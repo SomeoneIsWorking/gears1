@@ -730,3 +730,53 @@ Missing game data · jump-table/function-boundary errors · overlapping runtime
 allocations · forced 64 KiB physical pages · the vblank interrupt never firing ·
 `ObDereferenceObject` refcounting · the `rlwinm`/`addi` recompiler semantics
 this bug depends on.
+
+---
+
+## Explanation 2 rejected: the node is genuinely initialised
+
+Watched `0xA06F034C` on all four physical aliases from process start.
+
+```
+NODEWRITE pc=0xdb3843 val(BE)=0xA06F0041     <- in-block, tag bit SET
+NODEWRITE pc=0xd94b1b val(BE)=0xA06F0390     <- in-block, tag clear
+TREE-FOLLOWS-NODE
+```
+
+Both writes store plausible in-block, correctly-aligned links, one of them
+carrying the tag bit the traversal tests for. This is not uninitialised garbage:
+the address is a real, properly constructed tree node before the tree reaches
+it.
+
+**Explanation 2 (link never valid / garbage from a silently failed init) is
+rejected.** The failing `ShaderDumpxe:\CompareBackEnds` lookup is unrelated to
+this crash.
+
+Resolved writers:
+
+- `sub_82734E60` (`ppc_recomp.112.cpp:15054`)
+- `sub_82730540` (`ppc_recomp.112.cpp:4156`)
+
+`sub_82734E60` already appeared in this investigation as the caller of the
+push-front in `sub_826ED298`, so it is the structure's builder.
+
+### What is left
+
+Explanation 1 stands alone: **the region was handed out twice by the title's own
+pool.**
+
+Precisely: the tree's container base is `0xA06F032C`, while the float path's
+object base is `0xA06F0308` and it writes at `+36` — the same address. The two
+sub-allocations overlap, both inside the single 4 KiB block from one
+`MmAllocatePhysicalMemoryEx(size=4096, alignment=4096)`, which we satisfy
+exactly.
+
+So the title's own sub-allocator produced two overlapping regions in a block we
+sized correctly. Something it used to lay that pool out is wrong, and the only
+things it could have got from us are the block's address, its size, and its
+alignment — all of which match the request.
+
+The next concrete step is to find where the pool's bump/free cursor for this
+block lives, and watch it: if the cursor is reset or rewound between the two
+sub-allocations, that identifies the mechanism. Until then, no fix should be
+attempted — every remaining guess would be a change made without knowing why.
