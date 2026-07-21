@@ -663,3 +663,70 @@ wrote the float". Concretely: find the pool's free path and watch the node at
 `0xA06F034C` being unlinked or freed, then work out what triggered it. That is
 a guest-side lifetime question, and the runtime's most plausible contribution
 remains `ObDereferenceObject` never decrementing a refcount — still untested.
+
+---
+
+## ObDereferenceObject rejected; and the ordering that reframes the bug
+
+### ObDereferenceObject is NOT the cause — rejected on both evidence and reasoning
+
+This was flagged as the prime suspect for three iterations. It is wrong, and the
+reasoning error is worth recording.
+
+**Evidence:** `ObReferenceObjectByHandle` and `ObDereferenceObject` are each
+called exactly **3 times** before the crash. Perfectly balanced.
+
+**Reasoning:** the direction was backwards the whole time. A no-op
+`ObDereferenceObject` means a refcount never *drops*, so objects live **longer**
+than they should. That can leak, but it cannot cause a premature free. The
+symptom here needs memory released or reused **too early** — the opposite. The
+hypothesis could have been discarded on that argument alone, without measuring.
+
+Lesson: check the *direction* of a suspected divergence against the direction
+the symptom requires, before spending iterations on it.
+
+### The ordering test, and what it means
+
+Watching the float write and the tree traversal in one run:
+
+```
+EVENT float-write-to-0xA06F032C
+EVENT float-write-to-0xA06F032C
+EVENT tree-link-followed-to-0xA06F032C
+```
+
+(Two float writes, not one — the earlier count of one came from a watchpoint
+condition that only matched the `1.0f` value.)
+
+**The float writes come first.** The traversal reaches that address afterwards.
+
+This inverts the framing. It is not "two subsystems disagree about a live
+field". The memory was in use as float storage, and the tree **later followed a
+link into it**. The tree holds a link to a node that no longer exists — a stale
+link into repurposed memory.
+
+So the pool handed `0xA06F0308` out for float storage while the tree still
+linked to `0xA06F034C` inside that same region.
+
+### Two remaining explanations
+
+1. **A node was freed without being unlinked**, and the pool reused it. This is
+   the classic shape and fits everything observed.
+2. **The tree link was never valid** — garbage from uninitialised memory that
+   happens to point into the block. Less likely, because `0xA06F034C` is
+   in-block and correctly aligned for a node, which garbage usually is not. But
+   it becomes *more* likely if an earlier initialisation step silently failed,
+   and at least one has: `NtQueryFullAttributesFile` for
+   `ShaderDumpxe:\CompareBackEnds` does not resolve.
+
+Distinguishing them: watch `0xA06F034C` from process start and see whether it is
+ever written with a plausible node header before the tree links to it. If it is
+never initialised as a node, explanation 2 wins and the real bug is upstream in
+whatever failed silently.
+
+### Rejected hypotheses so far — do not revisit
+
+Missing game data · jump-table/function-boundary errors · overlapping runtime
+allocations · forced 64 KiB physical pages · the vblank interrupt never firing ·
+`ObDereferenceObject` refcounting · the `rlwinm`/`addi` recompiler semantics
+this bug depends on.
