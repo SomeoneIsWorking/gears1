@@ -109,3 +109,21 @@ void __imp__MmGetPhysicalAddress(PPCContext& __restrict ctx, uint8_t*)
 {
     ctx.r3.u64 = ctx.r3.u32;
 }
+
+// VOID MmSetAddressProtect(PVOID Address, ULONG Size, ULONG Protect)
+//
+// Page protection is not modelled: the guest heap commits everything readable
+// and writable, and enforcing the guest's requested protections would only turn
+// its own valid accesses into host faults. Recorded so a later access-violation
+// investigation can see what the title intended.
+void __imp__MmSetAddressProtect(PPCContext& __restrict ctx, uint8_t*)
+{
+    lucent::debug("kernel", "MmSetAddressProtect({:#x}, {:#x}, protect={:#x}) -- not enforced",
+        ctx.r3.u32, ctx.r4.u32, ctx.r5.u32);
+}
+
+void __imp__MmQueryAddressProtect(PPCContext& __restrict ctx, uint8_t*)
+{
+    ctx.r3.u64 = 0x04; // PAGE_READWRITE, matching how the heap is committed
+}
+
