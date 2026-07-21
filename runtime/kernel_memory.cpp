@@ -83,8 +83,11 @@ void __imp__MmAllocatePhysicalMemoryEx(PPCContext& __restrict ctx, uint8_t*)
     uint32_t size = ctx.r4.u32;
     const uint32_t alignment = ctx.r8.u32;
 
+    // Honour the alignment the caller asked for rather than forcing 64 KiB
+    // pages: the title packs its own structures inside these blocks and lays
+    // them out from the granularity it requested.
     const uint32_t address = gears::PhysicalHeap().Allocate(
-        0, size, gears::kMemCommit | gears::kMemLargePages, alignment);
+        0, size, gears::kMemCommit, alignment);
 
     if (address == 0)
         lucent::warn("kernel", "MmAllocatePhysicalMemoryEx({:#x}, align {:#x}) failed", size, alignment);
