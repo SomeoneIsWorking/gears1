@@ -341,12 +341,9 @@ Walking back, each step confirmed with a conditional watchpoint:
 4. The head lives at `0xA073032C`. It was written by `sub_82761CA8` line 18996:
    `stfs f0,0(r9)`, inside a float-fill loop (`addic. r10,r10,-1`) writing
    `1.0f`. Destination is `r29+36`, count `r30`.
-5. At the write, `r10 == 1` — the **last** element. So the array *ends* exactly
-   at `0xA073032C` rather than running past it.
-
-That last point matters: this is not a buffer overrun. The float array and the
-list header genuinely occupy the same address, so two of the title's own
-objects are sharing memory.
+5. ~~At the write, `r10 == 1` — the **last** element, so the array *ends*
+   exactly at `0xA073032C` rather than running past it.~~
+   **RETRACTED — this was wrong, see the correction below.**
 
 ### Ruled out — do not re-check these
 
@@ -383,3 +380,57 @@ wrong. Candidates, in order:
 
 Item 3 is the most suspicious, because it is a known, documented deviation
 where our behaviour differs from the console rather than merely being absent.
+
+
+---
+
+## CORRECTION to the trace above — step 5 was unsound
+
+The claim that the float array "ends exactly at `0xA073032C` rather than
+running past it", and the conclusion drawn from it that this is not a buffer
+overrun, are **both withdrawn**. The measurement behind them was invalid.
+
+**Why it was wrong:** a hardware watchpoint reports *after* the storing
+instruction retires. By the time gdb stops, the recompiled code has moved on
+and reused the registers, so `r9`/`r10`/`r30` read at that stop describe a
+later point in execution, not the state at the write. Two runs of the identical
+script disagreed — `r9=0xA073032C, r10=1` once and `r9=0x1, r10=4` the next —
+which is what exposed it. Register values captured at a watchpoint stop in this
+codebase are not evidence.
+
+The same objection applies to the `r30 = 2691629832` "pointer used as a count"
+reading, which came from the same kind of stop and from a breakpoint condition
+that matched only through unsigned wraparound. It is not evidence of anything.
+
+**What is still solid**, because each came from the address watched rather than
+from registers:
+
+- The crash is a list walk advancing through `next` at `+4`, not re-reading the
+  head. (Proved by the watchpoint on the head never firing.)
+- `0xA0730358` — the predecessor's `next` — receives `1.0f`.
+- `0xA073032C` — the list head — receives `1.0f` earlier.
+- Both addresses lie inside one 64 KiB physical block from a single
+  `MmAllocatePhysicalMemoryEx`.
+
+**What is now unknown again:** which instruction actually writes `1.0f` to
+`0xA073032C`. The backtrace pointed at `sub_82761CA8` around line 18994-18996,
+but a conditional breakpoint on the store itself
+(`ppc_recomp.114.cpp:18994 if ctx.r9.u32 == 0xA073032C`) **never fires**, on
+either candidate line, before the process crashes. So either the write comes
+from somewhere else, or it happens on another thread whose frame was not the
+one inspected. The backtrace was, again, taken at a post-write stop.
+
+**How to measure this properly next time:** do not read registers at a
+watchpoint stop. Either
+(a) put the conditional breakpoint on the store instruction and let it stop
+    *before* the write, or
+(b) have the watchpoint handler print only the *memory* it watched plus
+    `$pc`, and resolve `$pc` to a source line afterwards.
+Given (a) is not firing, (b) with `$pc` logging across all threads is the next
+step, followed by identifying which guest allocation owns `0xA0730000` and what
+the title thinks lives there.
+
+Two lessons worth keeping beyond this bug: a hardware watchpoint stop tells you
+*what changed*, never *who changed it*; and a breakpoint condition written with
+unsigned guest arithmetic can match through wraparound, so conditions need to
+be bounded, not just equal.
