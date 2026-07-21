@@ -312,3 +312,74 @@ correctly before trusting it.
 produces the bad struct, and whether the float lands there from guest code or
 from a wrong value one of the runtime's own stubs returned. Do not guess a fix
 before that is known.
+
+---
+
+## Root-cause trace of the float-as-pointer crash (NOT yet fixed)
+
+Traced the crash from symptom to the exact instruction that plants the bad
+value. It is **not fixed**, but the chain is now known and four hypotheses are
+dead. Read this before re-investigating.
+
+### The chain, verified by watchpoint
+
+The crash is a linked-list walk in `sub_82766F68`. The loop re-enters at
+`loc_82766FB4`, *after* the load from `*r28`, so `r31` advances via
+`r31 = *(r31+4)` (line 31465) — the node's `next` field. An early watchpoint on
+`*r28` never fired, which is what proved the walk, not the head, was the
+problem.
+
+Walking back, each step confirmed with a conditional watchpoint:
+
+1. Crash: `lwz r30,12(r31)` with `r31 = 0x3F800000`. The game's own null check
+   passes because the value is non-zero.
+2. The predecessor node is `0xA0730354`; its `next` field at `0xA0730358`
+   holds `1.0f`.
+3. That field was written by `sub_826ED298` — a textbook push-front:
+   `node->next = list->head; list->head = node`. So the *head* already held
+   `1.0f`.
+4. The head lives at `0xA073032C`. It was written by `sub_82761CA8` line 18996:
+   `stfs f0,0(r9)`, inside a float-fill loop (`addic. r10,r10,-1`) writing
+   `1.0f`. Destination is `r29+36`, count `r30`.
+5. At the write, `r10 == 1` — the **last** element. So the array *ends* exactly
+   at `0xA073032C` rather than running past it.
+
+That last point matters: this is not a buffer overrun. The float array and the
+list header genuinely occupy the same address, so two of the title's own
+objects are sharing memory.
+
+### Ruled out — do not re-check these
+
+- **Missing game data.** The crash is byte-identical with and without the
+  6.3 GB of extracted disc data, at the same instruction.
+- **The 1,394 jump-table / function-boundary errors.** None of the functions in
+  the call path appears anywhere in the recompiler's switch-escape error list.
+- **Overlapping runtime allocations.** `0xA0730000` is a single 64 KiB block
+  from one `MmAllocatePhysicalMemoryEx`; both objects live inside it, so the
+  overlap is inside the title's own arena, not between two of our allocations.
+- **Forced 64 KiB physical pages.** `MmAllocatePhysicalMemoryEx` was rounding
+  every allocation to 64 KiB regardless of the alignment requested (the title
+  asks for `0x20`). Honouring the requested alignment is more correct and has
+  been kept, but it does **not** fix the crash — same instruction, same values.
+
+### Where to look next
+
+The title sub-allocates inside a physical block it owns, and two of its objects
+end up at the same address. So something it used to lay out that arena is
+wrong. Candidates, in order:
+
+1. A size or capacity the title derived from a value one of our stubs returned.
+   `MmQueryAllocationSize` is deliberately unimplemented and would be an
+   obvious one to check for — it currently traps, so it is not being called,
+   but a related query might be answered wrongly.
+2. The `1.0f` fill and the list are two different views of one union or pooled
+   allocator; the bug may be that the title's pool is being *reset* or reused
+   earlier than it should, which would point back at an event or refcount the
+   runtime is signalling too early.
+3. `ObDereferenceObject` is a no-op, so guest lifetime bugs do not reproduce
+   faithfully. If the title relies on a refcount reaching zero to know a block
+   is free, that is a real divergence and a plausible cause of two objects
+   sharing memory.
+
+Item 3 is the most suspicious, because it is a known, documented deviation
+where our behaviour differs from the console rather than merely being absent.
