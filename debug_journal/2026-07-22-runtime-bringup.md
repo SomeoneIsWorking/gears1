@@ -104,3 +104,62 @@ from its cause.
    mutants, semaphores. This is the gateway to `ExCreateThread`.
 2. Pay the memory-barrier debt *before* threads, not after.
 3. File I/O (`NtCreateFile`/`NtReadFile`) so the title can load its packages.
+
+---
+
+## Continued: barriers, threading, graphics init
+
+Picked up in the order the previous entry recommended — barriers *before*
+threads, not after.
+
+### Memory barriers paid off first
+
+`sync`, `lwsync`, `eieio` and `isync` now emit real `__atomic_thread_fence`:
+acq_rel for lwsync/eieio, acquire for isync, seq_cst for sync. In Gears that is
+**121 acq_rel and 12 seq_cst sites**. The 12 are the ones that mattered — `sync`
+exists for StoreLoad ordering, which x86-64's TSO does *not* provide, so those
+were genuinely broken before. `isync` had no case at all and would have been
+reported as an unrecognized instruction had any title used one.
+
+### Guest threading works
+
+`ExCreateThread` spawns a host thread with its own `PPCContext`, KPCR, TLS and
+stack. Nothing else was needed — the recompiled code takes its context by
+parameter, so per-thread state falls out for free. `CREATE_SUSPENDED` is a real
+gate the thread waits on.
+
+**Verified:** two guest threads start and run concurrently with the main
+thread, deterministically across three consecutive runs.
+
+`KeSetAffinityThread` is deliberately **not honoured** — the title pins work to
+specific Xenon hardware threads, which is meaningless on a host with different
+topology. It records and reports back the mask and lets the host scheduler
+place the thread. Same for `KeSetBasePriorityThread`.
+
+### Kernel object manager
+
+A handle table plus one waitable object type covering notification and
+synchronisation events. Handles start at `0xF8000000` so one mistaken for a
+pointer faults instead of landing in real guest memory. Objects get a
+guest-visible address lazily, only when something asks for one via
+`ObReferenceObjectByHandle`, so the common handle-only path costs nothing.
+
+`ObDereferenceObject` is a no-op: host objects are `shared_ptr`-owned and
+outlive the guest's references. Guest lifetime bugs therefore will not
+reproduce here — a difference worth remembering, not a behaviour to rely on.
+
+### Graphics initialisation reached
+
+`XGetVideoMode` reports 1280x720 progressive widescreen at 60 Hz, and physical
+memory now allocates from a separate heap at `0xA0000000` because those
+addresses are handed to the GPU and must not come from the title heap. This
+also forced the guest reservation up from 2.06 GiB to the full 4 GiB window.
+
+Boot now stops at **`VdInitializeEngines`** — the Xenos video driver. That is
+the door to the command ring buffer, and past it nothing works without an
+actual GPU backend.
+
+### Status: 43/226 imports
+
+Still true: nothing is rendered, no file I/O, no audio, no input. The 1,394
+jump-table/function-boundary errors remain unhit and unaddressed.

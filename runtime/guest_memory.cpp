@@ -19,7 +19,11 @@ constexpr uint64_t kFuncTableSize = uint64_t(PPC_CODE_SIZE) * 2;
 
 bool GuestMemory::Reserve()
 {
-    reservedSize_ = kFuncTableBase + kFuncTableSize;
+    // The whole 4 GiB guest window, not just up to the function table: the
+    // console's physical-memory ranges live near the top of it, and the graphics
+    // path allocates there. It costs address space, not pages -- Commit() faults
+    // in only what is used.
+    reservedSize_ = PPC_MEMORY_SIZE;
     static_assert(kFuncTableBase + kFuncTableSize <= PPC_MEMORY_SIZE,
         "function table must fit inside the 4 GiB guest window");
 
