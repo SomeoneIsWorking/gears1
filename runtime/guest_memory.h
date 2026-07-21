@@ -23,6 +23,10 @@ public:
     // Backs a guest address range with committed, zeroed pages.
     bool Commit(uint32_t address, uint32_t size);
 
+    // Maps one block of real memory into every guest window that aliases
+    // physical RAM, so a write through one view is visible through the others.
+    bool MapPhysicalAliases();
+
     template<typename T>
     T* Translate(uint32_t address) const
     {
@@ -32,6 +36,7 @@ public:
 private:
     uint8_t* base_{};
     size_t reservedSize_{};
+    int physicalFd_{-1};
 };
 
 // Populates the function table PPC_LOOKUP_FUNC reads, from PPCFuncMappings.

@@ -1,6 +1,8 @@
+#define _GNU_SOURCE 1
 #include "guest_memory.h"
 
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include <lucent/log.h>
 
@@ -15,6 +17,19 @@ namespace
 // instruction slot.
 constexpr uint64_t kFuncTableBase = PPC_IMAGE_BASE + PPC_IMAGE_SIZE;
 constexpr uint64_t kFuncTableSize = uint64_t(PPC_CODE_SIZE) * 2;
+
+// The console has 512 MiB of RAM, and exposes it through several virtual
+// windows that differ only in caching and page size. Guest code converts
+// between them by masking the top three bits (`clrlwi rD,rS,3`), so a pointer
+// handed out as 0xA0320000 comes back as physical 0x00320000 and must refer to
+// the same bytes. These are the windows that alias physical RAM.
+constexpr uint32_t kPhysicalSize = 0x20000000;
+constexpr uint32_t kPhysicalAliases[] = {
+    0x00000000, // raw physical
+    0xA0000000, // cached
+    0xC0000000, // 16 MiB pages
+    0xE0000000, // 4 KiB pages
+};
 } // namespace
 
 bool GuestMemory::Reserve()
@@ -50,6 +65,42 @@ bool GuestMemory::Reserve()
 
     lucent::info("mem", "reserved {:.2f} GiB of guest address space at {}",
         double(reservedSize_) / (1024.0 * 1024.0 * 1024.0), static_cast<void*>(base_));
+
+    return MapPhysicalAliases();
+}
+
+bool GuestMemory::MapPhysicalAliases()
+{
+    physicalFd_ = memfd_create("gears-physical", 0);
+    if (physicalFd_ < 0)
+    {
+        lucent::error("mem", "memfd_create failed for physical RAM");
+        return false;
+    }
+
+    if (ftruncate(physicalFd_, kPhysicalSize) != 0)
+    {
+        lucent::error("mem", "cannot size physical RAM to {} bytes", kPhysicalSize);
+        return false;
+    }
+
+    // MAP_SHARED over the same descriptor is what makes the windows alias; the
+    // kernel still allocates pages lazily, so mapping all four costs nothing
+    // until the guest actually touches them.
+    for (uint32_t alias : kPhysicalAliases)
+    {
+        void* p = mmap(base_ + alias, kPhysicalSize, PROT_READ | PROT_WRITE,
+            MAP_SHARED | MAP_FIXED, physicalFd_, 0);
+        if (p == MAP_FAILED)
+        {
+            lucent::error("mem", "cannot map physical RAM at guest {:#x}", alias);
+            return false;
+        }
+    }
+
+    lucent::info("mem", "physical RAM ({} MiB) aliased at {:#x}, {:#x}, {:#x}, {:#x}",
+        kPhysicalSize / (1024 * 1024), kPhysicalAliases[0], kPhysicalAliases[1],
+        kPhysicalAliases[2], kPhysicalAliases[3]);
     return true;
 }
 
@@ -59,6 +110,12 @@ void GuestMemory::Release()
     {
         munmap(base_, reservedSize_);
         base_ = nullptr;
+    }
+
+    if (physicalFd_ >= 0)
+    {
+        close(physicalFd_);
+        physicalFd_ = -1;
     }
 }
 

@@ -4,7 +4,10 @@
 
 #include <lucent/log.h>
 
+#include <byteswap.h>
+
 #include "guest_heap.h"
+#include "guest_memory.h"
 
 namespace gears
 {
@@ -21,6 +24,21 @@ void KernelObject::Set()
         cv_.notify_all();
     else
         cv_.notify_one();
+}
+
+int32_t KernelObject::Release(int32_t increment)
+{
+    int32_t previous;
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        previous = count_;
+        count_ += increment;
+        if (limit_ > 0 && count_ > limit_)
+            count_ = limit_;
+        signalled_ = count_ > 0;
+    }
+    cv_.notify_all();
+    return previous;
 }
 
 void KernelObject::Clear()
@@ -50,7 +68,7 @@ bool KernelObject::Wait(int64_t timeout100ns)
 {
     std::unique_lock<std::mutex> lock(mutex_);
 
-    auto satisfied = [this] { return signalled_; };
+    auto satisfied = [this] { return kind_ == Kind::Semaphore ? count_ > 0 : signalled_; };
 
     if (timeout100ns < 0)
     {
@@ -62,7 +80,14 @@ bool KernelObject::Wait(int64_t timeout100ns)
     }
 
     if (kind_ == Kind::SynchronizationEvent)
+    {
         signalled_ = false;
+    }
+    else if (kind_ == Kind::Semaphore)
+    {
+        --count_;
+        signalled_ = count_ > 0;
+    }
     return true;
 }
 
@@ -133,6 +158,63 @@ std::shared_ptr<KernelObject> LookupByGuestAddress(uint32_t address)
     std::lock_guard<std::mutex> guard(g_guestObjectMutex);
     auto it = g_byGuestAddress.find(address);
     return it != g_byGuestAddress.end() ? it->second : nullptr;
+}
+
+namespace
+{
+// X_DISPATCH_HEADER: the first word packs the object type in its high byte,
+// and the second word is the signal state.
+constexpr uint32_t kDispatcherTypeNotificationEvent = 0;
+constexpr uint32_t kDispatcherTypeSynchronizationEvent = 1;
+constexpr uint32_t kDispatcherTypeSemaphore = 5;
+} // namespace
+
+void RegisterGuestObject(uint32_t address, std::shared_ptr<KernelObject> object)
+{
+    std::lock_guard<std::mutex> guard(g_guestObjectMutex);
+    g_byGuestAddress[address] = std::move(object);
+}
+
+std::shared_ptr<KernelObject> BindGuestDispatcherObject(uint32_t address)
+{
+    {
+        std::lock_guard<std::mutex> guard(g_guestObjectMutex);
+        auto it = g_byGuestAddress.find(address);
+        if (it != g_byGuestAddress.end())
+            return it->second;
+    }
+
+    const uint32_t typeWord = ByteSwap(*Memory().Translate<uint32_t>(address));
+    const int32_t signalState = int32_t(ByteSwap(*Memory().Translate<uint32_t>(address + 4)));
+    const uint32_t type = typeWord >> 24;
+
+    std::shared_ptr<KernelObject> object;
+    switch (type)
+    {
+    case kDispatcherTypeNotificationEvent:
+        object = std::make_shared<KernelObject>(
+            KernelObject::Kind::NotificationEvent, signalState != 0);
+        break;
+    case kDispatcherTypeSynchronizationEvent:
+        object = std::make_shared<KernelObject>(
+            KernelObject::Kind::SynchronizationEvent, signalState != 0);
+        break;
+    case kDispatcherTypeSemaphore:
+        object = std::make_shared<KernelObject>(signalState, 0);
+        break;
+    default:
+        lucent::error("kernel", "dispatcher object at {:#x} has unhandled type {}", address, type);
+        return nullptr;
+    }
+
+    lucent::debug("kernel", "bound guest dispatcher object at {:#x} (type {}, state {})",
+        address, type, signalState);
+
+    std::lock_guard<std::mutex> guard(g_guestObjectMutex);
+    auto& slot = g_byGuestAddress[address];
+    if (!slot)
+        slot = object;
+    return slot;
 }
 
 void RegisterThreadResume(uint32_t handle, std::shared_ptr<KernelObject> resumed)

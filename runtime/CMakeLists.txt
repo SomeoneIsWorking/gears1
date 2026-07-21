@@ -51,6 +51,10 @@ add_executable(gears1
     kernel_thread.cpp
     kernel_object_api.cpp
     kernel_video.cpp
+    vd_null_gpu.cpp
+    kernel_rtl.cpp
+    kernel_config.cpp
+    kernel_dispatcher.cpp
     "${IMPORT_STUBS}")
 
 target_include_directories(gears1 PRIVATE .)

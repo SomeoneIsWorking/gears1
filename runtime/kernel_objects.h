@@ -19,15 +19,21 @@ class KernelObject
 public:
     enum class Kind
     {
-        NotificationEvent,   // stays signalled until explicitly cleared
-        SynchronizationEvent // one waiter consumes the signal
+        NotificationEvent,    // stays signalled until explicitly cleared
+        SynchronizationEvent, // one waiter consumes the signal
+        Semaphore             // signalled while count > 0; a waiter takes one
     };
 
     KernelObject(Kind kind, bool signalled) : kind_(kind), signalled_(signalled) {}
+    KernelObject(int32_t count, int32_t limit)
+        : kind_(Kind::Semaphore), signalled_(count > 0), count_(count), limit_(limit) {}
 
     void Set();
     void Clear();
     void Pulse();
+
+    // Returns the previous count.
+    int32_t Release(int32_t increment);
 
     // Returns true if the wait was satisfied, false on timeout.
     // A negative timeout means wait forever.
@@ -36,6 +42,8 @@ public:
 private:
     Kind kind_;
     bool signalled_;
+    int32_t count_ = 0;
+    int32_t limit_ = 0;
     std::mutex mutex_;
     std::condition_variable cv_;
 };
@@ -64,6 +72,13 @@ HandleTable& Handles();
 // handle-only path costs nothing.
 uint32_t GuestAddressForHandle(uint32_t handle);
 std::shared_ptr<KernelObject> LookupByGuestAddress(uint32_t address);
+
+// Binds a host object to a dispatcher object that lives in guest memory. Titles
+// embed KEVENTs and KSEMAPHOREs in their own structures and initialise them in
+// place, so these never pass through a handle. The object's kind and initial
+// state are read from the guest's own dispatch header rather than assumed.
+std::shared_ptr<KernelObject> BindGuestDispatcherObject(uint32_t address);
+void RegisterGuestObject(uint32_t address, std::shared_ptr<KernelObject> object);
 
 // A suspended thread's resume gate, keyed by its handle. Kept beside the handle
 // table because a thread handle waits on *exit*, so the resume signal needs its

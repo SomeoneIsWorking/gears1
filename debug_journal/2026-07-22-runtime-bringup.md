@@ -163,3 +163,82 @@ actual GPU backend.
 
 Still true: nothing is rendered, no file I/O, no audio, no input. The 1,394
 jump-table/function-boundary errors remain unhit and unaddressed.
+
+---
+
+## Continued: null GPU, physical aliasing, dispatcher objects
+
+**74 of 226** imports. Three guest threads. Boot now reaches
+`MmSetAddressProtect`, past GPU init and the ring buffer.
+
+### The notable bug: physical memory aliasing
+
+**Symptom:** SIGSEGV storing to guest `0x32003C` from
+`VdEnableRingBufferRPtrWriteBack`, an address nothing had allocated.
+
+**Root cause**, from the guest code that computed it:
+
+```
+r11 = *(r31+10768) + 60     ; 0xA0320000 + 60
+r10 = r11 & 0x1FFFFFFF      ; clrlwi r10,r11,3 -- strips the top 3 bits
+```
+
+That mask is the console's virtual→physical conversion. The title took a
+pointer we had handed it from the physical heap at `0xA0320000` and converted
+it to physical `0x0032003C`, expecting the same bytes.
+
+On real hardware the 512 MiB of RAM is visible through several virtual windows
+that differ only in caching and page size — `0x00000000`, `0xA0000000`,
+`0xC0000000`, `0xE0000000` — and guest code moves between them by masking. The
+runtime was treating them as unrelated regions.
+
+**Fix:** physical RAM is now one `memfd`, `MAP_SHARED` at all four windows, so a
+write through one view is visible through the others. Pages are still allocated
+lazily, so mapping four aliases of 512 MiB costs nothing until touched.
+Verified: `[mem] physical RAM (512 MiB) aliased at 0x0, 0xa0000000, 0xc0000000,
+0xe0000000`, and the store that faulted now lands.
+
+This was the second bug of the same shape as the variable-import one: the guest
+was right and the runtime's model was wrong.
+
+### Guest dispatcher objects
+
+`KeWaitForSingleObject` was failing on an address it had never seen. Titles
+embed KEVENTs and KSEMAPHOREs inside their own structures and initialise them
+in place, so those never pass through a handle. Host objects are now bound to
+guest dispatcher objects on first use, with kind and initial state read from
+the guest's own `X_DISPATCH_HEADER` rather than assumed. Semaphores were added
+to the object model for this.
+
+### NULL GPU — read this before trusting anything graphical
+
+`runtime/vd_null_gpu.cpp` implements the 20-function `Vd*` surface **without a
+GPU**. It tracks what the driver genuinely owns (ring buffer, write-back
+pointer, display mode) and then retires submitted command buffers without
+executing them.
+
+Retiring is a deliberate choice, not an oversight: never advancing the read
+pointer would deadlock the guest against a full ring buffer and teach us
+nothing. What is missing is the command processor. Consequences, all of them
+visible in the log rather than hidden:
+
+- `VdSetGraphicsInterruptCallback` registers a callback that **will never
+  fire**. A title that waits on a vsync interrupt will stall, and that stall is
+  the honest signal.
+- `VdSwap` counts frames and presents nothing.
+- The Xenos register file at `0x7FC80000` is committed as **plain memory**.
+  Guest code reaches it through the MMIO macros, not through any `Vd*` call. On
+  hardware some of those registers have side effects; with no command processor
+  there is nothing to trigger, so reads simply see back what was written.
+
+### Config settings fail loudly
+
+`ExGetXConfigSetting` answers only settings with a defensible value and returns
+`STATUS_INVALID_PARAMETER` for anything else, naming the category and setting.
+A wrong console setting produces misbehaviour a long way from its cause, so
+guessing one is worse than refusing.
+
+### Still true
+
+Nothing is rendered. No file I/O, audio or input. The 1,394
+jump-table/function-boundary errors remain unhit and unaddressed.

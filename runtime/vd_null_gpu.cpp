@@ -1,0 +1,218 @@
+// The Xenos video driver surface, backed by a NULL GPU.
+//
+// This is not a graphics implementation and does not pretend to be one. It
+// tracks the state the driver genuinely owns -- ring buffer location, write-back
+// pointer, display mode -- and then consumes submitted command buffers without
+// executing them. Nothing is rasterised and nothing is presented.
+//
+// Consuming is not a lie: it models a GPU that retires work instantly. The
+// alternative, never advancing the read pointer, would deadlock the guest
+// against a full ring buffer and tell us nothing. What IS missing is the
+// command processor that would interpret those packets, and every function here
+// that would need one says so.
+#include "import_stub.h"
+
+#include <atomic>
+
+#include <byteswap.h>
+#include <lucent/log.h>
+
+#include "guest_memory.h"
+
+PPC_EXTERN_FUNC(__imp__XGetVideoMode);
+
+namespace
+{
+
+struct RingBuffer
+{
+    uint32_t base;
+    uint32_t sizeLog2;
+    uint32_t readPtrWriteBackAddress;
+    uint32_t readPtrWriteBackBlockSize;
+};
+
+RingBuffer g_ringBuffer{};
+uint32_t g_graphicsInterruptCallback = 0;
+uint32_t g_graphicsInterruptContext = 0;
+uint32_t g_systemCommandBufferGpuIdentifier = 0;
+std::atomic<uint64_t> g_frameCount{0};
+
+void StoreGuest32(uint32_t address, uint32_t value)
+{
+    if (address != 0)
+        *gears::Memory().Translate<uint32_t>(address) = ByteSwap(value);
+}
+
+// Reports the whole ring buffer as consumed. See the file comment: this is the
+// instant-retirement model, not command execution.
+void RetireRingBuffer()
+{
+    if (g_ringBuffer.readPtrWriteBackAddress == 0)
+        return;
+
+    const uint32_t writePtr = 1u << g_ringBuffer.sizeLog2;
+    StoreGuest32(g_ringBuffer.readPtrWriteBackAddress, writePtr);
+}
+
+} // namespace
+
+namespace gears
+{
+
+// The Xenos register file, which guest code reaches through the MMIO load and
+// store macros rather than through any Vd* call. On hardware some of these
+// registers have side effects -- writing the command-processor pointers kicks
+// off work. With no command processor there is nothing to kick, so the window
+// is plain memory: reads see back what was written, which is what register
+// save/restore sequences expect.
+bool CommitGpuRegisterFile(GuestMemory& memory)
+{
+    constexpr uint32_t kRegisterFileBase = 0x7FC80000;
+    constexpr uint32_t kRegisterFileSize = 0x10000;
+
+    if (!memory.Commit(kRegisterFileBase, kRegisterFileSize))
+        return false;
+
+    lucent::info("gpu", "Xenos register file at {:#x}, {} KiB (inert)",
+        kRegisterFileBase, kRegisterFileSize / 1024);
+    return true;
+}
+
+} // namespace gears
+
+void __imp__VdInitializeEngines(PPCContext& __restrict ctx, uint8_t*)
+{
+    lucent::warn("gpu", "VdInitializeEngines -- NULL GPU: no commands will be executed");
+    ctx.r3.u64 = 1;
+}
+
+void __imp__VdShutdownEngines(PPCContext& __restrict ctx, uint8_t*)
+{
+    lucent::info("gpu", "VdShutdownEngines after {} submitted frames", g_frameCount.load());
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdInitializeRingBuffer(PPCContext& __restrict ctx, uint8_t*)
+{
+    g_ringBuffer.base = ctx.r3.u32;
+    g_ringBuffer.sizeLog2 = ctx.r4.u32;
+    lucent::info("gpu", "ring buffer at {:#x}, {} bytes", g_ringBuffer.base, 1u << g_ringBuffer.sizeLog2);
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdEnableRingBufferRPtrWriteBack(PPCContext& __restrict ctx, uint8_t*)
+{
+    g_ringBuffer.readPtrWriteBackAddress = ctx.r3.u32;
+    g_ringBuffer.readPtrWriteBackBlockSize = ctx.r4.u32;
+    lucent::info("gpu", "ring buffer read-pointer write-back at {:#x}",
+        g_ringBuffer.readPtrWriteBackAddress);
+    RetireRingBuffer();
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdSetSystemCommandBufferGpuIdentifierAddress(PPCContext& __restrict ctx, uint8_t*)
+{
+    g_systemCommandBufferGpuIdentifier = ctx.r3.u32;
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdSetGraphicsInterruptCallback(PPCContext& __restrict ctx, uint8_t*)
+{
+    g_graphicsInterruptCallback = ctx.r3.u32;
+    g_graphicsInterruptContext = ctx.r4.u32;
+    // Nothing raises this yet: interrupts come from the command processor, which
+    // does not exist. A title that waits on a vsync interrupt will stall here,
+    // and that stall is the honest signal that the GPU is missing.
+    lucent::warn("gpu", "graphics interrupt callback {:#x} registered but will never fire",
+        g_graphicsInterruptCallback);
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
+{
+    const uint64_t frame = g_frameCount.fetch_add(1) + 1;
+    if (frame == 1 || frame % 60 == 0)
+        lucent::info("gpu", "VdSwap: {} frames submitted (nothing presented)", frame);
+
+    RetireRingBuffer();
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdQueryVideoFlags(PPCContext& __restrict ctx, uint8_t*)
+{
+    // Widescreen | HD, matching the 1280x720 mode XGetVideoMode reports.
+    ctx.r3.u64 = 0x00000006;
+}
+
+void __imp__VdGetCurrentDisplayGamma(PPCContext& __restrict ctx, uint8_t*)
+{
+    StoreGuest32(ctx.r3.u32, 2);
+    StoreGuest32(ctx.r4.u32, 0x40000000); // 2.0f
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdGetCurrentDisplayInformation(PPCContext& __restrict ctx, uint8_t*)
+{
+    const uint32_t p = ctx.r3.u32;
+    if (p == 0)
+        return;
+
+    // Only the fields the title reads are filled; the rest stays zero so an
+    // unexpected read shows up as a zero rather than as plausible noise.
+    StoreGuest32(p + 0x00, (720u << 16) | 1280u); // height:width
+    StoreGuest32(p + 0x08, 1280);
+    StoreGuest32(p + 0x0C, 720);
+    StoreGuest32(p + 0x14, 1280);
+    StoreGuest32(p + 0x18, 720);
+    StoreGuest32(p + 0x30, 1280);
+    StoreGuest32(p + 0x34, 720);
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdSetDisplayMode(PPCContext& __restrict ctx, uint8_t*)
+{
+    lucent::debug("gpu", "VdSetDisplayMode({:#x})", ctx.r3.u32);
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdIsHSIOTrainingSucceeded(PPCContext& __restrict ctx, uint8_t*)
+{
+    // The high-speed IO link between CPU and GPU. There is no link to train.
+    ctx.r3.u64 = 1;
+}
+
+void __imp__VdPersistDisplay(PPCContext& __restrict ctx, uint8_t*)
+{
+    StoreGuest32(ctx.r4.u32, 0);
+    ctx.r3.u64 = 1;
+}
+
+void __imp__VdRetrainEDRAM(PPCContext& __restrict ctx, uint8_t*)
+{
+    // EDRAM is physical memory on the console's GPU daughter die; there is no
+    // equivalent here and nothing to retrain.
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdRetrainEDRAMWorker(PPCContext& __restrict ctx, uint8_t*)
+{
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdEnableDisableClockGating(PPCContext& __restrict ctx, uint8_t*)
+{
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdCallGraphicsNotificationRoutines(PPCContext& __restrict ctx, uint8_t*)
+{
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdQueryVideoMode(PPCContext& __restrict ctx, uint8_t* base)
+{
+    // Same mode XGetVideoMode reports; the two must not disagree.
+    __imp__XGetVideoMode(ctx, base);
+    ctx.r3.u64 = 0;
+}

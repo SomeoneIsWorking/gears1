@@ -110,3 +110,25 @@ void __imp__RtlLeaveCriticalSection(PPCContext& __restrict ctx, uint8_t* base)
 
     HostLockFor(address).unlock();
 }
+
+namespace
+{
+// Critical regions defer kernel APC delivery to the current thread. Nothing
+// delivers APCs yet, so there is nothing to defer -- but the depth is tracked
+// per thread so an unbalanced pair shows up rather than passing silently.
+thread_local int32_t t_criticalRegionDepth = 0;
+} // namespace
+
+void __imp__KeEnterCriticalRegion(PPCContext& __restrict ctx, uint8_t*)
+{
+    ++t_criticalRegionDepth;
+}
+
+void __imp__KeLeaveCriticalRegion(PPCContext& __restrict ctx, uint8_t*)
+{
+    if (--t_criticalRegionDepth < 0)
+    {
+        lucent::error("kernel", "KeLeaveCriticalRegion without a matching enter");
+        t_criticalRegionDepth = 0;
+    }
+}
