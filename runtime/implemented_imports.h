@@ -1,0 +1,28 @@
+#pragma once
+
+// Imports with a real implementation somewhere in the runtime. Listing a name
+// here suppresses its generated trap stub, so the two can never both define it.
+// This header is included by both the hand-written implementations and the
+// generated stub file, which is what keeps them in agreement.
+
+#define GEARS_IMPORT_IMPLEMENTED_NtAllocateVirtualMemory
+#define GEARS_IMPORT_IMPLEMENTED_NtFreeVirtualMemory
+
+#define GEARS_IMPORT_IMPLEMENTED_KeGetCurrentProcessType
+#define GEARS_IMPORT_IMPLEMENTED_RtlInitializeCriticalSection
+#define GEARS_IMPORT_IMPLEMENTED_RtlInitializeCriticalSectionAndSpinCount
+#define GEARS_IMPORT_IMPLEMENTED_RtlEnterCriticalSection
+#define GEARS_IMPORT_IMPLEMENTED_RtlTryEnterCriticalSection
+#define GEARS_IMPORT_IMPLEMENTED_RtlLeaveCriticalSection
+#define GEARS_IMPORT_IMPLEMENTED_XexCheckExecutablePrivilege
+#define GEARS_IMPORT_IMPLEMENTED_ExAllocatePool
+#define GEARS_IMPORT_IMPLEMENTED_ExAllocatePoolWithTag
+#define GEARS_IMPORT_IMPLEMENTED_ExFreePool
+#define GEARS_IMPORT_IMPLEMENTED_KeTlsAlloc
+#define GEARS_IMPORT_IMPLEMENTED_KeTlsFree
+#define GEARS_IMPORT_IMPLEMENTED_KeTlsGetValue
+#define GEARS_IMPORT_IMPLEMENTED_KeTlsSetValue
+#define GEARS_IMPORT_IMPLEMENTED_DbgPrint
+#define GEARS_IMPORT_IMPLEMENTED_KeQueryPerformanceFrequency
+#define GEARS_IMPORT_IMPLEMENTED_KeQuerySystemTime
+#define GEARS_IMPORT_IMPLEMENTED_FscSetCacheElementCount

@@ -6,9 +6,10 @@ time and overriding only at hardware/OS seams (graphics, audio, input, file
 I/O), following the [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) /
 [N64Recomp](https://github.com/N64Recomp/N64Recomp) model.
 
-**Status: early.** The executable recompiles. Nothing runs yet — there is no
-runtime. See [`debug_journal/`](debug_journal/) for dated, honest write-ups of
-what has and has not been verified.
+**Status: early.** The executable recompiles and guest code now executes,
+reaching the kernel object manager during startup. Nothing is rendered yet. See
+[`debug_journal/`](debug_journal/) for dated, honest write-ups of what has and
+has not been verified.
 
 ## What works
 
@@ -16,12 +17,16 @@ what has and has not been verified.
   `0x82000000`).
 - Register save/restore helpers and 360 jump tables are located automatically.
 - XenonRecomp emits **49,012 functions** (~176 MB of C++) with **zero
-  unimplemented instructions**.
+  unimplemented instructions**, and all 193 translation units compile.
+- The runtime maps the image, installs 49,475 functions into the indirect-call
+  table, sets up a guest thread block and runs guest code through memory
+  allocation, critical sections, TLS and timing — **20 of 226** kernel imports.
 
 ## What does not
 
-- **No runtime.** "It recompiles" is a claim about code generation only. Not one
-  instruction of this output has ever been executed.
+- **Nothing is rendered.** No graphics, audio, input or file I/O. 206 kernel
+  imports are unimplemented; each aborts loudly with its name and arguments the
+  first time the game calls it.
 - **1,394 jump-table / function-boundary errors.** XenonRecomp's function
   analyser treats a jump table as a tail call and cuts functions short.
 - **Memory barriers are no-ops.** `sync`, `lwsync`, `eieio` and `isync` emit
@@ -69,6 +74,18 @@ cmake --build scratch/build-xenonrecomp
 
 XenonRecomp needs CMake 3.20+ and Clang 18+. It exits non-zero if any
 instruction lacks an implementation.
+
+Then build and run the runtime against the generated code:
+
+```sh
+cmake -S . -B scratch/build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+      -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
+cmake --build scratch/build
+./scratch/build/runtime/gears1 scratch/bin/default.xex
+```
+
+Set `GEARS_LUCENT_DEBUG=heap,loader,kernel,thread,mem` for per-subsystem
+tracing (`all` for everything).
 
 ## Fork changes
 
