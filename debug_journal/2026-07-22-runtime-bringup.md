@@ -434,3 +434,78 @@ Two lessons worth keeping beyond this bug: a hardware watchpoint stop tells you
 *what changed*, never *who changed it*; and a breakpoint condition written with
 unsigned guest arithmetic can match through wraparound, so conditions need to
 be bounded, not just equal.
+
+---
+
+## Crash trace, re-done with a sound method
+
+The retracted trace has been redone properly. The conclusion happens to land
+near where the unsound one did, but it is now measured rather than inferred,
+and the numbers are different in the part that matters.
+
+### Two measurement traps, both real
+
+**1. Hardware watchpoints do not see writes through a different virtual
+alias.** Physical RAM is mapped at four guest windows (`0x0`, `0xA0000000`,
+`0xC0000000`, `0xE0000000`) over one `memfd`. A watchpoint is set on a *virtual*
+address, so a write through any other alias to the same physical page never
+fires it. Watch all four, or watch none. This is a direct consequence of the
+aliasing fix made earlier in this project.
+
+**2. Addresses move when the allocator changes.** Making
+`MmAllocatePhysicalMemoryEx` honour the requested alignment shifted every
+physical allocation down by `0x40000`. Watch addresses derived before that
+change silently matched nothing afterwards — the watchpoint simply never fired
+and looked like "no write happens", which is indistinguishable from a wrong
+address. Re-derive addresses after any allocator change.
+
+Both traps produce the same symptom: a watchpoint that never fires. Neither is
+evidence that nothing was written.
+
+### The chain, measured
+
+Addresses are for the current build.
+
+1. Crash in `sub_82766F68`: `lwz r30,12(r31)` with `r31 = 0x3F800000`.
+2. Predecessor node `0xA06F0354`; its `next` at `0xA06F0358` holds `1.0f`.
+   Found with a *breakpoint* on the walk (registers valid), not a watchpoint.
+3. Watching `0xA06F0358` on all four aliases: **exactly one write**, from the
+   push-front in `sub_826ED298` (`node->next = list->head`). So the head
+   already held `1.0f`.
+4. Watching the head `0xA06F032C` on all four aliases: **exactly one write**,
+   from `sub_82761CA8` line 18994, `stfs f0,0(r9)`.
+5. Breakpoint on that store, stopping *before* it, with valid registers:
+
+```
+r9 = 0xA06F032C   remaining = 1   count(r30) = 1
+fill_base = 0xA06F032C   fill_end = 0xA06F032C
+```
+
+**The fill count is 1.** It writes a single float, exactly in bounds, to
+exactly that address. It is not a runaway loop and not an overrun — the earlier
+"pointer used as a count" reading was an artefact and stays withdrawn.
+
+### What this actually means
+
+`r29 = 0xA06F0308`, and the fill target is `r29 + 36`. The list head the walker
+is handed is that same `0xA06F032C`.
+
+So one code path stores a float at object`+36`, and another treats object`+36`
+as the head of a linked list. **Two subsystems disagree about the type of the
+same field.**
+
+That is either a union/derived-layout the recompiled code is reaching through
+the wrong branch of, or a wrong object pointer handed to one of the two paths.
+It is no longer a memory-management question — both accesses are in bounds and
+the allocator is behaving.
+
+### Next
+
+Identify what object begins at `0xA06F0308` and which allocation produced it,
+then determine which of the two paths is holding the wrong pointer. The float
+path (`sub_82761CA8`) and the list path (`sub_82766F68` via `sub_82722F38`) are
+both reached from `sub_826C4C28`, which is the nearest common ancestor and the
+place to start.
+
+Do **not** re-investigate: allocator overlap, buffer overrun, missing game data,
+or the jump-table errors. All four are eliminated.
