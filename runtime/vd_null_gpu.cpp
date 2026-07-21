@@ -13,11 +13,15 @@
 #include "import_stub.h"
 
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <thread>
 
 #include <byteswap.h>
 #include <lucent/log.h>
 
 #include "guest_heap.h"
+#include "guest_thread.h"
 #include "guest_memory.h"
 
 PPC_EXTERN_FUNC(__imp__XGetVideoMode);
@@ -122,15 +126,62 @@ void __imp__VdSetSystemCommandBufferGpuIdentifierAddress(PPCContext& __restrict 
     ctx.r3.u64 = 0;
 }
 
+namespace
+{
+// The console raises this from the GPU at vblank and on command-buffer
+// completion, and titles advance real state machines from it. Not raising it at
+// all leaves those state machines frozen, which is not a neutral omission -- it
+// is its own kind of wrong. So it is driven from a host thread at the display
+// refresh rate.
+//
+// This is still not a command processor: the callback reports vblank, never
+// actual completion of work, because no work is executed. Set
+// GEARS_NO_VBLANK=1 to disable it and get the old never-fires behaviour, which
+// is useful for telling the two failure modes apart.
+void VblankThread()
+{
+    gears::GuestThreadBlock block{};
+    if (!gears::CreateGuestThreadBlock(gears::Memory(), 0x10000, block))
+    {
+        lucent::error("gpu", "cannot create the vblank thread's guest block");
+        return;
+    }
+
+    uint8_t* base = gears::Memory().Base();
+    PPCContext ctx{};
+    ctx.r13.u32 = block.pcrAddress;
+    ctx.fpscr.loadFromHost();
+
+    lucent::info("gpu", "vblank thread driving interrupt callback {:#x} at 60 Hz",
+        g_graphicsInterruptCallback);
+
+    while (true)
+    {
+        std::this_thread::sleep_for(std::chrono::microseconds(16667));
+
+        ctx.r1.u32 = block.stackBase - 0x100;
+        ctx.r3.u32 = 0; // source: vblank
+        ctx.r4.u32 = g_graphicsInterruptContext;
+        (PPC_LOOKUP_FUNC(base, g_graphicsInterruptCallback))(ctx, base);
+    }
+}
+} // namespace
+
 void __imp__VdSetGraphicsInterruptCallback(PPCContext& __restrict ctx, uint8_t*)
 {
     g_graphicsInterruptCallback = ctx.r3.u32;
     g_graphicsInterruptContext = ctx.r4.u32;
-    // Nothing raises this yet: interrupts come from the command processor, which
-    // does not exist. A title that waits on a vsync interrupt will stall here,
-    // and that stall is the honest signal that the GPU is missing.
-    lucent::warn("gpu", "graphics interrupt callback {:#x} registered but will never fire",
-        g_graphicsInterruptCallback);
+
+    if (getenv("GEARS_NO_VBLANK") != nullptr)
+    {
+        lucent::warn("gpu", "GEARS_NO_VBLANK set: interrupt callback {:#x} will never fire",
+            g_graphicsInterruptCallback);
+    }
+    else if (g_graphicsInterruptCallback != 0)
+    {
+        std::thread(VblankThread).detach();
+    }
+
     ctx.r3.u64 = 0;
 }
 

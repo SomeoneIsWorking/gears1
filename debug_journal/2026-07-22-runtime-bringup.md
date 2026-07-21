@@ -509,3 +509,87 @@ place to start.
 
 Do **not** re-investigate: allocator overlap, buffer overrun, missing game data,
 or the jump-table errors. All four are eliminated.
+
+---
+
+## The disputed field: whose object is it, and a vblank hypothesis (not the cause)
+
+### Which allocation owns it
+
+`0xA06F0308` sits in a **4 KiB physical block at `0xA06F0000`**, from a single
+`MmAllocatePhysicalMemoryEx(size=4096, alignment=4096)`. Allocation path:
+
+```
+sub_826C4F28 -> sub_826C4960 -> sub_826C4648 -> sub_826C4580
+             -> sub_822193B0 -> sub_82612800 -> sub_826126C0 -> MmAllocatePhysicalMemoryEx
+```
+
+The crash path descends from the **same ancestor** by a different branch:
+
+```
+sub_826C4F28 -> sub_826C4C28 -> sub_826C49C8 -> sub_8272B7F8
+             -> sub_82722F38 -> sub_82766F68   (crash)
+```
+
+So one subtree of `sub_826C4F28` allocates the block and another walks it.
+
+### How the walker derives its pointer
+
+At `sub_82722F38` `loc_827230D0`:
+
+```
+lwz    r11,0(r30)
+rlwinm r11,r11,0,0,30   ; r11 &= ~1  -- the low bit is a TAG
+addi   r31,r11,-32      ; container_of: node -> owner, member offset 32
+```
+
+This is an intrusive list with a **tagged pointer**: bit 0 carries a flag and is
+masked off, then 32 is subtracted to reach the containing object. So the walker
+believes it holds a node whose owner begins 32 bytes earlier.
+
+Numbers for the current build: the walker's argument is `0xA06F032C`, so the
+untagged node pointer was `0xA06F034C`. The float path's object base is
+`0xA06F0308` and it writes at `+36` — the same `0xA06F032C`.
+
+`0xA06F034C - 0xA06F0308 = 0x44` (68). The two paths therefore place their
+structures at different offsets within one 4 KiB block.
+
+The tag bit is worth noting: if the low bit of that stored pointer were ever set
+when the title did not intend it, the masking would still produce a clean
+pointer, so a corrupted tag cannot be detected by inspecting the result.
+
+### Vblank hypothesis — tested, NOT the cause
+
+Reasoning: `VdSetGraphicsInterruptCallback` registered a callback that never
+fired. Titles advance real state machines from the vblank interrupt, so a frozen
+state machine could plausibly leave one subsystem reusing memory another still
+points at — which is exactly the observed symptom.
+
+Implemented: a host thread now drives the registered callback at 60 Hz on its
+own guest thread block. `GEARS_NO_VBLANK=1` restores the never-fires behaviour
+so the two can be compared.
+
+**Result: no change.** Same crash, same function, same line, and the same
+amount of progress before it (identical count of threads started and frames
+submitted with the interrupt on and off). The hypothesis is **rejected** as the
+cause of this crash.
+
+The vblank thread has been kept regardless, because never raising the interrupt
+is its own inaccuracy rather than a neutral omission — but it is not a fix and
+must not be recorded as one.
+
+### Where this leaves it
+
+Both accesses are in bounds, the allocator is behaving, the interrupt is now
+firing, and the two paths still disagree about the layout of one 4 KiB block.
+The remaining candidates are, in order:
+
+1. A wrong value stored into the tagged pointer at `*(r30+0)` earlier — trace
+   who writes `r30`'s list rather than the object.
+2. `sub_826C4F28` running its two subtrees in an order the console would not,
+   e.g. because something we return causes an initialisation branch to be taken
+   or skipped.
+3. An actual recompiler defect in one of the two paths. Nothing points here yet
+   and it should stay last, but `rlwinm rD,rS,0,0,30` and the `container_of`
+   arithmetic are worth hand-checking against the PPC semantics before trusting
+   them.
