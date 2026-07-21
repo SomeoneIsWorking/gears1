@@ -38,4 +38,10 @@ private:
 // Returns the number of entries installed.
 size_t InstallFunctionTable(GuestMemory& memory);
 
+// The process-wide guest memory. There is exactly one guest address space, and
+// guest threads created later need to reach it without threading a reference
+// through every kernel import.
+GuestMemory& Memory();
+void SetMemory(GuestMemory& memory);
+
 } // namespace gears

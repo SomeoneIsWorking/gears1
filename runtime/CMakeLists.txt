@@ -46,6 +46,9 @@ add_executable(gears1
     kernel_sync.cpp
     kernel_misc.cpp
     kernel_time.cpp
+    kernel_objects.cpp
+    kernel_events.cpp
+    kernel_thread.cpp
     "${IMPORT_STUBS}")
 
 target_include_directories(gears1 PRIVATE .)

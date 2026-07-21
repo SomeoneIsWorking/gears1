@@ -78,6 +78,21 @@ bool GuestMemory::Commit(uint32_t address, uint32_t size)
     return true;
 }
 
+namespace
+{
+GuestMemory* g_memory = nullptr;
+}
+
+GuestMemory& Memory()
+{
+    return *g_memory;
+}
+
+void SetMemory(GuestMemory& memory)
+{
+    g_memory = &memory;
+}
+
 size_t InstallFunctionTable(GuestMemory& memory)
 {
     if (!memory.Commit(uint32_t(kFuncTableBase), uint32_t(kFuncTableSize)))

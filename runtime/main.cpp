@@ -81,6 +81,8 @@ int main(int argc, char* argv[])
     if (!memory.Reserve())
         return EXIT_FAILURE;
 
+    gears::SetMemory(memory);
+
     if (!memory.Commit(uint32_t(image.base), image.size))
         return EXIT_FAILURE;
     memcpy(memory.Base() + image.base, image.data.get(), image.size);
