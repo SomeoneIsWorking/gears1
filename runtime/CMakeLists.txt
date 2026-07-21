@@ -55,6 +55,10 @@ add_executable(gears1
     kernel_rtl.cpp
     kernel_config.cpp
     kernel_dispatcher.cpp
+    kernel_spinlock.cpp
+    xaudio_null.cpp
+    guest_filesystem.cpp
+    kernel_file.cpp
     "${IMPORT_STUBS}")
 
 target_include_directories(gears1 PRIVATE .)

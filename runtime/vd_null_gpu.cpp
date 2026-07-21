@@ -17,6 +17,7 @@
 #include <byteswap.h>
 #include <lucent/log.h>
 
+#include "guest_heap.h"
 #include "guest_memory.h"
 
 PPC_EXTERN_FUNC(__imp__XGetVideoMode);
@@ -60,22 +61,26 @@ void RetireRingBuffer()
 namespace gears
 {
 
-// The Xenos register file, which guest code reaches through the MMIO load and
-// store macros rather than through any Vd* call. On hardware some of these
-// registers have side effects -- writing the command-processor pointers kicks
-// off work. With no command processor there is nothing to kick, so the window
-// is plain memory: reads see back what was written, which is what register
-// save/restore sequences expect.
-bool CommitGpuRegisterFile(GuestMemory& memory)
+// The console's memory-mapped device window. Guest code reaches it through the
+// MMIO macros and through byte-reversed loads and stores (`lwbrx`/`stwbrx`,
+// because device registers are little-endian), never through a Vd* call. The
+// Xenos register file at 0x7FC80000 lives here, along with other device blocks.
+//
+// The whole window is committed as inert memory rather than page-by-page as
+// each new block is discovered: no devices are modelled, so every register in
+// it behaves the same way -- reads see back what was written. Committing it as
+// one region is a model; committing addresses individually as they fault would
+// just be chasing symptoms.
+bool CommitDeviceWindow(GuestMemory& memory)
 {
-    constexpr uint32_t kRegisterFileBase = 0x7FC80000;
-    constexpr uint32_t kRegisterFileSize = 0x10000;
+    constexpr uint32_t kDeviceWindowBase = 0x7FC00000;
+    constexpr uint32_t kDeviceWindowSize = 0x00400000;
 
-    if (!memory.Commit(kRegisterFileBase, kRegisterFileSize))
+    if (!memory.Commit(kDeviceWindowBase, kDeviceWindowSize))
         return false;
 
-    lucent::info("gpu", "Xenos register file at {:#x}, {} KiB (inert)",
-        kRegisterFileBase, kRegisterFileSize / 1024);
+    lucent::info("gpu", "device MMIO window {:#x}..{:#x} committed (inert)",
+        kDeviceWindowBase, kDeviceWindowBase + kDeviceWindowSize);
     return true;
 }
 
@@ -214,5 +219,31 @@ void __imp__VdQueryVideoMode(PPCContext& __restrict ctx, uint8_t* base)
 {
     // Same mode XGetVideoMode reports; the two must not disagree.
     __imp__XGetVideoMode(ctx, base);
+    ctx.r3.u64 = 0;
+}
+
+// The system command buffer is a small ring the driver writes into directly.
+// It is handed out as real, committed memory so the guest's writes land
+// somewhere valid -- but as with the main ring buffer, nothing interprets what
+// it writes.
+void __imp__VdGetSystemCommandBuffer(PPCContext& __restrict ctx, uint8_t*)
+{
+    static uint32_t s_commandBuffer = 0;
+    if (s_commandBuffer == 0)
+    {
+        uint32_t size = 0x10000;
+        s_commandBuffer = gears::PhysicalHeap().Allocate(
+            0, size, gears::kMemCommit | gears::kMemLargePages);
+        lucent::info("gpu", "system command buffer at {:#x} (inert)", s_commandBuffer);
+    }
+
+    StoreGuest32(ctx.r3.u32, s_commandBuffer);
+    StoreGuest32(ctx.r4.u32, 0);
+    ctx.r3.u64 = 0;
+}
+
+void __imp__VdInitializeScalerCommandBuffer(PPCContext& __restrict ctx, uint8_t*)
+{
+    // Returns the number of command words written. Writing none is truthful.
     ctx.r3.u64 = 0;
 }

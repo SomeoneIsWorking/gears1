@@ -7,6 +7,7 @@ unpacking the whole 7.8 GB filesystem.
 Usage:
     gdf_extract.py <iso> --list
     gdf_extract.py <iso> --extract default.xex --out <path>
+    gdf_extract.py <iso> --extract-all <directory>
 
 The ISO path defaults to $GEARS_ISO (see .env).  Nothing from the disc is ever
 written inside the repo's tracked tree -- point --out at scratch/.
@@ -87,6 +88,8 @@ def main():
     ap.add_argument("--list", action="store_true")
     ap.add_argument("--extract", help="path inside the disc, e.g. default.xex")
     ap.add_argument("--out", help="destination file for --extract")
+    ap.add_argument("--extract-all", metavar="DIR",
+                    help="extract the whole disc into DIR, preserving layout")
     args = ap.parse_args()
 
     if not args.iso:
@@ -104,6 +107,37 @@ def main():
             for path, start, size, attr in sorted(entries):
                 kind = "DIR " if attr & ATTR_DIRECTORY else "FILE"
                 print(f"{kind} {size:>12} {path}")
+            return
+
+        if args.extract_all:
+            root = args.extract_all
+            files = [e for e in entries if not (e[3] & ATTR_DIRECTORY)]
+            total = sum(e[2] for e in files)
+            written = 0
+            for i, (path, start, size, _attr) in enumerate(sorted(files), 1):
+                dest = os.path.join(root, path)
+                os.makedirs(os.path.dirname(dest) or root, exist_ok=True)
+                # Skip files already present at the right size so an interrupted
+                # extraction can be resumed rather than restarted.
+                if os.path.exists(dest) and os.path.getsize(dest) == size:
+                    written += size
+                    continue
+                f.seek(base + start * SECTOR)
+                with open(dest, "wb") as out:
+                    remaining = size
+                    while remaining > 0:
+                        chunk = f.read(min(remaining, 8 << 20))
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        remaining -= len(chunk)
+                written += size
+                if i % 100 == 0 or i == len(files):
+                    sys.stderr.write(
+                        f"\r{i}/{len(files)} files, "
+                        f"{written/1e9:.2f}/{total/1e9:.2f} GB")
+                    sys.stderr.flush()
+            sys.stderr.write("\ndone\n")
             return
 
         if args.extract:
