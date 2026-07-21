@@ -10,6 +10,8 @@
 #include "guest_memory.h"
 #include "guest_heap.h"
 #include "guest_thread.h"
+
+namespace gears { bool CommitGpuRegisterFile(GuestMemory& memory); }
 #include "import_variables.h"
 #include "ppc_recomp_shared.h"
 
@@ -93,6 +95,9 @@ int main(int argc, char* argv[])
 
     gears::ResolveImportVariables(memory, image);
     gears::InitialiseHeaps(memory);
+
+    if (!gears::CommitGpuRegisterFile(memory))
+        return EXIT_FAILURE;
 
     gears::GuestThreadBlock mainThread{};
     if (!gears::CreateGuestThreadBlock(memory, kStackSize, mainThread))

@@ -97,3 +97,20 @@ void __imp__FscSetCacheElementCount(PPCContext& __restrict ctx, uint8_t*)
     lucent::debug("kernel", "FscSetCacheElementCount({}) -> success", ctx.r4.u32);
     ctx.r3.u64 = 0;
 }
+
+// The title registers a routine to run when it is being torn down. Nothing
+// tears a title down here yet, so the registration is recorded and the routine
+// is never invoked.
+void __imp__ExRegisterTitleTerminateNotification(PPCContext& __restrict ctx, uint8_t*)
+{
+    lucent::debug("kernel", "ExRegisterTitleTerminateNotification(routine={:#x}, create={})",
+        ctx.r3.u32, ctx.r4.u32);
+    ctx.r3.u64 = 0;
+}
+
+// A deliberately empty APC routine the kernel exports so callers have
+// something valid to point at. Doing nothing is the whole contract.
+void __imp__KiApcNormalRoutineNop(PPCContext& __restrict ctx, uint8_t*)
+{
+    ctx.r3.u64 = 0;
+}

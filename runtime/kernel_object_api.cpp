@@ -45,10 +45,11 @@ void __imp__KeWaitForSingleObject(PPCContext& __restrict ctx, uint8_t* base)
     const uint32_t objectAddress = ctx.r3.u32;
     const uint32_t timeoutPtr = ctx.r7.u32;
 
-    auto object = gears::LookupByGuestAddress(objectAddress);
+    // Not finding it is normal: the title may have initialised this dispatcher
+    // object in its own memory without ever going through a handle.
+    auto object = gears::BindGuestDispatcherObject(objectAddress);
     if (!object)
     {
-        lucent::error("kernel", "KeWaitForSingleObject: unknown object {:#x}", objectAddress);
         ctx.r3.u64 = gears::kStatusInvalidHandle;
         return;
     }
