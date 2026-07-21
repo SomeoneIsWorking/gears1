@@ -593,3 +593,73 @@ The remaining candidates are, in order:
    and it should stay last, but `rlwinm rD,rS,0,0,30` and the `container_of`
    arithmetic are worth hand-checking against the PPC semantics before trusting
    them.
+
+---
+
+## The walker is a tagged-pointer tree traversal; recompiler semantics checked
+
+### Candidate 3 (recompiler defect) — the two suspect instructions are correct
+
+Hand-checked against PPC semantics rather than assumed:
+
+- `rlwinm rA,rS,0,0,30`: rotate by 0, mask bits 0..30 in MSB-first numbering =
+  `0xFFFFFFFE`, i.e. clear the LSB. Emitted as
+  `__builtin_rotateleft64(...,0) & 0xFFFFFFFE`. **Correct.**
+- `addi r31,r11,-32` emitted as `r31.s64 = r11.s64 + -32`. **Correct.**
+
+That does not clear the recompiler generally, but it removes the two
+instructions this bug actually depends on. Candidate 3 stays last.
+
+### What the traversal really is
+
+The path that produces the bad pointer is at `ppc_recomp.111.cpp:50611-50618`,
+not the one at `50649` that was checked first. Confirmed by conditional
+breakpoints on all three candidate sites — only the middle one fires.
+
+```
+rlwinm r11,r31,0,0,30   ; untag the current node
+lwz    r11,28(r11)      ; follow the link at offset 28
+clrlwi. r10,r11,31      ; test the tag bit of what was loaded
+beq    loc_8272309C
+  mr   r31,r20          ; tag set -> r20, which is 0: end of traversal
+loc_8272309C:
+  rlwinm r11,r11,0,0,30 ; tag clear -> untag
+  addi   r31,r11,-32    ; container_of, member at offset 32
+```
+
+So this is a **tagged-pointer tree or intrusive list**: links live at offset 28,
+bit 0 of a link is a flag, `r20 = 0` is the null sentinel, and a node is
+converted to its container by subtracting 32.
+
+Measured at the failing step: the link loaded from `+28` is `0xA06F034C` with
+the tag clear, giving container `0xA06F032C`.
+
+### The overlap, stated precisely
+
+- Walker: container base `0xA06F032C`, node member at `+32` (`0xA06F034C`).
+- Float path: object base `0xA06F0308`, writes its field at `+36`
+  (`0xA06F032C`).
+
+The two bases differ by `0x24` (36) and the objects overlap. Both live in the
+same 4 KiB physical block, which — given it holds many small linked nodes — is
+almost certainly a **pool the title sub-allocates from**.
+
+A node freed back to that pool and reused while something still linked to it
+would produce exactly this: one subsystem writing a float where another still
+expects a live tree node.
+
+### Why the call-site state cannot be read directly
+
+`r30` at the call site is `0xA06F005C` and its slot holds `0xA06F0640`, which is
+*not* the value that produced `r31`. The caller loops, so by the time the call
+executes `r30` has already advanced. Reading iteration state at a call site in
+this function is meaningless; break on the specific assignment instead, with a
+condition on the value being produced.
+
+### Next
+
+The question is now "who returned this node to the pool, and why", not "who
+wrote the float". Concretely: find the pool's free path and watch the node at
+`0xA06F034C` being unlinked or freed, then work out what triggered it. That is
+a guest-side lifetime question, and the runtime's most plausible contribution
+remains `ObDereferenceObject` never decrementing a refcount — still untested.
