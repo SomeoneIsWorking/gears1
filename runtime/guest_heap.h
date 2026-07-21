@@ -4,6 +4,7 @@
 #include <map>
 
 #include "guest_memory.h"
+#include "kernel_status.h"
 
 namespace gears
 {
@@ -12,10 +13,6 @@ namespace gears
 constexpr uint32_t kMemCommit = 0x00001000;
 constexpr uint32_t kMemReserve = 0x00002000;
 constexpr uint32_t kMemLargePages = 0x20000000;
-
-constexpr uint32_t kStatusSuccess = 0x00000000;
-constexpr uint32_t kStatusNoMemory = 0xC0000017;
-constexpr uint32_t kStatusInvalidParameter = 0xC000000D;
 
 // A page-granular allocator over one span of the guest address space.
 //
