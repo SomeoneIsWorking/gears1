@@ -29,7 +29,9 @@ public:
 
     // Returns the guest base address, or 0 if the request cannot be satisfied.
     // On success `size` is updated to the page-rounded size actually reserved.
-    uint32_t Allocate(uint32_t requestedBase, uint32_t& size, uint32_t allocationType);
+    // `alignment` of 0 means "use the page size implied by allocationType".
+    uint32_t Allocate(uint32_t requestedBase, uint32_t& size, uint32_t allocationType,
+        uint32_t alignment = 0);
     bool Free(uint32_t address);
 
 private:
@@ -41,6 +43,12 @@ private:
 };
 
 GuestHeap& TitleHeap();
-void InitialiseTitleHeap(GuestMemory& memory);
+
+// Physical memory, which the console maps near the top of the address space and
+// the graphics path allocates from. Kept separate from the title heap because
+// the guest distinguishes the two and passes physical addresses to the GPU.
+GuestHeap& PhysicalHeap();
+
+void InitialiseHeaps(GuestMemory& memory);
 
 } // namespace gears

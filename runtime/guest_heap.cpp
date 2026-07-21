@@ -21,11 +21,15 @@ uint32_t RoundUp(uint32_t value, uint32_t alignment)
 }
 
 GuestHeap* g_titleHeap = nullptr;
+GuestHeap* g_physicalHeap = nullptr;
 } // namespace
 
-uint32_t GuestHeap::Allocate(uint32_t requestedBase, uint32_t& size, uint32_t allocationType)
+uint32_t GuestHeap::Allocate(uint32_t requestedBase, uint32_t& size, uint32_t allocationType,
+    uint32_t alignment)
 {
-    const uint32_t pageSize = PageSizeFor(allocationType);
+    uint32_t pageSize = PageSizeFor(allocationType);
+    if (alignment > pageSize)
+        pageSize = alignment;
     const uint32_t roundedSize = RoundUp(size, pageSize);
     if (roundedSize == 0)
         return 0;
@@ -88,13 +92,25 @@ GuestHeap& TitleHeap()
     return *g_titleHeap;
 }
 
-void InitialiseTitleHeap(GuestMemory& memory)
+GuestHeap& PhysicalHeap()
+{
+    return *g_physicalHeap;
+}
+
+void InitialiseHeaps(GuestMemory& memory)
 {
     // The 64 KiB-page virtual range on the console. Kept clear of the image
     // (0x82000000), the stack and the import-variable storage.
-    static GuestHeap heap(memory, 0x40000000, 0x20000000);
-    g_titleHeap = &heap;
+    static GuestHeap titleHeap(memory, 0x40000000, 0x20000000);
+    g_titleHeap = &titleHeap;
     lucent::info("heap", "title heap at 0x40000000, 512 MiB");
+
+    // The console's physical range. Addresses from here are what the guest
+    // hands to the GPU, so they must come from this window and not the title
+    // heap.
+    static GuestHeap physicalHeap(memory, 0xA0000000, 0x20000000);
+    g_physicalHeap = &physicalHeap;
+    lucent::info("heap", "physical heap at 0xA0000000, 512 MiB");
 }
 
 } // namespace gears

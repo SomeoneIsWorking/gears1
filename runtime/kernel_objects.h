@@ -58,6 +58,13 @@ private:
 
 HandleTable& Handles();
 
+// Some kernel APIs take a pointer to the object itself rather than a handle
+// (the console's dispatcher objects live in guest memory). Objects are given a
+// guest address lazily, the first time one is actually asked for, so the common
+// handle-only path costs nothing.
+uint32_t GuestAddressForHandle(uint32_t handle);
+std::shared_ptr<KernelObject> LookupByGuestAddress(uint32_t address);
+
 // A suspended thread's resume gate, keyed by its handle. Kept beside the handle
 // table because a thread handle waits on *exit*, so the resume signal needs its
 // own home rather than overloading the same object.

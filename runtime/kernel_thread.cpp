@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <memory>
+#include <chrono>
 #include <thread>
 
 #include <byteswap.h>
@@ -134,5 +135,57 @@ void __imp__NtResumeThread(PPCContext& __restrict ctx, uint8_t*)
 void __imp__KeResumeThread(PPCContext& __restrict ctx, uint8_t*)
 {
     gears::ResumeThread(ctx.r3.u32);
+    ctx.r3.u64 = gears::kStatusSuccess;
+}
+
+// The title pins work to specific Xenon hardware threads. That mapping is
+// meaningless on a host with different topology and core counts, so the request
+// is recorded and reported back but not honoured -- the host scheduler places
+// the thread. Forcing a host affinity to mimic six SMT threads would constrain
+// the scheduler for no benefit.
+void __imp__KeSetAffinityThread(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t affinity = ctx.r4.u32;
+    const uint32_t previousPtr = ctx.r5.u32;
+
+    lucent::debug("thread", "KeSetAffinityThread(object={:#x}, mask={:#x}) -- not honoured",
+        ctx.r3.u32, affinity);
+
+    if (previousPtr != 0)
+        *reinterpret_cast<uint32_t*>(base + previousPtr) = ByteSwap(affinity);
+
+    ctx.r3.u64 = affinity;
+}
+
+void __imp__KeSetBasePriorityThread(PPCContext& __restrict ctx, uint8_t*)
+{
+    // Host thread priorities need privileges we do not have and do not map
+    // cleanly onto the console's scheme; the previous priority is reported so
+    // the guest's save/restore pairs stay balanced.
+    lucent::debug("thread", "KeSetBasePriorityThread({}) -- not honoured", int32_t(ctx.r4.u32));
+    ctx.r3.u64 = 0;
+}
+
+void __imp__KeDelayExecutionThread(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t timeoutPtr = ctx.r5.u32;
+    if (timeoutPtr == 0)
+    {
+        std::this_thread::yield();
+        ctx.r3.u64 = gears::kStatusSuccess;
+        return;
+    }
+
+    const int64_t raw = int64_t(ByteSwap(*reinterpret_cast<uint64_t*>(base + timeoutPtr)));
+    if (raw > 0)
+    {
+        lucent::warn("thread", "absolute delay {} not supported, yielding instead", raw);
+        std::this_thread::yield();
+    }
+    else
+    {
+        std::this_thread::sleep_for(std::chrono::nanoseconds(-raw * 100));
+    }
+
     ctx.r3.u64 = gears::kStatusSuccess;
 }

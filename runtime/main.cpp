@@ -92,7 +92,7 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
 
     gears::ResolveImportVariables(memory, image);
-    gears::InitialiseTitleHeap(memory);
+    gears::InitialiseHeaps(memory);
 
     gears::GuestThreadBlock mainThread{};
     if (!gears::CreateGuestThreadBlock(memory, kStackSize, mainThread))
