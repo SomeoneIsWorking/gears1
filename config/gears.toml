@@ -1,0 +1,29 @@
+[main]
+file_path = "../scratch/bin/default.xex"
+out_directory_path = "../scratch/ppc"
+switch_table_file_path = "../scratch/config/gears_switch_tables.toml"
+
+# All optimizations off for the first pass, per XenonRecomp README:
+# do not enable until there is a working recompilation.
+skip_lr = false
+skip_msr = false
+ctr_as_local = false
+xer_as_local = false
+reserved_as_local = false
+cr_as_local = false
+non_argument_as_local = false
+non_volatile_as_local = false
+
+# Byte-pattern-scanned from the decompressed image by tools/xex_probe.
+restgprlr_14_address = 0x828D2830
+savegprlr_14_address = 0x828D27E0
+restfpr_14_address   = 0x828D424C
+savefpr_14_address   = 0x828D4200
+restvmx_14_address   = 0x828D7AF8
+savevmx_14_address   = 0x828D7860
+restvmx_64_address   = 0x828D7B8C
+savevmx_64_address   = 0x828D78F4
+
+# longjmp_address / setjmp_address: not yet located. Omitted deliberately
+# rather than guessed -- the recompiler treats them as ordinary functions
+# until identified.

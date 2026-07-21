@@ -1,0 +1,4 @@
+[submodule "extern/XenonRecomp"]
+	path = extern/XenonRecomp
+	url = https://github.com/SomeoneIsWorking/XenonRecomp.git
+	branch = gears
