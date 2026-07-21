@@ -7,7 +7,7 @@ I/O), following the [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) /
 [N64Recomp](https://github.com/N64Recomp/N64Recomp) model.
 
 **Status: early.** The executable recompiles, and guest code executes on
-multiple threads, reaching Xenos GPU initialisation during startup. Nothing is
+multiple threads, running past Xenos GPU initialisation on three threads. Nothing is
 rendered yet. See
 [`debug_journal/`](debug_journal/) for dated, honest write-ups of what has and
 has not been verified.
@@ -21,20 +21,22 @@ has not been verified.
   unimplemented instructions**, and all 193 translation units compile.
 - The runtime maps the image, installs 49,475 functions into the indirect-call
   table, and runs guest code through memory allocation, the kernel object
-  manager, timing and display queries — **43 of 226** kernel imports.
+  manager, timing and display queries — **74 of 226** kernel imports.
 - **Guest threading works.** `ExCreateThread` gives each guest thread its own
   context, KPCR, TLS and stack; two guest threads run concurrently with the
   main thread, deterministically across runs.
 
 ## What does not
 
-- **Nothing is rendered.** No graphics, audio, input or file I/O. 183 kernel
+- **Nothing is rendered.** No graphics, audio, input or file I/O. 152 kernel
   imports are unimplemented; each aborts loudly with its name and arguments the
   first time the game calls it.
 - **1,394 jump-table / function-boundary errors.** XenonRecomp's function
   analyser treats a jump table as a tail call and cuts functions short.
-- **No GPU backend.** Boot stops at `VdInitializeEngines`; past that nothing
-  works without a real Xenos command-buffer implementation.
+- **No GPU backend.** The `Vd*` surface is a *null GPU*: it tracks driver state
+  and retires command buffers without executing them, and the Xenos register
+  file is inert memory. Registered graphics interrupts never fire. Nothing is
+  rasterised or presented.
 
 ## You must supply the game
 
