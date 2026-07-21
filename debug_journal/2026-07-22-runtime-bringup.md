@@ -780,3 +780,47 @@ The next concrete step is to find where the pool's bump/free cursor for this
 block lives, and watch it: if the cursor is reset or rewound between the two
 sub-allocations, that identifies the mechanism. Until then, no fix should be
 attempted — every remaining guess would be a change made without knowing why.
+
+---
+
+## Correction: "the pool double-allocates" was over-stated
+
+Watching `0xA06F0308` — the address previously called "the float path's object
+base" — on all four aliases from process start gives **no writes at all**.
+
+An allocation base that is never written is not an allocation base. `r29` is a
+pointer some code computes `+36` from; it does not follow that an object begins
+there. Last entry's conclusion, that the title's pool handed out two overlapping
+regions with bases `0xA06F0308` and `0xA06F032C`, rested on that assumption and
+is **withdrawn**.
+
+### What is actually established
+
+The disputed word is a single address, `0xA06F032C`, and both paths agree on it:
+
+- `sub_82761CA8` writes a **float** there (`stfs f0,0(r9)`, count 1, in bounds).
+- `sub_826ED298` uses it as a **list head** (`node->next = *head; *head = node`),
+  which is how `1.0f` got copied into `0xA06F0358` and became the crash's
+  `r31 = 0x3F800000`.
+
+So one word is used as a float by one subsystem and as a list-head pointer by
+another. That much is measured. Whether that is two overlapping allocations, a
+union, or one path holding a wrong pointer is **not** established, and the
+evidence for the overlap reading has just been removed.
+
+### Method note
+
+This is the second conclusion in this investigation built on a register value
+rather than on an address that was actually observed (`r10 == 1` was the first).
+Registers describe what code *computed*; only watched addresses describe what
+memory *is*. Where the two disagree, the addresses win.
+
+Rule going forward for this bug: a claim about an object's identity or extent
+needs a write to that object, not an arithmetic relationship to a register.
+
+### Next
+
+Determine which of the two uses is wrong by finding which one owns the memory:
+watch the whole 4 KiB block's first use and identify the structure written
+there, or find the allocation that returned `0xA06F032C` (as opposed to the
+4 KiB block, whose origin is known). Do not assume either path is correct.
