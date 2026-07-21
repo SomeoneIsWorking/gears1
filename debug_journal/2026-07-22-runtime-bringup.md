@@ -242,3 +242,73 @@ guessing one is worse than refusing.
 
 Nothing is rendered. No file I/O, audio or input. The 1,394
 jump-table/function-boundary errors remain unhit and unaddressed.
+
+---
+
+## Continued: real file I/O, and the first crash that is not a missing import
+
+**102 of 226** imports.
+
+### File I/O is real, not a null layer
+
+`guest_filesystem` maps the console's device paths (`\Device\Cdrom0\`,
+`game:\`, …) onto a host directory of extracted disc files, with a
+case-insensitive fallback — the console's file systems are case-insensitive and
+a Linux host is not, so a straight path join reports files missing that are
+really there.
+
+`tools/gdf_extract.py` grew `--extract-all`, resumable so an interrupted run
+continues rather than restarting. The full 6.7 GB of disc data is now extracted
+to `scratch/game` (6.3 GB on disk).
+
+Unhandled `NtQueryInformationFile` classes are refused **by name** rather than
+answered with zeros, because a zeroed reply looks valid. Opening a directory is
+refused outright: `NtQueryDirectoryFile` is not implemented, and a handle that
+silently fails every later operation is worse than no handle.
+
+### Device MMIO window
+
+Guest code reaches device registers at fixed addresses using byte-reversed
+loads (`lwbrx` — device registers are little-endian), not through any `Vd*`
+call. After the Xenos register file at `0x7FC80000`, a second block at
+`0x7FEA1800` faulted. Rather than commit pages one at a time as each faults,
+the whole `0x7FC00000` window is committed as one inert region. Committing a
+window is a model; committing addresses as they fault is chasing symptoms.
+
+### CURRENT BLOCKER — a real bug, not a missing import
+
+Boot now dies with SIGSEGV in `sub_82766F68`:
+
+```
+	// lwz r31,0(r28)
+	ctx.r31.u64 = PPC_LOAD_U32(ctx.r28.u32 + 0);
+	// cmplwi cr6,r31,0        <- the game null-checks it, and it passes
+	// lwz r30,12(r31)         <- faults here
+```
+
+`r31 = 0x3F800000`, which is the bit pattern of `1.0f` being used as a pointer.
+The game's own null check passes because the value is non-zero. So the struct
+`r4` points at has a float where a pointer belongs — the field was never
+initialised, or something wrote a float over it.
+
+Call path: `sub_826C49C8` → `sub_8272B7F8` → `sub_82722F38` → `sub_82766F68`.
+
+**Ruled out:**
+
+- *Not* caused by missing game data. The crash is byte-identical with and
+  without `scratch/game` present, at the same instruction, and only one
+  filesystem call happens before it.
+- *Not* one of the 1,394 jump-table/function-boundary errors. None of the four
+  functions in the call path appears anywhere in the recompiler's
+  switch-escape error list. That hypothesis is dead; do not re-check it.
+
+The one filesystem request seen before the crash is
+`NtQueryFullAttributesFile("ShaderDumpxe:\CompareBackEnds")`, which does not
+resolve. The odd-looking path is not necessarily wrong — it may be a UE3 debug
+path — but it is worth confirming the `X_ANSI_STRING` length is being read
+correctly before trusting it.
+
+**Next:** trace back through the call path to find which of the four frames
+produces the bad struct, and whether the float lands there from guest code or
+from a wrong value one of the runtime's own stubs returned. Do not guess a fix
+before that is known.
