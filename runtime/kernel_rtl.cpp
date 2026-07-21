@@ -148,3 +148,37 @@ void __imp__RtlNtStatusToDosError(PPCContext& __restrict ctx, uint8_t*)
     lucent::debug("kernel", "RtlNtStatusToDosError({:#x}) -> ERROR_GEN_FAILURE", status);
     ctx.r3.u64 = 31;
 }
+
+// VOID RtlFillMemoryUlong(PVOID Destination, SIZE_T Length, ULONG Pattern)
+// Length is in bytes but always a multiple of four; the pattern is written as a
+// big-endian guest word, so the stored bytes match what the guest would write.
+void __imp__RtlFillMemoryUlong(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t dest = ctx.r3.u32;
+    const uint32_t length = ctx.r4.u32;
+    const uint32_t pattern = ByteSwap(ctx.r5.u32);
+
+    auto* out = reinterpret_cast<uint32_t*>(base + dest);
+    for (uint32_t i = 0; i < length / 4; i++)
+        out[i] = pattern;
+}
+
+// SIZE_T RtlCompareMemoryUlong(PVOID Source, SIZE_T Length, ULONG Pattern)
+// Returns the number of leading bytes that match the pattern.
+void __imp__RtlCompareMemoryUlong(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t source = ctx.r3.u32;
+    const uint32_t length = ctx.r4.u32;
+    const uint32_t pattern = ByteSwap(ctx.r5.u32);
+
+    const auto* in = reinterpret_cast<const uint32_t*>(base + source);
+    uint32_t matched = 0;
+    for (uint32_t i = 0; i < length / 4; i++)
+    {
+        if (in[i] != pattern)
+            break;
+        matched += 4;
+    }
+
+    ctx.r3.u64 = matched;
+}

@@ -91,9 +91,12 @@ void __imp__NtWaitForSingleObjectEx(PPCContext& __restrict ctx, uint8_t* base)
     ctx.r3.u64 = WaitOn(ctx.r3.u32, ReadTimeout(base, ctx.r6.u32));
 }
 
+// File handles live in their own table, so closing has to try both.
+bool CloseGuestFile(uint32_t handle);
+
 void __imp__NtClose(PPCContext& __restrict ctx, uint8_t*)
 {
-    ctx.r3.u64 = gears::Handles().Close(ctx.r3.u32)
-        ? gears::kStatusSuccess
-        : gears::kStatusInvalidHandle;
+    const uint32_t handle = ctx.r3.u32;
+    const bool closed = gears::Handles().Close(handle) || CloseGuestFile(handle);
+    ctx.r3.u64 = closed ? gears::kStatusSuccess : gears::kStatusInvalidHandle;
 }

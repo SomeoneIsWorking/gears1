@@ -1,6 +1,7 @@
 #pragma once
 
 #include "implemented_imports.h"
+#include "kernel_status.h"
 #include "ppc_config.h"
 #include "ppc_context.h"
 

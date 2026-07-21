@@ -4,8 +4,6 @@
 #include <optional>
 
 #include <byteswap.h>
-
-#include "kernel_status.h"
 #include <lucent/log.h>
 
 namespace

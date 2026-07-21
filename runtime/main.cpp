@@ -9,9 +9,10 @@
 
 #include "guest_memory.h"
 #include "guest_heap.h"
+#include "guest_filesystem.h"
 #include "guest_thread.h"
 
-namespace gears { bool CommitGpuRegisterFile(GuestMemory& memory); }
+namespace gears { bool CommitDeviceWindow(GuestMemory& memory); }
 #include "import_variables.h"
 #include "ppc_recomp_shared.h"
 
@@ -51,9 +52,18 @@ int main(int argc, char* argv[])
 
     if (argc < 2)
     {
-        lucent::error("boot", "usage: {} <path to default.xex>", argv[0]);
+        lucent::error("boot", "usage: {} <path to default.xex> [game data directory]", argv[0]);
         return EXIT_FAILURE;
     }
+
+    // Where the title's own data files live, extracted from the user's disc.
+    // Without it the game runs but every file open fails, which is a legitimate
+    // way to test the rest of the runtime.
+    const char* gameDirectory = argc >= 3 ? argv[2] : getenv("GEARS_GAME_DIR");
+    if (gameDirectory != nullptr)
+        gears::Files().SetGameDirectory(gameDirectory);
+    else
+        lucent::warn("fs", "no game directory given; all file opens will fail");
 
     const std::filesystem::path xexPath = argv[1];
     std::vector<uint8_t> xex = ReadFile(xexPath);
@@ -96,7 +106,7 @@ int main(int argc, char* argv[])
     gears::ResolveImportVariables(memory, image);
     gears::InitialiseHeaps(memory);
 
-    if (!gears::CommitGpuRegisterFile(memory))
+    if (!gears::CommitDeviceWindow(memory))
         return EXIT_FAILURE;
 
     gears::GuestThreadBlock mainThread{};
