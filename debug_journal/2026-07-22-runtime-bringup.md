@@ -824,3 +824,52 @@ Determine which of the two uses is wrong by finding which one owns the memory:
 watch the whole 4 KiB block's first use and identify the structure written
 there, or find the allocation that returned `0xA06F032C` (as opposed to the
 4 KiB block, whose origin is known). Do not assume either path is correct.
+
+---
+
+## Full write history of the disputed word — and which use is the intruder
+
+Watched `0xA06F032C` on all four aliases from process start. **Exactly two
+writes in the entire run:**
+
+| # | PC | Function (post-write PC, so the store is the line before) | Value stored |
+|---|----|----|----|
+| 1 | `0xef2350` | `sub_82761CA8` — the `stfs f0,0(r9)` float store | `0x3F800000` (`1.0f`) |
+| 2 | `0xb2149a` | `sub_826ED298` — the push-front's `stw r4,0(r31)` | `0xA06F0354` (the node) |
+
+### Correcting the previous ordering entry
+
+The earlier run reported "two float writes then the tree follows". That was
+wrong: the printf labelled every hit `float-write` unconditionally. Write 2 is
+the **list-head store**, not a float. Same trap as before — the label was an
+assumption, not a measurement. Print the value, never a description of it.
+
+### What this settles
+
+Before write 1 the word is **zero**, and there is no earlier write. Zero is a
+valid empty list head. So the sequence is:
+
+1. The word is a zero-initialised, empty list head.
+2. `sub_82761CA8` stores `1.0f` over it.
+3. `sub_826ED298` pushes a node: reads the head (now `1.0f`), stores it as
+   `node->next` at `0xA06F0358`, then writes the real head. That read-and-copy
+   is what carries `1.0f` into the list.
+4. The walker follows `next` and dereferences `1.0f`. Crash.
+
+**The float store is the intruder.** It writes into a word that is a list head,
+and the list code is behaving correctly throughout — it faithfully propagates
+what it was given. This is the first time in this investigation that one of the
+two uses can be called wrong rather than merely conflicting, and it rests only
+on observed writes.
+
+### Next, and narrowly scoped
+
+In `sub_82761CA8` the destination is `r9 = r29 + 36` with a count of 1. Since
+the count and the store are in bounds and correct, **`r29` is the wrong value** —
+it is 36 bytes below a list head rather than pointing at whatever float field
+the code intends.
+
+So: trace where `r29` comes from in `sub_82761CA8`. That is a single-function
+question with a concrete target, and it is the first step in this investigation
+that starts from a known-wrong value rather than from a conflict of
+interpretations.
