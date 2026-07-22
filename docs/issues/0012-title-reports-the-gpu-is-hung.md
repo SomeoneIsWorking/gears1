@@ -118,3 +118,6 @@ VERIFIED RESULT: 150s run, zero 'GPU is hung' prints (was 100% reproducible); se
 
 ### Resolution (2026-07-22)
 The runtime never executed the driver protocol packets: submission arrives as a CP_RB_WPTR MMIO store (0x7FC80714) that landed silently in the inert device window, and retirement is EVENT_WRITE_SHD writing the ticket to 0x30A000 plus scratch-writeback + INTERRUPT(0x54) driving the title's ISR -- none of which existed. Implemented a minimal command processor in runtime/vd_null_gpu.cpp; verified the hang is gone.
+
+### Note (2026-07-22)
+ADDENDUM (scene phase): the 'GPU is hung' symptom returned during real scene rendering with the movie-phase protocol still correct. That recurrence was a DIFFERENT root cause -- VdSwap not filling the title's reserved 64-dword swap block in the command buffer, desyncing the CP walk past frame fences. Full analysis and fix recorded in entry #14. The command processor now also logs fence provenance (buffer+offset) which was decisive.
