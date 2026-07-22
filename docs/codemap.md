@@ -78,7 +78,11 @@ float store lands on a zero-initialised list head, the list code faithfully
 propagates it, the walker dereferences it. **Twelve mechanisms eliminated** —
 see the journal, and do not re-investigate them.
 
-Recommended next method is a **differential harness** against a reference
-emulator rather than further hypothesis-testing. Feasibility assessed: Xenia
-ships the needed instruction tracing, but its Linux support is described
-upstream as "extremely experimental and presently incomplete".
+Recommended next method is **static reverse engineering** of the two
+conflicting functions: determine from the binary what `sub_82761CA8` believes
+it is writing at `+36`, and what `sub_82766F68`'s walker believes lives there.
+
+A differential harness against Xenia was tried and **abandoned** — it never
+executed the title across many attempts, and an unreliable oracle is worse than
+none because any divergence is ambiguous between its bug and ours. See
+`catalog.py show 7`. Do not resume it.
