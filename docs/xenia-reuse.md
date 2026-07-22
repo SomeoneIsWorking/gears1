@@ -16,15 +16,20 @@ list and the disclaimer to be retained, and forbids using the project's or its
 contributors' names to endorse this one. `gears1` is a public repository, so
 this is a real obligation rather than a formality.
 
-The plan that satisfies it:
+This is satisfied by taking a **fork** rather than copying a subset in, which
+is both cleaner and less work to keep honest:
 
-- vendor under `extern/xenia-gpu/`, never intermingled with our own sources, so
-  the boundary is obvious to anyone reading the tree;
-- keep upstream's `LICENSE` verbatim at the root of that directory;
-- record provenance (upstream commit) in `extern/xenia-gpu/PROVENANCE.md`;
-- attribute in the top-level `README.md`;
-- keep local modifications minimal and marked, so they can be told apart from
-  upstream code.
+- `extern/xenia` is a submodule of `SomeoneIsWorking/xenia-canary`, a public
+  fork of `xenia-canary/xenia-canary`, pinned at upstream commit `a635ac6`;
+- upstream's `LICENSE`, copyright notices and full history come with it
+  untouched, so retention is automatic rather than something to remember;
+- the submodule boundary makes it obvious which code is ours and which is not,
+  with no file-by-file provenance to maintain;
+- changes we need (the capability shim below) are commits on the fork, so they
+  are visibly ours and can be offered upstream or rebased.
+
+Attribution still belongs in the top-level `README.md`, and the fork must stay
+public or `git clone --recursive` breaks for anyone else.
 
 ## What the dependency graph actually looks like
 
@@ -57,7 +62,7 @@ device is a shim, not a port.
 Take the SPIR-V path. Vulkan is the right target on this machine, and the
 back end's only coupling is the capability shim described above.
 
-Subset to vendor:
+Subset to compile from the fork (the rest of Xenia is not built):
 
 - `gpu/`: `ucode`, `xenos`, `shader`, `shader_translator`, `spirv_builder`,
   `spirv_shader_translator*`, `registers` + `register_table.inc`,
@@ -65,6 +70,10 @@ Subset to vendor:
 - `base/`: `math`, `memory`, `byte_order`, `string_buffer`, `assert`, and
   whatever platform header those pull in
 - ours: a `VulkanDevice`-shaped shim exposing `properties()` and `extensions()`
+
+Only these translation units get compiled into our target. The submodule brings
+the whole tree, but nothing links Xenia's GPU abstraction, command processor or
+window system.
 
 ## What this does and does not change
 
