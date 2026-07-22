@@ -39,6 +39,9 @@
 #include <thread>
 
 #include <byteswap.h>
+#include <cstdio>
+#include <vector>
+#include <lucent/config.h>
 #include <lucent/log.h>
 
 #include "guest_heap.h"
@@ -181,6 +184,127 @@ constexpr uint32_t kRegSampleCountAddr = 0x2325;
 // opcode Xenos does not define and sizes it to the reservation.
 constexpr uint32_t kOpRuntimeSwap = 0x7F;
 constexpr uint32_t kSwapReservationDwords = 64;
+
+// Sequencer instruction-memory loads: this is where a shader actually becomes
+// the bound shader, at the hardware level. IM_LOAD points at microcode in
+// physical memory; IM_LOAD_IMMEDIATE carries the microcode inline in the
+// packet. Contract mirrored from extern/xenia
+// src/xenia/gpu/pm4_command_processor_implement.h
+// (ExecutePacketType3_IM_LOAD / _IM_LOAD_IMMEDIATE).
+constexpr uint32_t kOpImLoad = 0x27;
+constexpr uint32_t kOpImLoadImmediate = 0x2B;
+
+// ---------------------------------------------------------------------------
+// Bound-shader capture.
+//
+// The offline corpus (tools/shader_extract.py) is everything that sits
+// uncompressed in the cooked packages. It says nothing about which shaders the
+// running title binds. The sequencer load packets do: whatever microcode the
+// GPU is handed here is, by definition, what the title bound. Capturing at this
+// point needs no knowledge of the D3D shader-set API and covers every path,
+// including the movie player's hand-built command buffer.
+//
+// Enabled with GEARS_SHADER_CAPTURE=1; containers go to
+// GEARS_SHADER_CAPTURE_DIR (default scratch/shaders/bound).
+// ---------------------------------------------------------------------------
+struct BoundShader
+{
+    uint32_t type = 0;      // xenos::ShaderType: 0 vertex, 1 pixel
+    uint32_t dwords = 0;
+    uint32_t address = 0;   // physical address (IM_LOAD) or 0 (immediate)
+    uint64_t loads = 0;
+    bool immediate = false;
+};
+
+struct ShaderCaptureState
+{
+    bool enabled = false;
+    bool ready = false;
+    std::string dir = "scratch/shaders/bound";
+    std::map<uint64_t, BoundShader> shaders; // ucode hash -> record
+    uint64_t imLoads = 0;
+    uint64_t imLoadsImmediate = 0;
+    uint64_t truncated = 0;   // packet claimed more ucode than the buffer held
+    uint64_t rejected = 0;    // implausible size
+} g_shaderCapture;
+
+uint64_t Fnv1a64(const uint8_t* p, size_t n)
+{
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (size_t i = 0; i < n; ++i)
+    {
+        h ^= p[i];
+        h *= 0x100000001B3ull;
+    }
+    return h;
+}
+
+// `ucode` holds the microcode as big-endian bytes, exactly as the GPU reads it,
+// which is also what tools/xenos_translate consumes (std::endian::big).
+void RecordBoundShader(uint32_t type, uint32_t address, bool immediate,
+    const std::vector<uint8_t>& ucode)
+{
+    auto& cap = g_shaderCapture;
+    const uint64_t hash = Fnv1a64(ucode.data(), ucode.size());
+    auto it = cap.shaders.find(hash);
+    if (it != cap.shaders.end())
+    {
+        ++it->second.loads;
+        return;
+    }
+    BoundShader s;
+    s.type = type;
+    s.dwords = uint32_t(ucode.size() / 4);
+    s.address = address;
+    s.immediate = immediate;
+    s.loads = 1;
+    cap.shaders.emplace(hash, s);
+
+    const std::string path = std::format("{}/{}_{:016x}.ucode",
+        cap.dir, type == 0 ? "vs" : "ps", hash);
+    if (FILE* f = std::fopen(path.c_str(), "wb"))
+    {
+        std::fwrite(ucode.data(), 1, ucode.size(), f);
+        std::fclose(f);
+    }
+    else
+    {
+        lucent::warn("gpu", "shader capture: cannot write {}", path);
+    }
+}
+
+void ShaderCaptureManifest()
+{
+    auto& cap = g_shaderCapture;
+    const std::string path = cap.dir + "/manifest.csv";
+    FILE* f = std::fopen(path.c_str(), "w");
+    if (!f)
+        return;
+    std::fprintf(f, "file,type,ucode_dwords,address,immediate,loads\n");
+    for (const auto& [hash, s] : cap.shaders)
+        std::fprintf(f, "%s_%016llx.ucode,%s,%u,0x%08X,%d,%llu\n",
+            s.type == 0 ? "vs" : "ps", (unsigned long long)hash,
+            s.type == 0 ? "vs" : "ps", s.dwords, s.address, s.immediate ? 1 : 0,
+            (unsigned long long)s.loads);
+    std::fclose(f);
+}
+
+void ShaderCaptureInit()
+{
+    auto& cap = g_shaderCapture;
+    if (cap.ready)
+        return;
+    cap.ready = true;
+    cap.enabled = lucent::config::flag("SHADER_CAPTURE");
+    if (!cap.enabled)
+        return;
+    const std::string& dir = lucent::config::text("SHADER_CAPTURE_DIR");
+    if (!dir.empty())
+        cap.dir = dir;
+    if (std::system(("mkdir -p '" + cap.dir + "'").c_str()) != 0)
+        lucent::warn("gpu", "shader capture: cannot create {}", cap.dir);
+    lucent::info("gpu", "shader capture armed (PM4 IM_LOAD), writing microcode to {}", cap.dir);
+}
 
 // Addresses in packets carry the Xenos endian mode in their low two bits.
 // Mode 2 (8-in-32) is a full byte swap, which for guest big-endian memory is
@@ -393,11 +517,91 @@ struct CommandProcessor
         predicatedSkip.clear();
         predicateOffPackets = 0;
 
+        if (g_shaderCapture.enabled)
+        {
+            const auto& cap = g_shaderCapture;
+            size_t vs = 0, ps = 0;
+            uint64_t maxLoads = 0;
+            for (const auto& [hash, s] : cap.shaders)
+            {
+                (s.type == 0 ? vs : ps)++;
+                maxLoads = std::max(maxLoads, s.loads);
+            }
+            lucent::debug("gpu", "shader capture: {} IM_LOAD + {} IM_LOAD_IMMEDIATE, "
+                "{} distinct microcode payloads ({} vertex, {} pixel), hottest bound {}x, "
+                "{} rejected, {} truncated",
+                cap.imLoads, cap.imLoadsImmediate, cap.shaders.size(), vs, ps, maxLoads,
+                cap.rejected, cap.truncated);
+            ShaderCaptureManifest();
+        }
+
         waitStats.clear();
         ringOpcodes.clear();
         innerOpcodes.clear();
         ibCounts.clear();
         idleUs = idlePolls = regWaitUs = interruptUs = interrupts = 0;
+    }
+
+    // IM_LOAD:            data[0] = physical address | shaderType(low 2 bits)
+    //                     data[1] = (start << 16) | sizeDwords
+    // IM_LOAD_IMMEDIATE:  data[0] = shaderType
+    //                     data[1] = (start << 16) | sizeDwords
+    //                     data[2..] = the microcode itself
+    template <typename Fetch>
+    void CaptureShaderLoad(uint32_t opcode, Fetch&& fetch, uint32_t usable, uint32_t count)
+    {
+        auto& cap = g_shaderCapture;
+        if (!cap.enabled || usable < 2)
+            return;
+        const uint32_t word0 = fetch(0);
+        const uint32_t startSize = fetch(1);
+        const uint32_t start = startSize >> 16;
+        const uint32_t sizeDwords = startSize & 0xFFFF;
+        const bool immediate = opcode == kOpImLoadImmediate;
+        const uint32_t type = immediate ? word0 : (word0 & 3);
+        const uint32_t address = immediate ? 0 : (word0 & ~3u);
+
+        // Xenos ucode instructions are 3 dwords; a load that is not a whole
+        // number of them, or that starts part-way in, is not something this can
+        // reconstruct, and is counted rather than guessed at.
+        if (type > 1 || start != 0 || sizeDwords == 0 || sizeDwords % 3 != 0 ||
+            sizeDwords > 0x4000)
+        {
+            ++cap.rejected;
+            return;
+        }
+
+        std::vector<uint8_t> ucode(size_t(sizeDwords) * 4);
+        if (immediate)
+        {
+            if (usable < 2 + sizeDwords || count < 2 + sizeDwords)
+            {
+                ++cap.truncated;
+                return;
+            }
+            for (uint32_t i = 0; i < sizeDwords; ++i)
+            {
+                const uint32_t w = fetch(2 + i);
+                ucode[i * 4 + 0] = uint8_t(w >> 24);
+                ucode[i * 4 + 1] = uint8_t(w >> 16);
+                ucode[i * 4 + 2] = uint8_t(w >> 8);
+                ucode[i * 4 + 3] = uint8_t(w);
+            }
+            ++cap.imLoadsImmediate;
+        }
+        else
+        {
+            for (uint32_t i = 0; i < sizeDwords; ++i)
+            {
+                const uint32_t w = ReadGuest32(address + i * 4);
+                ucode[i * 4 + 0] = uint8_t(w >> 24);
+                ucode[i * 4 + 1] = uint8_t(w >> 16);
+                ucode[i * 4 + 2] = uint8_t(w >> 8);
+                ucode[i * 4 + 3] = uint8_t(w);
+            }
+            ++cap.imLoads;
+        }
+        RecordBoundShader(type, address, immediate, ucode);
     }
 
     void HandleType3(uint32_t opcode, const uint32_t* data, uint32_t count, int depth)
@@ -719,6 +923,12 @@ struct CommandProcessor
             }
         }
 
+        // Shader loads are handled here rather than in HandleType3 because
+        // IM_LOAD_IMMEDIATE carries its whole microcode payload inline, which
+        // does not fit the 20-word copy above.
+        if (opcode == kOpImLoad || opcode == kOpImLoadImmediate)
+            CaptureShaderLoad(opcode, fetch, usable, count);
+
         HandleType3(opcode, data, copy, depth);
         return count;
     }
@@ -727,6 +937,7 @@ struct CommandProcessor
     // whatever the title last stored to CP_RB_WPTR through the device window.
     void Run()
     {
+        ShaderCaptureInit();
         if (!interruptState.Init())
         {
             lucent::error("gpu", "cannot create the command processor's guest block");
@@ -1030,6 +1241,7 @@ void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
     const uint64_t frame = g_frameCount.fetch_add(1) + 1;
     gears::HleDumpCensus("swap");
     gears::HleWorkerCensus();
+    gears::HleShaderCaptureFrame(frame);
     if (frame == 1 || frame % 60 == 0)
     {
         // Frame rate is the metric the presentation work is judged on, so

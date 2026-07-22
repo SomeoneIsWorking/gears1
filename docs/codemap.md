@@ -26,7 +26,8 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | `extern/XenonRecomp` | Submodule → our fork, branch `gears` |
 | `xenia_gpu/` | Build island for Xenia's Xenos microcode front end + SPIR-V back end out of `extern/xenia`. One CMakeLists plus `xenia_host_shim.cpp` — no Xenia sources are copied. Optional at configure time exactly like the Vulkan/SDL3 presenter |
 | `tools/shader_extract.py` | Scans any file for `0x102A11tt` shader containers, validates the layout, and writes deduplicated containers. The container layout is documented in its docstring |
-| `tools/xenos_translate/` | Offline driver: container → Xenos microcode → SPIR-V + microcode disassembly. Measurement tool, not part of the runtime |
+| `tools/xenos_translate/` | Offline driver: container (or, with `--raw`, bare captured microcode) → Xenos microcode → SPIR-V + microcode disassembly. Measurement tool, not part of the runtime |
+| `tools/compare_bound_shaders.py` | Compares runtime-captured microcode against the offline container corpus and ranks the captured set by bind count |
 | `runtime/` | The PC-side runtime. See below |
 | `tests/` | `test_vmx_instructions` (fork's instruction implementations) and `test_runtime_logic` (kernel object semantics, path translation). Both mutation-checked |
 | `tools/catalog.py` + `docs/issues/` | **Findings registry, keyed by symptom. Search it before investigating anything.** `catalog.py search "<symptom>"` |
@@ -51,9 +52,10 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | Config | `kernel_config.cpp` | **partial** | Answers only settings with a defensible value; refuses the rest **by name** |
 | Strings | `kernel_rtl.cpp` | **partial** | Counted strings, code-page conversion, memory fills. `X_ANSI_STRING` parsing verified |
 | Display | `kernel_video.cpp` | **partial** | Reports 1280x720p60 widescreen. Verified that the title's layout does **not** depend on this |
-| **HLE D3D** | `hle_d3d.cpp` | **partial** | The native-override seam for the guest D3D layer, with a per-frame call census carrying call-site provenance (channel `hle`). Overriding **works** now -- it did not before `tools/prepare_overrides.py`, and a strong override linked cleanly while never being entered. One guest function is replaced so far, for instrumentation |
+| **HLE D3D** | `hle_d3d.cpp` | **partial** | The native-override seam for the guest D3D layer, with a per-frame call census carrying call-site provenance (channel `hle`). Overriding **works** now -- it did not before `tools/prepare_overrides.py`, and a strong override linked cleanly while never being entered. ~60 guest functions are wrapped so far, all for instrumentation (census, worker-queue watchpoint, shader argument scan); none replaces guest behaviour |
 | **GPU** | `vd_null_gpu.cpp` | **command processor, renders nothing** | Consumes the ring, follows indirect buffers, and executes TYPE0 register writes, `EVENT_WRITE_SHD` fences, `EVENT_WRITE_ZPD` occlusion reports, `WAIT_REG_MEM`, `INTERRUPT` (dispatched per CPU) and **predication** via bin mask/select. No draw is ever performed and no pixel is produced. Vblank at 60 Hz (`GEARS_NO_VBLANK=1` disables) |
-| **Shader translation** | `xenia_gpu/`, `tools/xenos_translate/` | **real, offline only** | Xenia's translator builds and runs in our tree. 425 of 425 of this title's own shaders translate and pass `spirv-val`. Nothing is wired into the runtime, no shader has been executed, and correctness of the output is unproven — only well-formedness. Details in `docs/d3d-seam.md` §3 |
+| **Shader translation** | `xenia_gpu/`, `tools/xenos_translate/` | **real, offline only** | Xenia's translator builds and runs in our tree. 425 of 425 offline containers, and **38 of 38 shaders the running title actually binds**, translate and pass `spirv-val`. Nothing is wired into the runtime and no shader has been executed, so correctness is unproven — only well-formedness. Details in `docs/d3d-seam.md` §3 |
+| **Shader capture** | `runtime/vd_null_gpu.cpp` (PM4 `IM_LOAD`/`IM_LOAD_IMMEDIATE`), `runtime/hle_d3d.cpp` (API argument scan) | **real** | `GEARS_SHADER_CAPTURE=1` dumps every microcode payload the GPU is handed, with bind counts, to `GEARS_SHADER_CAPTURE_DIR`. `GEARS_SHADER_ARGSCAN=1` probes 48 D3D entry points for shader arguments — how `SetVertexShader`/`SetPixelShader` were identified |
 | **Audio** | `xaudio_null.cpp` | **null** | Accepts frames, plays nothing. Its callback never fires |
 | Input | — | **absent** | |
 | Networking | — | **absent** | 32 `Net*` imports |
@@ -77,6 +79,8 @@ suppressed; adding an implementation means adding its name there.
 - *Why is the frame rate what it is?* → vblank pacing is faithful (~8 ms/wait on `0x30B004`) and must not be shortened; see `catalog.py show 16`
 - *Where do I get Xenos shader/packet semantics?* → `extern/xenia` submodule (BSD-3 fork, pinned); see `docs/xenia-reuse.md`
 - *How do I get a shader out of the game and into SPIR-V?* → `tools/shader_extract.py` then `scratch/build/tools/xenos_translate/xenos_translate`; layout in `docs/d3d-seam.md` §3
+- *Which shaders does the title actually bind, and where?* → `GEARS_SHADER_CAPTURE=1` (PM4 sequencer loads), then `xenos_translate --raw` and `tools/compare_bound_shaders.py`; setters are `sub_82222B98` (vertex) / `sub_82222808` (pixel), see `catalog.py show 21`
+- *Why doesn't captured microcode match the corpus?* → the title patches the vertex fetch into the instruction at bind time; `catalog.py show 22`
 - *Why are Xenia's asserts off in `xenia_gpu/`?* → every vertex shader in this title has a zero vfetch stride; see the comment in `xenia_gpu/CMakeLists.txt`
 - *What has already been ruled out for the current crash?* → `catalog.py show 1`
 - *Why won't my gdb watchpoint fire?* → `catalog.py show 5` (physical aliasing / stale addresses)
