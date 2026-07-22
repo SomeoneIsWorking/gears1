@@ -114,3 +114,6 @@ Loose default.xex does NOT work even with the patch: 429 lines, and critically n
 
 ### Note (2026-07-22)
 HANDOFF STATE. Oracle: builds and runs (verified), launches attempted via the local RunTitle patch (verified by log change), disc mount fails (DiscImageDevice::Initialize repeating). Everything needed to resume is recorded: build recipe and three workarounds in this entry, the RunTitle patch with its .bak alongside it in scratch/oracle/, and eliminated approaches (headless toggle, target spellings, detachment, Xvfb/DRI3, loose XEX). The next lead is Xenia's disc reader versus this image's non-zero partition base.
+
+### Note (2026-07-22)
+IMPORTANT: the disc FORMAT is not the problem. Our extractor locates this image's partition at base 0xFD90000, and Xenia's disc_image_device.cc lists exactly that base among the ones it supports (0x0, 0xFB20, 0x20600, 0x2080000, 0xFD90000). So DiscImageDevice::Initialize failing is NOT an unsupported XGD variant, and the next investigation should look at file access instead -- the ISO lives on <the image's mount point>, an external mount, and 'F>' log lines repeat three times, suggesting a read or open failure rather than a parse failure.
