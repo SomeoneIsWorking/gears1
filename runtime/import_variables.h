@@ -25,4 +25,10 @@ size_t ResolveImportVariables(GuestMemory& memory, const Image& image);
 // it reads. That is deliberate: it points straight at the missing work.
 uint32_t ExecutableModuleHandle();
 
+// The parsed image stays reachable after boot: imports that answer questions
+// about the running executable (its sections, its handle) need it, and the
+// alternative is duplicating the loader's parse per import.
+void SetLoadedImage(const Image& image);
+const Image* LoadedImage();
+
 } // namespace gears

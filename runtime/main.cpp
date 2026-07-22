@@ -103,6 +103,7 @@ int main(int argc, char* argv[])
     if (gears::InstallFunctionTable(memory) == 0)
         return EXIT_FAILURE;
 
+    gears::SetLoadedImage(image);
     gears::ResolveImportVariables(memory, image);
     gears::InitialiseHeaps(memory);
 

@@ -235,6 +235,17 @@ void __imp__NtQueryInformationFile(PPCContext& __restrict ctx, uint8_t* base)
         StoreU64(base, info + 0x00, uint64_t(ftell(file->handle)));
         break;
 
+    case 34: // FileNetworkOpenInformation
+        // Same layout NtQueryFullAttributesFile fills, and timestamps are left
+        // zero for the same reason: an obviously-unset value beats a plausible
+        // invented one. Only the sizes are actually read here -- the title
+        // sizes an allocation from this reply, so leaving the class unhandled
+        // made it allocate from uninitialised memory.
+        StoreU64(base, info + 0x20, file->size); // allocation size
+        StoreU64(base, info + 0x28, file->size); // end of file
+        StoreU32(base, info + 0x30, kFileAttributeNormal);
+        break;
+
     default:
         // Answering an unknown class with zeros would look like a valid reply.
         lucent::error("fs", "NtQueryInformationFile: unhandled class {}", infoClass);
