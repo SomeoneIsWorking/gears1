@@ -81,3 +81,12 @@ Title launch NOT solved. Tried three invocations -- positional ISO, positional e
 
 ### Note (2026-07-22)
 Signal to use next time: an identical log line count (430) across three different targets is itself the evidence that the argument is not being consumed -- a loaded title would change the log regardless of how far it got. Next thing to check is whether headless mode in this build actually calls the launch path at all, i.e. read xenia_main.cc around :742 and see what gates it, rather than trying more argument spellings.
+
+### Note (2026-07-22)
+Root cause of the non-launch FOUND, in xenia_main.cc around :745: RunTitle is dispatched via app_context().CallInUIThread(...). If no UI thread is pumping, the call never executes and nothing is logged -- no error, no mount, no module. That is exactly the observed behaviour and explains why three different target spellings and headless on/off all produced byte-identical output.
+
+### Note (2026-07-22)
+Also: the 430 lines are almost entirely Xenia's CONFIG DUMP (~400 lines) plus setup. Line count is therefore a poor progress signal -- it stays 430 whether or not anything happens. Grep for RunTitle/module/title_id instead of counting lines.
+
+### Note (2026-07-22)
+NEXT: the launch needs a pumping UI thread. Our invocations are setsid/nohup-detached, which is what keeps a session task-stop from killing the emulator but may also be what starves the UI loop. Try running attached in a real desktop session, or find/patch a path that calls RunTitle directly off the UI thread. Do not try more argument spellings -- the argument was never the problem.
