@@ -8,6 +8,7 @@
 #include <lucent/log.h>
 
 #include "guest_heap.h"
+#include "import_variables.h"
 
 namespace
 {
@@ -113,4 +114,35 @@ void __imp__ExRegisterTitleTerminateNotification(PPCContext& __restrict ctx, uin
 void __imp__KiApcNormalRoutineNop(PPCContext& __restrict ctx, uint8_t*)
 {
     ctx.r3.u64 = 0;
+}
+
+// NTSTATUS XexGetModuleHandle(PCSTR moduleName, PHANDLE outHandle)
+//
+// A NULL name asks for the running executable. Only that case can be answered
+// honestly here: no other modules are loaded, so any name lookup genuinely has
+// nothing to find and reporting that is correct rather than a stand-in.
+void __imp__XexGetModuleHandle(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t nameAddress = ctx.r3.u32;
+    const uint32_t outAddress = ctx.r4.u32;
+
+    if (nameAddress != 0)
+    {
+        lucent::warn("kernel", "XexGetModuleHandle({}) -> not found",
+            reinterpret_cast<const char*>(base + nameAddress));
+        ctx.r3.u64 = gears::kStatusNotFound;
+        return;
+    }
+
+    if (outAddress == 0)
+    {
+        ctx.r3.u64 = gears::kStatusInvalidParameter;
+        return;
+    }
+
+    const uint32_t handle = gears::ExecutableModuleHandle();
+    *reinterpret_cast<uint32_t*>(base + outAddress) = ByteSwap(handle);
+
+    lucent::debug("kernel", "XexGetModuleHandle(NULL) -> {:#x}", handle);
+    ctx.r3.u64 = gears::kStatusSuccess;
 }
