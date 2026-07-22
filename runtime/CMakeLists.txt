@@ -46,6 +46,7 @@ add_executable(gears1
     kernel_sync.cpp
     crt_printf.cpp
     xam_loader.cpp
+    xam_notify.cpp
     xnet_null.cpp
     kernel_misc.cpp
     kernel_time.cpp
