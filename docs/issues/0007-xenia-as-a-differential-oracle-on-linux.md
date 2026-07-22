@@ -96,3 +96,9 @@ UI-thread hypothesis tested and NOT confirmed as fixable that way: running attac
 
 ### Note (2026-07-22)
 STATUS after several attempts: Xenia builds and runs here, but has never executed this title. Do not re-try target spellings or headless toggles -- both are eliminated. The next genuinely different approaches are (a) run under a nested X server such as Xephyr or xvfb-run to give it a conventional X window, or (b) call RunTitle off the UI thread with a small local patch, which is the most direct route to a CPU-only oracle and does not need a working window at all.
+
+### Note (2026-07-22)
+Xvfb approach FAILS: under xvfb-run, Mesa reports 'vulkan: No DRI3 support detected - required for presentation' repeatedly, so the Vulkan presenter cannot initialise and the title still never launches. Note the presenter comes up even with --gpu=null --apu=nop, so the emulation backends are not what pulls Vulkan in. Approach (a) is therefore eliminated on this machine.
+
+### Note (2026-07-22)
+Approach (b) applied: a local patch to src/xenia/app/xenia_main.cc replaces 'result = app_context().CallInUIThread([...]{ return emulator_window_->RunTitle(abs_path); })' with a direct 'result = emulator_window_->RunTitle(abs_path)'. Original saved to scratch/oracle/xenia_main.cc.bak. Rationale: a differential CPU oracle needs no window, and the UI dispatch is the only thing preventing launch. Rebuild is incremental (one TU plus link).
