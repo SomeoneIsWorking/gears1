@@ -50,6 +50,7 @@ void __imp__KeWaitForSingleObject(PPCContext& __restrict ctx, uint8_t* base)
     auto object = gears::BindGuestDispatcherObject(objectAddress);
     if (!object)
     {
+        lucent::debug("wait", "KeWait -> object {:#x} unbindable", objectAddress);
         ctx.r3.u64 = gears::kStatusInvalidHandle;
         return;
     }
@@ -64,7 +65,15 @@ void __imp__KeWaitForSingleObject(PPCContext& __restrict ctx, uint8_t* base)
             timeout = -raw;
     }
 
-    ctx.r3.u64 = object->Wait(timeout) ? gears::kStatusSuccess : gears::kStatusTimeout;
+    // Handle-based waits are logged by handle in kernel_sync.cpp; this is the
+    // pointer-based path titles use for dispatcher objects embedded in their
+    // own structures (the D3D per-CPU interrupt events among them), so it needs
+    // its own line or those waits are invisible.
+    lucent::debug("wait", "KeWait -> object {:#x} timeout {}", objectAddress, timeout);
+    const bool signalled = object->Wait(timeout);
+    lucent::debug("wait", "KeWait <- object {:#x} {}", objectAddress,
+        signalled ? "signalled" : "timed out");
+    ctx.r3.u64 = signalled ? gears::kStatusSuccess : gears::kStatusTimeout;
 }
 
 // NTSTATUS NtDuplicateObject(HANDLE Handle, PHANDLE NewHandle, DWORD Options)

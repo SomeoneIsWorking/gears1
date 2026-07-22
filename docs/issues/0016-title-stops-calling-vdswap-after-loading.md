@@ -1,7 +1,7 @@
 ---
 id: 16
 title: title stops calling VdSwap after loading
-status: resolved
+status: open
 symptom: post-load: guest VdSwap calls freeze (572, delta 0 over 40s) while the command processor keeps executing swap packets at ~12/s; guest threads still executing engine code, not blocked
 tags: gpu,presentation
 created: 2026-07-22
@@ -52,3 +52,83 @@ NEW FRONTIER, measured but NOT fixed -- frame rate is ~0.2 fps: each presented f
 
 ### Resolution (2026-07-22)
 Occlusion queries: the title polls ZPD report blocks (sentinel 0xFFFFFEED) that only EVENT_WRITE_ZPD (0x5B) writes; the CP skipped that opcode. Implemented ZPD (zero samples) + EXT per the Xenia-documented contract, plus the stale swap-packet sequence guard. Presentation resumed; new frontier is frame rate (~0.2 fps from 30ms worker-wake polling), recorded above.
+
+### Note (2026-07-22)
+FRONTIER RESOLVED AS MISDIAGNOSED. The previous note's claim -- "the ISR provably discards the inner callback's returned per-CPU event pointer" and "no code path that performs that KeSetEvent from the interrupt side has been found" -- is FALSIFIED. Both halves were wrong, and both came from trusting a Ghidra decompile.
+
+1. THE INNER CALLBACK DOES SIGNAL, ITSELF. Raw bytes at 0x8223B8A0 (decoded with the new tools/ppcdis.py, which reads the image with capstone and does not depend on Ghidra's listing state):
+     lis r11,0x8200 / li r5,0 / li r4,1 / lwz r11,0x868(r11) / lwz r11,0(r11)
+     stw r3,0x2A94(r11)            <- store the argument to pool+0x2A94
+     lbz r10,0x10C(r13) / mulli r10,r10,0x38 / add r11,r10,r11
+     addi r3,r11,0x2BDC            <- r3 = &percpu_event[cpu]
+     b   0x82AC67E4                <- TAIL CALL, not a return
+   ppc_func_mapping.cpp: { 0x82AC67E4, __imp__KeSetEvent }. So the callback IS
+   {store pool+0x2A94; KeSetEvent(pool+0x2BDC+cpu*0x38, 1, 0)} -- exactly the contract the
+   CPU-side path at 0x8223C7C0 shows. Ghidra rendered the tail branch as "return <that
+   pointer>", which is what produced the phantom "discarded return value".
+
+2. 0x82221CC8 "or r3,r30,r30" IS NOT A DISCARD. In raw disasm r30 there is r31+0x2A18 (loaded
+   at 0x82221CC0), the argument to KeAcquireSpinLockAtRaisedIrql at 0x82AC66D4. The ISR takes
+   that spinlock, clears its own CPU bit in *(*(ctx+0x2A14)), and releases
+   (KeReleaseSpinLockFromRaisedIrql, 0x82AC66A4). Nothing is discarded.
+
+3. THE SIGNAL PATH RUNS CORRECTLY IN OUR RUNTIME. Measured live: pool = 0x4015B080, cpu2 event
+   = 0x4015DCCC, and the log shows INTERRUPT -> cpu 2 -> inner callback 0x8223B8A0 ->
+   KeSetEvent(object 0x4015dccc) -> KeWait <- object 0x4015dccc signalled. There is no missing
+   piece of the console's interrupt model here.
+
+4. WHAT THE SLOT AT ctx+0x2A14+0x10 ACTUALLY IS: ctx+0x2A14 points at the SCRATCH write-back
+   block (0x30B000). +0x10/+0x14 are SCRATCH_REG4/REG5. The stream writes REG4 = the callback
+   to run, REG5 = its argument, REG0 = the CPU mask, then INTERRUPT, then REG4 = 0xBADF00D
+   (the poison the ISR asserts on at 0x82221C7C). So the "inner callback" is chosen per
+   submission by the command stream, and it ALTERNATES between two functions:
+     0x8223B8A0  the per-CPU event signal above (arg = a retiring command-buffer pointer)
+     0x8223E648  a VSYNC PACING callback -- and this one is where the time goes.
+
+5. WHERE THE FRAME TIME ACTUALLY GOES (measured, not inferred). New frame-budget instrumentation
+   in the CP splits its wall time. One representative frame:
+     frame budget: 13122 ms total = 0 ms ring-empty (0 polls) + 12778 ms WAIT_REG_MEM
+                   + 10 ms ISR (1567 interrupts)
+       waits on 0x30b004: 784 times, 12778 ms
+   So ~97% of every frame is the command processor blocked in WAIT_REG_MEM on 0x30B004
+   (= SCRATCH_REG1's write-back slot), and ~0% is interrupt-wake latency. The 30 ms KeWait
+   timeouts in the earlier note are an idle worker, not the bottleneck.
+   NOTE: the previous session's waitStats "accumulate" lambda was defined and never called,
+   which is why "waits on" never printed and the WAIT_REG_MEM cost stayed invisible. Fixed.
+
+6. WHO WRITES 0x30B004 (the thing the CP waits for). Raw disasm of 0x8223E648..0x8223E6D4:
+   arg r3 splits into hi = deadline in vblanks, lo = a raster-position percentage.
+     r8 = hi - (vblankCount - lastAckVblank);  pool+0x3B20 += 1
+     if r8 > 0                      -> pool+0x3B1C = r8   (still pending, NO ack)
+     else if (*(0x7FC86530)*100 / (*(0x7FC86584)&0xFFF) + 1) > lo
+                                    -> pool+0x3B1C = 1    (still pending, NO ack)
+     else  *(*(pool+0x2A14)+4) = 0  <- THE ACK to 0x30B004; pool+0x3B18 = pool+0x3B14
+   And the vblank arm of the ISR (0x82221D08..0x82221D3C) decrements pool+0x3B1C each vblank and
+   writes the same ack when it hits zero. So 0x30B004 is released by a VBLANK-PACED countdown:
+   each pacing request costs one or more 60 Hz vblank periods BY DESIGN. Observed args: 0x2000A
+   (2 vblanks, 10%). Measured cost 8.1 ms per wait -- the mechanism is behaving correctly.
+
+7. THE REAL DEFECT IS UPSTREAM: THE TITLE RE-SUBMITS THE SAME COMMAND BUFFERS. 784 pacing waits
+   per frame is the symptom. Per-frame provenance counting shows every command-stream location
+   executing exactly 38 times, and within one frame the same reg5 argument repeats
+   (196x 0x2000a, 114x 0xc028f680, ...). New IB-provenance logging settles the cause:
+     IB 0xf68a0 (3692 words) from ring dword 0xed6 / 0xe82 / 0xe2e / 0xd32 / 0xa3e / ...
+   The same indirect buffer arrives from MANY DISTINCT ring slots, so the ring consumer is NOT
+   lapping (that hypothesis is now ruled out twice) -- the TITLE is genuinely re-submitting the
+   same buffers. One frame: 2352 IB submissions, each distinct IB submitted 44-88 times.
+
+CONCLUSION / NEXT STEP: the frame rate is not a wake-path problem and needs no new interrupt
+model. It is that the title's D3D layer re-kicks the same command buffers dozens of times per
+frame, and each re-kick replays a vblank-paced INTERRUPT that costs ~8 ms. The next question is
+why D3D re-kicks: find the guest loop that resubmits and what completion condition it waits on
+that our GPU never satisfies (prime suspect: the served-ticket fence at 0x30A000 / the D3D lock
+at 0x82221A68, since a fence that looks un-retired is exactly what makes a D3D layer resubmit).
+Do NOT attack the vblank pacing -- it is faithful.
+
+MEASURED, unchanged by this session (diagnostics only): intro ~30 fps, steady scene phase
+~0.42 fps (60 frames in 144.03 s). No regression; no behavioural change was made.
+
+NEW TOOL: tools/ppcdis.py -- capstone-based raw disassembly straight from the image, independent
+of Ghidra project state. tools/ghidra_scripts/Disasm.py silently degrades to a byte dump when
+Ghidra never rebuilt flow over the range (it did exactly that on 0x8223B8A0), so prefer
+ppcdis.py as the cross-check of record.

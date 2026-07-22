@@ -32,6 +32,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <map>
 #include <mutex>
 #include <thread>
 
@@ -96,6 +97,7 @@ struct InterruptThreadState
     gears::GuestThreadBlock block{};
     PPCContext ctx{};
     bool ready = false;
+    uint32_t lastInnerCallback = 0xFFFFFFFF;
 
     bool Init()
     {
@@ -118,6 +120,26 @@ struct InterruptThreadState
         ctx.r1.u32 = block.stackBase - 0x100;
         ctx.r3.u32 = source;
         ctx.r4.u32 = g_graphicsInterruptContext;
+        // The source==1 arm of the title's ISR calls *(*(ctx+0x2A14)+0x10)
+        // with *(*(ctx+0x2A14)+0x14); that inner callback is what signals the
+        // D3D worker. A null slot means the ISR silently skips the signal, so
+        // report the slot once per distinct value seen.
+        if (source == 1)
+        {
+            const uint32_t inner =
+                ReadGuest32(ReadGuest32(g_graphicsInterruptContext + 0x2A14) + 0x10);
+            if (inner != lastInnerCallback)
+            {
+                lastInnerCallback = inner;
+                // Pool base is *(*(0x82000868)); the per-CPU interrupt event
+                // array the signalling callback (0x8223B8A0) sets lives at
+                // pool+0x2BDC with a 0x38 stride.
+                const uint32_t pool = ReadGuest32(ReadGuest32(0x82000868));
+                lucent::debug("gpu",
+                    "graphics ISR inner callback -> {:#x} (pool {:#x}, cpu{} event {:#x})",
+                    inner, pool, cpu, pool + 0x2BDC + cpu * 0x38);
+            }
+        }
         (PPC_LOOKUP_FUNC(base, g_graphicsInterruptCallback))(ctx, base);
     }
 };
@@ -187,6 +209,12 @@ uint32_t LoadEndian(uint32_t addressWord)
 void WriteGpuRegister(uint32_t reg, uint32_t value)
 {
     reg &= 0x7FFF;
+    // SCRATCH_ADDR/SCRATCH_UMSK retarget every subsequent write-back, so a
+    // stray write to either silently redirects the ISR's callback slot and the
+    // stream's completion flags. Report every change to them.
+    if ((reg == kRegScratchAddr || reg == kRegScratchUmsk) && g_gpuRegisters[reg] != value)
+        lucent::debug("gpu", "SCRATCH_{} {:#x} -> {:#x}",
+            reg == kRegScratchAddr ? "ADDR" : "UMSK", g_gpuRegisters[reg], value);
     g_gpuRegisters[reg] = value;
 
     // Scratch write-back: the title programs SCRATCH_ADDR/SCRATCH_UMSK (seen
@@ -219,6 +247,43 @@ struct CommandProcessor
     // Highest VdSwap sequence executed; stale re-submitted copies are behind it.
     uint32_t lastSwapSequence = 0;
 
+    // Where the CP's time goes between frame boundaries: total microseconds
+    // spent inside WAIT_REG_MEM keyed by polled address/register, reported at
+    // each executed swap packet. Diagnosis for the frame-rate investigation.
+    std::map<uint32_t, std::pair<uint64_t, uint64_t>> waitStats; // addr -> {count, us}
+
+    // The whole of the CP thread's wall time between frames, split into the
+    // three places it can go. Anything unaccounted for is the guest's own
+    // execution time, which is the point of the split: it says whether a slow
+    // frame is our command processor or the title.
+    std::chrono::steady_clock::time_point frameStart = std::chrono::steady_clock::now();
+    uint64_t idleUs = 0;      // ring empty: waiting for the title to submit
+    uint64_t idlePolls = 0;
+    uint64_t regWaitUs = 0;   // inside WAIT_REG_MEM
+    uint64_t interruptUs = 0; // inside the title's ISR
+    uint64_t interrupts = 0;
+
+    void ReportWaitStats()
+    {
+        const auto now = std::chrono::steady_clock::now();
+        const uint64_t frameUs = uint64_t(
+            std::chrono::duration_cast<std::chrono::microseconds>(now - frameStart).count());
+        frameStart = now;
+        lucent::debug("gpu",
+            "frame budget: {} ms total = {} ms ring-empty ({} polls) + {} ms WAIT_REG_MEM"
+            " + {} ms ISR ({} interrupts)",
+            frameUs / 1000, idleUs / 1000, idlePolls, regWaitUs / 1000,
+            interruptUs / 1000, interrupts);
+        for (const auto& [addr, stat] : waitStats)
+        {
+            if (stat.second > 1000)
+                lucent::debug("gpu", "  waits on {:#x}: {} times, {} ms",
+                    addr, stat.first, stat.second / 1000);
+        }
+        waitStats.clear();
+        idleUs = idlePolls = regWaitUs = interruptUs = interrupts = 0;
+    }
+
     void HandleType3(uint32_t opcode, const uint32_t* data, uint32_t count, int depth)
     {
         switch (opcode)
@@ -230,7 +295,17 @@ struct CommandProcessor
                 const uint32_t address = data[0] & ~3u;
                 const uint32_t words = data[1] & 0xFFFFF;
                 if (depth < 8 && address != 0 && words != 0)
+                {
+                    // Ring provenance matters here: the same indirect buffer
+                    // being executed many times per frame is either the ring
+                    // consumer re-reading one ring slot or the title genuinely
+                    // re-submitting it, and only the ring dword index tells
+                    // those apart.
+                    if (depth == 0)
+                        lucent::debug("gpu", "IB {:#x} ({} words) from ring dword {:#x}",
+                            address, words, sourceIndex);
                     ExecuteLinear(address, words, depth + 1);
+                }
             }
             break;
 
@@ -271,6 +346,7 @@ struct CommandProcessor
                     lastSwapSequence = data[1];
                     lucent::debug("gpu", "swap packet: front buffer {:#x} (seq {})",
                         data[0], data[1]);
+                    ReportWaitStats();
                 }
                 else
                 {
@@ -341,7 +417,12 @@ struct CommandProcessor
                     if (data[0] & (1u << cpu))
                     {
                         lucent::debug("gpu", "INTERRUPT -> cpu {}", cpu);
+                        const auto isrStart = std::chrono::steady_clock::now();
                         interruptState.Dispatch(1, cpu);
+                        interruptUs += uint64_t(
+                            std::chrono::duration_cast<std::chrono::microseconds>(
+                                std::chrono::steady_clock::now() - isrStart).count());
+                        ++interrupts;
                     }
                 }
             }
@@ -361,6 +442,15 @@ struct CommandProcessor
 
         const auto start = std::chrono::steady_clock::now();
         bool reported = false;
+        auto& stat = waitStats[(waitInfo & 0x10) ? (poll & ~3u) : (poll & 0x7FFF)];
+        ++stat.first;
+        const auto accumulate = [&] {
+            const uint64_t us = uint64_t(
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - start).count());
+            stat.second += us;
+            regWaitUs += us;
+        };
         for (;;)
         {
             const uint32_t raw = (waitInfo & 0x10)
@@ -380,7 +470,10 @@ struct CommandProcessor
             default: matched = true; break;
             }
             if (matched)
+            {
+                accumulate();
                 return;
+            }
 
             std::this_thread::sleep_for(std::chrono::microseconds(50));
             if (!reported && std::chrono::steady_clock::now() - start > std::chrono::seconds(5))
@@ -470,7 +563,11 @@ struct CommandProcessor
             const uint32_t wptr = ReadGuest32(kCpRbWptr) & (dwords - 1);
             if (wptr == rptr)
             {
+                const auto idleStart = std::chrono::steady_clock::now();
                 std::this_thread::sleep_for(std::chrono::microseconds(500));
+                idleUs += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                    std::chrono::steady_clock::now() - idleStart).count());
+                ++idlePolls;
                 continue;
             }
 
@@ -713,7 +810,18 @@ void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
 {
     const uint64_t frame = g_frameCount.fetch_add(1) + 1;
     if (frame == 1 || frame % 60 == 0)
-        lucent::info("gpu", "VdSwap: {} frames submitted (nothing presented)", frame);
+    {
+        // Frame rate is the metric the presentation work is judged on, so
+        // report it measured rather than leaving it to be inferred from log
+        // line counts (the log has no timestamps).
+        static std::chrono::steady_clock::time_point last;
+        const auto now = std::chrono::steady_clock::now();
+        const double seconds =
+            frame == 1 ? 0.0 : std::chrono::duration<double>(now - last).count();
+        last = now;
+        lucent::info("gpu", "VdSwap: {} frames submitted, last 60 in {:.2f}s ({:.2f} fps)",
+            frame, seconds, seconds > 0 ? 60.0 / seconds : 0.0);
+    }
 
     const uint32_t block = ctx.r3.u32;
     if (block != 0)
