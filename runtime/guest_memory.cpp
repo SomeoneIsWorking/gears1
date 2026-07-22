@@ -4,6 +4,8 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <cstring>
+
 #include <lucent/log.h>
 
 namespace gears
@@ -137,6 +139,14 @@ bool GuestMemory::Commit(uint32_t address, uint32_t size)
 
     lucent::debug("mem", "committed {:#x}..{:#x} ({} KiB)", begin, end, (end - begin) / 1024);
     return true;
+}
+
+void GuestMemory::Zero(uint32_t address, uint32_t size)
+{
+    if (size == 0)
+        return;
+    std::memset(base_ + address, 0, size);
+    lucent::debug("mem", "zeroed {:#x}+{:#x}", address, size);
 }
 
 namespace

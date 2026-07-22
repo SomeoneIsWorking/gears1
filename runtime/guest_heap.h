@@ -76,6 +76,15 @@ private:
     void RemoveFreeRange(uint32_t address, uint32_t size);
     void NoteUsage();
 
+    // Zero-fills the part of a newly claimed range whose address space has been
+    // handed out before, and moves the high-water mark. Address space above the
+    // mark has never been given to anyone, so its pages are still the zeroes
+    // mmap gave us and memsetting them would only fault them in for nothing.
+    // Must be called BEFORE the range is recorded, and only for space that is
+    // transitioning free -> allocated: a re-commit inside a live region must
+    // not lose the owner's data.
+    void ZeroClaimed(uint32_t address, uint32_t size);
+
     GuestMemory& memory_;
     uint32_t base_;
     uint32_t size_;
@@ -85,6 +94,7 @@ private:
     uint32_t allocatedBytes_{};
     uint32_t peakAllocated_{};
     uint32_t reportedPeak_{}; // last peak reported to the log
+    uint32_t everAllocatedEnd_{}; // highest end ever handed out; above it, pages are still zero
 
     // Allocate/Free are reached from NtAllocateVirtualMemory and friends, which
     // guest threads call concurrently -- on the console these are kernel

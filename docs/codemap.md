@@ -35,7 +35,7 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | Area | Files | Status | Notes |
 |---|---|---|---|
 | Guest memory | `guest_memory.*` | **real** | 4 GiB sparse window. Physical RAM is one `memfd` aliased at `0x0/0xA0/0xC0/0xE0000000` because guest code converts between them by masking the top 3 bits |
-| Heaps | `guest_heap.*` | **works** | Page-granular, honours requested alignment. Address-keyed free list, first fit, coalescing on free; freed pages stay committed. Verified plateau at 192/194 MiB over 25 min of gameplay |
+| Heaps | `guest_heap.*` | **works** | Page-granular, honours requested alignment. Address-keyed free list, first fit, coalescing on free; freed pages stay committed but recycled address space is re-zeroed before it is handed out (issue #18). Verified plateau at 192/194 MiB over 25 min of gameplay |
 | Image loading | `main.cpp` | **real** | XEX via XenonUtils; refuses an image whose layout differs from the recompiled code's |
 | Indirect calls | `guest_memory.cpp` | **real** | 49,475 functions installed into the `PPC_LOOKUP_FUNC` table |
 | Variable imports | `import_variables.*` | **real** | 236 resolved. XenonUtils leaves these unresolved upstream; fixed in our fork |
@@ -93,9 +93,20 @@ Note the heap that exhausted was the **title** heap (0x40000000), not the
 physical heap, and its genuinely-live set at exhaustion was only 67.9 MiB -- the
 rest was leak.
 
-Next limit is unknown. One 900 s run took an INTERMITTENT SIGSEGV at frame
-~21840 inside translated guest code on a garbage pointer; a second identical run
-reached frame 25560 with no crash. Not diagnosed, not attributed to the heap.
+That intermittent SIGSEGV at frame ~21840 is now DIAGNOSED and attributed to the
+heap after all -- see issue #18. `GuestMemory::Commit` never zero-filled, which
+was invisible while the heap only moved forwards (fresh `mmap` pages are already
+zero) and became fatal once address space was recycled, because `Free` keeps the
+pages committed on purpose. The title's `RtlHeap` read a stale block header out
+of a segment extension it had just committed. `GuestHeap` now zeroes exactly the
+free -> allocated transitions, and only below the ever-allocated high-water mark
+so untouched space costs nothing. The same core also exposed three pairs of
+overlapping live regions produced by the reservation-growth path; it now absorbs
+what it grows over instead of leaving a second owner.
+
+Next limit is unknown. One 900 s run after the fix reached 26160 frames at
+~30 fps with no core and no heap errors -- consistent with the fix, but one run
+against an intermittent fault is not on its own proof.
 
 ## Standing hazards
 

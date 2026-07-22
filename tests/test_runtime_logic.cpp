@@ -268,6 +268,73 @@ void TestHeapReuse()
     Check(heap.Free(reserved), "heap: the reservation frees as one region");
     Check(heap.GetUsage().allocated == 0, "heap: reservation accounting balances");
 
+    // Recycled address space must come back ZEROED. The pages stay committed
+    // across a free on purpose, so without an explicit clear the next owner
+    // reads the previous tenant's bytes -- which is what let the title's
+    // RtlHeap find a stale block header in a segment it had just committed.
+    {
+        uint32_t s = 0x10000;
+        const uint32_t first = heap.Allocate(0, s, gears::kMemCommit | gears::kMemLargePages);
+        Check(first != 0, "heap: allocation for the zero-fill check succeeds");
+        uint8_t* p = memory.Base() + first;
+        for (uint32_t i = 0; i < 0x10000; ++i)
+            p[i] = 0xA5;
+        Check(heap.Free(first), "heap: free before reuse");
+        s = 0x10000;
+        const uint32_t again = heap.Allocate(0, s, gears::kMemCommit | gears::kMemLargePages);
+        Check(again == first, "heap: the same address comes back");
+        bool clean = true;
+        for (uint32_t i = 0; i < 0x10000; ++i)
+            if (memory.Base()[again + i] != 0)
+                clean = false;
+        Check(clean, "heap: recycled address space is handed back zeroed");
+        Check(heap.Free(again), "heap: free after the zero-fill check");
+    }
+
+    // Zeroing must never run over reserved-but-uncommitted pages, which are
+    // PROT_NONE and would fault the runtime. The high-water mark alone does not
+    // imply committed: an aligned allocation leaves a head fragment below the
+    // mark that was never committed, and first fit hands that fragment out
+    // later. This allocates into exactly such a fragment.
+    {
+        uint32_t head = 0x1000;
+        const uint32_t low = heap.Allocate(0, head, gears::kMemCommit); // 4 KiB page at the base
+        uint32_t big = 0x1000;
+        const uint32_t far = heap.Allocate(0, big, gears::kMemCommit, 0x10000);
+        Check(low != 0 && far > low + 0x1000,
+            "heap: the aligned allocation leaves an uncommitted head fragment");
+        Check(heap.Free(low) && heap.Free(far), "heap: free both sides of the fragment");
+        uint32_t frag = 0x2000;
+        const uint32_t inFragment = heap.Allocate(0, frag, gears::kMemCommit);
+        Check(inFragment != 0, "heap: the never-committed fragment is handed out without faulting");
+        bool clean = true;
+        for (uint32_t i = 0; i < 0x2000; ++i)
+            if (memory.Base()[inFragment + i] != 0)
+                clean = false;
+        Check(clean, "heap: the never-committed fragment reads back zero");
+        Check(heap.Free(inFragment), "heap: free the fragment allocation");
+    }
+
+    // A fixed commit that runs past its owner and over a NEIGHBOURING live
+    // region must absorb it, not leave a second entry owning the same bytes.
+    // The guest commits a run it treats as one in several calls, so our
+    // bookkeeping splits it; if the inner entry survives, whichever base is
+    // freed first puts memory the other still uses back on the free list.
+    {
+        uint32_t s1 = 0x10000, s2 = 0x10000;
+        const uint32_t lo = heap.Allocate(0, s1, gears::kMemCommit | gears::kMemLargePages);
+        const uint32_t hi = heap.Allocate(lo + 0x10000, s2, gears::kMemCommit | gears::kMemLargePages);
+        Check(lo != 0 && hi == lo + 0x10000, "heap: two adjacent commits land adjacently");
+        const uint32_t before = heap.GetUsage().regions;
+        uint32_t wide = 0x20000;
+        const uint32_t fused = heap.Allocate(lo, wide, gears::kMemCommit | gears::kMemLargePages);
+        Check(fused == lo, "heap: the widening commit returns its base");
+        Check(heap.GetUsage().regions == before - 1,
+            "heap: the widening commit absorbs the neighbour instead of overlapping it");
+        Check(heap.Free(lo), "heap: the fused region frees as one");
+        Check(heap.GetUsage().allocated == 0, "heap: fused-region accounting balances");
+    }
+
     // Exhaustion must still be reported rather than wrapping or overlapping.
     uint32_t huge = 0x00200000;
     Check(heap.Allocate(0, huge, gears::kMemCommit | gears::kMemLargePages) == 0,
