@@ -28,7 +28,17 @@ set(BUILD_SHARED_LIBS OFF)
 add_subdirectory(${THIRDPARTY_ROOT} thirdparty EXCLUDE_FROM_ALL)
 add_subdirectory(extern/XenonRecomp/XenonUtils XenonUtils EXCLUDE_FROM_ALL)
 
+# Xenia's Xenos microcode front end + SPIR-V back end (BSD-3, extern/xenia).
+# Optional in exactly the same way the Vulkan/SDL3 presenter is: if the
+# submodule is not checked out this sets GEARS_HAVE_XENOS_TRANSLATOR to OFF and
+# everything downstream of it drops out of the build.
+add_subdirectory(xenia_gpu)
+
 add_subdirectory(runtime)
+
+if(GEARS_HAVE_XENOS_TRANSLATOR)
+    add_subdirectory(tools/xenos_translate)
+endif()
 
 enable_testing()
 add_subdirectory(tests)

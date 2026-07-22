@@ -24,6 +24,9 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | `tools/prepare_overrides.py` | Strips the weak alias for functions listed in `runtime/hle_d3d.cpp`, so intra-TU calls reach a native override. **Re-run after changing the override list** |
 | `tools/gen_import_stubs.py` | Emits a trapping stub for every import not named in `implemented_imports.h` |
 | `extern/XenonRecomp` | Submodule → our fork, branch `gears` |
+| `xenia_gpu/` | Build island for Xenia's Xenos microcode front end + SPIR-V back end out of `extern/xenia`. One CMakeLists plus `xenia_host_shim.cpp` — no Xenia sources are copied. Optional at configure time exactly like the Vulkan/SDL3 presenter |
+| `tools/shader_extract.py` | Scans any file for `0x102A11tt` shader containers, validates the layout, and writes deduplicated containers. The container layout is documented in its docstring |
+| `tools/xenos_translate/` | Offline driver: container → Xenos microcode → SPIR-V + microcode disassembly. Measurement tool, not part of the runtime |
 | `runtime/` | The PC-side runtime. See below |
 | `tests/` | `test_vmx_instructions` (fork's instruction implementations) and `test_runtime_logic` (kernel object semantics, path translation). Both mutation-checked |
 | `tools/catalog.py` + `docs/issues/` | **Findings registry, keyed by symptom. Search it before investigating anything.** `catalog.py search "<symptom>"` |
@@ -50,6 +53,7 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | Display | `kernel_video.cpp` | **partial** | Reports 1280x720p60 widescreen. Verified that the title's layout does **not** depend on this |
 | **HLE D3D** | `hle_d3d.cpp` | **partial** | The native-override seam for the guest D3D layer, with a per-frame call census carrying call-site provenance (channel `hle`). Overriding **works** now -- it did not before `tools/prepare_overrides.py`, and a strong override linked cleanly while never being entered. One guest function is replaced so far, for instrumentation |
 | **GPU** | `vd_null_gpu.cpp` | **command processor, renders nothing** | Consumes the ring, follows indirect buffers, and executes TYPE0 register writes, `EVENT_WRITE_SHD` fences, `EVENT_WRITE_ZPD` occlusion reports, `WAIT_REG_MEM`, `INTERRUPT` (dispatched per CPU) and **predication** via bin mask/select. No draw is ever performed and no pixel is produced. Vblank at 60 Hz (`GEARS_NO_VBLANK=1` disables) |
+| **Shader translation** | `xenia_gpu/`, `tools/xenos_translate/` | **real, offline only** | Xenia's translator builds and runs in our tree. 425 of 425 of this title's own shaders translate and pass `spirv-val`. Nothing is wired into the runtime, no shader has been executed, and correctness of the output is unproven — only well-formedness. Details in `docs/d3d-seam.md` §3 |
 | **Audio** | `xaudio_null.cpp` | **null** | Accepts frames, plays nothing. Its callback never fires |
 | Input | — | **absent** | |
 | Networking | — | **absent** | 32 `Net*` imports |
@@ -72,6 +76,8 @@ suppressed; adding an implementation means adding its name there.
 - *Why does nothing render?* → `vd_null_gpu.cpp` executes the command stream but performs no draws; a real backend is the HLE work in `docs/d3d-seam.md`
 - *Why is the frame rate what it is?* → vblank pacing is faithful (~8 ms/wait on `0x30B004`) and must not be shortened; see `catalog.py show 16`
 - *Where do I get Xenos shader/packet semantics?* → `extern/xenia` submodule (BSD-3 fork, pinned); see `docs/xenia-reuse.md`
+- *How do I get a shader out of the game and into SPIR-V?* → `tools/shader_extract.py` then `scratch/build/tools/xenos_translate/xenos_translate`; layout in `docs/d3d-seam.md` §3
+- *Why are Xenia's asserts off in `xenia_gpu/`?* → every vertex shader in this title has a zero vfetch stride; see the comment in `xenia_gpu/CMakeLists.txt`
 - *What has already been ruled out for the current crash?* → `catalog.py show 1`
 - *Why won't my gdb watchpoint fire?* → `catalog.py show 5` (physical aliasing / stale addresses)
 - *Why do registers look wrong at a watchpoint?* → `catalog.py show 6`
