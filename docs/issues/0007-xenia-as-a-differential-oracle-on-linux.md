@@ -90,3 +90,9 @@ Also: the 430 lines are almost entirely Xenia's CONFIG DUMP (~400 lines) plus se
 
 ### Note (2026-07-22)
 NEXT: the launch needs a pumping UI thread. Our invocations are setsid/nohup-detached, which is what keeps a session task-stop from killing the emulator but may also be what starves the UI loop. Try running attached in a real desktop session, or find/patch a path that calls RunTitle directly off the UI thread. Do not try more argument spellings -- the argument was never the problem.
+
+### Note (2026-07-22)
+UI-thread hypothesis tested and NOT confirmed as fixable that way: running attached rather than setsid-detached makes no difference (429 lines, still no module load, no title_id). So the UI loop is not being starved merely by detachment. Remaining lead is that emulator_window creation itself may be failing or not pumping under Wayland (DISPLAY=:0 and WAYLAND_DISPLAY=wayland-0 are both set); the earlier zenity picker proves a dialog can appear, but not that Xenia's own window loop runs.
+
+### Note (2026-07-22)
+STATUS after several attempts: Xenia builds and runs here, but has never executed this title. Do not re-try target spellings or headless toggles -- both are eliminated. The next genuinely different approaches are (a) run under a nested X server such as Xephyr or xvfb-run to give it a conventional X window, or (b) call RunTitle off the UI thread with a small local patch, which is the most direct route to a CPU-only oracle and does not need a working window at all.
