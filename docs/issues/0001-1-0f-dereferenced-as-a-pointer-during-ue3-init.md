@@ -69,3 +69,9 @@ FUN_82761758 is NOT a memory reserve. Decompiled, it writes param_3 to obj+0x14,
 
 ### Note (2026-07-22)
 So the object is a shader/register descriptor whose inline float storage lives at +0x24, and sub_82761CA8 fills that storage with denormal flushing. This puts the whole conflict inside the GRAPHICS path, which matters because our GPU is an explicit null: no command processor, an inert register file at 0x7FC00000, and VdSwap presenting nothing. If the title pools these descriptors and recycles them based on GPU progress it can observe -- fences, command-buffer completion, register reads -- then a pool that never sees work retire could hand out a descriptor that is still linked elsewhere. That is a concrete, testable link between the null GPU and this crash, and it was NOT visible before decompilation.
+
+### Note (2026-07-22)
+sub_82766F68 decompiled. It allocates an 8-byte node via FUN_826d6af8(ctx, 8, 0x23) and initialises it as a CIRCULAR intrusive list using TAGGED SELF-POINTERS: *(n+4) = n|1 and *n = (n+4)|1. So an empty list here is self-referential with bit 0 set, NOT null. It then walks 'for (p = *param_2; p != 0; p = *(p+4))' -- iterating the caller's list via next at +4 and reading a value at +0xC from each node, exactly matching the runtime trace.
+
+### Note (2026-07-22)
+NOTE on reading these decompilations: the leading 'iVar6 = FUN_828d280c()' is our blr stub standing in for the prologue 'bl __savegprlr_NN'. Ghidra now models it as a call returning a value, so iVar6 is really a caller-set register (r31-ish), not a return value. Treat any variable initialised from a 0x828dxxxx call as an incoming register, not data.
