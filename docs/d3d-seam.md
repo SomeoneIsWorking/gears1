@@ -74,24 +74,76 @@ the `bl`-scan used here (see catalog #15). An HLE seam does not need all
 
 ## 3. Shaders at the seam
 
-- Shader objects wrap a container with **magic 0x102A1100** (big-endian) at
-  offset 0. Two such containers are embedded in the image itself
-  (0x82039878, 0x82039A40 — D3D's built-ins); the rest arrive from cooked
-  UE3 packages. **V**
-- Container header (words, BE): `magic, totalSize, ...section offsets...`;
-  the observed built-in has totalSize 0x10C and carries a D3D9 SM3 version
-  token (0xFFFF0300 = ps_3_0) inside — i.e. the container holds both
-  D3D9-style metadata (constant table) and the **Xenos microcode** the GPU
-  executes. Exact section table layout not fully mapped (**?** — the create
-  path at 0x82227600 masks/validates header word flags; finish this mapping
-  before writing the translator). 
-- Validation site: 0x82227600 region compares against 0x102A1100 at create
+- Shader objects wrap a container whose magic is **0x102A11tt** (big-endian),
+  where `tt` is the shader type: **0 = pixel, 1 = vertex**. This was previously
+  recorded as a single constant 0x102A1100; that was the pixel-shader case
+  only. Verified over 1290 containers: every `tt`=0 container carries the
+  D3D9 token 0xFFFF0300 (ps_3_0) and every `tt`=1 container carries
+  0xFFFE0300 (vs_3_0), 0 exceptions. **V**
+- Two containers are embedded in the image itself (0x82039878, 0x82039A40 —
+  D3D's built-ins). They are **not two shaders**: both are the same pixel
+  shader with the same microcode, differing only in the 16-float constant
+  block (two YUV→RGB matrices). The rest arrive from cooked UE3 packages. **V**
+- **Container layout (now mapped, verified — see `tools/shader_extract.py`)**:
+
+  | Offset | Meaning |
+  |---|---|
+  | +0x00 | magic `0x102A11tt` |
+  | +0x04 | `headerSize` — also the offset of the data blob |
+  | +0x08 | offset, role not identified |
+  | +0x0C | always 0 |
+  | +0x10 | offset of a u32 CTAB byte-size, with the D3D9 constant table at +4 after it (its `Version` word is the 0xFFFF0300 / 0xFFFE0300 token) |
+  | +0x14 | offset of a 0x28-byte section, or 0 if absent |
+  | +0x18 | offset of the shader-info section, last thing in the header |
+
+  Shader-info section: word 0 = constant-block byte size, word 1 = **microcode
+  byte size** (always a multiple of 12 — the Xenos instruction slot size);
+  words 2.. are register-shaped and not decoded. The blob after the header is
+  `[constants][microcode]`, so the microcode starts at
+  `headerSize + info[0]` and is `info[1]` bytes long.
+
+  Evidence: parsed 5443 magic hits across 768 disc files; 1290 satisfied every
+  structural check with **zero** rejections among them, and the two built-ins
+  decode to exactly the movie player's YUV→RGB converter (three `tfetch2D` of
+  Y/U/V samplers, then the colour matrix). The **?** on this line is cleared.
+- Validation site: 0x82227600 region compares against the magic at create
   time (device+0x4D34/0x4D3C/0x4D40 involved — a shader/constant cache).
   UE3-side loaders referencing the magic: 0x82617464, 0x8261D58C,
   0x826223E0, 0x82694CD0, 0x8274679C. **V**
 - Consequence: **shader translation input = Xenos microcode**, not D3D9
   bytecode; the 0xFFFF0300 token is metadata only. This is the same
   translation job Xenia solved (ucode → host shaders) and it is unavoidable.
+
+### Translation status: proven on this title's own data
+
+`xenia_gpu/` compiles Xenia's microcode front end and SPIR-V back end into our
+tree; `tools/xenos_translate/` drives it offline. Measured result:
+
+- **425 distinct microcode payloads** extracted from the cooked packages
+  (322 pixel, 103 vertex) plus the built-in.
+- **425 of 425 translate**, and **425 of 425 pass `spirv-val --target-env
+  vulkan1.3`** (SPIRV-Tools v2026.1). No shader is special-cased.
+- The **capability shim was not needed**. `SpirvShaderTranslator::Features`
+  already has a device-free constructor; we pass `Features(all=true)`. The
+  only host code we had to supply is `xenia_gpu/xenia_host_shim.cpp`
+  (`ShowSimpleMessageBox` / `LaunchWebBrowser` / `LaunchFileExplorer`), which
+  exists purely to avoid linking SDL2 for a message box the translator can
+  never raise.
+- **Xenos vertex stride does not come from the shader in this title.** All 103
+  vertex shaders leave the `vfetch_full` stride field zero and trip Xenia's
+  `assert_not_zero(fetch_instr.attributes.stride)`
+  (`shader_translator.cc:421`) — confirmed by backtrace on all 103, and by
+  decoding the raw instruction words (`opcode=0 stride=0 offset=0`). The
+  microcode either side of the assert disassembles cleanly, so this is not a
+  parse error: **the HLE layer must supply the vertex stride from the vertex
+  fetch constant at bind time.** Xenia's asserts are therefore off by default
+  in `xenia_gpu/` (`-DGEARS_XENIA_ASSERTS=ON` to restore them).
+
+What this does **not** establish: the SPIR-V is well-formed, not proven
+correct — nothing has been executed on a GPU and no output has been compared
+against the console. And the corpus is what is stored **uncompressed** in the
+packages; shaders that only exist inside compressed package chunks, and the
+question of which shaders are actually bound at runtime, are still open.
 
 ## 4. Resources
 
@@ -160,7 +212,11 @@ model.
 ## Not established (explicit)
 
 - Creation-API entry points for textures/buffers/render targets.
-- The shader container's full section table.
+- The roles of container header words +0x08 and +0x14, and of shader-info
+  words 2.. — enough of the container is mapped to find the microcode and its
+  type, but those fields are still unread.
+- Whether any shaders exist only inside compressed package chunks, and which
+  shaders the title actually binds at runtime (the corpus above is static).
 - Vertex declaration / stream binding entry points.
 - What the post-load state waits on (it calls none of the frame APIs;
   separate investigation, catalog #15).
