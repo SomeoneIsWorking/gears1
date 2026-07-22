@@ -1147,3 +1147,45 @@ started without the user choosing, because the first is a multi-session
 commitment and the second is an explicit decision to leave a known bug.
 
 Nothing has been built yet. The probe clone was made in scratch and discarded.
+
+---
+
+## X_ANSI_STRING parsing verified correct
+
+Raised as a suspicion several entries ago ("the odd-looking path is worth
+confirming before trusting it") and left open. Now closed.
+
+Read the object attributes and counted string straight out of guest memory at
+the call:
+
+```
+OBJECT_ATTRIBUTES = 0x40102368   namePtr = 0x40102360
+X_ANSI_STRING     len = 29  max = 30  buffer = 0x82001B20
+```
+
+And the image at that address contains, literally:
+
+```
+b'ShaderDumpxe:\\CompareBackEnds\x00'
+```
+
+29 bytes then a terminator — exactly the declared length. **The parse is
+correct**; the odd-looking path is a real string in the title's own `.rdata`,
+sitting just after `"...d and new back ends.\n"`. It is a UE3 shader-comparison
+debug path, not evidence of a runtime defect.
+
+One less thing to suspect in our own code, and it closes the last open question
+about the file-I/O layer.
+
+## Decision still outstanding
+
+The fork recorded in the previous entry — build the differential harness versus
+park this crash and broaden — has not been answered, and a loop tick is not an
+answer to it.
+
+**Default if no decision arrives:** take the reversible option and broaden,
+implementing more of the remaining ~120 imports. It commits to nothing, cannot
+waste a multi-session effort on an emulator that may not run, and leaves the
+harness available later. The harness remains the better engineering and the
+recommendation stands; it simply should not be started on the strength of an
+automated prompt.
