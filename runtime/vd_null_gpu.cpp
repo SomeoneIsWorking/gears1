@@ -84,7 +84,26 @@ bool CommitDeviceWindow(GuestMemory& memory)
     if (!memory.Commit(kDeviceWindowBase, kDeviceWindowSize))
         return false;
 
-    lucent::info("gpu", "device MMIO window {:#x}..{:#x} committed (inert)",
+    // One register in this window is not inert, because leaving it zero is not
+    // a neutral choice.
+    //
+    // 0x7FC86544 bit 0 gates the vblank path of the title's graphics interrupt
+    // handler: the handler runs `if (source == 0 && (reg & 1))`. The whole
+    // image reads that address exactly once -- at 0x82221CFC, inside that
+    // handler -- and never writes it, so it is a status bit the GPU owns and
+    // the title only samples.
+    //
+    // The runtime is the GPU here and it does deliver vblank, at 60 Hz from a
+    // host thread. Reporting the bit clear while delivering the interrupt
+    // describes a machine that cannot exist, and it is why 8350 delivered
+    // vblanks in a single run did nothing at all. It stays set rather than
+    // being latched and cleared because the title never acknowledges it.
+    //
+    // Device registers are little-endian, so this is stored unswapped.
+    constexpr uint32_t kVblankStatusRegister = 0x7FC86544;
+    *memory.Translate<uint32_t>(kVblankStatusRegister) = 1;
+
+    lucent::info("gpu", "device MMIO window {:#x}..{:#x} committed; vblank status set",
         kDeviceWindowBase, kDeviceWindowBase + kDeviceWindowSize);
     return true;
 }
