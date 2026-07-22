@@ -24,3 +24,9 @@ Against: upstream docs/building.md says verbatim 'Linux support is extremely exp
 
 ### Note (2026-07-22)
 Bounded feasibility test started rather than committing to the full harness: clone and attempt a Linux build. A failed build is still a useful result -- it resolves the harness-vs-broaden fork empirically instead of leaving it open. Recursive clone exceeds 10 minutes, so it runs in the background; artifacts under scratch/oracle/ (gitignored).
+
+### Note (2026-07-22)
+Toolchain check on this Fedora machine: Clang 22 (docs want 'Clang-19 or newer' -- satisfied), CMake 4.3.0, Ninja 1.13.2. Build is CMake+Ninja via CMakePresets.json (presets: default, vs, vs-arm64). Clone is ~1.3 GB with submodules and takes well over 10 minutes.
+
+### Note (2026-07-22)
+BLOCKED ON SYSTEM PACKAGES. Present: gtk3-devel, vulkan-loader-devel, libX11-devel, libxcb-devel. Missing: libcxx-devel, libcxxabi-devel, lz4-devel, SDL2-devel. Installing these needs sudo, i.e. a machine-level change outside the repo, so it requires the user's go-ahead rather than being done unilaterally.
