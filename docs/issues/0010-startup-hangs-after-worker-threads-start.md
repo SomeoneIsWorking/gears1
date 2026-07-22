@@ -1,7 +1,7 @@
 ---
 id: 10
 title: startup hangs after worker threads start
-status: investigating
+status: resolved
 symptom: no crash; main thread and workers block forever in WaitOn(-1) via sub_8243A510 -> sub_82613318 -> sub_82613DA8, while one worker spins in an mftb-bounded loop in sub_82221A68 -> sub_8222F460
 tags: threading,startup,timebase
 created: 2026-07-22
@@ -33,3 +33,6 @@ Signals in the whole run: NtSetEvent on 0xF8000008 x2, 0xF8000018 x1, 0xF8000030
 Conclusion: the blocked threads are not the defect. They are waiting for work that would be produced by thread 2, which is the only thread running guest code and is stuck in its own loop in sub_82221A68 (worker entry sub_8243AD98), reading counters at r31+0x2A10 / r31+0x2A1C and calling sub_8222F460 -> sub_827A7B08 each pass. The starving waiters are a consequence. Investigate sub_82221A68's loop condition next, NOT the event plumbing.
 
 Ruled out: mftb rate (fixed to 49.875 MHz, hang reproduces identically); thread resume handle/pointer split (fixed, all workers now run, hang persists).
+
+### Resolution (2026-07-22)
+KTHREAD+0x58 (scheduler tick) and KTHREAD+0x14C (processor number) were never populated by the runtime. The title's adaptive lock reads +0x58 to decide whether to keep spinning ('tick - tickAtLastProgress < 5000'); with the field pinned at zero the delta was always zero, so it spun forever and never fell through to its blocking path. Four read sites in the whole image, zero writers -- purely kernel-maintained fields the runtime owns. Fixed by publishing a millisecond tick into every live thread block from one writer and assigning each thread a distinct processor number. Startup now proceeds past the lock.
