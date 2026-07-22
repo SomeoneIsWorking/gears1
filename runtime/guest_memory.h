@@ -20,8 +20,17 @@ public:
 
     uint8_t* Base() const { return base_; }
 
-    // Backs a guest address range with committed, zeroed pages.
+    // Backs a guest address range with committed pages. Pages that have never
+    // been handed out are already zero; a range whose address space is being
+    // recycled still holds the previous tenant's bytes, so the caller that
+    // knows which is which has to call Zero -- see GuestHeap::Allocate.
     bool Commit(uint32_t address, uint32_t size);
+
+    // Zero-fills a committed guest range. NtAllocateVirtualMemory promises
+    // zeroed pages on commit and the title's RtlHeap relies on it: it reads the
+    // block header at the start of a freshly committed segment extension and
+    // treats a non-zero one as a live heap block.
+    void Zero(uint32_t address, uint32_t size);
 
     // Maps one block of real memory into every guest window that aliases
     // physical RAM, so a write through one view is visible through the others.
