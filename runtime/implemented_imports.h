@@ -152,3 +152,12 @@
 // printf-family formatting, overridden natively.
 #define GEARS_IMPORT_IMPLEMENTED__vsnprintf
 #define GEARS_IMPORT_IMPLEMENTED_sprintf
+
+// System notifications and Xam message dispatch.
+#define GEARS_IMPORT_IMPLEMENTED_XamNotifyCreateListener
+#define GEARS_IMPORT_IMPLEMENTED_XNotifyGetNext
+#define GEARS_IMPORT_IMPLEMENTED_XNotifyPositionUI
+#define GEARS_IMPORT_IMPLEMENTED_XMsgInProcessCall
+#define GEARS_IMPORT_IMPLEMENTED_XMsgStartIORequest
+#define GEARS_IMPORT_IMPLEMENTED_XMsgStartIORequestEx
+#define GEARS_IMPORT_IMPLEMENTED_XMsgCancelIORequest
