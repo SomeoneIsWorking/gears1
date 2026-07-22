@@ -11,6 +11,8 @@
 #include <byteswap.h>
 #include <lucent/log.h>
 
+#include "guest_heap.h"
+
 namespace
 {
 std::atomic<uint32_t> g_nextClientId{1};
@@ -72,4 +74,44 @@ void __imp__XAudioGetVoiceCategoryVolumeChangeMask(PPCContext& __restrict ctx, u
     if (ctx.r4.u32 != 0)
         *reinterpret_cast<uint32_t*>(base + ctx.r4.u32) = 0;
     ctx.r3.u64 = gears::kStatusSuccess;
+}
+
+// NTSTATUS XMACreateContext(PVOID* OutContext)
+//
+// The XMA block is the console's hardware audio decoder. Refusing context
+// creation was measured to be intolerable: the title's audio device reports
+// a successful init anyway and then crashes dispatching through the members
+// it never built (SIGSEGV in its Update path). So creation succeeds and
+// hands out a real, zeroed context record in physical memory -- the title
+// programs it and kicks the (unmodelled) decoder block through MMIO. What is
+// missing is decode itself: no PCM is ever produced. That gap is logged
+// loudly here and tracked as the audio subsystem's frontier.
+void __imp__XMACreateContext(PPCContext& __restrict ctx, uint8_t* base)
+{
+    constexpr uint32_t kContextSize = 0x40; // the hardware context record
+    static std::atomic<uint64_t> s_created{0};
+
+    uint32_t size = kContextSize;
+    const uint32_t context = gears::PhysicalHeap().Allocate(0, size, gears::kMemCommit);
+    if (context == 0)
+    {
+        ctx.r3.u64 = gears::kStatusNoMemory;
+        return;
+    }
+
+    if (ctx.r3.u32 != 0)
+        *reinterpret_cast<uint32_t*>(base + ctx.r3.u32) = ByteSwap(context);
+
+    const uint64_t n = s_created.fetch_add(1) + 1;
+    if (n == 1)
+        lucent::warn("audio", "XMA contexts handed out with NO decoder behind them"
+            " -- audio will be silent and decode never progresses");
+    lucent::debug("audio", "XMACreateContext -> {:#x} ({} live)", context, n);
+    ctx.r3.u64 = gears::kStatusSuccess;
+}
+
+void __imp__XMAReleaseContext(PPCContext& __restrict ctx, uint8_t*)
+{
+    gears::PhysicalHeap().Free(ctx.r3.u32);
+    ctx.r3.u64 = 0;
 }

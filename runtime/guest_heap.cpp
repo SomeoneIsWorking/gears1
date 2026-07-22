@@ -34,6 +34,8 @@ uint32_t GuestHeap::Allocate(uint32_t requestedBase, uint32_t& size, uint32_t al
     if (roundedSize == 0)
         return 0;
 
+    std::lock_guard<std::mutex> lock(mutex_);
+
     uint32_t address;
     if (requestedBase != 0)
     {
@@ -72,6 +74,7 @@ uint32_t GuestHeap::Allocate(uint32_t requestedBase, uint32_t& size, uint32_t al
 
 bool GuestHeap::Free(uint32_t address)
 {
+    std::lock_guard<std::mutex> lock(mutex_);
     auto it = regions_.find(address);
     if (it == regions_.end())
     {

@@ -196,3 +196,132 @@ void __imp__XexGetModuleSection(PPCContext& __restrict ctx, uint8_t* base)
         name, uint32_t(section->base), section->size);
     ctx.r3.u64 = gears::kStatusSuccess;
 }
+
+// The kernel's lock-free singly-linked lists. The 32-bit console lays the
+// header out as 8 bytes: the head pointer, then a 16-bit depth and a 16-bit
+// pop sequence that exist to make an 8-byte compare-exchange ABA-safe. Only
+// Pop and Flush are imported -- pushes are inlined guest code operating on the
+// same header -- so these must speak the real layout with real atomics rather
+// than serialise through a host lock the guest never takes.
+namespace
+{
+struct SListHeader
+{
+    uint32_t next;      // guest big-endian
+    uint32_t depthSeq;  // guest big-endian: depth << 16 | sequence
+};
+
+std::atomic<uint64_t>& SListAtomic(uint8_t* base, uint32_t address)
+{
+    return *reinterpret_cast<std::atomic<uint64_t>*>(base + address);
+}
+} // namespace
+
+// PSLIST_ENTRY InterlockedPopEntrySList(PSLIST_HEADER Header)
+void __imp__InterlockedPopEntrySList(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t header = ctx.r3.u32;
+    auto& atom = SListAtomic(base, header);
+
+    uint64_t old = atom.load();
+    for (;;)
+    {
+        SListHeader view;
+        memcpy(&view, &old, sizeof(view));
+        const uint32_t head = ByteSwap(view.next);
+        if (head == 0)
+        {
+            ctx.r3.u64 = 0;
+            return;
+        }
+
+        SListHeader replacement;
+        replacement.next = *reinterpret_cast<uint32_t*>(base + head); // entry->Next, already BE
+        const uint32_t depthSeq = ByteSwap(view.depthSeq);
+        replacement.depthSeq = ByteSwap(((depthSeq - 0x10000) & 0xFFFF0000) | ((depthSeq + 1) & 0xFFFF));
+
+        uint64_t desired;
+        memcpy(&desired, &replacement, sizeof(desired));
+        if (atom.compare_exchange_weak(old, desired))
+        {
+            ctx.r3.u64 = head;
+            return;
+        }
+    }
+}
+
+// PSLIST_ENTRY InterlockedFlushSList(PSLIST_HEADER Header)
+void __imp__InterlockedFlushSList(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t header = ctx.r3.u32;
+    auto& atom = SListAtomic(base, header);
+
+    uint64_t old = atom.load();
+    for (;;)
+    {
+        SListHeader view;
+        memcpy(&view, &old, sizeof(view));
+        const uint32_t head = ByteSwap(view.next);
+
+        SListHeader replacement;
+        replacement.next = 0;
+        const uint32_t depthSeq = ByteSwap(view.depthSeq);
+        replacement.depthSeq = ByteSwap((depthSeq + 1) & 0xFFFF);
+
+        uint64_t desired;
+        memcpy(&desired, &replacement, sizeof(desired));
+        if (atom.compare_exchange_weak(old, desired))
+        {
+            ctx.r3.u64 = head;
+            return;
+        }
+    }
+}
+
+// PVOID RtlImageXexHeaderField(PVOID xexHeaderBase, DWORD key)
+//
+// Walks the optional-header table of an XEX2 header. The header the title
+// passes is the verbatim copy installed by InstallExecutableModule, so this
+// is a real lookup over real data. The low byte of a key encodes where its
+// data lives:
+//   0x00  the entry's value word IS the field           -> return the value
+//   0x01  the field is one dword stored in the entry    -> return its address
+//   else  the entry's value is an offset from the base  -> return base+offset
+void __imp__RtlImageXexHeaderField(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t headerBase = ctx.r3.u32;
+    const uint32_t key = ctx.r4.u32;
+    ctx.r3.u64 = 0;
+
+    if (headerBase == 0)
+        return;
+
+    const auto read32 = [&](uint32_t address) {
+        return ByteSwap(*reinterpret_cast<uint32_t*>(base + address));
+    };
+
+    if (read32(headerBase) != 0x58455832) // "XEX2"
+    {
+        lucent::warn("kernel", "RtlImageXexHeaderField: {:#x} is not an XEX2 header", headerBase);
+        return;
+    }
+
+    const uint32_t count = read32(headerBase + 0x14);
+    for (uint32_t i = 0; i < count; i++)
+    {
+        const uint32_t entry = headerBase + 0x18 + i * 8;
+        if (read32(entry) != key)
+            continue;
+
+        switch (key & 0xFF)
+        {
+        case 0x00: ctx.r3.u64 = read32(entry + 4); break;
+        case 0x01: ctx.r3.u64 = entry + 4; break;
+        default: ctx.r3.u64 = headerBase + read32(entry + 4); break;
+        }
+        lucent::debug("kernel", "RtlImageXexHeaderField({:#x}) -> {:#x}", key, ctx.r3.u32);
+        return;
+    }
+
+    lucent::debug("kernel", "RtlImageXexHeaderField({:#x}) -> not present", key);
+}
