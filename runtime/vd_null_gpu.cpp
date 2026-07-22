@@ -399,6 +399,11 @@ struct CommandProcessor
                 continue;
             }
 
+            // Everything the title has actually written and we have not yet
+            // consumed. A ring consumer must never read past this: beyond the
+            // write pointer the memory holds whatever the previous lap left.
+            const uint32_t available = (wptr - rptr) & (dwords - 1);
+
             const uint32_t header = ReadGuest32(g_ringBuffer.base + rptr * 4);
             sourceBase = 0;
             sourceIndex = rptr;
@@ -406,7 +411,29 @@ struct CommandProcessor
             const uint32_t consumed = ExecutePacket(header, [&](uint32_t w) {
                 return ReadGuest32(g_ringBuffer.base + ((rptr + w) & (dwords - 1)) * 4);
             }, dwords, 0);
-            rptr = (rptr + consumed) & (dwords - 1);
+
+            if (consumed + 1 > available)
+            {
+                // The packet claims to extend past what has been written, so a
+                // length was misread. Advancing by it would carry rptr beyond
+                // wptr, and since the comparison below is an equality test the
+                // consumer would then lap the whole ring, re-executing every
+                // stale packet on it -- old swap packets and old fences
+                // included. That is not a hypothetical: it is what left the
+                // title submitting nothing while the ring appeared busy.
+                //
+                // Reported at error level with the header, because clamping
+                // hides the misparse that caused it and the misparse is the
+                // real defect.
+                lucent::error("gpu", "packet at ring dword {:#x} claims {} dwords with only"
+                    " {} written (header {:#010x}); resynchronising to the write pointer",
+                    sourceIndex, consumed + 1, available, header);
+                rptr = wptr;
+            }
+            else
+            {
+                rptr = (rptr + consumed) & (dwords - 1);
+            }
 
             StoreGuest32(g_ringBuffer.readPtrWriteBackAddress, rptr);
         }
