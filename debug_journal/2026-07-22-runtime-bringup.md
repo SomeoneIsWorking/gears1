@@ -920,3 +920,48 @@ our side, the conclusion will be that the title is being driven into a state the
 console would not have produced — most likely by something we report
 differently — and the search should switch from pointer provenance to which
 reported value steered it there.
+
+---
+
+## Trace status, and why the per-frame climb is the wrong method now
+
+Two more frames, same shape each time:
+
+```
+sub_8273B488   r31 = r3   (line 7070 -- the only assignment)  -> passes r4 = r31
+sub_82744148   call site at 31756 sets r4 and r6, not r3
+```
+
+Every frame so far has exactly **one** assignment of the register in question,
+and it is always "= the incoming argument". The pointer is threaded unchanged
+through at least five frames. Climbing one frame per iteration is therefore
+costing an iteration to learn nothing but "still passed through".
+
+### The value's real shape
+
+The disputed addresses are simply offsets into the 4 KiB block:
+
+```
+block base   = 0xA06F0000   (one MmAllocatePhysicalMemoryEx, size 4096, align 4096)
+float object = 0xA06F0308   = block + 0x308
+list head    = 0xA06F032C   = block + 0x32C   = float object + 36
+```
+
+So the question is not "which frame passes the pointer" — they all do — but
+**who computed `block + 0x308`, and who decided a list head belongs at
+`block + 0x32C`**. Those are two sub-allocation or layout decisions inside the
+title, and one of them is wrong relative to the other.
+
+### Better method for next time
+
+Stop walking frames. Instead break on the *creation* of the value: find where
+`0xA06F0308` is first computed, by breaking early and watching for the block
+base to have `0x308` added to it, or by breaking at the allocation of the block
+and single-stepping the sub-allocator that carves it up. That identifies the
+layout decision directly rather than re-confirming pass-through at each level.
+
+The alternative framing from the previous entry still stands and is now more
+attractive: every runtime interaction with this block has been exactly as
+requested, so if the layout decision itself is internally consistent, the fault
+is upstream in some value we report that steered the title into this
+configuration.
