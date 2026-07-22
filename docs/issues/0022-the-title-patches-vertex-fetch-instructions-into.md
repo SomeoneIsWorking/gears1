@@ -46,3 +46,6 @@ Not established: whether the pixel-shader side has an analogous patch. Nine
 captured pixel shaders are byte-identical to corpus entries, so at least those
 are not patched; several others differ from their nearest corpus entry in ALU
 operands, which is a different shader rather than a patched one.
+
+### Note (2026-07-23)
+CORRECTION: the framing 'derive Vulkan vertex-input state from the fetch constants' is falsified by the translator's real output. Xenia's translated vertex shaders declare NO vertex-attribute Input locations -- the hot VS entry point's only Input is gl_VertexIndex (verified independently: spirv-dis of vs_5363d074, OpEntryPoint interface). vfetch is implemented as SSBO loads from a guest-memory mirror, and the fetch constants are consumed as a UBO, not as VkVertexInputAttributeDescription. Stride/format from the fetch constants is still needed, but as UBO contents for in-shader fetch, not as a Vulkan vertex layout. The first-draw dependency chain is now tracked in docs/re-frontier.md (const-capture is the next RE-ready step).
