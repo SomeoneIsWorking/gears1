@@ -14,15 +14,19 @@ namespace gears
 // the game dereferences one.
 size_t ResolveImportVariables(GuestMemory& memory, const Image& image);
 
-// The handle the kernel uses to name the running executable. On hardware this
-// is the address of the module's own structure, so the image base is the
-// natural value; what matters here is that every path that can produce it
-// agrees, since the title both reads the XexExecutableModuleHandle variable
-// and asks XexGetModuleHandle for the same thing and may compare the two.
-//
-// Nothing lays out a module structure at this address yet, so a title that
-// dereferences the handle rather than passing it back will fault on the field
-// it reads. That is deliberate: it points straight at the missing work.
+// Lays out the loader's record of the running executable in guest memory: a
+// module entry whose +0x58 field points at a copy of the real XEX header
+// region (the layout titles depend on -- they read the header pointer from
+// the module entry and hand it to RtlImageXexHeaderField). Must run before
+// ResolveImportVariables so the XexExecutableModuleHandle variable can carry
+// the installed handle.
+bool InstallExecutableModule(GuestMemory& memory, const uint8_t* xexData, size_t xexSize);
+
+// The handle the kernel uses to name the running executable: the guest
+// address of the module entry installed above. Every path that can produce
+// the handle agrees, since the title both reads the XexExecutableModuleHandle
+// variable and asks XexGetModuleHandle for the same thing and may compare the
+// two.
 uint32_t ExecutableModuleHandle();
 
 // The parsed image stays reachable after boot: imports that answer questions

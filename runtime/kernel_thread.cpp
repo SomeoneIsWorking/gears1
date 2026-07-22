@@ -37,6 +37,17 @@ struct GuestThreadStart
     std::shared_ptr<gears::KernelObject> resumed;
 };
 
+// Thrown by ExTerminateThread to unwind the calling guest thread back to
+// GuestThreadMain. The recompiled functions are plain C++ with no cleanup of
+// their own, so the unwind is safe; only the runtime's own frames run
+// destructors on the way out.
+struct GuestThreadExit
+{
+    uint32_t exitCode;
+};
+
+thread_local GuestThreadStart* t_currentThread = nullptr;
+
 void GuestThreadMain(std::shared_ptr<GuestThreadStart> start)
 {
     uint8_t* base = gears::Memory().Base();
@@ -44,6 +55,8 @@ void GuestThreadMain(std::shared_ptr<GuestThreadStart> start)
     // A suspended thread must not run guest code until it is resumed.
     if (start->resumed)
         start->resumed->Wait(-1);
+
+    t_currentThread = start.get();
 
     PPCContext ctx{};
     ctx.r13.u32 = start->block.pcrAddress;
@@ -53,18 +66,26 @@ void GuestThreadMain(std::shared_ptr<GuestThreadStart> start)
     lucent::info("thread", "guest thread {} entering {:#x} (context {:#x})",
         start->threadId, start->startAddress, start->startContext);
 
-    // The XAPI startup shim, when present, is what the console calls; it takes
-    // the real entry point and its argument and handles thread teardown.
-    if (start->startupRoutine != 0)
+    try
     {
-        ctx.r3.u32 = start->startAddress;
-        ctx.r4.u32 = start->startContext;
-        (PPC_LOOKUP_FUNC(base, start->startupRoutine))(ctx, base);
+        // The XAPI startup shim, when present, is what the console calls; it
+        // takes the real entry point and its argument and handles teardown.
+        if (start->startupRoutine != 0)
+        {
+            ctx.r3.u32 = start->startAddress;
+            ctx.r4.u32 = start->startContext;
+            (PPC_LOOKUP_FUNC(base, start->startupRoutine))(ctx, base);
+        }
+        else
+        {
+            ctx.r3.u32 = start->startContext;
+            (PPC_LOOKUP_FUNC(base, start->startAddress))(ctx, base);
+        }
     }
-    else
+    catch (const GuestThreadExit& exit)
     {
-        ctx.r3.u32 = start->startContext;
-        (PPC_LOOKUP_FUNC(base, start->startAddress))(ctx, base);
+        lucent::debug("thread", "guest thread {} terminated with code {:#x}",
+            start->threadId, exit.exitCode);
     }
 
     lucent::info("thread", "guest thread {} exited", start->threadId);
@@ -72,6 +93,21 @@ void GuestThreadMain(std::shared_ptr<GuestThreadStart> start)
 }
 
 } // namespace
+
+// VOID ExTerminateThread(DWORD ExitCode) -- ends the calling thread. Never
+// returns to guest code: the unwind lands in GuestThreadMain, which signals
+// the thread's exit object so joiners wake.
+void __imp__ExTerminateThread(PPCContext& __restrict ctx, uint8_t*)
+{
+    if (t_currentThread == nullptr)
+    {
+        // The primary thread was not made by ExCreateThread; it ending is the
+        // process ending.
+        lucent::warn("thread", "ExTerminateThread({:#x}) on the primary thread", ctx.r3.u32);
+        std::exit(int(ctx.r3.u32));
+    }
+    throw GuestThreadExit{ctx.r3.u32};
+}
 
 // NTSTATUS ExCreateThread(PHANDLE Handle, ULONG StackSize, PULONG ThreadId,
 //                         PVOID XapiThreadStartup, PVOID StartAddress,

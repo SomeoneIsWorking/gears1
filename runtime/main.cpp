@@ -104,6 +104,8 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
 
     gears::SetLoadedImage(image);
+    if (!gears::InstallExecutableModule(memory, xex.data(), xex.size()))
+        return EXIT_FAILURE;
     gears::ResolveImportVariables(memory, image);
     gears::InitialiseHeaps(memory);
 

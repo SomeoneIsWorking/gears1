@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <map>
+#include <mutex>
 
 #include "guest_memory.h"
 #include "kernel_status.h"
@@ -39,7 +40,11 @@ public:
     // Everything past the cursor. Freed regions are not recycled, so this is
     // what a further allocation can actually get rather than a bookkeeping
     // total that would over-promise.
-    uint32_t Available() const { return uint32_t(uint64_t(base_) + size_ - cursor_); }
+    uint32_t Available() const
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return uint32_t(uint64_t(base_) + size_ - cursor_);
+    }
 
 private:
     GuestMemory& memory_;
@@ -47,6 +52,13 @@ private:
     uint32_t size_;
     uint32_t cursor_;
     std::map<uint32_t, uint32_t> regions_; // base -> size
+
+    // Allocate/Free are reached from NtAllocateVirtualMemory and friends, which
+    // guest threads call concurrently -- on the console these are kernel
+    // syscalls and the kernel serialises them. Without this lock the std::map
+    // corrupts under load (observed: spurious "free of unknown address"
+    // warnings followed by a SIGSEGV inside the rb-tree erase).
+    mutable std::mutex mutex_;
 };
 
 GuestHeap& TitleHeap();

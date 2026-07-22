@@ -27,3 +27,12 @@ savevmx_64_address   = 0x828D78F4
 # longjmp_address / setjmp_address: not yet located. Omitted deliberately
 # rather than guessed -- the recompiler treats them as ordinary functions
 # until identified.
+
+# Function entries the recompiler's boundary analysis missed. Each was found
+# the same way: a live indirect call whose function-table lookup returned
+# null (host jump to 0), with the target verified as real code by disassembly.
+functions = [
+    # Reached via vtable from 0x825B48C4 (render-thread post-processing).
+    # Body runs to the shared restore-tail branch at 0x825B6160.
+    { address = 0x825B4EB8, size = 0x12AC },
+]
