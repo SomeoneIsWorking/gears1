@@ -1,0 +1,31 @@
+
+# ---- MANUAL ENTRIES (not from XenonAnalyse) ----
+# XenonAnalyse missed this jump table: 16-case dispatch in the render-command
+# executor. The case blocks (0x825B4938..0x825B6020) share the function's
+# frame and epilogue; recompiling one as a standalone function (the earlier
+# workaround for the jump-to-0 crash here) corrupted the caller's nonvolatile
+# registers on return -- r24 came back as a float bit pattern and crashed
+# sub_82544148. `base` is the bctr at 0x825B48F4, index register is r8
+# (r0 holds the scaled table offset, not the index).
+[[switch]]
+base = 0x825B48F4
+r = 8
+default = 0x825B4938
+labels = [
+    0x825B4938,
+    0x825B4A7C,
+    0x825B4CD4,
+    0x825B4EB8,
+    0x825B509C,
+    0x825B5280,
+    0x825B5464,
+    0x825B5648,
+    0x825B5808,
+    0x825B5930,
+    0x825B5A58,
+    0x825B5B80,
+    0x825B5CA8,
+    0x825B5DD0,
+    0x825B5EF8,
+    0x825B6020,
+]

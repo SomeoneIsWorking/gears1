@@ -141,6 +141,16 @@ constexpr uint32_t kOpIndirectBufferPfd = 0x37;
 constexpr uint32_t kOpInterrupt = 0x54;
 constexpr uint32_t kOpEventWriteShd = 0x58;
 
+// The runtime's own swap packet. D3D reserves 64 dwords in the command buffer
+// and passes their address to VdSwap; the KERNEL is what fills them with the
+// swap commands (leaving them unwritten desyncs any parser: the stale bytes
+// there are not packets, and the frame's fences behind them are skipped --
+// measured as the transient scene-phase "GPU is hung" episodes). The encoding
+// of the fill is private between the kernel and its GPU, so this pair uses an
+// opcode Xenos does not define and sizes it to the reservation.
+constexpr uint32_t kOpRuntimeSwap = 0x7F;
+constexpr uint32_t kSwapReservationDwords = 64;
+
 // Addresses in packets carry the Xenos endian mode in their low two bits.
 // Mode 2 (8-in-32) is a full byte swap, which for guest big-endian memory is
 // the plain guest store; the observed stream uses mode 2 everywhere. Mode 0
@@ -196,6 +206,11 @@ struct CommandProcessor
 {
     InterruptThreadState interruptState;
 
+    // Where the packet being executed came from (buffer base, or 0 for the
+    // ring, and the word index of its header) -- provenance for diagnostics.
+    uint32_t sourceBase = 0;
+    uint32_t sourceIndex = 0;
+
     void HandleType3(uint32_t opcode, const uint32_t* data, uint32_t count, int depth)
     {
         switch (opcode)
@@ -228,8 +243,17 @@ struct CommandProcessor
             if (count >= 3)
             {
                 StoreEndian(data[1], data[2]);
-                lucent::debug("gpu", "EVENT_WRITE_SHD {:#x} <- {:#x}", data[1] & ~3u, data[2]);
+                lucent::debug("gpu", "EVENT_WRITE_SHD {:#x} <- {:#x} (from {:#x}[{:#x}])",
+                    data[1] & ~3u, data[2], sourceBase, sourceIndex);
             }
+            break;
+
+        case kOpRuntimeSwap:
+            // Frame boundary written by VdSwap. data[0] is the front buffer
+            // address recorded there; nothing is presented, but the packet's
+            // execution is what proves the stream stayed parseable through
+            // the swap block.
+            lucent::debug("gpu", "swap packet: front buffer {:#x}", count >= 1 ? data[0] : 0u);
             break;
 
         case kOpInterrupt:
@@ -301,6 +325,8 @@ struct CommandProcessor
         while (i < words)
         {
             const uint32_t header = ReadGuest32(base + i * 4);
+            sourceBase = base;
+            sourceIndex = i;
             ++i;
             i += ExecutePacket(header, [&](uint32_t w) {
                 return ReadGuest32(base + (i + w) * 4);
@@ -374,6 +400,8 @@ struct CommandProcessor
             }
 
             const uint32_t header = ReadGuest32(g_ringBuffer.base + rptr * 4);
+            sourceBase = 0;
+            sourceIndex = rptr;
             rptr = (rptr + 1) & (dwords - 1);
             const uint32_t consumed = ExecutePacket(header, [&](uint32_t w) {
                 return ReadGuest32(g_ringBuffer.base + ((rptr + w) & (dwords - 1)) * 4);
@@ -569,11 +597,37 @@ void __imp__VdSetGraphicsInterruptCallback(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = 0;
 }
 
+// VdSwap(swapBlock, ..., frontBufferPtrPtr, ...): D3D's Present reserves 64
+// dwords in the command buffer and hands their address over as r3; the kernel
+// writes the swap command sequence into them, and the stream then flows on to
+// the frame's fence packets. Leaving the block unwritten is not a neutral
+// omission: whatever stale bytes sit there desync the command processor and
+// the frame's fences are skipped (measured: transient scene-phase "GPU is
+// hung" episodes, ~5 s each, until a later frame's fence rescued the ticket
+// lock). The fill is one runtime-private packet spanning the whole
+// reservation, carrying the front buffer address for when presentation
+// becomes real.
 void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
 {
     const uint64_t frame = g_frameCount.fetch_add(1) + 1;
     if (frame == 1 || frame % 60 == 0)
         lucent::info("gpu", "VdSwap: {} frames submitted (nothing presented)", frame);
+
+    const uint32_t block = ctx.r3.u32;
+    if (block != 0)
+    {
+        const uint32_t frontBuffer =
+            ctx.r8.u32 != 0 ? ReadGuest32(ctx.r8.u32) : 0;
+
+        StoreGuest32(block, (3u << 30) | ((kSwapReservationDwords - 2) << 16)
+            | (kOpRuntimeSwap << 8));
+        StoreGuest32(block + 4, frontBuffer);
+        for (uint32_t i = 2; i < kSwapReservationDwords; i++)
+            StoreGuest32(block + i * 4, 0);
+
+        lucent::debug("gpu", "VdSwap: swap packet at {:#x}, front buffer {:#x}",
+            block, frontBuffer);
+    }
 
     ctx.r3.u64 = 0;
 }
