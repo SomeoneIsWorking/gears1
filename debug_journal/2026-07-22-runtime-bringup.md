@@ -1024,3 +1024,70 @@ values that steer the title's own layout decisions: `XGetVideoMode` and
 EDRAM/`MmQuery*` responses. A wrong answer there would make the title size or
 lay out a structure differently from the console, which is exactly the shape of
 what is being observed.
+
+---
+
+## The reported-values audit: first test is negative, and a better method exists
+
+### Which invented values the title actually consults
+
+All of them, before the crash:
+
+| Import | Calls |
+|---|---|
+| `XGetVideoMode` | 3 |
+| `VdQueryVideoMode` | 2 |
+| `VdQueryVideoFlags` | 2 |
+| `VdGetCurrentDisplayInformation` | 1 |
+| `VdGetCurrentDisplayGamma` | 1 |
+| `ExGetXConfigSetting` | 1 |
+| `XGetAVPack` | 0 |
+
+`VdGetCurrentDisplayInformation` deserves particular suspicion: its struct
+layout was **invented**. Seven offsets were filled with guessed values and the
+rest left zero, under a comment claiming "only the fields the title reads are
+filled" — which was never verified and is not knowledge, it is a guess wearing
+the costume of one. That comment has been a small lie in the source since it was
+written.
+
+### Test: does the reported resolution steer the layout?
+
+Changed the reported mode from 1280x720 to 640x480 and re-ran.
+
+**Result: byte-identical.** Same crash, `r31 = 0x3F800000`, `r28 = 0xA06F032C` —
+the same addresses, not merely the same failure. The structure being corrupted
+is laid out independently of the display configuration we report.
+
+That is a strong negative for the whole video branch of the audit. Restored to
+1280x720.
+
+### Honest assessment after ~8 iterations on this one crash
+
+Twelve mechanisms eliminated. The propagation chain is fully understood and
+every step of it is measured. But the *cause* is not found, and the last two
+promising directions — pointer provenance, and reported machine values — have
+both now produced negatives.
+
+Continuing to guess-and-eliminate from inside this runtime has poor expected
+value. The remaining space is large and each probe costs an iteration.
+
+### The method that should be used instead: differential comparison
+
+This project has a `recomp-harness` skill describing exactly the right approach
+for this situation, and it has not been used: **run a reference emulator as an
+oracle and compare state until the first divergence.**
+
+Xenia runs Gears of War. Rather than reasoning about what `0xA06F0308` should
+have been, the question becomes empirical: at the same point in execution, what
+does Xenia have there? The first divergence between the two is the bug, and
+finding it is a search over execution time rather than over hypotheses.
+
+That is a substantial piece of infrastructure — vendoring Xenia, driving both
+headless, agreeing on comparison points — but it is the difference between
+guessing and measuring, and this investigation has reached the point where that
+trade is clearly worth making. It is also what the project's own methodology
+says to do, and skipping it is why the last several iterations have been
+hypothesis-driven rather than evidence-driven.
+
+**Recommendation: stop single-crash archaeology and build the differential
+harness.**
