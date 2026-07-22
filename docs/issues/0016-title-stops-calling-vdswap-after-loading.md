@@ -132,3 +132,81 @@ NEW TOOL: tools/ppcdis.py -- capstone-based raw disassembly straight from the im
 of Ghidra project state. tools/ghidra_scripts/Disasm.py silently degrades to a byte dump when
 Ghidra never rebuilt flow over the range (it did exactly that on 0x8223B8A0), so prefer
 ppcdis.py as the cross-check of record.
+
+### Note (2026-07-22)
+RE-SUBMISSION QUESTION ANSWERED: NOT (a) tiled rendering. Tiling IS present and accounts for a
+factor of 3, not the factor of 196. The remaining 196x is pathological, and on real hardware it
+would be equally fatal -- so it is a defect (b/c), not faithful behaviour.
+
+METHOD (new diagnostics in runtime/vd_null_gpu.cpp, all channel-gated, no behavioural change):
+  - per-frame TYPE3 opcode census split by depth (ring level vs inside an indirect buffer),
+    distinct-IB counts, and ring dwords written vs consumed  -> channel "gpu"
+  - raw ring-level packet trace (dword index, header, dwords charged, wptr before/after)
+    -> channel "ring"
+  - unwrapped rptr/wptr accounting with a first-overshoot report. NOTE: the pre-existing
+    "consumed + 1 > available" guard CANNOT detect lapping, because (wptr - rptr) is computed
+    with masked arithmetic and a lapped read pointer reports an almost-full ring. The earlier
+    "ring lapping ruled out" result was therefore a non-result from a detector that cannot fire.
+    The unwrapped accounting is the detector that can, and it reports NO overshoot: rptr never
+    passes wptr. Lapping is now genuinely ruled out, on evidence rather than on a blind test.
+
+WHAT THE RING ACTUALLY CONTAINS (measured, one presented frame, scene phase). The ring-level
+stream is one 42-dword unit repeated, each unit a COMPLETE frame submission:
+    IB(11) IB(3255) IB(11) IB(23)
+    SET_BIN_SELECT_LO 0x80000003 -> IB(3489) IB(29)
+    SET_BIN_SELECT_LO 0xc        -> IB(3489) IB(29)
+    SET_BIN_SELECT_LO 0xffffffff -> IB(11) IB(9589) IB(11) IB(3692)
+    <VdSwap reservation packet>
+12 IB packets * 3 dwords + 3 SET_BIN_SELECT_LO * 2 dwords = 42 dwords. Per presented frame:
+197 such units, 2352 IB submissions, 8232 ring dwords written and 8232 consumed, 196 swap
+packets of which 1 is accepted. Every published count divides by 196 exactly.
+
+(a) TILED RENDERING IS REAL BUT IS NOT THE ANSWER. Predicated tiling is unambiguously in use:
+the ring brackets scene replays with SET_BIN_SELECT_LO (0x62) and the indirect buffers carry
+SET_BIN_MASK_LO/HI (0x60/0x61) in bulk (33516 / 14308 per presented frame). But the bin
+selects take only THREE values (0x80000003, 0xc, 0xffffffff) and they are IDENTICAL in every
+one of the 197 units. A tiling replay varies the bin selection per pass; a constant selection
+repeated 197 times is not a tile loop. So tiling explains the 3 passes INSIDE a unit and
+nothing else. Hypothesis (a) is refuted on the register values the title actually programs.
+
+THE 196 IS "AS MANY AS FIT IN THE RING". Ring = 0x8000 bytes = 8192 dwords; unit = 42 dwords;
+8192/42 = 195.0. The backlog was tracked unwrapped from CP start: it grows monotonically
+(0 -> 2543 -> 6743 at packet 6000) and then PINS at 8163 = 8192 - 29 for the entire remainder
+of the run. The ring is permanently full and the title is blocked on ring space. The repeat
+count is not chosen by the title -- it is whatever the ring holds. That is the signature of an
+UNBOUNDED resubmission loop whose only backstop is the ring filling up, not of any fixed
+multi-pass scheme.
+
+IT IS NOT FRESH RENDERING EITHER. Of the 197 units in one presented frame only 43 are distinct
+recordings; the rest are repeats, and the repeats are INTERLEAVED, not consecutive (run-length
+histogram: 181 runs of length 1, 8 of length 2). A small set of recorded command buffers is
+being cycled and re-kicked round-robin. The ~86-96 "distinct IBs at 44-116 submissions each"
+from the previous note is this same fact seen per-buffer.
+
+CORRECTION TO THE PREVIOUS NOTE: "the same IB arrives from many DISTINCT ring slots, so the
+title is genuinely re-submitting" was the right conclusion for the wrong reason -- distinct
+ring slots are also what lapping produces. The correct proof is the write pointer: wptr
+advances 8232 dwords per presented frame, and wptr is the title's own plain `stw` at
+0x82221424 (verified with tools/ppcdis.py: `lis r11,0x7fc8 / stw r30,0x714(r11)`, big-endian,
+so ReadGuest32 reads it correctly). The title really does write 8232 dwords per present.
+
+STALE SWAP SEQUENCES ARE A CLUE, NOT NOISE. The 195 rejected swap packets carry sequences in a
+narrow recent band (592-598 while current is 600), not a spread over 196 past frames. So the
+re-kicked buffers are ones VdSwap stamped within the last ~8 presents: D3D is recycling a
+small pool and re-submitting recent recordings, consistent with a retry loop over the last few
+frames' buffers rather than a backlog of ancient ones.
+
+PHASE-SPECIFIC: in the intro (~30 fps) a presented frame is a single unit of ~2-6 IBs. The
+197x replication appears only when the 3D scene phase starts, i.e. together with the tiled
+3-pass structure.
+
+WHAT REMAINS UNESTABLISHED (do not guess it): the guest-side condition that drives the retry.
+Candidates named but NOT tested this session: the served-ticket fence at 0x30A000 and the D3D
+adaptive lock at 0x82221A68. The frame-latency throttle a title normally uses (1-3 frames in
+flight) is provably not working here -- 196 frames are in flight and the only thing that stops
+the title is ring exhaustion -- so whatever implements that throttle is the place to look. The
+next step is to find the guest loop that re-kicks and the completion condition it re-tests,
+NOT to change anything in the command processor.
+
+MEASURED, unchanged by this session (diagnostics only): intro 30.27 fps, scene phase 0.45 fps
+(600 frames, last 60 in 134.21 s). No regression, no behavioural change, nothing committed.

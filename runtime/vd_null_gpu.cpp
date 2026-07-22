@@ -32,7 +32,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <format>
 #include <map>
+#include <string>
 #include <mutex>
 #include <thread>
 
@@ -235,6 +237,43 @@ void WriteGpuRegister(uint32_t reg, uint32_t value)
     }
 }
 
+// Names only for the opcodes this investigation reasons about; anything else
+// prints as its number, which is enough to look up in Xenia's xenos.h.
+std::string OpcodeName(uint32_t op)
+{
+    switch (op)
+    {
+    case 0x10: return "NOP";
+    case 0x22: return "DRAW_INDX";
+    case 0x23: return "VIZ_QUERY";
+    case 0x25: return "SET_STATE";
+    case 0x26: return "WAIT_FOR_IDLE";
+    case 0x2D: return "SET_CONSTANT";
+    case 0x36: return "DRAW_INDX_2";
+    case 0x37: return "IB_PFD";
+    case 0x3B: return "INVALIDATE_STATE";
+    case 0x3C: return "WAIT_REG_MEM";
+    case 0x3D: return "MEM_WRITE";
+    case 0x3F: return "IB";
+    case 0x44: return "COND_EXEC";
+    case 0x45: return "COND_WRITE";
+    case 0x46: return "EVENT_WRITE";
+    case 0x4B: return "SET_BIN_BASE_OFFSET";
+    case 0x50: return "SET_BIN_MASK";
+    case 0x51: return "SET_BIN_SELECT";
+    case 0x54: return "INTERRUPT";
+    case 0x58: return "EVENT_WRITE_SHD";
+    case 0x5A: return "EVENT_WRITE_EXT";
+    case 0x5B: return "EVENT_WRITE_ZPD";
+    case 0x60: return "SET_BIN_MASK_LO";
+    case 0x61: return "SET_BIN_MASK_HI";
+    case 0x62: return "SET_BIN_SELECT_LO";
+    case 0x63: return "SET_BIN_SELECT_HI";
+    case kOpRuntimeSwap: return "SWAP";
+    default: return std::format("op{:#x}", op);
+    }
+}
+
 struct CommandProcessor
 {
     InterruptThreadState interruptState;
@@ -251,6 +290,29 @@ struct CommandProcessor
     // spent inside WAIT_REG_MEM keyed by polled address/register, reported at
     // each executed swap packet. Diagnosis for the frame-rate investigation.
     std::map<uint32_t, std::pair<uint64_t, uint64_t>> waitStats; // addr -> {count, us}
+
+    // Per-frame packet census, for the "why is the same buffer submitted 44-88
+    // times per frame" question. Xenos renders in EDRAM tiles and D3D's
+    // predicated tiling REPLAYS the recorded command buffer once per tile,
+    // bracketing each replay with SET_BIN_MASK/SET_BIN_SELECT; that would make
+    // repeated IB submission entirely faithful. So the census keys opcodes by
+    // depth (ring level vs inside an indirect buffer) and counts distinct IBs,
+    // and the bin packets are counted whether or not they are acted on.
+    // Unwrapped ring accounting. The masked difference (wptr - rptr) can never
+    // report an overshoot -- once the read pointer passes the write pointer the
+    // difference wraps and looks like an almost-full ring, which is exactly the
+    // shape of a consumer that laps. So both pointers are also tracked
+    // unwrapped, and the first packet whose consumption carries the read
+    // pointer past everything written is reported.
+    uint64_t rptrTotal = 0;
+    uint64_t wptrTotal = 0;
+    bool overshootReported = false;
+    uint64_t frameWptrAdvance = 0;
+    uint64_t frameRptrAdvance = 0;
+
+    std::map<uint32_t, uint64_t> ringOpcodes;  // depth 0 TYPE3 opcode -> count
+    std::map<uint32_t, uint64_t> innerOpcodes; // depth > 0 TYPE3 opcode -> count
+    std::map<uint32_t, uint64_t> ibCounts;     // IB address -> submissions
 
     // The whole of the CP thread's wall time between frames, split into the
     // three places it can go. Anything unaccounted for is the guest's own
@@ -280,12 +342,49 @@ struct CommandProcessor
                 lucent::debug("gpu", "  waits on {:#x}: {} times, {} ms",
                     addr, stat.first, stat.second / 1000);
         }
+        uint64_t ibTotal = 0;
+        uint64_t ibMax = 0;
+        for (const auto& [addr, n] : ibCounts)
+        {
+            ibTotal += n;
+            ibMax = std::max(ibMax, n);
+        }
+        lucent::debug("gpu", "frame packets: {} IB submissions of {} distinct buffers"
+            " (max {} each); ring dwords written {} consumed {}",
+            ibTotal, ibCounts.size(), ibMax, frameWptrAdvance, frameRptrAdvance);
+        frameWptrAdvance = frameRptrAdvance = 0;
+        lucent::Line ring;
+        ring.add("  ring TYPE3:");
+        for (const auto& [op, n] : ringOpcodes)
+            ring.add(" {}x{}", OpcodeName(op), n);
+        ring.flush_debug("gpu");
+        lucent::Line inner;
+        inner.add("  IB TYPE3:");
+        for (const auto& [op, n] : innerOpcodes)
+            inner.add(" {}x{}", OpcodeName(op), n);
+        inner.flush_debug("gpu");
+
         waitStats.clear();
+        ringOpcodes.clear();
+        innerOpcodes.clear();
+        ibCounts.clear();
         idleUs = idlePolls = regWaitUs = interruptUs = interrupts = 0;
     }
 
     void HandleType3(uint32_t opcode, const uint32_t* data, uint32_t count, int depth)
     {
+        ++(depth == 0 ? ringOpcodes : innerOpcodes)[opcode];
+        // The bin registers are the tiling controls: on a predicated-tiling
+        // replay the driver sets BIN_MASK/BIN_SELECT before each pass over the
+        // same recorded buffer. Report every distinct value once so the tile
+        // count (if any) is observable rather than assumed.
+        if (opcode >= 0x50 && opcode <= 0x51)
+            lucent::debug("gpu", "{} data {:#x} {:#x} (depth {})", OpcodeName(opcode),
+                count >= 1 ? data[0] : 0u, count >= 2 ? data[1] : 0u, depth);
+        if (opcode >= 0x60 && opcode <= 0x63)
+            lucent::debug("gpu", "{} data {:#x} (depth {})", OpcodeName(opcode),
+                count >= 1 ? data[0] : 0u, depth);
+
         switch (opcode)
         {
         case kOpIndirectBuffer:
@@ -302,8 +401,11 @@ struct CommandProcessor
                     // re-submitting it, and only the ring dword index tells
                     // those apart.
                     if (depth == 0)
+                    {
+                        ++ibCounts[address];
                         lucent::debug("gpu", "IB {:#x} ({} words) from ring dword {:#x}",
                             address, words, sourceIndex);
+                    }
                     ExecuteLinear(address, words, depth + 1);
                 }
             }
@@ -556,11 +658,19 @@ struct CommandProcessor
         constexpr uint32_t kCpRbWptr = 0x7FC80714;
         const uint32_t dwords = g_ringBuffer.Dwords();
         uint32_t rptr = 0;
+        uint32_t lastWptr = 0;
         StoreGuest32(g_ringBuffer.readPtrWriteBackAddress, rptr);
 
         for (;;)
         {
             const uint32_t wptr = ReadGuest32(kCpRbWptr) & (dwords - 1);
+            if (wptr != lastWptr)
+            {
+                const uint32_t advance = (wptr - lastWptr) & (dwords - 1);
+                wptrTotal += advance;
+                frameWptrAdvance += advance;
+                lastWptr = wptr;
+            }
             if (wptr == rptr)
             {
                 const auto idleStart = std::chrono::steady_clock::now();
@@ -579,6 +689,10 @@ struct CommandProcessor
             const uint32_t header = ReadGuest32(g_ringBuffer.base + rptr * 4);
             sourceBase = 0;
             sourceIndex = rptr;
+            // Kept separately: sourceIndex is a member and nested indirect
+            // buffer execution overwrites it, so anything logged after the
+            // packet runs would report the last packet inside the IB instead.
+            const uint32_t ringIndex = rptr;
             rptr = (rptr + 1) & (dwords - 1);
             const uint32_t consumed = ExecutePacket(header, [&](uint32_t w) {
                 return ReadGuest32(g_ringBuffer.base + ((rptr + w) & (dwords - 1)) * 4);
@@ -605,6 +719,24 @@ struct CommandProcessor
             else
             {
                 rptr = (rptr + consumed) & (dwords - 1);
+            }
+
+            // Raw ring-level trace: dword index, header, dwords the parser
+            // charged for it. The consumer must account for every dword the
+            // title wrote, so any shortfall shows up as a gap between one
+            // packet's index+length and the next packet's index.
+            lucent::debug("ring", "{:#06x} {:#010x} +{} wptr {:#06x}->{:#06x}",
+                ringIndex, header, consumed + 1, wptr,
+                ReadGuest32(kCpRbWptr) & (dwords - 1));
+
+            rptrTotal += consumed + 1;
+            frameRptrAdvance += consumed + 1;
+            if (!overshootReported && rptrTotal > wptrTotal)
+            {
+                overshootReported = true;
+                lucent::error("gpu", "ring overshoot: consumed {} dwords but only {} written;"
+                    " packet at dword {:#x} header {:#010x} claimed {} dwords",
+                    rptrTotal, wptrTotal, sourceIndex, header, consumed + 1);
             }
 
             StoreGuest32(g_ringBuffer.readPtrWriteBackAddress, rptr);
