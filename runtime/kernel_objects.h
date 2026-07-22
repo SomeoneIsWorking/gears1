@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 
 #include "kernel_status.h"
@@ -21,7 +22,8 @@ public:
     {
         NotificationEvent,    // stays signalled until explicitly cleared
         SynchronizationEvent, // one waiter consumes the signal
-        Semaphore             // signalled while count > 0; a waiter takes one
+        Semaphore,            // signalled while count > 0; a waiter takes one
+        Mutant                // owned by one thread, recursively acquirable
     };
 
     KernelObject(Kind kind, bool signalled) : kind_(kind), signalled_(signalled) {}
@@ -35,6 +37,10 @@ public:
     // Returns the previous count.
     int32_t Release(int32_t increment);
 
+    // Mutant release. Returns false when the calling thread is not the owner,
+    // which the caller reports as STATUS_MUTANT_NOT_OWNED.
+    bool ReleaseMutant();
+
     // Returns true if the wait was satisfied, false on timeout.
     // A negative timeout means wait forever.
     bool Wait(int64_t timeout100ns);
@@ -44,6 +50,8 @@ private:
     bool signalled_;
     int32_t count_ = 0;
     int32_t limit_ = 0;
+    std::thread::id owner_{};       // Mutant only
+    int32_t recursion_ = 0;         // Mutant only
     std::mutex mutex_;
     std::condition_variable cv_;
 };

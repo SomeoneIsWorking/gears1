@@ -64,11 +64,33 @@ void KernelObject::Pulse()
     signalled_ = false;
 }
 
+bool KernelObject::ReleaseMutant()
+{
+    {
+        std::lock_guard<std::mutex> guard(mutex_);
+        if (owner_ != std::this_thread::get_id())
+            return false;
+        if (--recursion_ > 0)
+            return true;
+        owner_ = {};
+    }
+    cv_.notify_one();
+    return true;
+}
+
 bool KernelObject::Wait(int64_t timeout100ns)
 {
     std::unique_lock<std::mutex> lock(mutex_);
 
-    auto satisfied = [this] { return kind_ == Kind::Semaphore ? count_ > 0 : signalled_; };
+    auto satisfied = [this] {
+        switch (kind_)
+        {
+        case Kind::Semaphore: return count_ > 0;
+        case Kind::Mutant:
+            return recursion_ == 0 || owner_ == std::this_thread::get_id();
+        default: return signalled_;
+        }
+    };
 
     if (timeout100ns < 0)
     {
@@ -87,6 +109,11 @@ bool KernelObject::Wait(int64_t timeout100ns)
     {
         --count_;
         signalled_ = count_ > 0;
+    }
+    else if (kind_ == Kind::Mutant)
+    {
+        owner_ = std::this_thread::get_id();
+        ++recursion_;
     }
     return true;
 }

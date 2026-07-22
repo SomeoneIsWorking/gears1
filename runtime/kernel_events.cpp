@@ -1,6 +1,10 @@
 // Event objects and waiting.
 #include "import_stub.h"
 
+#include <chrono>
+#include <thread>
+#include <vector>
+
 #include <byteswap.h>
 #include <lucent/log.h>
 
@@ -66,6 +70,127 @@ void __imp__NtCreateEvent(PPCContext& __restrict ctx, uint8_t* base)
     lucent::debug("kernel", "NtCreateEvent(type={}, initial={}) -> {:#x}",
         type, initialState, handle);
     ctx.r3.u64 = gears::kStatusSuccess;
+}
+
+// NTSTATUS NtCreateMutant(PHANDLE Handle, POBJECT_ATTRIBUTES Attributes,
+//                         BOOLEAN InitialOwner)
+void __imp__NtCreateMutant(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t handlePtr = ctx.r3.u32;
+    const bool initialOwner = ctx.r5.u32 != 0;
+
+    auto object = std::make_shared<gears::KernelObject>(
+        gears::KernelObject::Kind::Mutant, false);
+    if (initialOwner)
+        object->Wait(0); // takes ownership for the creating thread
+
+    const uint32_t handle = gears::Handles().Insert(std::move(object));
+    if (handlePtr != 0)
+        *reinterpret_cast<uint32_t*>(base + handlePtr) = ByteSwap(handle);
+
+    lucent::debug("kernel", "NtCreateMutant(initialOwner={}) -> {:#x}", initialOwner, handle);
+    ctx.r3.u64 = gears::kStatusSuccess;
+}
+
+// NTSTATUS NtReleaseMutant(HANDLE Handle, PLONG PreviousCount)
+void __imp__NtReleaseMutant(PPCContext& __restrict ctx, uint8_t*)
+{
+    const uint32_t handle = ctx.r3.u32;
+    auto object = gears::Handles().Lookup(handle);
+    if (object == nullptr)
+    {
+        lucent::warn("kernel", "NtReleaseMutant({:#x}): no such handle", handle);
+        ctx.r3.u64 = gears::kStatusInvalidHandle;
+        return;
+    }
+
+    if (!object->ReleaseMutant())
+    {
+        lucent::warn("kernel", "NtReleaseMutant({:#x}): calling thread is not the owner", handle);
+        ctx.r3.u64 = gears::kStatusMutantNotOwned;
+        return;
+    }
+
+    ctx.r3.u64 = gears::kStatusSuccess;
+}
+
+// NTSTATUS NtWaitForMultipleObjectsEx(ULONG Count, PHANDLE Handles,
+//     WAIT_TYPE WaitType, KPROCESSOR_MODE WaitMode, BOOLEAN Alertable,
+//     PLARGE_INTEGER Timeout)
+// WaitType 0 waits for all objects, 1 for any; the any-wait returns
+// STATUS_WAIT_0 + the index of the object that satisfied it.
+void __imp__NtWaitForMultipleObjectsEx(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t count = ctx.r3.u32;
+    const uint32_t handlesPtr = ctx.r4.u32;
+    const uint32_t waitType = ctx.r5.u32;
+    const int64_t timeout100ns = ReadTimeout(base, ctx.r8.u32);
+
+    if (count == 0 || handlesPtr == 0)
+    {
+        ctx.r3.u64 = gears::kStatusInvalidParameter;
+        return;
+    }
+
+    std::vector<uint32_t> handles(count);
+    std::vector<std::shared_ptr<gears::KernelObject>> objects(count);
+    for (uint32_t i = 0; i < count; i++)
+    {
+        handles[i] = ByteSwap(*reinterpret_cast<uint32_t*>(base + handlesPtr + i * 4));
+        objects[i] = gears::Handles().Lookup(handles[i]);
+        if (objects[i] == nullptr)
+        {
+            lucent::error("wait", "NtWaitForMultipleObjectsEx: unknown handle {:#x}", handles[i]);
+            ctx.r3.u64 = gears::kStatusInvalidHandle;
+            return;
+        }
+    }
+
+    if (waitType == 0)
+    {
+        // Wait-all: acquired one after another. Not atomic the way the real
+        // dispatcher is, but the objects are acquired in a stable order so two
+        // all-waiters cannot deadlock against each other on the same set.
+        for (uint32_t i = 0; i < count; i++)
+        {
+            if (!objects[i]->Wait(timeout100ns))
+            {
+                ctx.r3.u64 = gears::kStatusTimeout;
+                return;
+            }
+        }
+        ctx.r3.u64 = gears::kStatusSuccess;
+        return;
+    }
+
+    // Wait-any. The objects have independent signal states, so this polls:
+    // each pass try-acquires every object with a zero timeout, then sleeps
+    // briefly. Millisecond-scale latency, which is the granularity the
+    // console's own scheduler quantum gave titles anyway.
+    const auto start = std::chrono::steady_clock::now();
+    for (;;)
+    {
+        for (uint32_t i = 0; i < count; i++)
+        {
+            if (objects[i]->Wait(0))
+            {
+                ctx.r3.u64 = i; // STATUS_WAIT_0 + i
+                return;
+            }
+        }
+
+        if (timeout100ns >= 0)
+        {
+            const auto elapsed = std::chrono::steady_clock::now() - start;
+            if (std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()
+                >= timeout100ns * 100)
+            {
+                ctx.r3.u64 = gears::kStatusTimeout;
+                return;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+    }
 }
 
 void __imp__NtSetEvent(PPCContext& __restrict ctx, uint8_t*)
