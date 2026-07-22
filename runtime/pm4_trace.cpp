@@ -44,11 +44,13 @@ const char* OpcodeName(uint32_t opcode)
     case 0x3F: return "INDIRECT_BUFFER";
     case 0x3D: return "MEM_WRITE";
     case 0x46: return "EVENT_WRITE";
-    case 0x47: return "EVENT_WRITE_SHD";
-    case 0x48: return "EVENT_WRITE_CFL";
     case 0x22: return "COND_EXEC";
     case 0x2D: return "SET_CONSTANT";
-    case 0x10: return "ME_INIT";
+    case 0x10: return "NOP";
+    case 0x48: return "ME_INIT";
+    case 0x3C: return "WAIT_REG_MEM";
+    case 0x54: return "INTERRUPT";
+    case 0x58: return "EVENT_WRITE_SHD";
     default: return "?";
     }
 }
@@ -86,6 +88,25 @@ void Walk(uint32_t base, uint32_t words, uint32_t watchAddress, int depth,
             for (uint32_t w = 0; w < count && i + w < words; w++)
             {
                 const uint32_t value = Read(base + (i + w) * 4);
+                const uint32_t reg = baseRegister + w;
+                // The scratch registers (0x578..0x57F) and the writeback
+                // control pair (SCRATCH_UMSK 0x1DC / SCRATCH_ADDR 0x1DD) are
+                // the retirement protocol: values written to a masked scratch
+                // register are copied by the GPU to SCRATCH_ADDR + 4n. Report
+                // them unconditionally -- they carry submission ids and
+                // callback pointers, never the fence address itself, which is
+                // why a watch on the address alone cannot see them.
+                if (reg >= 0x578 && reg <= 0x57F)
+                {
+                    lucent::info("pm4", "SCRATCH_REG{} <- {:#010x} (TYPE0 at {:#x})",
+                        reg - 0x578, value, base + (i - 1) * 4);
+                }
+                else if (reg == 0x1DC || reg == 0x1DD)
+                {
+                    lucent::info("pm4", "{} <- {:#010x} (TYPE0 at {:#x})",
+                        reg == 0x1DC ? "SCRATCH_UMSK" : "SCRATCH_ADDR", value,
+                        base + (i - 1) * 4);
+                }
                 if (PhysicalOffset(value) == PhysicalOffset(watchAddress))
                 {
                     lucent::info("pm4", "TYPE{} register write at {:#x} puts the watched"
@@ -98,6 +119,12 @@ void Walk(uint32_t base, uint32_t words, uint32_t watchAddress, int depth,
         }
 
         const uint32_t opcode = (header >> 8) & 0x7F;
+
+        if (opcode == 0x40)
+        {
+            lucent::info("pm4", "INTERRUPT packet at {:#x}, data {:#010x}",
+                base + (i - 1) * 4, count >= 1 ? Read(base + i * 4) : 0u);
+        }
 
         // Any packet carrying the watched address is the one being looked for,
         // whichever opcode it turns out to be -- reported rather than assumed
