@@ -1,7 +1,7 @@
 ---
 id: 9
 title: Ghidra decompiles Xbox 360 functions to a single call
-status: investigating
+status: resolved
 symptom: decompiled body is just 'WARNING: Subroutine does not return' plus one call to a 0x828dxxxx address, no real code
 tags: ghidra,re,method
 created: 2026-07-22
@@ -30,3 +30,6 @@ PARTIAL PROGRESS. Stubbing the helper ranges removed the 'Subroutine does not re
 
 ### Note (2026-07-22)
 So two things are now known: the approach is correct (the noreturn inference is what was discarding bodies, and stubbing addresses it), and the remaining obstacle is purely mechanical -- getting four real bytes written into the Ghidra program and persisted. Worth checking whether headless actually saves memory edits made by a -postScript, since the byte value never changes across runs while other edits appear to stick. Next attempt should verify the write inside the same script by reading the bytes straight back before exiting.
+
+### Resolution (2026-07-22)
+SOLVED. Three separate problems, in order: (1) the save/restore helpers make the decompiler treat callers as noreturn -- fixed by overwriting their ranges with blr; (2) the target functions' instructions were disassembled under the old flow, so recreating the function alone yields only the prologue -- must clearCodeUnits over the function span and re-disassemble BEFORE CreateFunctionCmd; (3) my verification was lying -- mem.getBytes into a Jython bytearray silently reads zeros, so every 'the write failed' conclusion was wrong; use jarray.zeros(n,'b'). tools/ghidra_scripts/DecompXbox.py does all of it in one run. Result: 0x82761CA8 decompiles to 548 bytes / 99 lines, 0x82766F68 to 608 / 97.
