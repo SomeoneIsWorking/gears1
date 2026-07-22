@@ -520,3 +520,278 @@ PPC_FUNC(sub_8223B8A0)
     CountValue(g_enqueued, kValueSlots, list);
     __imp__sub_8223B8A0(ctx, base);
 }
+
+// ---------------------------------------------------------------------------
+// Shared helpers for the shader instrumentation below, plus the two census
+// probes on the D3D draw path.
+//
+// Reads of candidate guest pointers go through process_vm_readv so an unmapped
+// guest page returns EFAULT instead of faulting the process: an argument
+// register is full of values that look like pointers and are not.
+// ---------------------------------------------------------------------------
+
+#include <sys/syscall.h>
+#include <sys/uio.h>
+
+#include <mutex>
+
+namespace
+{
+
+// Defined with the argument-scan probes at the end of this file.
+void ArgReport();
+void ArgScanInit();
+
+bool GuestCopy(uint32_t guest, void* out, size_t n)
+{
+    iovec local{out, n};
+    iovec remote{gears::Memory().Translate<uint8_t>(guest), n};
+    long r = syscall(SYS_process_vm_readv, getpid(), &local, 1UL, &remote, 1UL, 0UL);
+    return r == long(n);
+}
+
+bool IsShaderContainerWord(uint32_t w) { return (w & 0xFFFFFF00u) == 0x102A1100u; }
+
+// A guest address worth spending a syscall on. Anything else in a register is
+// a float, a bitfield or a small integer.
+bool PlausiblePointer(uint32_t v)
+{
+    if (v & 3)
+        return false;
+    return (v >= 0x40000000u && v < 0x50000000u) || // title heap
+           (v >= 0x80000000u && v < 0x83000000u) || // image
+           (v >= 0xA0000000u && v < 0xC0000000u);   // physical windows
+}
+
+} // namespace
+
+namespace gears
+{
+
+void HleShaderCaptureFrame(uint64_t frame)
+{
+    ArgScanInit();
+    if (frame % 60 == 0)
+        ArgReport();
+}
+
+} // namespace gears
+
+// SetTexture, and the state-flush-and-draw emitter. Census only: both are on
+// the path the shader work has to understand, and their per-frame call counts
+// with call-site provenance are what say which phase is doing what.
+extern "C" PPC_FUNC(__imp__sub_82220858);
+namespace {
+Probe g_probe_settex{"82220858/SetTexture", 0x82220858};
+struct RegSetTex { RegSetTex() { Register(&g_probe_settex); } } g_regSetTex;
+}
+PPC_FUNC(sub_82220858)
+{
+    Note(g_probe_settex, uint32_t(ctx.lr));
+    __imp__sub_82220858(ctx, base);
+}
+
+extern "C" PPC_FUNC(__imp__sub_82544148);
+namespace {
+Probe g_probe_draw{"82544148/draw", 0x82544148};
+struct RegDraw { RegDraw() { Register(&g_probe_draw); } } g_regDraw;
+}
+PPC_FUNC(sub_82544148)
+{
+    Note(g_probe_draw, uint32_t(ctx.lr));
+    __imp__sub_82544148(ctx, base);
+}
+
+// ---------------------------------------------------------------------------
+// Finding the shader-set entry point.
+//
+// Nothing in the image names it. So this asks the question directly at the API
+// boundary: a D3D shader object contains the container word 0x102A11tt (at
+// +0x28 in a pixel-shader object, +0x368 in a vertex-shader one -- it is NOT at
+// offset 0, and a detector that assumes so finds nothing), so the function that
+// BINDS a shader is a D3D function handed one in an argument register.
+// Every D3D-range function
+// reachable from the UE3 RHI zone (0x82540000-0x82560000, 51 of them by a
+// static bl-scan) gets the same argument probe; the ones that never receive a
+// shader report zero and are eliminated by measurement rather than by guesswork.
+//
+// Result (catalog #21): sub_82222808 is SetPixelShader and sub_82222B98 is
+// SetVertexShader, r3 = device, r4 = shader.
+//
+// Enabled with GEARS_SHADER_ARGSCAN=1.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+bool g_argScan = false;
+
+struct ArgProbe
+{
+    const char* name;
+    uint64_t calls = 0;
+    uint64_t hits[8]{};       // per argument register r3..r10
+    uint32_t types[8]{};      // bitmask of shader types seen in that register
+    uint32_t lastShader[8]{};
+    uint32_t distinct[8]{};   // distinct shader pointers, capped
+    uint32_t magicOffset[8]{};// where the container word sat inside the object
+    uint32_t seen[8][16]{};
+};
+
+constexpr size_t kMaxArgProbes = 96;
+ArgProbe* g_argProbes[kMaxArgProbes]{};
+size_t g_argProbeCount = 0;
+std::mutex g_argLock;
+
+void RegisterArg(ArgProbe* p)
+{
+    if (g_argProbeCount < kMaxArgProbes)
+        g_argProbes[g_argProbeCount++] = p;
+}
+
+void ArgScan(ArgProbe& p, const PPCContext& ctx)
+{
+    const uint32_t regs[8] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                              ctx.r7.u32, ctx.r8.u32, ctx.r9.u32, ctx.r10.u32};
+    std::lock_guard<std::mutex> guard(g_argLock);
+    ++p.calls;
+    for (int i = 0; i < 8; ++i)
+    {
+        const uint32_t v = regs[i];
+        if (!PlausiblePointer(v))
+            continue;
+        // The D3D shader object is NOT the bare container: the setters found by
+        // this scan are handed objects with fields well past 0x300, so the
+        // container word can sit at an offset. Search a bounded prefix and
+        // record where it was found rather than requiring it at +0.
+        uint32_t head[256];
+        if (!GuestCopy(v, head, sizeof(head)))
+            continue;
+        uint32_t first = 0;
+        int at = -1;
+        for (int w = 0; w < 256; ++w)
+        {
+            const uint32_t x = __builtin_bswap32(head[w]);
+            if (IsShaderContainerWord(x)) { first = x; at = w; break; }
+        }
+        if (at < 0)
+            continue;
+        p.magicOffset[i] = uint32_t(at) * 4;
+        ++p.hits[i];
+        p.types[i] |= 1u << (first & 0xFF);
+        p.lastShader[i] = v;
+        bool known = false;
+        for (uint32_t k = 0; k < p.distinct[i] && k < 16; ++k)
+            if (p.seen[i][k] == v) { known = true; break; }
+        if (!known)
+        {
+            if (p.distinct[i] < 16)
+                p.seen[i][p.distinct[i]] = v;
+            ++p.distinct[i];
+        }
+    }
+}
+
+void ArgScanInit()
+{
+    g_argScan = lucent::config::flag("SHADER_ARGSCAN");
+    if (g_argScan)
+        lucent::info("hle", "shader argument scan armed over {} D3D entry points",
+            g_argProbeCount);
+}
+
+void ArgReport()
+{
+    if (!g_argScan)
+        return;
+    std::lock_guard<std::mutex> guard(g_argLock);
+    for (size_t i = 0; i < g_argProbeCount; ++i)
+    {
+        ArgProbe* p = g_argProbes[i];
+        // Probes with zero shader arguments are reported too: "called 200000
+        // times and never handed a shader" is the measurement that eliminates a
+        // candidate, and silence would not distinguish it from "never called".
+        if (p->calls == 0)
+            continue;
+        lucent::Line line;
+        line.add("argscan sub_{} calls={}", p->name, p->calls);
+        for (int r = 0; r < 8; ++r)
+        {
+            if (!p->hits[r])
+                continue;
+            line.add("  r{}: {} shader args, {} distinct, types{}{}, container word at +{:#x}, last {:#x}", r + 3,
+                p->hits[r], p->distinct[r],
+                (p->types[r] & 1) ? " ps" : "", (p->types[r] & 2) ? " vs" : "",
+                p->magicOffset[r], p->lastShader[r]);
+        }
+        line.flush_debug("hle");
+    }
+}
+
+} // namespace
+
+#define GEARS_HLE_ARGPROBE(addr)                                               \
+    extern "C" PPC_FUNC(__imp__sub_##addr);                                    \
+    namespace {                                                                \
+    ArgProbe g_arg_##addr{#addr};                                              \
+    struct RegArg_##addr { RegArg_##addr() { RegisterArg(&g_arg_##addr); } }   \
+        g_regArg_##addr;                                                       \
+    }                                                                          \
+    PPC_FUNC(sub_##addr)                                                       \
+    {                                                                          \
+        if (g_argScan)                                                         \
+            ArgScan(g_arg_##addr, ctx);                                        \
+        __imp__sub_##addr(ctx, base);                                          \
+    }
+
+// The 51 D3D-range functions called from the UE3 RHI zone, minus the ones
+// already overridden above (0x82220858, 0x82221980) and 0x8221CBA8, which the
+// seam notes identify as UE3's render-command ring allocator, not D3D.
+GEARS_HLE_ARGPROBE(8222E8E0)
+GEARS_HLE_ARGPROBE(82222350)
+GEARS_HLE_ARGPROBE(8221D9B8)
+GEARS_HLE_ARGPROBE(82222460)
+GEARS_HLE_ARGPROBE(8222E868)
+GEARS_HLE_ARGPROBE(8222E758)
+GEARS_HLE_ARGPROBE(8222ABF8)
+GEARS_HLE_ARGPROBE(8222CC48)
+GEARS_HLE_ARGPROBE(82218928)
+GEARS_HLE_ARGPROBE(8222B068)
+GEARS_HLE_ARGPROBE(8222AE20)
+GEARS_HLE_ARGPROBE(8222B398)
+GEARS_HLE_ARGPROBE(82222808)
+GEARS_HLE_ARGPROBE(82222B98)
+GEARS_HLE_ARGPROBE(8222AFD8)
+GEARS_HLE_ARGPROBE(8222A2D8)
+GEARS_HLE_ARGPROBE(8222A150)
+GEARS_HLE_ARGPROBE(82235528)
+GEARS_HLE_ARGPROBE(8222CFF8)
+GEARS_HLE_ARGPROBE(82220570)
+GEARS_HLE_ARGPROBE(82222E18)
+GEARS_HLE_ARGPROBE(82222710)
+GEARS_HLE_ARGPROBE(82228F70)
+GEARS_HLE_ARGPROBE(82229460)
+GEARS_HLE_ARGPROBE(8222AB30)
+GEARS_HLE_ARGPROBE(8222ECC0)
+GEARS_HLE_ARGPROBE(82222AC8)
+GEARS_HLE_ARGPROBE(82220028)
+GEARS_HLE_ARGPROBE(8221F8B0)
+GEARS_HLE_ARGPROBE(8222DE50)
+GEARS_HLE_ARGPROBE(82236370)
+GEARS_HLE_ARGPROBE(82228998)
+GEARS_HLE_ARGPROBE(82228AB8)
+GEARS_HLE_ARGPROBE(82228B48)
+GEARS_HLE_ARGPROBE(82229398)
+GEARS_HLE_ARGPROBE(8222D4F8)
+GEARS_HLE_ARGPROBE(82229028)
+GEARS_HLE_ARGPROBE(82222EF8)
+GEARS_HLE_ARGPROBE(82229B28)
+GEARS_HLE_ARGPROBE(82228A28)
+GEARS_HLE_ARGPROBE(82228D28)
+GEARS_HLE_ARGPROBE(82228BD8)
+GEARS_HLE_ARGPROBE(82228C48)
+GEARS_HLE_ARGPROBE(82228CB8)
+GEARS_HLE_ARGPROBE(822364F8)
+GEARS_HLE_ARGPROBE(8222EF20)
+GEARS_HLE_ARGPROBE(822369F0)
+GEARS_HLE_ARGPROBE(82221D78)

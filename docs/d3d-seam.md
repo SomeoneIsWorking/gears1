@@ -141,9 +141,72 @@ tree; `tools/xenos_translate/` drives it offline. Measured result:
 
 What this does **not** establish: the SPIR-V is well-formed, not proven
 correct — nothing has been executed on a GPU and no output has been compared
-against the console. And the corpus is what is stored **uncompressed** in the
-packages; shaders that only exist inside compressed package chunks, and the
-question of which shaders are actually bound at runtime, are still open.
+against the console.
+
+### Which shaders the title actually binds (measured)
+
+The offline corpus above is a corpus of **templates**, and it is not what runs.
+Both questions left open — where shaders are bound, and which ones — are now
+answered by measurement. Full evidence in catalog entries #21 and #22.
+
+**Where they are bound.** Two D3D API setters, identified by probing all 51
+D3D-range functions reachable from the UE3 RHI zone and keeping the ones
+measurably handed a shader object (`GEARS_SHADER_ARGSCAN=1`):
+
+| Address | Role | Device field | Dirty bit(s) at device+0x10 |
+|---|---|---|---|
+| **0x82222808** | `SetPixelShader` (r3 device, r4 shader) | device+0x3080 | 1<<52, 1<<49 |
+| **0x82222B98** | `SetVertexShader` (r3 device, r4 shader) | device+0x3084 | 1<<51 |
+
+Called exactly the same number of times as each other (410374 each over four
+minutes); 0x82222808 is only ever handed type-0 (pixel) objects and 0x82222B98
+only type-1 (vertex) ones. The flush emitter at 0x82234xxx reads both fields and
+emits the sequencer load. **The shader object is not the bare container**: the
+0x102A11tt word sits at +0x28 inside a pixel-shader object and +0x368 inside a
+vertex-shader one. **V**
+
+**The authoritative bind point is lower.** The GPU is not given the container's
+microcode; it is given a patched copy, via the PM4 sequencer loads
+`IM_LOAD` (opcode 0x27, microcode by physical address) and `IM_LOAD_IMMEDIATE`
+(opcode 0x2B, microcode inline). Both occur in this title's stream (~181 and ~33
+packets per frame). `runtime/vd_null_gpu.cpp` captures them under
+`GEARS_SHADER_CAPTURE=1`. **V**
+
+**The patch is the vertex fetch.** Every `vfetch_full` in captured vertex
+microcode carries a non-zero stride (2..22 observed); `Stride=0` never occurs,
+where the corpus has it everywhere. For 12 of the 18 bound vertex shaders there
+is a corpus container of the same length whose disassembly differs **only** in
+`vfetch` lines — the ALU body is byte-identical. So the guest D3D merges the
+vertex fetch constant into the instruction at bind time, exactly the mechanism
+predicted in catalog #20, and a shader must be translated **after** that patch.
+**V**
+
+**What is bound, over a 10-minute run** (2.0M `IM_LOAD` + 0.36M
+`IM_LOAD_IMMEDIATE`, 0 rejected, 0 truncated):
+
+- **38 distinct microcode payloads**: 18 vertex, 20 pixel. 5 of them during the
+  movie phase; the set reaches 38 at the first post-load frame and never grows
+  again, over ~18000 frames.
+- **38 of 38 translate to SPIR-V and pass `spirv-val --target-env vulkan1.3`**
+  (`xenos_translate --raw`).
+- Against the 425-container offline corpus: **9 byte-identical** (all pixel),
+  **12 more are corpus shaders with the vertex fetch patched**, and **17 have no
+  established corpus counterpart**. So the compressed-chunk gap is not the main
+  story — fetch patching is.
+- The hot set is tiny: one vertex/pixel pair (`vs_5363d074`/`ps_501ac5d8`)
+  accounts for **61%** of all binds, the top six for **81%**, and the
+  top ten for **89%**. Early rendering work can target a handful.
+
+Caveat on the counts: the title replays its command buffer once per EDRAM tile
+(predicated tiling), so a bind is counted once per tile pass. That inflates the
+absolute numbers equally across shaders; the shares are still meaningful, the
+absolute "binds per frame" is not.
+
+Still open: the corpus is what is stored **uncompressed** in the packages, so
+whether the 17 unmatched payloads come from compressed package chunks or are
+simply patched beyond recognition is not established. Nothing has been executed
+on a GPU. And the run only ever reached the phases the port reaches today — a
+title that got further would bind more.
 
 ## 4. Resources
 
@@ -215,8 +278,9 @@ model.
 - The roles of container header words +0x08 and +0x14, and of shader-info
   words 2.. — enough of the container is mapped to find the microcode and its
   type, but those fields are still unread.
-- Whether any shaders exist only inside compressed package chunks, and which
-  shaders the title actually binds at runtime (the corpus above is static).
+- Whether the 17 bound microcode payloads with no corpus counterpart come from
+  compressed package chunks or are patched beyond recognition (section 3).
+- Whether pixel shaders are patched at bind time the way vertex shaders are.
 - Vertex declaration / stream binding entry points.
 - What the post-load state waits on (it calls none of the frame APIs;
   separate investigation, catalog #15).

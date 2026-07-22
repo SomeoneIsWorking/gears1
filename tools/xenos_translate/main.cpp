@@ -89,11 +89,20 @@ bool ParseContainer(const std::vector<uint8_t>& data, Container* out,
 int main(int argc, char** argv) {
   if (argc < 3) {
     std::fprintf(stderr,
-                 "usage: xenos_translate OUTDIR CONTAINER...\n"
-                 "  writes OUTDIR/<name>.spv and OUTDIR/<name>.ucode.txt\n");
+                 "usage: xenos_translate [--raw] OUTDIR CONTAINER...\n"
+                 "  writes OUTDIR/<name>.spv and OUTDIR/<name>.ucode.txt\n"
+                 "  --raw: inputs are bare big-endian microcode (as captured\n"
+                 "         from PM4 sequencer loads), not containers; the\n"
+                 "         shader type comes from the vs_/ps_ filename prefix\n");
     return 2;
   }
-  std::filesystem::path outdir(argv[1]);
+  int argi = 1;
+  bool raw = false;
+  if (std::string(argv[argi]) == "--raw") {
+    raw = true;
+    ++argi;
+  }
+  std::filesystem::path outdir(argv[argi++]);
   std::filesystem::create_directories(outdir);
 
   // No Vulkan device: the SPIR-V back end's only coupling to Xenia's UI layer
@@ -107,7 +116,7 @@ int main(int argc, char** argv) {
       /*edram_fragment_shader_interlock=*/false);
 
   int total = 0, parsed = 0, analyzed = 0, translated = 0;
-  for (int i = 2; i < argc; ++i) {
+  for (int i = argi; i < argc; ++i) {
     ++total;
     std::filesystem::path in(argv[i]);
     std::string stem = in.stem().string();
@@ -115,7 +124,26 @@ int main(int argc, char** argv) {
 
     Container c{};
     std::string error;
-    if (!ParseContainer(data, &c, &error)) {
+    if (raw) {
+      // Bare microcode: no container to parse, so the only things that can be
+      // checked are the instruction-slot size and the type carried by the name.
+      if (data.size() % 12 != 0 || data.empty()) {
+        std::printf("%-28s RAW-FAIL size %zu is not a non-zero multiple of 12\n",
+                    stem.c_str(), data.size());
+        continue;
+      }
+      if (stem.rfind("vs_", 0) == 0) {
+        c.type = xe::gpu::xenos::ShaderType::kVertex;
+      } else if (stem.rfind("ps_", 0) == 0) {
+        c.type = xe::gpu::xenos::ShaderType::kPixel;
+      } else {
+        std::printf("%-28s RAW-FAIL name does not start with vs_ or ps_\n",
+                    stem.c_str());
+        continue;
+      }
+      c.ucode = reinterpret_cast<const uint32_t*>(data.data());
+      c.ucode_dwords = data.size() / 4;
+    } else if (!ParseContainer(data, &c, &error)) {
       std::printf("%-28s CONTAINER-FAIL %s\n", stem.c_str(), error.c_str());
       continue;
     }
