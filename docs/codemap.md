@@ -24,7 +24,8 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | `extern/XenonRecomp` | Submodule → our fork, branch `gears` |
 | `runtime/` | The PC-side runtime. See below |
 | `tests/` | Correctness tests for the instructions added to our XenonRecomp fork. Mutation-checked |
-| `debug_journal/` | Dated findings, **including every rejected hypothesis** |
+| `tools/catalog.py` + `docs/issues/` | **Findings registry, keyed by symptom. Search it before investigating anything.** `catalog.py search "<symptom>"` |
+| `debug_journal/` | Dated narrative of each session. The catalog is the index into it |
 | `scratch/` | All derived output, gitignored: `ppc/` generated C++, `game/` extracted disc, `bin/`, `logs/`, `raw/` |
 
 ## Runtime subsystems
@@ -66,7 +67,9 @@ suppressed; adding an implementation means adding its name there.
 - *Why is a physical pointer valid at four addresses?* → `guest_memory.cpp`, `MapPhysicalAliases`
 - *What decides an import traps vs runs?* → `implemented_imports.h` + `tools/gen_import_stubs.py`
 - *Why does nothing render?* → `vd_null_gpu.cpp`, top-of-file comment
-- *What has already been ruled out for the current crash?* → `debug_journal/2026-07-22-runtime-bringup.md`
+- *What has already been ruled out for the current crash?* → `catalog.py show 1`
+- *Why won't my gdb watchpoint fire?* → `catalog.py show 5` (physical aliasing / stale addresses)
+- *Why do registers look wrong at a watchpoint?* → `catalog.py show 6`
 
 ## Current blocker
 
