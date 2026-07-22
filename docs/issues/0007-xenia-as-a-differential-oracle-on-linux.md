@@ -117,3 +117,9 @@ HANDOFF STATE. Oracle: builds and runs (verified), launches attempted via the lo
 
 ### Note (2026-07-22)
 IMPORTANT: the disc FORMAT is not the problem. Our extractor locates this image's partition at base 0xFD90000, and Xenia's disc_image_device.cc lists exactly that base among the ones it supports (0x0, 0xFB20, 0x20600, 0x2080000, 0xFD90000). So DiscImageDevice::Initialize failing is NOT an unsupported XGD variant, and the next investigation should look at file access instead -- the ISO lives on <the image's mount point>, an external mount, and 'F>' log lines repeat three times, suggesting a read or open failure rather than a parse failure.
+
+### Note (2026-07-22)
+USER JUDGEMENT (ground truth): Xenia is not reliable enough to be an oracle. Confirmed by this session's own evidence -- ~12 iterations, never once executed the title, upstream calls Linux support experimental, and it needed three build workarounds plus a source patch merely to ATTEMPT a launch. The deeper objection is that an unreliable oracle is worse than none: any divergence found would be ambiguous between its bug and ours, so it cannot settle a question, which was the entire point.
+
+### Note (2026-07-22)
+Do NOT resume the Xenia harness. The recomp-harness methodology assumes a trustworthy reference emulator; that assumption holds for mature N64/SNES emulators and does NOT hold for Xbox 360 on Linux. Applying the skill without checking its precondition is the mistake made here.

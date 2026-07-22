@@ -33,6 +33,8 @@ has not been verified.
   first time the game calls it.
 - **1,394 jump-table / function-boundary errors.** XenonRecomp's function
   analyser treats a jump table as a tail call and cuts functions short.
+- **Boot dies during UE3 initialisation** — a float is dereferenced as a pointer.
+  Twelve mechanisms eliminated; see `docs/issues/`.
 - **No GPU backend.** The `Vd*` surface is a *null GPU*: it tracks driver state
   and retires command buffers without executing them, and the Xenos register
   file is inert memory. Registered graphics interrupts never fire. Nothing is

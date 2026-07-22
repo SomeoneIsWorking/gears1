@@ -1,7 +1,7 @@
 ---
 id: 8
 title: Differential harness design: comparing our runtime against Xenia
-status: investigating
+status: resolved
 symptom: need to find the first divergence between our recompiled runtime and a reference emulator for a given guest execution
 tags: harness,method
 created: 2026-07-22
@@ -30,3 +30,6 @@ BLOCKER on the gdb-based comparison: running xenia_canary under gdb segfaults in
 
 ### Note (2026-07-22)
 Ways round it, untried, cheapest first: (a) let break_on_instruction's int3 dump core and inspect the core rather than attaching gdb live; (b) run under a virtual display / offscreen so the presenter takes a different path; (c) skip breakpoints entirely and use Xenia's own instrumentation -- trace_functions, trace_function_data, disassemble_functions -- which needs no debugger; (d) build Xenia with the presenter disabled. Option (c) is probably best: it avoids the debugger entirely and its output is already guest-side.
+
+### Resolution (2026-07-22)
+SUPERSEDED. The differential-harness-against-Xenia design is withdrawn: the oracle is not trustworthy (see #7). Replacement approach is static reverse engineering of the two conflicting functions -- determine from the BINARY what object sub_82761CA8 believes it is writing at +36, and what sub_82766F68's walker believes lives at that address. That answers 'which use is wrong' from ground truth rather than from a second implementation that may itself be wrong, and it needs no emulator.
