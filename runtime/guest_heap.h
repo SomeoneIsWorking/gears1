@@ -34,6 +34,13 @@ public:
         uint32_t alignment = 0);
     bool Free(uint32_t address);
 
+    uint32_t Size() const { return size_; }
+
+    // Everything past the cursor. Freed regions are not recycled, so this is
+    // what a further allocation can actually get rather than a bookkeeping
+    // total that would over-promise.
+    uint32_t Available() const { return uint32_t(uint64_t(base_) + size_ - cursor_); }
+
 private:
     GuestMemory& memory_;
     uint32_t base_;
