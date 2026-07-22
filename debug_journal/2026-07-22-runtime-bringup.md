@@ -1091,3 +1091,59 @@ hypothesis-driven rather than evidence-driven.
 
 **Recommendation: stop single-crash archaeology and build the differential
 harness.**
+
+---
+
+## Differential-harness feasibility: Xenia as an oracle
+
+Assessed before committing effort, rather than starting a large build blind.
+
+### In favour: Xenia already has the exact mechanism
+
+`docs/instruction_tracing.md` documents built-in PPC instruction tracing:
+
+- `#define ITRACE 1` in `x64_tracers.cc` — trace PPC instructions
+- `#define DTRACE 1` — add HIR data values
+- `--store_all_context_values` — full context at each step
+- `#define TARGET_THREAD n` — restrict to one thread
+- `bool trace_enabled` — gate tracing to a chosen point
+
+That is precisely what a differential harness needs: a per-instruction trace
+with register state, restrictable to one thread. It removes the largest piece of
+work — we would not have to instrument the oracle ourselves.
+
+### Against: Linux support is explicitly unfinished
+
+From `docs/building.md`, verbatim:
+
+> ### Linux
+> Linux support is extremely experimental and presently incomplete.
+
+It also expects Clang 19 specifically ("GCC, while it should work in theory, is
+not easily interchangeable"); this machine has Clang 22, which may or may not
+matter.
+
+### Honest risk assessment
+
+The crash under investigation happens early — during UE3 initialisation, before
+any real rendering — so an incomplete emulator may well reach it. But
+"experimental and incomplete" is the upstream project's own description, and
+the failure mode is bad: effort spent getting Xenia to build and run on Linux
+produces nothing at all if it cannot reach the comparison point.
+
+This is a genuine fork in the road, not a formality:
+
+- **Build the harness.** High cost, real risk of returning nothing, but if it
+  works it turns every future divergence — not just this crash — from a
+  hypothesis search into a measurement. The project's own methodology says to
+  do this, and doing it late is why the last several iterations were guesswork.
+- **Park this crash and broaden.** Implement more of the remaining ~120
+  imports, on the theory that other paths are also blocked and progress
+  elsewhere is cheaper than this one bug. Costs nothing to try, but leaves the
+  first hard bug unsolved and the next one will be met with the same weak tools.
+
+The first is correct engineering; the second is faster. Neither should be
+started without the user choosing, because the first is a multi-session
+commitment and the second is an explicit decision to leave a known bug.
+
+Nothing has been built yet. The probe clone was made in scratch and discarded.
