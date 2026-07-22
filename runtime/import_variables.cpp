@@ -16,6 +16,11 @@ constexpr uint32_t kVariableHeapBase = 0x70100000;
 constexpr uint32_t kVariableHeapSize = 0x10000;
 } // namespace
 
+uint32_t ExecutableModuleHandle()
+{
+    return uint32_t(PPC_IMAGE_BASE);
+}
+
 size_t ResolveImportVariables(GuestMemory& memory, const Image& image)
 {
     if (image.importVariables.empty())
@@ -40,8 +45,12 @@ size_t ResolveImportVariables(GuestMemory& memory, const Image& image)
         // The thunk slot holds the *address* of the variable; the variable
         // itself starts zeroed. Where a zero is not a valid initial value the
         // game will tell us by misbehaving -- better than inventing a value.
+        //
+        // The executable's own module handle is the exception: its correct
+        // value is known, and XexGetModuleHandle must hand back the same one.
         *memory.Translate<uint32_t>(var.thunkAddress) = ByteSwap(cursor);
-        *memory.Translate<uint32_t>(cursor) = 0;
+        *memory.Translate<uint32_t>(cursor) =
+            var.name == "XexExecutableModuleHandle" ? ByteSwap(ExecutableModuleHandle()) : 0;
 
         if (var.name.empty())
         {
