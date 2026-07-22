@@ -48,8 +48,8 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | Config | `kernel_config.cpp` | **partial** | Answers only settings with a defensible value; refuses the rest **by name** |
 | Strings | `kernel_rtl.cpp` | **partial** | Counted strings, code-page conversion, memory fills. `X_ANSI_STRING` parsing verified |
 | Display | `kernel_video.cpp` | **partial** | Reports 1280x720p60 widescreen. Verified that the title's layout does **not** depend on this |
-| **HLE D3D** | `hle_d3d.cpp` | **partial** | The native-override seam for the guest D3D layer, plus a per-frame call census with call-site provenance (channel `hle`). Today it only traces; no guest function is replaced yet |
-| **GPU** | `vd_null_gpu.cpp` | **null** | Tracks driver state, retires command buffers **without executing them**. No command processor. Register file at `0x7FC00000` is inert memory. Vblank interrupt is driven at 60 Hz (`GEARS_NO_VBLANK=1` disables) |
+| **HLE D3D** | `hle_d3d.cpp` | **partial** | The native-override seam for the guest D3D layer, with a per-frame call census carrying call-site provenance (channel `hle`). Overriding **works** now -- it did not before `tools/prepare_overrides.py`, and a strong override linked cleanly while never being entered. One guest function is replaced so far, for instrumentation |
+| **GPU** | `vd_null_gpu.cpp` | **command processor, renders nothing** | Consumes the ring, follows indirect buffers, and executes TYPE0 register writes, `EVENT_WRITE_SHD` fences, `EVENT_WRITE_ZPD` occlusion reports, `WAIT_REG_MEM`, `INTERRUPT` (dispatched per CPU) and **predication** via bin mask/select. No draw is ever performed and no pixel is produced. Vblank at 60 Hz (`GEARS_NO_VBLANK=1` disables) |
 | **Audio** | `xaudio_null.cpp` | **null** | Accepts frames, plays nothing. Its callback never fires |
 | Input | — | **absent** | |
 | Networking | — | **absent** | 32 `Net*` imports |
@@ -69,24 +69,46 @@ suppressed; adding an implementation means adding its name there.
 - *Why does the game see zeros at an address?* → `import_variables.cpp` (variable imports start zeroed)
 - *Why is a physical pointer valid at four addresses?* → `guest_memory.cpp`, `MapPhysicalAliases`
 - *What decides an import traps vs runs?* → `implemented_imports.h` + `tools/gen_import_stubs.py`
-- *Why does nothing render?* → `vd_null_gpu.cpp`, top-of-file comment
+- *Why does nothing render?* → `vd_null_gpu.cpp` executes the command stream but performs no draws; a real backend is the HLE work in `docs/d3d-seam.md`
+- *Why is the frame rate what it is?* → vblank pacing is faithful (~8 ms/wait on `0x30B004`) and must not be shortened; see `catalog.py show 16`
+- *Where do I get Xenos shader/packet semantics?* → `extern/xenia` submodule (BSD-3 fork, pinned); see `docs/xenia-reuse.md`
 - *What has already been ruled out for the current crash?* → `catalog.py show 1`
 - *Why won't my gdb watchpoint fire?* → `catalog.py show 5` (physical aliasing / stale addresses)
 - *Why do registers look wrong at a watchpoint?* → `catalog.py show 6`
 - *Why is my native override never entered?* → clang folds intra-TU calls through the weak alias; run `tools/prepare_overrides.py`, and note `sub_X` is C++-mangled, not `extern "C"`. Details in `catalog.py show 16`
 
-## Current blocker
+## Current state
 
-Boot dies in `sub_82766F68` dereferencing `1.0f` as a pointer. Fully traced: a
-float store lands on a zero-initialised list head, the list code faithfully
-propagates it, the walker dereferences it. **Twelve mechanisms eliminated** —
-see the journal, and do not re-investigate them.
+Boots, loads its own packages, plays the startup movies, and reaches scene
+rendering at **~30 fps sustained** -- while drawing nothing, because the command
+processor executes the stream but performs no draws.
 
-Recommended next method is **static reverse engineering** of the two
-conflicting functions: determine from the binary what `sub_82761CA8` believes
-it is writing at `+36`, and what `sub_82766F68`'s walker believes lives there.
+The run now reaches roughly 160 seconds of gameplay and then exhausts the
+512 MiB physical heap. `GuestHeap` is a bump allocator whose `Free` reclaims no
+address space, so every guest free leaks it. That was harmless while nothing ran
+long enough to matter and became the limit once the frame rate rose.
 
-A differential harness against Xenia was tried and **abandoned** — it never
-executed the title across many attempts, and an unreliable oracle is worse than
-none because any divergence is ambiguous between its bug and ours. See
-`catalog.py show 7`. Do not resume it.
+## Standing hazards
+
+Several of these have each cost more than one session:
+
+- **Decompiler output is fiction** wherever Ghidra failed to rebuild a function,
+  because `DecompXbox.py` stubs the save/restore helper ranges -- and `Disasm.py`
+  silently degrades to a byte dump in exactly those places. Check anything
+  suspicious with `tools/ppcdis.py`, which decodes from the image directly.
+  Five wrong conclusions have come from this, including two "established facts".
+- **A negative result is only as good as the detector.** Ring lapping was
+  recorded as ruled out twice on the strength of a check that could not fire,
+  because the available-space calculation was masked. Before trusting a prior
+  negative, confirm the test could have detected the thing.
+- **Suspect this port before the title.** Most blockers so far have been defects
+  here, not in the game: silently dropped switch cases, a 64-bit switch on a
+  32-bit dispatch, an unlocked heap, an import-name comparison that never
+  matched, a device register written in the wrong byte order, alias folding that
+  made overrides no-ops, and a missing predicate bit that cost 70x frame rate.
+
+A differential harness against Xenia was tried and **abandoned** -- it never
+executed the title, and an unreliable oracle is worse than none. See
+`catalog.py show 7`. Do not resume it. This is unrelated to `extern/xenia`,
+which is used as a *reference for hardware contracts* and has been good for
+exactly that.

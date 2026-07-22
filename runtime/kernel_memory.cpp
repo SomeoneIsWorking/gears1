@@ -59,16 +59,41 @@ void __imp__NtAllocateVirtualMemory(PPCContext& __restrict ctx, uint8_t* base)
 
 // NTSTATUS NtFreeVirtualMemory(PVOID* BaseAddress, SIZE_T* RegionSize,
 //                              ULONG FreeType, ULONG DebugMemory)
+//
+// FreeType matters now that the heap recycles address space. MEM_DECOMMIT
+// drops the pages but KEEPS the reservation, so the guest still owns the
+// address range and handing it to another allocation would corrupt it; only
+// MEM_RELEASE gives the range back. The pages themselves stay committed either
+// way -- see GuestHeap::Free.
 void __imp__NtFreeVirtualMemory(PPCContext& __restrict ctx, uint8_t* base)
 {
+    constexpr uint32_t kMemDecommit = 0x4000;
+    constexpr uint32_t kMemRelease = 0x8000;
+
     const uint32_t baseAddressPtr = ctx.r3.u32;
+    const uint32_t freeType = ctx.r5.u32;
     if (baseAddressPtr == 0)
     {
         ctx.r3.u64 = gears::kStatusInvalidParameter;
         return;
     }
 
-    gears::TitleHeap().Free(GuestLoad32(base, baseAddressPtr));
+    const uint32_t address = GuestLoad32(base, baseAddressPtr);
+    if ((freeType & kMemRelease) != 0 || freeType == 0)
+    {
+        // A FreeType of 0 is not a documented value; treating it as a release
+        // matches what this import did before FreeType was honoured at all, so
+        // an unexpected caller does not silently start leaking.
+        gears::TitleHeap().Free(address);
+    }
+    else
+    {
+        lucent::debug("kernel", "NtFreeVirtualMemory({:#x}, type {:#x}) decommit only -- reservation kept",
+            address, freeType);
+        if ((freeType & kMemDecommit) == 0)
+            lucent::warn("kernel", "NtFreeVirtualMemory({:#x}): unexpected FreeType {:#x}",
+                address, freeType);
+    }
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
