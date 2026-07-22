@@ -18,40 +18,73 @@ constexpr uint32_t kMemLargePages = 0x20000000;
 // A page-granular allocator over one span of the guest address space.
 //
 // The console splits guest memory into ranges with different page sizes; this
-// covers the 64 KiB-page virtual range the title heap lives in. It tracks
-// reservations so a later free knows how big the region was, but deliberately
-// does no coalescing or reuse beyond whole regions -- enough to be correct,
-// with no cleverness to be wrong about.
+// covers the 64 KiB-page virtual range the title heap lives in.
+//
+// Free space is held as an address-ordered list of non-overlapping,
+// non-adjacent regions; a free coalesces with its neighbours on insertion, so
+// a repeated allocate/free cycle of the same shape reuses the same address
+// space instead of walking forwards for ever. Allocation is first fit, which
+// is enough for a title that allocates in a handful of recurring sizes; there
+// is nothing clever here on purpose.
 class GuestHeap
 {
 public:
     GuestHeap(GuestMemory& memory, uint32_t base, uint32_t size)
-        : memory_(memory), base_(base), size_(size), cursor_(base) {}
+        : memory_(memory), base_(base), size_(size)
+    {
+        free_[base] = size;
+        freeBytes_ = size;
+    }
 
     // Returns the guest base address, or 0 if the request cannot be satisfied.
     // On success `size` is updated to the page-rounded size actually reserved.
     // `alignment` of 0 means "use the page size implied by allocationType".
     uint32_t Allocate(uint32_t requestedBase, uint32_t& size, uint32_t allocationType,
         uint32_t alignment = 0);
+
+    // Releases a region previously returned by Allocate, making its address
+    // space available again. The pages stay committed -- see the comment in
+    // Free's implementation.
     bool Free(uint32_t address);
 
     uint32_t Size() const { return size_; }
 
-    // Everything past the cursor. Freed regions are not recycled, so this is
-    // what a further allocation can actually get rather than a bookkeeping
-    // total that would over-promise.
+    struct Usage
+    {
+        uint32_t allocated;   // bytes currently handed out
+        uint32_t peak;        // high-water mark of `allocated`
+        uint32_t free;        // total free bytes
+        uint32_t largestFree; // biggest single free region
+        uint32_t freeBlocks;  // how fragmented the free list is
+        uint32_t regions;     // live allocations
+    };
+    Usage GetUsage() const;
+
+    // Total free bytes. This is a real total now that frees are recycled, but
+    // a request also needs one CONTIGUOUS run, so a large Available() is not on
+    // its own a promise that a large allocation succeeds -- GetUsage().largestFree
+    // is the number that answers that.
     uint32_t Available() const
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        return uint32_t(uint64_t(base_) + size_ - cursor_);
+        return freeBytes_;
     }
 
 private:
+    // All of these require mutex_ to be held.
+    void InsertFree(uint32_t address, uint32_t size);
+    void RemoveFreeRange(uint32_t address, uint32_t size);
+    void NoteUsage();
+
     GuestMemory& memory_;
     uint32_t base_;
     uint32_t size_;
-    uint32_t cursor_;
-    std::map<uint32_t, uint32_t> regions_; // base -> size
+    std::map<uint32_t, uint32_t> regions_; // live allocations: base -> size
+    std::map<uint32_t, uint32_t> free_;    // free space: base -> size, coalesced
+    uint32_t freeBytes_{};
+    uint32_t allocatedBytes_{};
+    uint32_t peakAllocated_{};
+    uint32_t reportedPeak_{}; // last peak reported to the log
 
     // Allocate/Free are reached from NtAllocateVirtualMemory and friends, which
     // guest threads call concurrently -- on the console these are kernel
