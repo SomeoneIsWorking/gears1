@@ -104,7 +104,22 @@ saturating VMX forms — and, more importantly, makes an unimplemented
 instruction emit a trap and fail the build instead of emitting a bare comment
 and letting the following code run against stale registers.
 
+## Third-party code
+
+`extern/xenia` is a fork of [Xenia](https://github.com/xenia-canary/xenia-canary),
+copyright (c) 2015 Ben Vanik and contributors, used under the BSD 3-Clause
+licence — see `extern/xenia/LICENSE`, which is preserved verbatim.
+
+Only its GPU translation subset is compiled here: the Xenos microcode front end,
+the instruction-set definitions and the texture tiling code. Its GPU
+abstraction, command processor and window system are not linked. Xenia has also
+served as the reference for several hardware contracts this port had to get
+right — the depth-sample-count record layout, and the packet predication rules
+that the command processor now implements. Nothing in this repository is
+endorsed by the Xenia project or its contributors.
+
 ## Licence
 
-Tooling here is MIT. XenonRecomp is MIT (see the submodule). Gears of War is
-copyright Epic Games / Microsoft; this project ships none of it.
+Tooling here is MIT. XenonRecomp is MIT (see the submodule). Xenia is
+BSD 3-Clause (see above). Gears of War is copyright Epic Games / Microsoft;
+this project ships none of it, and none of it is required to build.
