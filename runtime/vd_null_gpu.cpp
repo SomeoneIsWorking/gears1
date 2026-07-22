@@ -315,6 +315,22 @@ struct CommandProcessor
     std::map<uint32_t, uint64_t> innerOpcodes; // depth > 0 TYPE3 opcode -> count
     std::map<uint32_t, uint64_t> ibCounts;     // IB address -> submissions
 
+    // Predication (Xenos PFP bin mask/select). Bit 0 of a TYPE3 header marks the
+    // packet predicated; hardware skips it when (bin_select & bin_mask) == 0.
+    // Both registers reset to all-ones, i.e. "everything passes", so a title
+    // that never programs them is unaffected. Contract mirrored from
+    // extern/xenia src/xenia/gpu/pm4_command_processor_implement.h (bin_select_/
+    // bin_mask_ defaults in command_processor.h, the `packet & 1` test, and the
+    // SET_BIN_* opcode handlers).
+    uint64_t binMask = 0xFFFFFFFFull;
+    uint64_t binSelect = 0xFFFFFFFFull;
+
+    // Per-frame census of what predication WOULD change, kept separate from any
+    // behavioural use so the effect can be predicted before it is applied.
+    std::map<uint32_t, uint64_t> predicatedSeen;   // opcode -> predicated packets
+    std::map<uint32_t, uint64_t> predicatedSkip;   // opcode -> would be skipped
+    uint64_t predicateOffPackets = 0;              // any packet while select&mask==0
+
     // The whole of the CP thread's wall time between frames, split into the
     // three places it can go. Anything unaccounted for is the guest's own
     // execution time, which is the point of the split: it says whether a slow
@@ -365,6 +381,17 @@ struct CommandProcessor
             inner.add(" {}x{}", OpcodeName(op), n);
         inner.flush_debug("gpu");
 
+        lucent::Line pred;
+        pred.add("  predication: select {:#x} mask {:#x}; packets seen while OFF {};"
+            " predicated packets", binSelect, binMask, predicateOffPackets);
+        for (const auto& [op, n] : predicatedSeen)
+            pred.add(" {}x{}(skip {})", OpcodeName(op), n,
+                predicatedSkip.count(op) ? predicatedSkip[op] : 0);
+        pred.flush_debug("gpu");
+        predicatedSeen.clear();
+        predicatedSkip.clear();
+        predicateOffPackets = 0;
+
         waitStats.clear();
         ringOpcodes.clear();
         innerOpcodes.clear();
@@ -388,6 +415,31 @@ struct CommandProcessor
 
         switch (opcode)
         {
+        // Bin mask/select maintenance. These are PFP registers, 64 bits each,
+        // written either as a pair (0x50/0x51, hi word first) or half at a time
+        // (0x60..0x63). They are the predication state everything else is
+        // tested against.
+        case 0x50:
+            if (count >= 2)
+                binMask = (uint64_t(data[0]) << 32) | data[1];
+            break;
+        case 0x51:
+            if (count >= 2)
+                binSelect = (uint64_t(data[0]) << 32) | data[1];
+            break;
+        case 0x60:
+            if (count >= 1) binMask = (binMask & 0xFFFFFFFF00000000ull) | data[0];
+            break;
+        case 0x61:
+            if (count >= 1) binMask = (binMask & 0xFFFFFFFFull) | (uint64_t(data[0]) << 32);
+            break;
+        case 0x62:
+            if (count >= 1) binSelect = (binSelect & 0xFFFFFFFF00000000ull) | data[0];
+            break;
+        case 0x63:
+            if (count >= 1) binSelect = (binSelect & 0xFFFFFFFFull) | (uint64_t(data[0]) << 32);
+            break;
+
         case kOpIndirectBuffer:
         case kOpIndirectBufferPfd:
             if (count >= 2)
@@ -639,6 +691,26 @@ struct CommandProcessor
         const uint32_t copy = std::min<uint32_t>(usable, 20);
         for (uint32_t w = 0; w < copy; w++)
             data[w] = fetch(w);
+
+        // Predication: bit 0 of the header marks a packet the PFP executes only
+        // while the bin registers still select a live bin. The title records one
+        // command buffer and replays it per EDRAM tile, masking off the packets
+        // that do not belong to the tile being rendered; a consumer that ignores
+        // the predicate executes every packet on every pass, including the
+        // INTERRUPT that re-enqueues the command list.
+        const bool anyPass = (binSelect & binMask) != 0;
+        if (!anyPass)
+            ++predicateOffPackets;
+        if (header & 1)
+        {
+            ++predicatedSeen[opcode];
+            if (!anyPass)
+            {
+                ++predicatedSkip[opcode];
+                return count;
+            }
+        }
+
         HandleType3(opcode, data, copy, depth);
         return count;
     }

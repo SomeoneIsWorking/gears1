@@ -386,3 +386,83 @@ in place and its override would have been silently bypassed by intra-TU call sit
 MEASURED: intro 29.70-30.29 fps, scene phase 0.41 fps (600 frames, last 60 in 145.32 s) with
 all probes installed -- unchanged from the 0.42-0.45 fps of record, so no regression. No fix
 was attempted; nothing committed.
+
+### Note (2026-07-22)
+HYPOTHESIS CONFIRMED AND FIXED: our command processor ignored PM4 predication.
+Scene phase 0.42 fps -> 29.9 fps sustained (71x). The positive-feedback loop is gone.
+
+CONTRACT (from extern/xenia, src/xenia/gpu/pm4_command_processor_implement.h and
+command_processor.h, cross-checked against what the title actually programs):
+  - The PFP holds two 64-bit registers, BIN_MASK and BIN_SELECT, BOTH RESET TO
+    ALL-ONES ("everything passes"), so a title that never programs them is
+    unaffected.
+  - Written by TYPE3 opcodes SET_BIN_MASK 0x50 / SET_BIN_SELECT 0x51 (two data
+    words, HI first then LO) and by the half-register forms SET_BIN_MASK_LO 0x60,
+    _HI 0x61, SET_BIN_SELECT_LO 0x62, _HI 0x63 (one word each).
+  - BIT 0 OF A TYPE3 PACKET HEADER IS THE PREDICATE BIT. When set, the packet
+    executes only if (bin_select & bin_mask) != 0; otherwise the PFP consumes its
+    count and skips it. Only TYPE3 packets are affected; TYPE0/1 are not.
+  Guest usage matches exactly: the ring brackets scene replays with
+  SET_BIN_SELECT_LO (three values 0x80000003, 0xc, 0xffffffff) and the indirect
+  buffers carry SET_BIN_MASK_LO/HI in bulk -- classic Xenos predicated tiling,
+  where ONE recorded command buffer is replayed per EDRAM tile with the packets
+  that do not belong to that tile masked off.
+
+INSTRUMENTED BEFORE CHANGING BEHAVIOUR (predication census in the CP, per
+presented frame, scene phase, measurement-only build):
+    packets executed while (select & mask) == 0 : 32340
+    predicated packets: DRAW_INDX 21285 (skip 0)    SET_CONSTANT 14112 (skip 7056)
+                        DRAW_INDX_2 4508 (skip 980) WAIT_REG_MEM  1568 (skip 392)
+                        EVENT_WRITE 1568 (skip 784) EVENT_WRITE_EXT 1568 (skip 784)
+                        INTERRUPT    784 (skip 196)
+So 196 of the 784 INTERRUPT packets per frame were being executed that hardware
+would have skipped -- and 196 is exactly the replication factor of record. Note
+the census UNDERSTATES the effect: it is measured inside the runaway loop, so
+each skipped INTERRUPT also removes the enqueue -> replay -> 6 ring kicks it
+would have caused. The prediction was therefore "loop gain drops below 1", not
+"25% fewer interrupts", and that is what happened.
+
+FIX (runtime/vd_null_gpu.cpp, ~40 lines): CommandProcessor now keeps binMask /
+binSelect (both initialised 0xFFFFFFFF), updates them in HandleType3 for opcodes
+0x50/0x51/0x60..0x63, and in ExecutePacket skips any TYPE3 packet whose header
+has bit 0 set while (binSelect & binMask) == 0, consuming its count. Nothing else
+changed; no suppression of enqueues, no rate-limiting, no dropped interrupts --
+the loop was broken by executing the stream correctly, not by damping it.
+
+MEASURED AFTER, long runs, same logging configuration as the before-run:
+    scene phase   0.42 fps  ->  29.89 fps, sustained from frame 660 to frame 4740
+                                (samples at 660/1380/2100/2820/3540/4260: 29.89,
+                                 29.89, 29.88, 28.80, 27.78, 29.83)
+    intro/movie   30.0 fps   ->  30.18 fps (unchanged, as expected: the bin
+                                registers are all-ones there)
+    per frame     2352 IB submissions, 8232 ring dwords  ->  12 IB submissions,
+                  42 ring dwords written and consumed. That is EXACTLY the single
+                  42-dword unit the ring-content analysis said one frame should
+                  be, so the 196x replication is fully accounted for.
+    per frame     784 INTERRUPTs -> 4;  784 pacing waits (12.8 s) -> 3 interrupts
+                  and 29 ms of WAIT_REG_MEM in a 33 ms frame (vblank pacing,
+                  faithful, now the only cost).
+    zero "GPU is hung", zero "WAIT_REG_MEM stuck".
+
+WHY THE EARLIER ANALYSIS POINTED HERE CORRECTLY BUT READ ONE FACT WRONG: the
+previous note refuted tiling as the explanation because "the bin selects take
+only three values and are identical in every one of the 197 units". That is true
+and is still the right observation -- but it refutes tiling as an explanation of
+the 197 REPEATS, not tiling itself. The tiling was real, and the CP's failure to
+honour it is what made each of the 3 masked passes execute in full, INTERRUPT
+included, which is what generated the repeats in the first place.
+
+NEW FRONTIER, NOT PART OF THIS DEFECT: the run now reaches frame ~4740 (~160 s of
+real gameplay) and then dies with the physical heap exhausted -- 90x
+"[heap:error] out of guest heap: wanted 0x10000 bytes, 0x0 left" against the
+512 MiB physical heap, after which the title prints "ERR[D3D]: Unanticipated
+CPU_INTERRUPT. Sign of a corrupt command buffer?" and the process takes SIGSEGV.
+The D3D complaint and the crash are DOWNSTREAM of the allocation failures (they
+appear ~8000 log lines after the first one), not of predication. This is a guest
+heap sizing/leak question that was simply unreachable before, because the title
+never got this far. Do not conflate it with this entry.
+
+CANDIDATE (b) FROM THE PREVIOUS NOTE -- the stale-packet defect -- was NOT needed
+and is not currently supported by evidence: with predication honoured the per
+frame counts collapse to the exact recorded unit, leaving no unexplained
+re-execution.
