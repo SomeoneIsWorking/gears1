@@ -23,6 +23,7 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | `tools/gen_import_stubs.py` | Emits a trapping stub for every import not named in `implemented_imports.h` |
 | `extern/XenonRecomp` | Submodule → our fork, branch `gears` |
 | `runtime/` | The PC-side runtime. See below |
+| `tests/` | Correctness tests for the instructions added to our XenonRecomp fork. Mutation-checked |
 | `debug_journal/` | Dated findings, **including every rejected hypothesis** |
 | `scratch/` | All derived output, gitignored: `ppc/` generated C++, `game/` extracted disc, `bin/`, `logs/`, `raw/` |
 

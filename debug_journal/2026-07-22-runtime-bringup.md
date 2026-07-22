@@ -1189,3 +1189,58 @@ waste a multi-session effort on an emulator that may not run, and leaves the
 harness available later. The harness remains the better engineering and the
 recommendation stands; it simply should not be started on the strength of an
 automated prompt.
+
+---
+
+## Instruction implementations finally tested
+
+A gap that should have been closed much earlier: the 36 instructions added to
+our XenonRecomp fork were only ever checked for "the recompiler no longer
+reports them unrecognized". That says nothing about whether they compute the
+right values, and a wrong vector op corrupts guest data silently — precisely the
+class of fault this journal has spent iterations chasing.
+
+`tests/test_vmx_instructions.cpp` now checks each risky one against an
+independent reference. The cases were chosen where a plausible-looking
+implementation is wrong in a way casual testing misses:
+
+- **`vslh`/`vsrah`** — the shift amount is the low byte of each halfword lane,
+  which the full 16-byte reversal places at byte `lane*2`. A wrong index is
+  silent and data-dependent.
+- **`vspltish`** — the immediate is a 5-bit **signed** field; splatting it
+  unsigned turns `-1` into `15`.
+- **`vpkuhus`** — `packus_epi16` treats its input as *signed*, so values
+  `>= 0x8000` would come out `0`. The test asserts the unclamped form is wrong
+  and the `min_epu16` clamp fixes it, rather than only checking the happy path.
+  Inputs are deliberately asymmetric so a transposed-halves bug cannot pass.
+- **`vctuxs`** — a hand-written helper, the highest risk. Checks negatives and
+  NaN to zero, `>= 2^32` saturating, and that the `2^31..2^32` range does not
+  wrap.
+- **`vandc`** — operand order; reversed, it silently computes `~vA & vB`.
+- **`cror`/`crorc`** — CR bit `N` maps to field `N/4`, sub-field `N%4`. An
+  off-by-one corrupts control flow.
+
+**All pass.**
+
+### The suite was mutation-checked
+
+A suite that passes on its first run proves little. Deliberately removed the
+`>= 2^32` saturation from `simde_mm_vctuxs` and re-ran:
+
+```
+FAIL vctuxs: >= 2^32 saturates to UINT_MAX: vctuxs(4.29497e+09) = 0, want 0xffffffff
+FAIL vctuxs: huge saturates: vctuxs(1e+30) = 0, want 0xffffffff
+2 instruction test(s) FAILED
+```
+
+Restored, and it passes again. The tests can detect a real defect in the code
+they cover.
+
+### What this rules out, and what it does not
+
+The instruction implementations this crash could plausibly depend on are now
+**verified correct**, not merely assumed. That closes candidate 3 from the
+earlier suspect list properly rather than by inspection alone.
+
+It does **not** vindicate the other ~30 implementations — the suite covers the
+risky ones, not all of them — and it does not explain the crash.

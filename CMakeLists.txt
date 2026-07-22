@@ -29,3 +29,6 @@ add_subdirectory(${THIRDPARTY_ROOT} thirdparty EXCLUDE_FROM_ALL)
 add_subdirectory(extern/XenonRecomp/XenonUtils XenonUtils EXCLUDE_FROM_ALL)
 
 add_subdirectory(runtime)
+
+enable_testing()
+add_subdirectory(tests)
