@@ -130,3 +130,55 @@ void __imp__MmQueryAddressProtect(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = 0x04; // PAGE_READWRITE, matching how the heap is committed
 }
 
+
+// NTSTATUS MmQueryStatistics(PMM_STATISTICS out)
+//
+// The caller sets the leading Length field and the kernel refuses a struct it
+// does not recognise, so that check is honoured rather than blindly filling.
+//
+// The console's own numbers are reported where they are properties of the
+// hardware (512 MiB of physical memory in 4 KiB pages) and the runtime's real
+// heap state where they are properties of this process. Fields the runtime
+// genuinely does not track are left zero rather than filled with plausible
+// numbers, which would be indistinguishable from real ones to a title sizing
+// its caches off them.
+void __imp__MmQueryStatistics(PPCContext& __restrict ctx, uint8_t* base)
+{
+    constexpr uint32_t kStatisticsSize = 0x68;
+    constexpr uint32_t kPageSize = 4096;
+    constexpr uint32_t kTotalPhysicalPages = 512u * 1024u * 1024u / kPageSize;
+
+    const uint32_t out = ctx.r3.u32;
+    if (out == 0)
+    {
+        ctx.r3.u64 = gears::kStatusInvalidParameter;
+        return;
+    }
+
+    const uint32_t length = ByteSwap(*reinterpret_cast<uint32_t*>(base + out));
+    if (length != kStatisticsSize)
+    {
+        lucent::warn("kernel", "MmQueryStatistics: unexpected struct length {:#x}", length);
+        ctx.r3.u64 = gears::kStatusInvalidParameter;
+        return;
+    }
+
+    auto store = [&](uint32_t offset, uint32_t value) {
+        *reinterpret_cast<uint32_t*>(base + out + offset) = ByteSwap(value);
+    };
+
+    for (uint32_t offset = 4; offset < kStatisticsSize; offset += 4)
+        store(offset, 0);
+
+    const uint32_t titleAvailable = gears::TitleHeap().Available() / kPageSize;
+
+    store(0x04, kTotalPhysicalPages);            // total physical pages
+    store(0x0C, titleAvailable);                 // title available pages
+    store(0x10, gears::TitleHeap().Size());      // title total virtual bytes
+    store(0x18, gears::PhysicalHeap().Size() / kPageSize); // title physical pages
+    store(0x38, titleAvailable);                 // system available pages
+
+    lucent::debug("kernel", "MmQueryStatistics -> {} of {} pages available",
+        titleAvailable, kTotalPhysicalPages);
+    ctx.r3.u64 = gears::kStatusSuccess;
+}

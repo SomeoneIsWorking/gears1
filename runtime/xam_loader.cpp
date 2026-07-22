@@ -29,3 +29,15 @@ void __imp__XamLoaderGetLaunchData(PPCContext& __restrict ctx, uint8_t*)
         ctx.r3.u32, ctx.r4.u32);
     ctx.r3.u64 = gears::kErrorNotFound;
 }
+
+// DWORD XamGetSystemVersion(void)
+//
+// The dashboard version the title is running under. Reporting zero is what a
+// title sees on early/unpatched system software, and it is the one answer that
+// cannot make this runtime look like it provides a dashboard feature set it
+// does not have.
+void __imp__XamGetSystemVersion(PPCContext& __restrict ctx, uint8_t*)
+{
+    lucent::debug("xam", "XamGetSystemVersion -> 0");
+    ctx.r3.u64 = 0;
+}
