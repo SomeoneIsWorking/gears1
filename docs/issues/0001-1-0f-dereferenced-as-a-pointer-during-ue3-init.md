@@ -57,3 +57,9 @@ Reported display values steering the layout -- changing the reported mode from 1
 
 ### Note (2026-07-22)
 NEXT METHOD: stop hypothesis-testing. Build a differential harness against a reference emulator (Xenia ships ITRACE/DTRACE per-instruction tracing with --store_all_context_values). Xenia's Linux support is described upstream as 'extremely experimental and presently incomplete', which is the risk.
+
+### Note (2026-07-22)
+GHIDRA RESULT for the float store. sub_82761CA8 is a float-array copy WITH DENORMAL FLUSHING into a container: it calls FUN_82761758(obj, x, flags, 0x78, 0, count) first, then writes count elements starting at obj+0x24, flushing denormals to signed zero as it goes. So obj+0x24 is the container's INLINE value storage and the write is entirely by design -- it is not a stray pointer. That kills the 'the float store is the intruder' framing from earlier.
+
+### Note (2026-07-22)
+Which reframes the bug again: the same memory is legitimately a float array to one subsystem and a list head to another, so the object is being REUSED or REPURPOSED while something still holds a list pointer into it. The next question is what FUN_82761758(..., 0x78, ...) does -- it looks like a reserve/capacity call, and if it is supposed to move the storage elsewhere when capacity grows, a wrong answer from our runtime could leave the data inline when it should not be.
