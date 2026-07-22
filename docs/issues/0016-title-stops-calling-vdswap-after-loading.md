@@ -29,3 +29,12 @@ HYPOTHESIS TESTED AND REJECTED: that the ring consumer overshoots the write poin
 REAL DEFECT FOUND in our own VdSwap implementation: the swap packet is written into a 64-dword reservation INSIDE the guest's frame indirect buffer, and that guest memory persists. A later submission that reuses the same buffer without calling VdSwap still carries the old packet, so the CP executes it again. That is why CP swap packets vastly outnumber guest VdSwap calls. The frame-boundary signal is therefore unreliable and needs a validity marker the guest cannot leave stale -- for example stamping a sequence number the CP checks against the submission it is executing, so a stale copy is recognisable.
 
 STILL UNEXPLAINED, and this is the actual question: why the guest stops calling VdSwap at all. Thread backtraces in this state show guest threads ACTIVELY EXECUTING engine code (sub_825550A8 -> sub_82553258 -> sub_82553EA0 -> sub_82492610 -> sub_825A4300 -> sub_822306A0), not blocked on any wait. So it is running and choosing not to present, rather than being stuck. Next: determine what that call chain is doing and what condition gates the render/present path.
+
+### Note (2026-07-22)
+DECISIVE: the title is NOT loading in this state. Counting from the last guest VdSwap call (log line 5901 of 177190), there are ZERO [fs] lines afterwards. So roughly 97% of the run is post-presentation execution with no file access and no frames.
+
+This refutes the earlier characterisation of the post-load steady state as 'asset/map loading against the null GPU'. There is no loading. The title is executing engine code in a loop, doing no I/O and presenting nothing.
+
+Combined with the thread backtraces (guest threads ACTIVELY RUNNING sub_825550A8 -> sub_82553258 -> sub_82553EA0 -> sub_82492610 -> sub_825A4300 -> sub_822306A0, not blocked on any kernel wait), the shape is a SPIN on a condition that never becomes true -- not a deadlock and not progress.
+
+Next step is to identify that condition: sample the guest thread PCs repeatedly to confirm the loop is tight and locate its head, then decompile it (verifying against raw disassembly, since the decompiler misleads on any function whose body Ghidra failed to rebuild). The likely shape, given everything else in this port, is a wait for GPU-produced state that the null GPU never writes -- but that is a hypothesis and has not been tested.
