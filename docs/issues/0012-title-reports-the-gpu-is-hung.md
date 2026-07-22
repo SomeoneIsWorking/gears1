@@ -79,3 +79,22 @@ NEXT MEASUREMENTS, in order:
      and what it reads to decide what completed.
   c. Only then decide what the runtime must supply: probably a completion source
      plus whatever GPU state the handler consults.
+
+### Note (2026-07-22)
+ISR CONFIRMED AND PARTIALLY ADDRESSED.
+
+Confirmed by raw disassembly (not decompiler output -- the decompile's prologue runs through a stubbed save/restore helper and its local for the source argument is an artifact):
+  82221C6C  or r31,r4,r4       ; r31 = interrupt CONTEXT (arg 2)
+  82221C70  cmplwi cr6,r3,0x1  ; source (arg 1) == 1 ?
+  82221C74  bne cr6,0x82221cf0 ; else -> vblank path
+So source 1 is the command-complete path and source 0 the vblank path, as read.
+
+Measured: the ISR is invoked 8350 times in one run and EVERY call is source 0. Source 1 is never delivered by the runtime. That is gap A and it is the path that retires work.
+
+Gap B, addressed: the vblank path is additionally gated on MMIO 0x7FC86544 bit 0. A scan of the whole image finds that address accessed at exactly ONE site -- the load at 0x82221CFC inside this ISR -- and never written, so it is a status bit the GPU owns and the title only samples. The runtime is the GPU and does deliver vblank, so reporting the bit clear described a machine that cannot exist. It is now set when the device window is committed, and verified to still read 1 at the hang.
+
+UNVERIFIED, and must not be recorded as either working or not: whether the vblank path now actually executes. The check made was to read pool+0x3B14 using the pool from sub_8222FD78's r3, but the ISR indexes its structures off r4, the interrupt CONTEXT, which is not known to be the same object. The counter reading 0 therefore proves nothing. Redo this by capturing r4 at ISR entry and reading r4+0x3B14 across two samples.
+
+Setting the bit did NOT clear the hang on its own, which is expected: gap A remains, and command completion is what advances the served counter.
+
+NEXT: deliver source 1. Requires knowing when a command buffer completes, which under instant retirement means 'on submission' -- so first find what the title does to submit (a write to the ring write pointer register is the likely candidate, and would need that MMIO write to be observable rather than landing in inert memory).
