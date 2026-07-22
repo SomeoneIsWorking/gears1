@@ -48,3 +48,12 @@ Real failure: 'version.h' file not found, included by trace_writer.cc, primitive
 
 ### Note (2026-07-22)
 version.h workaround WORKS: after generating it, the build reached 270/411 with ZERO compile failures before being interrupted externally (ninja reported 'interrupted by user', not an error). So no Linux/Clang incompatibility has appeared anywhere in ~760 compiled objects. Restarted detached via nohup so a session-level task stop cannot kill it again.
+
+### Note (2026-07-22)
+XENIA BUILDS AND LINKS ON THIS MACHINE -- 19 MB build/bin/Linux/xenia_canary, and NO sudo was required. Three workarounds, all local: (1) generate build/generated/version.h from git metadata, since the CMake path lacks the rule their premake flow has; (2) CMakeLists.txt line ~297 forces -fuse-ld=lld for Release and lld is not installed -- switched to bfd, which is; (3) liblz4.so.1 exists but the /usr/lib64/liblz4.so dev symlink does not, so a local symlink in scratch/oracle/localdev plus -L on the link line satisfies it. So the earlier 'needs sudo' conclusion was WRONG and the dependency blocker was avoidable entirely.
+
+### Note (2026-07-22)
+Binary launches (it pops a zenity file picker with no ROM argument). Remaining unknowns for the harness: whether it runs Gears of War headless to the point our crash occurs, and whether ITRACE/DTRACE tracing can be enabled and correlated with our runtime. Those need doing, not assessing.
+
+### Note (2026-07-22)
+Reproduce: CC=clang CXX=clang++ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-I<src>/build/generated -DCMAKE_EXE_LINKER_FLAGS=-L<scratch>/oracle/localdev ; ninja -C build xenia-app
