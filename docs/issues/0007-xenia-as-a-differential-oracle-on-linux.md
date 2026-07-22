@@ -69,3 +69,9 @@ PROCESS TRAP hit here: pkill -f 'xenia_canary --helpfull' matched the shell runn
 
 ### Resolution (2026-07-22)
 Xenia is a viable differential oracle on this Linux machine. It builds with three local workarounds and no sudo, and runs Gears of War headless with no errors. The harness-versus-broaden fork is therefore resolved in favour of the harness: the risk that justified hesitating -- an emulator that might not build or run -- does not exist. Remaining work is correlating ITRACE/DTRACE output with our runtime, which is engineering rather than gamble.
+
+### Note (2026-07-22)
+CORRECTION to the 'oracle confirmed working' note. Xenia starts, initialises Vulkan and spawns its own HOST threads (GPU Commands, GPU Frame limiter, XMA Decoder, Audio Worker) and a swapchain -- but the GUEST title thread never launches. Those thread names are Xenia's infrastructure, not Gears code, and I read them as evidence the game was running. It is not. 430 log lines, zero errors, and no title execution: the ISO is apparently not being mounted/launched by this invocation.
+
+### Note (2026-07-22)
+So the correct status is: Xenia BUILDS and RUNS on this machine (that part stands and is verified), but has NOT yet been shown to execute Gears of War. Launching the title is the next thing to solve -- likely the ISO needs mounting differently, or headless mode needs a different target argument. Do not treat the emulator starting as the game running.
