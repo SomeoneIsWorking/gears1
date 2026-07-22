@@ -210,3 +210,100 @@ NOT to change anything in the command processor.
 
 MEASURED, unchanged by this session (diagnostics only): intro 30.27 fps, scene phase 0.45 fps
 (600 frames, last 60 in 134.21 s). No regression, no behavioural change, nothing committed.
+
+### Note (2026-07-22)
+PHASE 1 (contract) -- partial, with the amplification located but its producer not yet named.
+
+NEW CAPABILITY, and it had to be built first: the override mechanism this port
+assumed it had DID NOT WORK. XenonRecomp emits
+    __attribute__((alias("__imp__sub_X"))) PPC_WEAK_FUNC(sub_X);
+so that a strong sub_X wins at link time. Clang folds a call to an alias into a
+call to its ALIASEE inside the defining translation unit, so every intra-TU call
+site becomes `call __imp__sub_X` and no link-time symbol can intercept it.
+Verified in the binary: __imp__sub_82221980 calls __imp__sub_822218C0 directly.
+Measured: nine strong overrides installed, entered ZERO times over a whole movie
+phase. Since the D3D layer is one dense cluster, most of its calls are intra-TU
+-- exactly the set an HLE seam must intercept. Two further traps found on the
+way: (1) the recomp symbol sub_X is C++-mangled, not extern "C", so an
+extern "C" override silently defines an unrelated symbol and links cleanly;
+(2) scratch/ppc held 191/192 as STALE leftovers of an earlier recompiler run,
+353 functions defined twice (byte-identical), and the link only survived while
+lazy archive extraction happened not to pull both members -- adding any
+__imp__ reference broke it with 256 multiple-definition errors.
+Fixes: tools/dedupe_recomp.py (removes byte-identical duplicates and stale TUs;
+--check is clean now) and tools/prepare_overrides.py (strips the alias line for
+declared overrides so intra-TU calls become external references). New TU
+runtime/hle_d3d.cpp holds the overrides + a call census with call-site
+provenance; runtime/hle_d3d.h; wired into VdSwap so the census prints per frame.
+Movie phase still 30.05 fps with the probes in, so no regression.
+
+MEASURED CONTRACT, scene phase, per PRESENTED frame (deltas between consecutive
+VdSwap censuses, all exact and repeatable):
+    sub_822218C0  D3D submit entry            +8      <- the API submits 8 times
+    sub_82221980  flush                       +5
+    sub_82221A68  ticket fence wait           +4  (of which +1 is the throttle)
+    sub_8223B5E0  worker replays a CPU list   +392
+    sub_8223B200  CPU command-list interpret  +392
+    sub_822212D8  RING KICK                   +2352  = 392 x 6
+Provenance of the 2352 kicks: 100% from 0x8223B304, i.e. from inside the CPU
+command-list interpreter run by the D3D worker thread. The direct path
+(0x82221970, inside sub_82221980) contributes ZERO in the scene phase -- its
+counter is frozen at 1154 for the whole run. The 2352 exactly reproduces the
+previously published "2352 IB submissions per presented frame", so the
+amplification is entirely between the 8 API submissions and the 392 worker
+replays.
+
+THE THROTTLE IS FOUND, IS RUNNING, AND IS NOT THE PROBLEM. Raw disasm of
+0x8223EEF0..0x8223EF38 (the present wrapper):
+    r30 = *(dev+0x2A1C)                 ; ticket BEFORE this frame's flush
+    sub_82221980(dev)                   ; flush, emits the fence, bumps 0x2A1C
+    sub_8223E3E0(dev,0,0)               ; Present -> VdSwap
+    sub_82221050(dev, *(dev+0x34B4)>>2) ; next command buffer
+    if (*(dev+0x34D0)) sub_82221A68(dev, *(dev+0x34D0), 3)   ; WAIT for the
+                                        ;   PREVIOUS present's ticket
+    *(dev+0x34D0) = r30                 ; remember this frame's ticket
+That is the ~2-frames-in-flight latency throttle, and the census shows it
+running once per frame (+1 per frame at call site 0x8223EF30). The same wait
+appears in the command-buffer allocator at 0x822211FC. So "the frame-latency
+throttle is not working" is FALSE as stated: it works, and it is not what the
+ring exhaustion comes from. The exhaustion is submissions WITHIN one frame.
+
+A SECOND, INDEPENDENT FRAMES-IN-FLIGHT RING EXISTS and was mistaken for nothing:
+0x8223E928..0x8223EB68. dev+0x4E54 = produced, dev+0x4E50 = retired, limit
+(produced - retired) >= 6, slots at *(dev+0x2A10) + 4*(16 + (idx & 7)), zeroed
+by the CPU and filled by an EVENT_WRITE_SHD (0xC0025800 / initiator 0x80000003 /
+value 0xDEADBEEF). The retire scan is at 0x82237070 (lwbrx of three slots,
+advances 0x4E50 by 2). It only SKIPS the fence when full; it never waits. Our CP
+does service that EVENT_WRITE_SHD, so this ring is not stuck.
+
+RULED OUT, on evidence: the block at 0x82221A00..0x82221A48 (test *(0x82BED120),
+wait for ticket-2) is NOT a throttle. That global is set at 0x8223AA5C from
+VdIsHSIOTrainingSucceeded() == FALSE, and the same arm prints "D3D: GPU
+initialization (HSIO training) has failed so no graphics will render." We
+return TRUE, so the global is 0 and the block is correctly dormant. Do not
+"enable" it.
+
+WHERE THE AMPLIFICATION ACTUALLY IS, and what is still unknown. The worker
+thread loop is 0x8223B7E8: KeWaitForSingleObject(worker+0x20, 30 ms timeout);
+on STATUS_TIMEOUT it runs the present pump (0x8223E6D8 + 0x8223E860); on signal
+it calls sub_8223B5E0, which takes the queued list from context+0x58 (clearing
+it) and interprets it. Instrumented the queue head at every replay:
+    per scene frame: 296 replays take a list address NEVER seen before,
+                      96 replays repeat the previous address,
+                       0 replays find an empty queue.
+So the queue is genuinely refilled ~296 times per frame while the D3D API
+submits 8 times. The producer of those enqueues is NOT sub_822218C0 and has NOT
+been identified. That is the open question, and it is the whole remaining
+distance to the answer -- do not guess it. The next step is to instrument writes
+to context+0x58 (or override sub_82220B40, the recorder) and capture the caller.
+
+PHASE 2 (native override) NOT ATTEMPTED. Overriding the submission layer before
+knowing who enqueues 296 lists per frame would be exactly the "patch the middle
+of a state machine you do not understand" the task forbids. The mechanism to do
+it now exists and is proven (nine functions overridden and measured), which is
+the part that was actually missing.
+
+NOT ESTABLISHED / regressions: no frame-rate measurement of the scene phase was
+taken in these runs (the instrumented runs were stopped in the 588-600 frame
+window before a 60-frame fps sample completed); movie phase measured unchanged
+at 30.05 fps. Nothing in the command processor was changed. Nothing committed.

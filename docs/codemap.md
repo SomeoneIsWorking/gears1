@@ -20,6 +20,8 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | `config/gears.toml` | XenonRecomp configuration: XEX path, save/restore helper addresses, switch-table file |
 | `tools/gdf_extract.py` | GDF/XDVDFS disc reader. `--list`, `--extract`, `--extract-all` (resumable) |
 | `tools/xex_probe/` | XEX decrypt/decompress, section + import dump, save/restore helper byte-scan |
+| `tools/dedupe_recomp.py` | Removes duplicate/stale generated TUs. `--check` in CI: duplicate `__imp__sub_X` definitions make the link order-dependent |
+| `tools/prepare_overrides.py` | Strips the weak alias for functions listed in `runtime/hle_d3d.cpp`, so intra-TU calls reach a native override. **Re-run after changing the override list** |
 | `tools/gen_import_stubs.py` | Emits a trapping stub for every import not named in `implemented_imports.h` |
 | `extern/XenonRecomp` | Submodule → our fork, branch `gears` |
 | `runtime/` | The PC-side runtime. See below |
@@ -46,6 +48,7 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | Config | `kernel_config.cpp` | **partial** | Answers only settings with a defensible value; refuses the rest **by name** |
 | Strings | `kernel_rtl.cpp` | **partial** | Counted strings, code-page conversion, memory fills. `X_ANSI_STRING` parsing verified |
 | Display | `kernel_video.cpp` | **partial** | Reports 1280x720p60 widescreen. Verified that the title's layout does **not** depend on this |
+| **HLE D3D** | `hle_d3d.cpp` | **partial** | The native-override seam for the guest D3D layer, plus a per-frame call census with call-site provenance (channel `hle`). Today it only traces; no guest function is replaced yet |
 | **GPU** | `vd_null_gpu.cpp` | **null** | Tracks driver state, retires command buffers **without executing them**. No command processor. Register file at `0x7FC00000` is inert memory. Vblank interrupt is driven at 60 Hz (`GEARS_NO_VBLANK=1` disables) |
 | **Audio** | `xaudio_null.cpp` | **null** | Accepts frames, plays nothing. Its callback never fires |
 | Input | — | **absent** | |
@@ -70,6 +73,7 @@ suppressed; adding an implementation means adding its name there.
 - *What has already been ruled out for the current crash?* → `catalog.py show 1`
 - *Why won't my gdb watchpoint fire?* → `catalog.py show 5` (physical aliasing / stale addresses)
 - *Why do registers look wrong at a watchpoint?* → `catalog.py show 6`
+- *Why is my native override never entered?* → clang folds intra-TU calls through the weak alias; run `tools/prepare_overrides.py`, and note `sub_X` is C++-mangled, not `extern "C"`. Details in `catalog.py show 16`
 
 ## Current blocker
 

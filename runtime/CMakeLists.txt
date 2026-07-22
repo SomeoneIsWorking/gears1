@@ -60,6 +60,7 @@ add_executable(gears1
     kernel_video.cpp
     pm4_trace.cpp
     vd_null_gpu.cpp
+    hle_d3d.cpp
     kernel_rtl.cpp
     kernel_config.cpp
     kernel_dispatcher.cpp

@@ -42,6 +42,7 @@
 #include <lucent/log.h>
 
 #include "guest_heap.h"
+#include "hle_d3d.h"
 #include "guest_thread.h"
 #include "guest_memory.h"
 
@@ -941,6 +942,8 @@ void __imp__VdSetGraphicsInterruptCallback(PPCContext& __restrict ctx, uint8_t*)
 void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
 {
     const uint64_t frame = g_frameCount.fetch_add(1) + 1;
+    gears::HleDumpCensus("swap");
+    gears::HleWorkerCensus();
     if (frame == 1 || frame % 60 == 0)
     {
         // Frame rate is the metric the presentation work is judged on, so
