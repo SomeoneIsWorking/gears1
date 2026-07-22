@@ -226,17 +226,52 @@ void RegisterThreadResume(uint32_t handle, std::shared_ptr<KernelObject> resumed
     g_resumeGates[handle] = std::move(resumed);
 }
 
-void ResumeThread(uint32_t handle)
+void ResumeThread(uint32_t handleOrObject)
 {
+    // NtResumeThread is given a handle, KeResumeThread a pointer to the thread
+    // object itself, and titles use both against the same thread. The guest
+    // address is allocated lazily on the first ObReferenceObjectByHandle, so it
+    // cannot be registered up front; instead an unrecognised key is treated as
+    // an object address and mapped back to its handle.
+    uint32_t key = handleOrObject;
+
     std::shared_ptr<KernelObject> gate;
     {
         std::lock_guard<std::mutex> guard(g_resumeMutex);
-        auto it = g_resumeGates.find(handle);
+        auto it = g_resumeGates.find(key);
         if (it == g_resumeGates.end())
-            return; // never suspended, so nothing to release
+        {
+            uint32_t handle = 0;
+            {
+                std::lock_guard<std::mutex> objectGuard(g_guestObjectMutex);
+                for (const auto& [candidate, address] : g_handleToGuestAddress)
+                {
+                    if (address == handleOrObject)
+                    {
+                        handle = candidate;
+                        break;
+                    }
+                }
+            }
+
+            if (handle == 0)
+            {
+                lucent::debug("thread", "resume of {:#x}: not a suspended thread",
+                    handleOrObject);
+                return; // never suspended, so nothing to release
+            }
+
+            key = handle;
+            it = g_resumeGates.find(key);
+            if (it == g_resumeGates.end())
+                return;
+        }
+
         gate = it->second;
         g_resumeGates.erase(it);
     }
+
+    lucent::debug("thread", "resumed thread ({:#x})", handleOrObject);
     gate->Set();
 }
 
