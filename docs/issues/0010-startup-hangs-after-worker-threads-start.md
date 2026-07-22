@@ -22,3 +22,14 @@ Thread stacks taken by attaching gdb to the live hung process. Threads 1 (main),
 Preceding fix, already landed: KeResumeThread is passed a thread OBJECT pointer while NtResumeThread is passed a handle, and both fed ResumeThread which only knew handles, so a suspended worker never woke. That is fixed and verified -- all workers now enter guest code -- but the hang persists, so it was a separate defect and NOT the cause of this one.
 
 Open question, deliberately not yet claimed as the cause: mftb was recompiled as raw __rdtsc(). The Xenon time base is 49.875 MHz and the host TSC is around 3 GHz, so tick-to-time conversions are off by roughly seventy times. That is a genuine defect being fixed regardless, but note the direction of the error argues AGAINST it explaining this hang: a loop bounded in ticks would expire far too EARLY, not spin forever. Do not record it as the root cause without evidence.
+
+### Note (2026-07-22)
+CORRECTED PICTURE from a clean single-boot run (an earlier log had two boots appended and its counts were not trustworthy -- do not reuse that analysis).
+
+Waits entered: 0xF8000000 x1, 0xF8000008 x3, 0xF8000018 x1, 0xF800001C x1, 0xF8000024 x1, 0xF800002C x1 (8 total). Waits returned: 0xF8000008 x2, 0xF8000018 x1 (3 total). The 5 that never return match the 5 threads gdb shows blocked.
+
+Signals in the whole run: NtSetEvent on 0xF8000008 x2, 0xF8000018 x1, 0xF8000030 x1. Nothing ever signals 0xF8000000, 0xF800001C, 0xF8000024 or 0xF800002C. Notably there are ZERO KeSetEvent calls, so the handle-vs-object-pointer split that caused the resume bug is NOT in play for events.
+
+Conclusion: the blocked threads are not the defect. They are waiting for work that would be produced by thread 2, which is the only thread running guest code and is stuck in its own loop in sub_82221A68 (worker entry sub_8243AD98), reading counters at r31+0x2A10 / r31+0x2A1C and calling sub_8222F460 -> sub_827A7B08 each pass. The starving waiters are a consequence. Investigate sub_82221A68's loop condition next, NOT the event plumbing.
+
+Ruled out: mftb rate (fixed to 49.875 MHz, hang reproduces identically); thread resume handle/pointer split (fixed, all workers now run, hang persists).
