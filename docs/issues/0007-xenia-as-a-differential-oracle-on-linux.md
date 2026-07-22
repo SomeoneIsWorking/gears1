@@ -102,3 +102,9 @@ Xvfb approach FAILS: under xvfb-run, Mesa reports 'vulkan: No DRI3 support detec
 
 ### Note (2026-07-22)
 Approach (b) applied: a local patch to src/xenia/app/xenia_main.cc replaces 'result = app_context().CallInUIThread([...]{ return emulator_window_->RunTitle(abs_path); })' with a direct 'result = emulator_window_->RunTitle(abs_path)'. Original saved to scratch/oracle/xenia_main.cc.bak. Rationale: a differential CPU oracle needs no window, and the UI dispatch is the only thing preventing launch. Rebuild is incremental (one TU plus link).
+
+### Note (2026-07-22)
+PATCH WORKS. With RunTitle called directly instead of via CallInUIThread, the log finally goes past setup: 'Checking for XISO' then 'DiscImageDevice::Initialize' (repeated). So the launch dispatch WAS the blocker, and the UI-thread diagnosis was correct. The 430-line plateau is broken.
+
+### Note (2026-07-22)
+New failure, one layer deeper: DiscImageDevice::Initialize repeats and no module loads, so the ISO is not mounting. Our own gdf_extract.py finds this image's partition at a non-zero base (XGD2-style video partition offset), which Xenia's disc reader may handle differently. Next thing to try is pointing Xenia at the already-extracted tree in scratch/game (which contains default.xex) instead of the raw ISO -- that sidesteps disc parsing entirely and we know the extraction is good because our own runtime executes that XEX.
