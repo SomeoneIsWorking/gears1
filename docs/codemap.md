@@ -35,7 +35,7 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | Area | Files | Status | Notes |
 |---|---|---|---|
 | Guest memory | `guest_memory.*` | **real** | 4 GiB sparse window. Physical RAM is one `memfd` aliased at `0x0/0xA0/0xC0/0xE0000000` because guest code converts between them by masking the top 3 bits |
-| Heaps | `guest_heap.*` | **partial** | Bump allocator, page-granular, honours requested alignment. **Never reuses freed memory** — deliberate, but a leak |
+| Heaps | `guest_heap.*` | **works** | Page-granular, honours requested alignment. Address-keyed free list, first fit, coalescing on free; freed pages stay committed. Verified plateau at 192/194 MiB over 25 min of gameplay |
 | Image loading | `main.cpp` | **real** | XEX via XenonUtils; refuses an image whose layout differs from the recompiled code's |
 | Indirect calls | `guest_memory.cpp` | **real** | 49,475 functions installed into the `PPC_LOOKUP_FUNC` table |
 | Variable imports | `import_variables.*` | **real** | 236 resolved. XenonUtils leaves these unresolved upstream; fixed in our fork |
@@ -83,10 +83,19 @@ Boots, loads its own packages, plays the startup movies, and reaches scene
 rendering at **~30 fps sustained** -- while drawing nothing, because the command
 processor executes the stream but performs no draws.
 
-The run now reaches roughly 160 seconds of gameplay and then exhausts the
-512 MiB physical heap. `GuestHeap` is a bump allocator whose `Free` reclaims no
-address space, so every guest free leaks it. That was harmless while nothing ran
-long enough to matter and became the limit once the frame rate rose.
+The heap leak that capped the run at roughly 160 seconds of gameplay (frame
+~4800) is FIXED -- see issue #17. `GuestHeap` now recycles freed address space
+through a coalescing free list; peak use plateaus at 192 MiB (title) and 194 MiB
+(physical) of the 512 MiB windows and stays flat, and the title runs past frame
+25000 at an unchanged ~30 fps.
+
+Note the heap that exhausted was the **title** heap (0x40000000), not the
+physical heap, and its genuinely-live set at exhaustion was only 67.9 MiB -- the
+rest was leak.
+
+Next limit is unknown. One 900 s run took an INTERMITTENT SIGSEGV at frame
+~21840 inside translated guest code on a garbage pointer; a second identical run
+reached frame 25560 with no crash. Not diagnosed, not attributed to the heap.
 
 ## Standing hazards
 
