@@ -108,3 +108,9 @@ PATCH WORKS. With RunTitle called directly instead of via CallInUIThread, the lo
 
 ### Note (2026-07-22)
 New failure, one layer deeper: DiscImageDevice::Initialize repeats and no module loads, so the ISO is not mounting. Our own gdf_extract.py finds this image's partition at a non-zero base (XGD2-style video partition offset), which Xenia's disc reader may handle differently. Next thing to try is pointing Xenia at the already-extracted tree in scratch/game (which contains default.xex) instead of the raw ISO -- that sidesteps disc parsing entirely and we know the extraction is good because our own runtime executes that XEX.
+
+### Note (2026-07-22)
+Loose default.xex does NOT work even with the patch: 429 lines, and critically no 'Checking for XISO' line at all, so RunTitle returns early for a .xex rather than failing later. The ISO path gets further (435 lines, reaches DiscImageDevice::Initialize). So the ISO is the more promising target and the disc mount is the real remaining problem.
+
+### Note (2026-07-22)
+HANDOFF STATE. Oracle: builds and runs (verified), launches attempted via the local RunTitle patch (verified by log change), disc mount fails (DiscImageDevice::Initialize repeating). Everything needed to resume is recorded: build recipe and three workarounds in this entry, the RunTitle patch with its .bak alongside it in scratch/oracle/, and eliminated approaches (headless toggle, target spellings, detachment, Xvfb/DRI3, loose XEX). The next lead is Xenia's disc reader versus this image's non-zero partition base.
