@@ -1,7 +1,7 @@
 ---
 id: 12
 title: title reports the GPU is hung
-status: open
+status: resolved
 symptom: guest DbgPrint: 'Breaking into the debugger. The GPU is hung and can't be recovered without doing a cold boot' -- reached after startup completes, with exactly one VdSwap
 tags: gpu,graphics
 created: 2026-07-22
@@ -98,3 +98,23 @@ UNVERIFIED, and must not be recorded as either working or not: whether the vblan
 Setting the bit did NOT clear the hang on its own, which is expected: gap A remains, and command completion is what advances the served counter.
 
 NEXT: deliver source 1. Requires knowing when a command buffer completes, which under instant retirement means 'on submission' -- so first find what the title does to submit (a write to the ring write pointer register is the likely candidate, and would need that MMIO write to be observable rather than landing in inert memory).
+
+### Note (2026-07-22)
+RESOLVED -- the GPU-hang stall is cleared. Full protocol found and implemented.
+
+SUBMISSION (question 1): the title kicks the GPU by storing the ring write index (dword units) to CP_RB_WPTR at MMIO 0x7FC80714 -- plain stw at 0x82221424, the only such store in the image (found by tools/scan_mmio_stores.py, a static scan for device-window lis bases). The kick function appends a TYPE3 INDIRECT_BUFFER packet to the ring, stores the new write index at pool+0x2A44, sync, then the MMIO store. Since the device window is committed memory, the store lands there; the runtime's command processor thread simply polls that word.
+
+SERVED COUNTER (question 2): advanced by the GPU itself via TYPE3 EVENT_WRITE_SHD (opcode 0x58). Function 0x82221640 builds each submission's retirement template: EVENT_WRITE_SHD with address word = physical(*(pool+0x2A10))|2 (= 0x0030A002) and value = the ticket from pool+0x2A1C; next += 2 per submission (tickets 3,5,7,9... -- served init next-2=1 matches). WHY ALL FOUR EARLIER SCANS MISSED IT: packet address words carry the Xenos endian mode in their low 2 bits, so the word is 0x0030A002, and pm4_trace compared PhysicalOffset equality INCLUDING those bits (0x30A002 != 0x30A000). Second scan hole: VdInitializeRingBuffer's size_log2 counts QUADWORDS (bytes = 8<<log2; verified live: guest ring mask pool+0x34A8 = 0x1FFF dwords = 0x8000 bytes with log2=12), while the runtime assumed bytes -- every prior walk covered only 1/8 of the ring.
+
+INTERRUPT PROTOCOL: scratch writeback. The title programs SCRATCH_ADDR (reg 0x1DD) = physical of the 0x20-byte block at *(pool+0x2A14) (= 0x30B000) and SCRATCH_UMSK (reg 0x1DC) = 0x20033: a TYPE0 write to SCRATCH_REGn (0x578+n) is copied by the GPU to SCRATCH_ADDR+4n for masked n (bits 0,1,4,5 = exactly the ISR's fields +0,+4,+0x10,+0x14). Per submission the stream writes REG4=callback pointer (0x8223E648, frame pacing), REG5=arg, REG0=CPU pending mask (4), then TYPE3 INTERRUPT opcode 0x54 (NOT 0x40 -- that's later Adreno) with data=cpu mask raises source 1; the ISR (0x82221C60) calls *(0x30B010) with *(0x30B014), clears its CPU bit in 0x30B000, and the stream WAIT_REG_MEMs (0x3C) on 0x30B000==0, restores REG4=0xBADF00D sentinel, waits 0x30B004==0 (cleared by the vblank countdown path / pacing callback).
+
+VBLANK GATE (question 3): the earlier flaw was real and material. 0x7FC86544 is read with plain lwz (big-endian), not lwbrx; the previous fix stored the bit little-endian, so the guest read 0x01000000, bit0 clear, and the vblank path NEVER executed. Now stored guest byte order. VERIFIED live: pool+0x3B14 advances 0x0C06->0x0C48->0x0C89 over 2s (~60 Hz).
+
+ALSO REQUIRED: the pacing callback 0x8223E648 divides by *(0x7FC86584)&0xFFF (vertical total; it computes scanline*100/total from *(0x7FC86530)). Inert zero = SIGFPE (reproduced, coredump in sub_8223E648). Now reports 750 (CEA-861 vertical total for the 1280x720p60 mode the runtime already reports), scanline register stays 0 (always in vblank, consistent with the status bit).
+
+IMPLEMENTATION: runtime/vd_null_gpu.cpp now runs a command processor thread: polls CP_RB_WPTR, walks the ring, executes TYPE0 (register file + scratch writeback), INDIRECT_BUFFER, EVENT_WRITE_SHD, MEM_WRITE, WAIT_REG_MEM (memory+register spaces, all compare functions), INTERRUPT (dispatches source 1 per CPU in mask, stamping KPCR+0x10C so the ISR clears the right pending bit); draws are skipped by count. Instant-retirement RetireRingBuffer removed. pm4_trace opcode table corrected (0x10 NOP, 0x48 ME_INIT, 0x54 INTERRUPT, 0x58 EVENT_WRITE_SHD).
+
+VERIFIED RESULT: 150s run, zero 'GPU is hung' prints (was 100% reproducible); served counter advanced 3,5,7,9 by EVENT_WRITE_SHD; 4 submissions retired; title proceeds -- spawns guest thread 8 (entry 0x82941df0), re-queries video mode, issues XMsg app 0xfa/0xfb/0xfc calls that the runtime rejects as 'no such service'. NEXT FRONTIER: whatever the title waits on after D3D device creation -- likely those XMsg services and/or further VdSwap-driven present flow (only 1 VdSwap so far).
+
+### Resolution (2026-07-22)
+The runtime never executed the driver protocol packets: submission arrives as a CP_RB_WPTR MMIO store (0x7FC80714) that landed silently in the inert device window, and retirement is EVENT_WRITE_SHD writing the ticket to 0x30A000 plus scratch-writeback + INTERRUPT(0x54) driving the title's ISR -- none of which existed. Implemented a minimal command processor in runtime/vd_null_gpu.cpp; verified the hang is gone.
