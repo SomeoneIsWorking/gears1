@@ -124,6 +124,40 @@ void GuestHeap::RemoveFreeRange(uint32_t address, uint32_t size)
     }
 }
 
+// NtAllocateVirtualMemory hands back zeroed pages, and the title's RtlHeap
+// depends on it: when it extends a segment it reads the block header at the
+// start of the newly committed range, and a non-zero one is taken for a live
+// heap block. While the heap only ever moved forwards this was free -- every
+// commit was of address space nobody had used, whose pages mmap had already
+// zeroed. Recycling address space breaks that: the pages stay committed across
+// a free (deliberately, so a stale guest pointer still hits real memory), so
+// they come back carrying the previous tenant's bytes.
+//
+// MEASURED consequence of not doing this: a heap block header left at
+// 0x43010000 by an earlier tenant survived the range being freed and re-handed
+// to the guest's RtlHeap, which walked its stale PreviousSize back to
+// 0x4300d3a0 -- application data -- and dereferenced the "free list" link it
+// found there (0x39c70861), taking SIGSEGV in sub_82614380.
+//
+// Only the part below everAllocatedEnd_ is written: address space above the
+// high-water mark has never been handed to anyone, so its pages are still the
+// zeroes mmap gave us and memsetting them would fault in pages for nothing.
+// CALLERS MUST HAVE COMMITTED the exact range first -- reserved-but-uncommitted
+// pages are PROT_NONE, and the high-water mark is not a commit map: first fit
+// skips a block too small for the current request, so free space below the mark
+// need never have been committed.
+void GuestHeap::ZeroClaimed(uint32_t address, uint32_t size)
+{
+    const uint64_t end = uint64_t(address) + size;
+    if (address < everAllocatedEnd_)
+    {
+        const uint64_t dirtyEnd = end < everAllocatedEnd_ ? end : everAllocatedEnd_;
+        memory_.Zero(address, uint32_t(dirtyEnd - address));
+    }
+    if (end > everAllocatedEnd_)
+        everAllocatedEnd_ = uint32_t(end);
+}
+
 // Reports the high-water mark as it moves, in 16 MiB steps. A heap that is
 // genuinely reusing its space plateaus here; one that leaks keeps printing.
 void GuestHeap::NoteUsage()
@@ -177,12 +211,57 @@ uint32_t GuestHeap::Allocate(uint32_t requestedBase, uint32_t& size, uint32_t al
             const uint64_t ownerEnd = uint64_t(owner->first) + owner->second;
             if (ownerEnd > address)
             {
-                if (uint64_t(address) + roundedSize > ownerEnd)
+                const uint64_t end = uint64_t(address) + roundedSize;
+                if (end > ownerEnd)
                 {
-                    // Grows the existing reservation upwards.
-                    RemoveFreeRange(uint32_t(ownerEnd), uint32_t(uint64_t(address) + roundedSize - ownerEnd));
-                    allocatedBytes_ += uint32_t(uint64_t(address) + roundedSize - ownerEnd);
-                    owner->second = uint32_t(uint64_t(address) + roundedSize - owner->first);
+                    // Grows the existing reservation upwards. The span past the
+                    // owner is not necessarily free: the guest commits a run it
+                    // treats as one in several calls, so our bookkeeping can
+                    // have split it into neighbouring entries. Those have to be
+                    // ABSORBED, not left behind -- an inner entry that survives
+                    // gives the same bytes two owners, and whichever is freed
+                    // first puts live memory back on the free list. (Observed
+                    // in a crashing run's core: 0x43010000+0x20000 fused over a
+                    // live 0x43020000+0x10000, and twice more besides.)
+                    uint64_t newEnd = end;
+                    uint64_t claimFrom = ownerEnd;
+                    auto victim = regions_.upper_bound(owner->first);
+                    while (victim != regions_.end() && victim->first < end)
+                    {
+                        const uint64_t victimEnd = uint64_t(victim->first) + victim->second;
+                        lucent::warn("heap",
+                            "commit {:#x}+{:#x} absorbs live region {:#x}+{:#x} into {:#x}; "
+                            "a later free of the absorbed base will report as unknown",
+                            address, roundedSize, victim->first, victim->second, owner->first);
+                        // Only the gap before this region was free space, so
+                        // only that has to be claimed and zeroed; the region's
+                        // own bytes are already the guest's and committing an
+                        // already-committed page does not clear it.
+                        if (victim->first > claimFrom)
+                        {
+                            const uint32_t gap = uint32_t(victim->first - claimFrom);
+                            RemoveFreeRange(uint32_t(claimFrom), gap);
+                            if (!memory_.Commit(uint32_t(claimFrom), gap))
+                                return 0;
+                            ZeroClaimed(uint32_t(claimFrom), gap);
+                            allocatedBytes_ += gap;
+                        }
+                        claimFrom = victimEnd;
+                        if (victimEnd > newEnd)
+                            newEnd = victimEnd;
+                        victim = regions_.erase(victim);
+                    }
+
+                    if (newEnd > claimFrom)
+                    {
+                        const uint32_t tail = uint32_t(newEnd - claimFrom);
+                        RemoveFreeRange(uint32_t(claimFrom), tail);
+                        if (!memory_.Commit(uint32_t(claimFrom), tail))
+                            return 0;
+                        ZeroClaimed(uint32_t(claimFrom), tail);
+                        allocatedBytes_ += tail;
+                    }
+                    owner->second = uint32_t(newEnd - owner->first);
                     NoteUsage();
                 }
                 if (!memory_.Commit(address, roundedSize))
@@ -270,6 +349,12 @@ uint32_t GuestHeap::Allocate(uint32_t requestedBase, uint32_t& size, uint32_t al
             InsertFree(address, roundedSize);
         return 0;
     }
+
+    // Both paths that reach here took the whole range out of the free list, so
+    // all of it is a free -> allocated transition and all of it owes the guest
+    // zeroed pages. The re-commit and conflict paths returned earlier: neither
+    // claims space, and zeroing there would wipe the owner's live data.
+    ZeroClaimed(address, roundedSize);
 
     regions_[address] = roundedSize;
     allocatedBytes_ += roundedSize;

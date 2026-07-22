@@ -104,3 +104,26 @@ second region, and exhaustion still reported.
   fall outside the title heap window and are refused -- `fixed allocation 0x10000+0x20000
   is outside the heap 0x40000000+0x20000000`. The baseline never survived long enough to
   reach this. Not folded into this fix.
+
+### Note (2026-07-22)
+FOLLOW-UP, and two corrections to this entry -- see #18 for the full investigation.
+
+1. The SIGSEGV listed under 'What is NOT established' is now root-caused and it IS a
+   consequence of this change, though not of the reuse logic itself: GuestMemory::Commit
+   never zero-filled. That was harmless while the heap only moved forwards (fresh mmap
+   pages are already zero) and became fatal the moment address space was recycled, because
+   Free deliberately keeps the pages committed. The title's RtlHeap read a stale block
+   header out of a segment extension it had just committed. Fixed in #18.
+
+2. CORRECTION to 'Zero out of guest heap and zero overlap errors in both': no OVERLAP error
+   fired, but overlaps were present. Replaying the crashing run's trace, and dumping the
+   live regions_ map out of core 1937065, both show THREE pairs of overlapping live regions
+   (0x43010000+0x20000 over 0x43020000+0x10000, and the same shape at 0x43060000 and
+   0x43090000). The detector structurally could not see them: InsertFree compares free_
+   against free_ only, and nothing ever compared regions_ against regions_. The producer was
+   the 'grows the existing reservation upwards' branch of Allocate, which predates this
+   commit. Also fixed in #18.
+
+3. CORRECTION to the fault location quoted here: the faulting instruction is at guest
+   0x826144A0, not 0x826143F4. Both are 'lwz r7,4(r10)'; r28 was 0, so the guest branched to
+   0x82614490 and the fault is the r31 unlink.
