@@ -63,3 +63,9 @@ GHIDRA RESULT for the float store. sub_82761CA8 is a float-array copy WITH DENOR
 
 ### Note (2026-07-22)
 Which reframes the bug again: the same memory is legitimately a float array to one subsystem and a list head to another, so the object is being REUSED or REPURPOSED while something still holds a list pointer into it. The next question is what FUN_82761758(..., 0x78, ...) does -- it looks like a reserve/capacity call, and if it is supposed to move the storage elsewhere when capacity grows, a wrong answer from our runtime could leave the data inline when it should not be.
+
+### Note (2026-07-22)
+FUN_82761758 is NOT a memory reserve. Decompiled, it writes param_3 to obj+0x14, packs bitfields into obj+0x08, and switches on (param_4 - 5) setting component masks like 0xdb6 / 0x924 into obj+0x10. param_4 is 0x78. That is the shape of a GPU shader-constant / vertex-element DESCRIPTOR being configured -- format code plus component write masks -- not an allocation.
+
+### Note (2026-07-22)
+So the object is a shader/register descriptor whose inline float storage lives at +0x24, and sub_82761CA8 fills that storage with denormal flushing. This puts the whole conflict inside the GRAPHICS path, which matters because our GPU is an explicit null: no command processor, an inert register file at 0x7FC00000, and VdSwap presenting nothing. If the title pools these descriptors and recycles them based on GPU progress it can observe -- fences, command-buffer completion, register reads -- then a pool that never sees work retire could hand out a descriptor that is still linked elsewhere. That is a concrete, testable link between the null GPU and this crash, and it was NOT visible before decompilation.
