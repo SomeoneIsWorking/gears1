@@ -44,6 +44,7 @@ add_executable(gears1
     guest_thread.cpp
     kernel_memory.cpp
     kernel_sync.cpp
+    crt_printf.cpp
     xam_loader.cpp
     xnet_null.cpp
     kernel_misc.cpp

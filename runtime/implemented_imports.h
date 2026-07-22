@@ -148,3 +148,7 @@
 #define GEARS_IMPORT_IMPLEMENTED_NetDll_XNetUnregisterKey
 #define GEARS_IMPORT_IMPLEMENTED_NetDll_inet_addr
 #define GEARS_IMPORT_IMPLEMENTED_NetDll_XNetRandom
+
+// printf-family formatting, overridden natively.
+#define GEARS_IMPORT_IMPLEMENTED__vsnprintf
+#define GEARS_IMPORT_IMPLEMENTED_sprintf
