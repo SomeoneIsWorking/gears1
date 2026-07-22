@@ -75,3 +75,9 @@ CORRECTION to the 'oracle confirmed working' note. Xenia starts, initialises Vul
 
 ### Note (2026-07-22)
 So the correct status is: Xenia BUILDS and RUNS on this machine (that part stands and is verified), but has NOT yet been shown to execute Gears of War. Launching the title is the next thing to solve -- likely the ISO needs mounting differently, or headless mode needs a different target argument. Do not treat the emulator starting as the game running.
+
+### Note (2026-07-22)
+Title launch NOT solved. Tried three invocations -- positional ISO, positional extracted default.xex, and the documented --target= flag (src/xenia/app/xenia_main.cc:116 DEFINE_transient_path(target), used at :742). All three produce an IDENTICAL 430-line log that ends at 'VulkanPresenter: Created 1280x720 swapchain' with no mount, no module load and no guest thread. The only path mentioned is the content root. So the target is being ignored or the launch happens on a code path headless mode does not reach.
+
+### Note (2026-07-22)
+Signal to use next time: an identical log line count (430) across three different targets is itself the evidence that the argument is not being consumed -- a loaded title would change the log regardless of how far it got. Next thing to check is whether headless mode in this build actually calls the launch path at all, i.e. read xenia_main.cc around :742 and see what gates it, rather than trying more argument spellings.
