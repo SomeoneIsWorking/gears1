@@ -66,3 +66,29 @@ void __imp__KeWaitForSingleObject(PPCContext& __restrict ctx, uint8_t* base)
 
     ctx.r3.u64 = object->Wait(timeout) ? gears::kStatusSuccess : gears::kStatusTimeout;
 }
+
+// NTSTATUS NtDuplicateObject(HANDLE Handle, PHANDLE NewHandle, DWORD Options)
+//
+// A second handle onto the same object. The host side is a shared_ptr, so both
+// handles genuinely refer to one object and signalling through either is seen
+// by waiters on the other -- which is the whole point of duplicating one.
+void __imp__NtDuplicateObject(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t handle = ctx.r3.u32;
+    const uint32_t newHandlePtr = ctx.r4.u32;
+
+    auto object = gears::Handles().Lookup(handle);
+    if (!object)
+    {
+        lucent::error("kernel", "NtDuplicateObject: unknown handle {:#x}", handle);
+        ctx.r3.u64 = gears::kStatusInvalidHandle;
+        return;
+    }
+
+    const uint32_t duplicate = gears::Handles().Insert(std::move(object));
+    if (newHandlePtr != 0)
+        *reinterpret_cast<uint32_t*>(base + newHandlePtr) = ByteSwap(duplicate);
+
+    lucent::debug("kernel", "NtDuplicateObject({:#x}) -> {:#x}", handle, duplicate);
+    ctx.r3.u64 = gears::kStatusSuccess;
+}

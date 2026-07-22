@@ -16,5 +16,11 @@ constexpr uint32_t kStatusNotFound = 0xC0000225;
 // Xam returns Win32-style error codes rather than NTSTATUS.
 constexpr uint32_t kErrorSuccess = 0x00000000;
 constexpr uint32_t kErrorNotFound = 0x00000490;
+constexpr uint32_t kErrorAccessDenied = 0x00000005;
+constexpr uint32_t kErrorInvalidParameter = 0x00000057;
+constexpr uint32_t kErrorInsufficientBuffer = 0x0000007A;
+constexpr uint32_t kErrorDeviceNotConnected = 0x0000048F;
+constexpr uint32_t kErrorNoSuchUser = 0x00000525;
+constexpr uint32_t kErrorNoMoreFiles = 0x00000012;
 
 } // namespace gears
