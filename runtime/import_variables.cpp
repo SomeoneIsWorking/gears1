@@ -16,6 +16,21 @@ constexpr uint32_t kVariableHeapBase = 0x70100000;
 constexpr uint32_t kVariableHeapSize = 0x10000;
 } // namespace
 
+namespace
+{
+const Image* g_loadedImage = nullptr;
+} // namespace
+
+void SetLoadedImage(const Image& image)
+{
+    g_loadedImage = &image;
+}
+
+const Image* LoadedImage()
+{
+    return g_loadedImage;
+}
+
 uint32_t ExecutableModuleHandle()
 {
     return uint32_t(PPC_IMAGE_BASE);

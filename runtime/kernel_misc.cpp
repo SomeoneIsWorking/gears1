@@ -3,6 +3,8 @@
 
 #include <array>
 #include <atomic>
+#include <cstring>
+#include <string_view>
 
 #include <byteswap.h>
 #include <lucent/log.h>
@@ -144,5 +146,53 @@ void __imp__XexGetModuleHandle(PPCContext& __restrict ctx, uint8_t* base)
     *reinterpret_cast<uint32_t*>(base + outAddress) = ByteSwap(handle);
 
     lucent::debug("kernel", "XexGetModuleHandle(NULL) -> {:#x}", handle);
+    ctx.r3.u64 = gears::kStatusSuccess;
+}
+
+// NTSTATUS XexGetModuleSection(HANDLE module, PCSTR name,
+//                              PVOID* outStart, PDWORD outLength)
+//
+// The XEX's PE section table is already parsed by the loader, so this is a
+// real lookup rather than a stand-in: a section the image genuinely lacks
+// reports not-found, which is the same answer hardware would give.
+void __imp__XexGetModuleSection(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t handle = ctx.r3.u32;
+    const uint32_t nameAddress = ctx.r4.u32;
+    const uint32_t outStart = ctx.r5.u32;
+    const uint32_t outLength = ctx.r6.u32;
+
+    if (handle != gears::ExecutableModuleHandle())
+    {
+        lucent::warn("kernel", "XexGetModuleSection: unknown module handle {:#x}", handle);
+        ctx.r3.u64 = gears::kStatusInvalidHandle;
+        return;
+    }
+
+    const Image* image = gears::LoadedImage();
+    if (image == nullptr || nameAddress == 0 || outStart == 0 || outLength == 0)
+    {
+        ctx.r3.u64 = gears::kStatusInvalidParameter;
+        return;
+    }
+
+    // PE section names are eight bytes and only NUL-terminated when shorter,
+    // so the guest string is bounded rather than read to the first NUL.
+    const char* requested = reinterpret_cast<const char*>(base + nameAddress);
+    const std::string_view name(requested, strnlen(requested, 8));
+
+    const Section* section = image->Find(name);
+    if (section == nullptr)
+    {
+        lucent::warn("kernel", "XexGetModuleSection({}) -> not present in the image", name);
+        ctx.r3.u64 = gears::kStatusNotFound;
+        return;
+    }
+
+    *reinterpret_cast<uint32_t*>(base + outStart) = ByteSwap(uint32_t(section->base));
+    *reinterpret_cast<uint32_t*>(base + outLength) = ByteSwap(section->size);
+
+    lucent::debug("kernel", "XexGetModuleSection({}) -> {:#x}+{:#x}",
+        name, uint32_t(section->base), section->size);
     ctx.r3.u64 = gears::kStatusSuccess;
 }
