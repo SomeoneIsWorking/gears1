@@ -28,3 +28,21 @@ DELIBERATELY NOT GUESSED: what value belongs there. The identifier echoes back a
 Note also that the interrupt callback is only ever raised with source 0 (vblank), never a command-completion source. Whether the title needs a completion source is unverified and should be checked rather than assumed.
 
 The real fix is a command processor that parses the ring buffer, which is a substantial subsystem and not a stub.
+
+### Note (2026-07-22)
+SYSTEMATIC INVESTIGATION -- evidence, not assumption.
+
+Established the failure signal. The 'GPU is hung' text at 0x820BDA98 is referenced from 0x8222FB84, and the companion string at 0x820BE050 from 0x8222FE08. Both sit inside sub_8222FD78, which is the ESCALATION PATH OF THE ADAPTIVE LOCK already understood earlier: sub_8222F460 calls it once the tick delta passes 5000. So the thing that lock waits on is GPU progress, and the two investigations are one.
+
+Established the contract. In sub_82221A68 the wait is modular sequence arithmetic: spin while (next - ticket) < (next - served), where next = *(pool+0x2A1C) and served = **(pool+0x2A10). Measured live at the hang with a breakpoint on sub_8222FD78: pool=0x4015B080, served counter address = 0xA030A000 holding 1, ticket next = 9. So the GPU must advance the word at 0xA030A000 from 1 to at least 9.
+
+Three hypotheses tested and RULED OUT:
+1. 'It is one of the addresses a Vd* call gave us.' No. Those are 0xA030A008 (system command buffer GPU identifier) and 0x0030A03C (ring read-pointer write-back). The polled word 0xA030A000 is 8 bytes before one and 0x3C before the other -- same block, different words. It is never handed to the runtime by any registration.
+2. 'A TYPE3 packet in the command stream names it.' No. A read-only PM4 walk over the ring and the 6-8 indirect buffers it follows found no data word carrying the address (compared on the physical offset, so window aliasing cannot hide it).
+3. 'A TYPE0 register write names it.' No. The walker was extended to inspect register payloads as well -- 82 walks, no hit.
+
+Also confirmed by watchpoint on all four aliases: exactly ONE write to 0xA030A000 in a whole run, from guest code during startup (_xstart -> sub_82218F98 -> sub_824A4D48 -> sub_8223A840 -> sub_82221EC0) initialising it to 1. Nothing writes it afterwards, so on hardware the GPU is the only other writer.
+
+Remaining candidate under test: the guest programs the address into a Xenos register directly through the MMIO window at 0x7FC00000 using byte-reversed stores, bypassing the ring buffer. That window is committed as inert memory, so such a write lands silently and the runtime never sees it.
+
+NOT DONE, deliberately: no value has been written into 0xA030A000 to make the symptom go away. Until the mechanism that names the address is found, any value would be chosen to silence the error rather than derived from the protocol.
