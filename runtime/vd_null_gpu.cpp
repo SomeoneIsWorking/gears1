@@ -42,6 +42,7 @@
 #include <lucent/log.h>
 
 #include "guest_heap.h"
+#include "gpu_present.h"
 #include "hle_d3d.h"
 #include "guest_thread.h"
 #include "guest_memory.h"
@@ -502,6 +503,13 @@ struct CommandProcessor
                     lucent::debug("gpu", "swap packet: front buffer {:#x} (seq {})",
                         data[0], data[1]);
                     ReportWaitStats();
+                    // The frame boundary is here, at the point in the stream
+                    // where the hardware would flip -- so this is where the
+                    // host swapchain is presented. Stale copies of the packet
+                    // are already filtered above, so this is one present per
+                    // guest VdSwap. The host backend lives in gpu_present.cpp;
+                    // it must not accrete into the command processor.
+                    gears::PresentFrame(data[0], data[1]);
                 }
                 else
                 {
@@ -819,6 +827,12 @@ struct CommandProcessor
 
 void CommandProcessorThread()
 {
+    // Brought up here rather than in main(): the presenter only has anything to
+    // do once there is a command stream, and this keeps the whole graphics
+    // backend off the guest's own threads. A false return means no display --
+    // a supported outcome, and the command processor is unchanged by it.
+    gears::PresenterStart();
+
     CommandProcessor cp;
     cp.Run();
 }
