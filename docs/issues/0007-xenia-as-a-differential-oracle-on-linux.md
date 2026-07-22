@@ -30,3 +30,9 @@ Toolchain check on this Fedora machine: Clang 22 (docs want 'Clang-19 or newer' 
 
 ### Note (2026-07-22)
 BLOCKED ON SYSTEM PACKAGES. Present: gtk3-devel, vulkan-loader-devel, libX11-devel, libxcb-devel. Missing: libcxx-devel, libcxxabi-devel, lz4-devel, SDL2-devel. Installing these needs sudo, i.e. a machine-level change outside the repo, so it requires the user's go-ahead rather than being done unilaterally.
+
+### Note (2026-07-22)
+Dependency list REFINED by reading Xenia's CMake rather than trusting its Ubuntu apt line. Only three find_package/pkg_check entries exist: PkgConfig, Python3, and GTK3 (the sole REQUIRED one) -- and gtk3-devel is already installed. SDL2 is vendored in third_party, so SDL2-devel is not needed. No libc++ flags anywhere in the CMake, so libcxx-devel/libcxxabi-devel appear unnecessary too.
+
+### Note (2026-07-22)
+The one genuine gap is lz4: CMakeLists.txt line 259 does link_libraries(stdc++fs dl lz4 pthread rt), and while liblz4.so.1 is present at runtime, the /usr/lib64/liblz4.so development symlink is missing, so the link step would fail. So the blocker is a SINGLE package (lz4-devel), not the four the apt line implies.
