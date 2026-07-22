@@ -35,7 +35,12 @@ import os
 import re
 import sys
 
-MACRO = re.compile(r'^\s*GEARS_HLE_(?:TRACE|OVERRIDE)\((?P<addr>[0-9A-Fa-f]{8})\)',
+# Both forms of override count: the registration macro, and a hand-written
+# PPC_FUNC(sub_X) definition (used where the override needs its own body rather
+# than a plain census wrapper). Missing the hand-written form leaves the alias
+# in place, and the override is then silently bypassed by intra-TU call sites.
+MACRO = re.compile(r'^\s*(?:GEARS_HLE_(?:TRACE|OVERRIDE)|PPC_FUNC)'
+                   r'\((?:sub_)?(?P<addr>[0-9A-Fa-f]{8})\)',
                    re.M)
 
 

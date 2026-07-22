@@ -307,3 +307,82 @@ NOT ESTABLISHED / regressions: no frame-rate measurement of the scene phase was
 taken in these runs (the instrumented runs were stopped in the 588-600 frame
 window before a 60-frame fps sample completed); movie phase measured unchanged
 at 30.05 fps. Nothing in the command processor was changed. Nothing committed.
+
+### Note (2026-07-22)
+PRODUCER OF THE WORKER QUEUE IDENTIFIED, ON EVIDENCE, AND THE RE-ENQUEUEING IS PATHOLOGICAL.
+
+METHOD. Static search cannot find the writer: the ONLY `stw rX,0x58(rY)` in the D3D range is
+the interpreter's own clear at 0x8223B670, so the enqueue reaches the field through a
+different base pointer. New capability instead (runtime/hle_d3d.cpp, GEARS_WATCH_QUEUE=1): an
+mprotect + SIGSEGV + single-step write watchpoint on the guest field, recording the faulting
+host RIP and re-arming per presented frame. Two writers, and only two:
+    __imp__sub_8223B5E0   the interpreter clearing the queue it just took
+    __imp__sub_8223B8A0   THE GPU INTERRUPT CALLBACK          <- the producer
+(Trap worth recording: dladdr's dli_fbase is 0x400000 for this non-PIE binary, so RIP is
+already the addr2line VMA. Subtracting the base first symbolised into an unrelated function
+and cost a wrong conclusion. Feed addr2line the raw RIP.)
+
+WHAT THE PRODUCER IS. <interpreter ctx> = pool+0x2A3C, so ctx+0x58 IS pool+0x2A94, the slot
+the interrupt callback at 0x8223B8A0 stores its argument into before KeSetEvent'ing the
+per-CPU event. Nothing new has to be discovered about that callback -- it is the same one
+already documented in this entry. The submission's SCRATCH_REG5 carries a CPU command-list
+pointer; the CP's INTERRUPT packet runs the callback; the callback enqueues that list and
+wakes the D3D worker, which replays it (sub_8223B5E0 -> sub_8223B200) and whose replays emit
+ring kicks. The loop is therefore CLOSED: ring -> INTERRUPT -> enqueue -> worker replay ->
+ring. 100% of the 2352 kicks/frame already came from the worker (0x8223B304), and now 100% of
+the worker's wakeups are shown to come from the ring. Nothing outside the loop drives it.
+
+IT IS A POSITIVE-FEEDBACK LOOP WITH GAIN > 1 (measured per presented frame, scene phase):
+    replays          524      each emitting exactly 6 ring kicks   -> 3144 kicks
+    enqueues         786      = 1.5 enqueues per replay            <- GAIN 1.5
+    of those, 312 re-enqueued the very list being replayed, and 262 OVERWROTE a list the
+    worker had not consumed yet (the queue is a single slot; the overwritten continuation is
+    silently dropped -- and if a resume pointer is set, sub_8223B5E0 at 0x8223B668 discards
+    the enqueued head outright and runs the resume instead).
+    replays split exactly 50/50: 262 suspended (left a resume pointer at ctx+0x50) and 262 ran
+    to completion. Another frame: 750 replays / 1124 enqueues / 4496 kicks, same ratios.
+Because each replay produces more than one enqueue, the population of pending replays grows
+until the only backstop -- the ring filling up -- caps it. That is the 196x already published,
+now explained rather than merely observed.
+
+THE REPLAYS MAKE NO PROGRESS. Per frame the 524-750 replays cover only 45-64 distinct
+(list, resume) start points, and the SAME point recurs up to 68 times in one frame. Crucially
+the recurring points include resume == 0, i.e. the same recorded list is re-run FROM THE START
+dozens of times per frame (e.g. `list 0xc021d400 resume 0x0 x48`). A list re-run from the start
+re-emits all of its ring packets, including the INTERRUPT that re-enqueues it. Only ~8-12
+distinct list pointers exist in a frame. This is not an engine legitimately recording many
+command lists: it is a small set of lists cycling.
+
+ANSWER TO THE FRAMED QUESTION: pathological, not legitimate. The coroutine design itself is
+legitimate (a list suspends on a GPU-sync token and the ISR resumes it via ctx+0x50 -- 262
+suspend / 262 complete per frame is that mechanism working), but the loop gain of 1.5 and the
+restart-from-zero repeats are not. On hardware a replay must not, on average, cause more than
+one further enqueue.
+
+WHAT REMAINS UNESTABLISHED, and it is the next step. WHY a completed list is re-enqueued at
+resume 0. The nomination sites that install callback 0x8223B8A0 with a list argument are only
+three (0x82236A80 -> sub_82221E68, 0x8223BA94 -> sub_82221B40 inside sub_8223BA18, and
+0x8223C2FC in the CPU-side dispatcher), and sub_8223BA18 is called ~30 times in a WHOLE RUN --
+so ~30 nominations produce ~800 enqueues per frame. The multiplier is entirely that our CP
+re-executes INTERRUPT packets sitting inside indirect buffers the worker keeps re-kicking.
+Two candidate root causes, NEITHER TESTED:
+  (a) predication. The IBs carry SET_BIN_MASK_LO/HI in bulk and the ring brackets them with
+      SET_BIN_SELECT_LO; if our CP ignores predication it executes packets (including the
+      INTERRUPT) that hardware would skip. This is the strongest candidate and is cheap to
+      test: count INTERRUPT packets executed inside predicated-off regions.
+  (b) a stale-packet defect of the same shape as the VdSwap one fixed earlier in this entry:
+      the INTERRUPT + SCRATCH_REG4/REG5 triple lives in reused guest command-buffer memory and
+      is re-executed from a buffer that was not re-recorded.
+Do NOT "fix" this by suppressing enqueues or by rate-limiting the worker; that would hide the
+loop, not break it. Find which packet the hardware would not have executed.
+
+CODE: runtime/hle_d3d.cpp only -- watchpoint (opt-in, off by default), enqueue census on a new
+override of sub_8223B8A0, ring-kick IB-size census, and a (list,resume) replay-progress
+census. All channel-gated on "hle", all pure instrumentation; nothing in the command processor
+or in guest behaviour was changed. tools/prepare_overrides.py now also recognises hand-written
+PPC_FUNC(sub_X) overrides, not just the GEARS_HLE_TRACE macro -- sub_8223B8A0's alias was still
+in place and its override would have been silently bypassed by intra-TU call sites.
+
+MEASURED: intro 29.70-30.29 fps, scene phase 0.41 fps (600 frames, last 60 in 145.32 s) with
+all probes installed -- unchanged from the 0.42-0.45 fps of record, so no regression. No fix
+was attempted; nothing committed.
