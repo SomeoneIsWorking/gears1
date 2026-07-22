@@ -36,7 +36,12 @@ uint32_t WaitOn(uint32_t handle, int64_t timeout100ns)
         return gears::kStatusInvalidHandle;
     }
 
-    return object->Wait(timeout100ns) ? gears::kStatusSuccess : gears::kStatusTimeout;
+    // Logged on both sides of the wait: a hang is only diagnosable if the
+    // record shows which handles were entered and never left.
+    lucent::debug("wait", "-> {:#x} (timeout {})", handle, timeout100ns);
+    const bool signalled = object->Wait(timeout100ns);
+    lucent::debug("wait", "<- {:#x} {}", handle, signalled ? "signalled" : "timed out");
+    return signalled ? gears::kStatusSuccess : gears::kStatusTimeout;
 }
 } // namespace
 
@@ -65,8 +70,11 @@ void __imp__NtCreateEvent(PPCContext& __restrict ctx, uint8_t* base)
 
 void __imp__NtSetEvent(PPCContext& __restrict ctx, uint8_t*)
 {
+    lucent::debug("wait", "NtSetEvent({:#x})", ctx.r3.u32);
     if (auto object = gears::Handles().Lookup(ctx.r3.u32))
         object->Set();
+    else
+        lucent::warn("wait", "NtSetEvent on unknown handle {:#x}", ctx.r3.u32);
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
@@ -79,6 +87,7 @@ void __imp__NtClearEvent(PPCContext& __restrict ctx, uint8_t*)
 
 void __imp__NtPulseEvent(PPCContext& __restrict ctx, uint8_t*)
 {
+    lucent::debug("wait", "NtPulseEvent({:#x})", ctx.r3.u32);
     if (auto object = gears::Handles().Lookup(ctx.r3.u32))
         object->Pulse();
     ctx.r3.u64 = gears::kStatusSuccess;
