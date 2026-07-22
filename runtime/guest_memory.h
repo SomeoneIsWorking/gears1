@@ -43,6 +43,10 @@ private:
 // Returns the number of entries installed.
 size_t InstallFunctionTable(GuestMemory& memory);
 
+// Read-only walk of the GPU command stream, reporting packets that mention
+// `watchAddress`. Executes nothing; see pm4_trace.cpp.
+void TraceCommandStream(uint32_t ringBase, uint32_t ringWords, uint32_t watchAddress);
+
 // The process-wide guest memory. There is exactly one guest address space, and
 // guest threads created later need to reach it without threading a reference
 // through every kernel import.

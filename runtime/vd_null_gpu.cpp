@@ -38,6 +38,7 @@ struct RingBuffer
 };
 
 RingBuffer g_ringBuffer{};
+uint32_t g_pm4WatchAddress = 0;
 uint32_t g_graphicsInterruptCallback = 0;
 uint32_t g_graphicsInterruptContext = 0;
 uint32_t g_systemCommandBufferGpuIdentifier = 0;
@@ -92,6 +93,13 @@ bool CommitDeviceWindow(GuestMemory& memory)
 
 void __imp__VdInitializeEngines(PPCContext& __restrict ctx, uint8_t*)
 {
+    if (const char* watch = getenv("GEARS_PM4_WATCH"))
+    {
+        g_pm4WatchAddress = uint32_t(strtoul(watch, nullptr, 16));
+        lucent::info("gpu", "command stream will be traced for writes to {:#x}",
+            g_pm4WatchAddress);
+    }
+
     lucent::warn("gpu", "VdInitializeEngines -- NULL GPU: no commands will be executed");
     ctx.r3.u64 = 1;
 }
@@ -123,6 +131,7 @@ void __imp__VdEnableRingBufferRPtrWriteBack(PPCContext& __restrict ctx, uint8_t*
 void __imp__VdSetSystemCommandBufferGpuIdentifierAddress(PPCContext& __restrict ctx, uint8_t*)
 {
     g_systemCommandBufferGpuIdentifier = ctx.r3.u32;
+    lucent::info("gpu", "system command buffer GPU identifier at {:#x}", ctx.r3.u32);
     ctx.r3.u64 = 0;
 }
 
@@ -155,9 +164,20 @@ void VblankThread()
     lucent::info("gpu", "vblank thread driving interrupt callback {:#x} at 60 Hz",
         g_graphicsInterruptCallback);
 
+    uint32_t tick = 0;
     while (true)
     {
         std::this_thread::sleep_for(std::chrono::microseconds(16667));
+
+        // Sampled from here rather than from VdSwap: the title submits one
+        // frame and then waits, so by the time it is stuck there are no more
+        // swaps to hang a trace off, and the ring only has contents to read
+        // after that first submission.
+        if (g_pm4WatchAddress != 0 && g_ringBuffer.base != 0 && ++tick % 60 == 0)
+        {
+            gears::TraceCommandStream(g_ringBuffer.base,
+                (1u << g_ringBuffer.sizeLog2) / 4, g_pm4WatchAddress);
+        }
 
         ctx.r1.u32 = block.stackBase - 0x100;
         ctx.r3.u32 = 0; // source: vblank
