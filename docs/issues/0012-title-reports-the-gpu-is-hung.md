@@ -46,3 +46,36 @@ Also confirmed by watchpoint on all four aliases: exactly ONE write to 0xA030A00
 Remaining candidate under test: the guest programs the address into a Xenos register directly through the MMIO window at 0x7FC00000 using byte-reversed stores, bypassing the ring buffer. That window is committed as inert memory, so such a write lands silently and the runtime never sees it.
 
 NOT DONE, deliberately: no value has been written into 0xA030A000 to make the symptom go away. Until the mechanism that names the address is found, any value would be chosen to silence the error rather than derived from the protocol.
+
+### Note (2026-07-22)
+FOURTH HYPOTHESIS ALSO RULED OUT. Scanned the whole device MMIO window (0x7FC00000..0x80000000, both byte orders, compared on the physical offset) at the moment of the hang: the fence address appears nowhere in it. So the guest does not program it into a Xenos register either.
+
+All four candidate mechanisms are now eliminated:
+  1. an address the runtime was handed by a Vd* registration -- no
+  2. a TYPE3 packet data word -- no
+  3. a TYPE0 register payload -- no
+  4. a Xenos register programmed directly through MMIO -- no
+
+That the address appears in NONE of the places the GPU could learn it from is the
+key result, and it redirects the investigation: the word is probably not written
+by the GPU at all. It is far more likely written by the TITLE'S OWN graphics
+interrupt handler, which computes the destination from its own structures -- which
+is exactly why the address never appears in any stream or register.
+
+The runtime registers that handler via VdSetGraphicsInterruptCallback (observed at
+0x82221C60) and a host thread invokes it at 60 Hz, but ALWAYS with source 0
+(vblank) and never with a command-completion source. A handler that only ever sees
+vblank would have nothing to retire, and would leave the counter where it is --
+matching the observation exactly.
+
+Note the initialising write came from sub_82221EC0, which is in the same 0x82221xxx
+neighbourhood as the interrupt callback at 0x82221C60 and the lock at 0x82221A68.
+That whole cluster is one subsystem and is where the answer is.
+
+NEXT MEASUREMENTS, in order:
+  a. Confirm the interrupt callback actually executes when the host thread invokes
+     it -- do not assume it does.
+  b. Decompile the callback at 0x82221C60 and find which source values it acts on
+     and what it reads to decide what completed.
+  c. Only then decide what the runtime must supply: probably a completion source
+     plus whatever GPU state the handler consults.
