@@ -59,6 +59,7 @@ Everything derived from the disc lands in `scratch/`, which is gitignored.
 | `tools/gdf_extract.py` | GDF/XDVDFS extractor for the Xbox 360 disc image |
 | `tools/xex_probe/` | XEX decrypt/decompress, section + import dump, save/restore helper scan |
 | `extern/XenonRecomp` | Submodule → our fork, `gears` branch |
+| `docs/codemap.md` | Orientation map — what's where, and how far each subsystem really got |
 | `debug_journal/` | Dated findings, including the dead ends |
 | `scratch/` | All derived output (gitignored) |
 
