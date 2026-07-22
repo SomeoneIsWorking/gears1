@@ -873,3 +873,50 @@ So: trace where `r29` comes from in `sub_82761CA8`. That is a single-function
 question with a concrete target, and it is the first step in this investigation
 that starts from a known-wrong value rather than from a conflict of
 interpretations.
+
+---
+
+## Tracing the bad pointer upward
+
+Working up from the known-wrong value rather than from a conflict.
+
+### The chain so far
+
+```
+sub_82761CA8   r29 = r3                 (line 18912 -- the ONLY r29 assignment)
+               stores 1.0f at r29+36 = 0xA06F032C, count 1, in bounds
+      ^ called by
+sub_82762A08   call site line 21006 sets r4 and r5 but NOT r3
+               r3 = r4  (line 20860 -- the ONLY r3 assignment before the call)
+               so the bad pointer is sub_82762A08's own second argument
+      ^ called by
+sub_8273B488   (ppc_recomp.113.cpp:8085)
+      ^ sub_82744148 -> sub_826C4C28 -> ...
+```
+
+So `0xA06F0308` enters as `sub_82762A08`'s **second argument** and is passed
+straight through as `sub_82761CA8`'s first.
+
+### Volatile-register concern — checked and cleared
+
+`r3` is assigned at line 20860 and used at 21006, 146 lines apart. On PowerPC
+`r3`-`r12` are volatile, so a call in between would clobber it and the value
+reaching the callee would be stale — a plausible way for a wrong pointer to
+appear, and worth ruling out explicitly.
+
+Checked: **there are no calls between those two lines.** The value survives
+legitimately. Not the mechanism.
+
+### Next
+
+Find what `sub_8273B488` passes as `r4` to `sub_82762A08`, and keep walking up.
+The target remains a single concrete value (`0xA06F0308`) rather than an
+interpretation, so each step is a mechanical question with a yes/no answer.
+
+Worth noting for scope: this chain has already climbed four frames and is still
+inside the title's own logic, with every runtime interaction so far behaving as
+requested. If it reaches the top without finding a wrong value handed in from
+our side, the conclusion will be that the title is being driven into a state the
+console would not have produced — most likely by something we report
+differently — and the search should switch from pointer provenance to which
+reported value steered it there.
