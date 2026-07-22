@@ -1,7 +1,7 @@
 ---
 id: 7
 title: Xenia as a differential oracle on Linux
-status: investigating
+status: resolved
 symptom: need a reference emulator to compare guest state against; unclear whether Xenia builds and runs on Linux
 tags: harness,method,oracle
 created: 2026-07-22
@@ -57,3 +57,15 @@ Binary launches (it pops a zenity file picker with no ROM argument). Remaining u
 
 ### Note (2026-07-22)
 Reproduce: CC=clang CXX=clang++ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-I<src>/build/generated -DCMAKE_EXE_LINKER_FLAGS=-L<scratch>/oracle/localdev ; ninja -C build xenia-app
+
+### Note (2026-07-22)
+ORACLE CONFIRMED WORKING. Xenia runs Gears of War headless on this machine: Vulkan initialised on the RX 6700 XT, GPU command / frame limiter / XMA decoder / audio worker threads started, 1280x720 swapchain created, zero errors in the log. So a reference oracle for this title exists on Linux, which was the whole open question.
+
+### Note (2026-07-22)
+Invocation: setsid nohup timeout N ./build/bin/Linux/xenia_canary --headless=true '<iso>' > log 2>&1 < /dev/null &  -- must be fully detached and stdin-redirected, because without a ROM argument it opens a zenity file picker and hangs, and a session-level task stop kills it otherwise.
+
+### Note (2026-07-22)
+PROCESS TRAP hit here: pkill -f 'xenia_canary --helpfull' matched the shell running the pkill and killed it (exit 144), so a later command in the same invocation never ran and the run appeared to have started when it had not. Kill by PID, never by pattern, when the pattern can match your own command line.
+
+### Resolution (2026-07-22)
+Xenia is a viable differential oracle on this Linux machine. It builds with three local workarounds and no sudo, and runs Gears of War headless with no errors. The harness-versus-broaden fork is therefore resolved in favour of the harness: the risk that justified hesitating -- an emulator that might not build or run -- does not exist. Remaining work is correlating ITRACE/DTRACE output with our runtime, which is engineering rather than gamble.
