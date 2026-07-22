@@ -965,3 +965,62 @@ attractive: every runtime interaction with this block has been exactly as
 requested, so if the layout decision itself is internally consistent, the fault
 is upstream in some value we report that steered the title into this
 configuration.
+
+---
+
+## Two negatives: the free policy is not implicated, and there is no pool header
+
+### `GuestHeap::Free` never reusing memory — checked, not implicated
+
+This is a deliberate runtime deviation (documented earlier: freed pages stay
+committed and are never handed out again), so it deserved testing rather than
+assuming.
+
+Measured over a full run to the crash: **74 allocations, 10 frees.** All ten
+frees are in the **title heap** (`0x40xxxxxx`). The physical block `0xA06F0000`
+is **never freed**. The non-reuse policy therefore cannot have produced the
+reuse seen here. It remains a leak, and should be revisited on its own merits,
+but it is not this bug.
+
+### The pointer is computed, not stored
+
+Scanned the entire 4 KiB block at the moment of the bad store, looking for the
+big-endian value `0xA06F0308` anywhere in it. **Not present.**
+
+So the pointer is not read back out of any header, free list or descriptor
+inside the block — it is computed and carried in registers and on the stack.
+
+That argues against the "pool carves up the block and one carve is wrong"
+model: a pool would keep its bookkeeping somewhere, and there is none in the
+block pointing at `+0x308`.
+
+### Where this leaves the investigation
+
+Established, all from observed writes:
+
+- The word at `block+0x32C` is a zero-initialised list head.
+- `sub_82761CA8` stores `1.0f` over it via `r29+36`, `r29 = block+0x308`.
+- The list code then faithfully propagates that value to the crash.
+- `r29` is threaded unchanged through at least five frames.
+- Nothing in the block records `block+0x308`, and the block is never freed.
+
+Ruled out, cumulative: missing game data · jump-table errors · overlapping
+*runtime* allocations · forced 64 KiB pages · vblank never firing ·
+`ObDereferenceObject` · the `rlwinm`/`addi` semantics involved · uninitialised
+tree links · volatile-register clobbering of `r3` · `GuestHeap` free-reuse
+policy · a pool header inside the block.
+
+**Assessment.** Eleven mechanisms eliminated, every one of them either in the
+runtime or in the immediate data path, and none was the cause. The value is
+computed inside the title from a block we allocated exactly as asked, threaded
+through five frames untouched, and lands 36 bytes below a live list head.
+
+This is the branch point flagged two entries ago, and it has now been reached.
+Further pointer-provenance work is unlikely to pay. The next iteration should
+**stop tracing and audit what the runtime reports about the machine** — the
+values that steer the title's own layout decisions: `XGetVideoMode` and
+`VdQueryVideoMode` dimensions, `VdQueryVideoFlags`, `XGetAVPack`,
+`ExGetXConfigSetting` answers, `VdGetCurrentDisplayInformation` fields, and the
+EDRAM/`MmQuery*` responses. A wrong answer there would make the title size or
+lay out a structure differently from the console, which is exactly the shape of
+what is being observed.
