@@ -60,6 +60,7 @@ add_executable(gears1
     kernel_video.cpp
     pm4_trace.cpp
     vd_null_gpu.cpp
+    gpu_present.cpp
     hle_d3d.cpp
     kernel_rtl.cpp
     kernel_config.cpp
@@ -72,3 +73,23 @@ add_executable(gears1
 
 target_include_directories(gears1 PRIVATE .)
 target_link_libraries(gears1 PRIVATE gears_ppc XenonUtils lucent::lucent)
+
+# The host graphics backend. Vulkan because extern/xenia's SPIR-V shader
+# translator is the intended path for real content later, and SDL3 for the
+# window and its Vulkan surface.
+#
+# Both are optional at BUILD time as well as at run time: without them
+# gpu_present.cpp compiles to the headless stub and the runtime behaves exactly
+# as it did before. A machine that cannot present must still be able to build
+# and run the measurement harnesses.
+find_package(Vulkan QUIET)
+find_package(SDL3 QUIET CONFIG)
+if(Vulkan_FOUND AND SDL3_FOUND)
+    target_compile_definitions(gears1 PRIVATE GEARS_HAVE_PRESENTER)
+    target_link_libraries(gears1 PRIVATE Vulkan::Vulkan SDL3::SDL3)
+    message(STATUS "gears1: host presenter enabled (Vulkan ${Vulkan_VERSION}, SDL3)")
+else()
+    message(WARNING
+        "gears1: no host presenter -- Vulkan and SDL3 development packages are "
+        "required for a window. The runtime will build and run headless.")
+endif()

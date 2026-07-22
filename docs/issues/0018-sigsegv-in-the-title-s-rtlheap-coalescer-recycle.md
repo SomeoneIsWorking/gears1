@@ -148,3 +148,20 @@ fix; only the unit test is.
 
 Worth doing if this area is touched again: log the requested base in the allocate trace so
 the replay can drive the fixed-base paths too.
+
+### Note (2026-07-22)
+RUN 2 AFTER THE FIX (900 s, GEARS_LUCENT_DEBUG=heap): exit 124 (timeout), 26220 frames at
+29.65 fps, no core, zero heap errors, zero absorb warnings. Together with run 1 (26160
+frames) that is 2/2 clean runs past the ~21840-frame point at which the pre-fix run crashed.
+
+REPRODUCTION RATE, stated honestly: the fault was seen ONCE, in 1 of the 2 pre-fix 900 s
+runs. Two clean post-fix runs cannot distinguish 'fixed' from 'got lucky twice' at that base
+rate -- roughly a 1-in-4 chance of two clean runs even with no fix at all. The confidence
+here comes from the CORE, not the run count: the faulting block's SegmentIndex named a
+segment it could not possibly belong to, which is only explicable as stale bytes surviving
+into a fresh commit, and that is exactly what the missing zero-fill produced.
+
+Checked and NOT attributable to this change: one '[heap:warn] free of unknown address 0x0'
+appears in every run, post-fix AND in the pre-fix crashing run alike (1 occurrence each), so
+it is pre-existing noise and not the absorb path's 'absorbed base freed later' warning --
+absorb count was 0 in both runs.
