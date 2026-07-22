@@ -36,3 +36,6 @@ Dependency list REFINED by reading Xenia's CMake rather than trusting its Ubuntu
 
 ### Note (2026-07-22)
 The one genuine gap is lz4: CMakeLists.txt line 259 does link_libraries(stdc++fs dl lz4 pthread rt), and while liblz4.so.1 is present at runtime, the /usr/lib64/liblz4.so development symlink is missing, so the link step would fail. So the blocker is a SINGLE package (lz4-devel), not the four the apt line implies.
+
+### Note (2026-07-22)
+CMake configure SUCCEEDS on this machine (exit 0, Clang 22, CMake 4.3.0, Ninja). It even found system sdl2 2.32.70, so SDL2 was never a blocker. Clone with all submodules is 4.5 GB. Build target for the emulator is xenia-app. Build started; the open question is whether it compiles and whether the only remaining failure is the lz4 link.
