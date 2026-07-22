@@ -21,3 +21,16 @@ target_include_directories(test_runtime_logic PRIVATE
     ../extern/XenonRecomp/XenonUtils)
 target_link_libraries(test_runtime_logic PRIVATE lucent::lucent)
 add_test(NAME runtime_logic COMMAND test_runtime_logic)
+
+# Replays a recorded heap trace through the real allocator. Not a test (it
+# needs a captured trace), but built with the tests so it cannot bit-rot.
+add_executable(heap_replay
+    ../tools/heap_replay.cpp
+    ../runtime/guest_heap.cpp
+    ../runtime/guest_memory.cpp)
+target_include_directories(heap_replay PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}"
+    "${THIRDPARTY_ROOT}/simde"
+    ../extern/XenonRecomp/XenonUtils)
+target_link_libraries(heap_replay PRIVATE lucent::lucent)
