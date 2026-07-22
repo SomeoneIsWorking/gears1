@@ -48,6 +48,7 @@ add_executable(gears1
     xam_loader.cpp
     xam_user.cpp
     xam_notify.cpp
+    xam_overlapped.cpp
     xnet_null.cpp
     kernel_misc.cpp
     kernel_time.cpp

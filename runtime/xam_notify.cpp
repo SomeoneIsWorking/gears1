@@ -19,6 +19,7 @@
 #include <byteswap.h>
 
 #include "kernel_objects.h"
+#include "xam_overlapped.h"
 
 namespace
 {
@@ -79,17 +80,25 @@ void __imp__XMsgInProcessCall(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = gears::kErrorNotFound;
 }
 
-void __imp__XMsgStartIORequest(PPCContext& __restrict ctx, uint8_t*)
+// DWORD XMsgStartIORequest(DWORD App, DWORD Message, PXOVERLAPPED Overlapped,
+//                          PVOID Buffer, DWORD Size)
+//
+// Asynchronous, so the refusal has to be delivered through the overlapped as
+// well as returned. Returning an error alone left callers waiting on a request
+// that never completed.
+void __imp__XMsgStartIORequest(PPCContext& __restrict ctx, uint8_t* base)
 {
     lucent::warn("xam", "XMsgStartIORequest(app {:#x}, message {:#x}) -- no such service",
         ctx.r3.u32, ctx.r4.u32);
+    gears::CompleteOverlapped(base, ctx.r5.u32, gears::kErrorNotFound);
     ctx.r3.u64 = gears::kErrorNotFound;
 }
 
-void __imp__XMsgStartIORequestEx(PPCContext& __restrict ctx, uint8_t*)
+void __imp__XMsgStartIORequestEx(PPCContext& __restrict ctx, uint8_t* base)
 {
     lucent::warn("xam", "XMsgStartIORequestEx(app {:#x}, message {:#x}) -- no such service",
         ctx.r3.u32, ctx.r4.u32);
+    gears::CompleteOverlapped(base, ctx.r5.u32, gears::kErrorNotFound);
     ctx.r3.u64 = gears::kErrorNotFound;
 }
 
