@@ -140,6 +140,11 @@ constexpr uint32_t kOpIndirectBuffer = 0x3F;
 constexpr uint32_t kOpIndirectBufferPfd = 0x37;
 constexpr uint32_t kOpInterrupt = 0x54;
 constexpr uint32_t kOpEventWriteShd = 0x58;
+constexpr uint32_t kOpEventWriteExt = 0x5A;
+constexpr uint32_t kOpEventWriteZpd = 0x5B;
+
+// RB_SAMPLE_COUNT_ADDR: where EVENT_WRITE_ZPD writes its sample-count record.
+constexpr uint32_t kRegSampleCountAddr = 0x2325;
 
 // The runtime's own swap packet. D3D reserves 64 dwords in the command buffer
 // and passes their address to VdSwap; the KERNEL is what fills them with the
@@ -211,6 +216,9 @@ struct CommandProcessor
     uint32_t sourceBase = 0;
     uint32_t sourceIndex = 0;
 
+    // Highest VdSwap sequence executed; stale re-submitted copies are behind it.
+    uint32_t lastSwapSequence = 0;
+
     void HandleType3(uint32_t opcode, const uint32_t* data, uint32_t count, int depth)
     {
         switch (opcode)
@@ -250,10 +258,77 @@ struct CommandProcessor
 
         case kOpRuntimeSwap:
             // Frame boundary written by VdSwap. data[0] is the front buffer
-            // address recorded there; nothing is presented, but the packet's
-            // execution is what proves the stream stayed parseable through
-            // the swap block.
-            lucent::debug("gpu", "swap packet: front buffer {:#x}", count >= 1 ? data[0] : 0u);
+            // address, data[1] a sequence number stamped at VdSwap time. The
+            // sequence exists because the packet lives in guest command-buffer
+            // memory that persists: a later submission reusing the buffer
+            // without calling VdSwap re-presents the stale packet (measured:
+            // CP swap executions far outnumbered guest VdSwap calls). A stale
+            // copy carries an old sequence and is skipped.
+            if (count >= 2)
+            {
+                if (int32_t(data[1] - lastSwapSequence) > 0)
+                {
+                    lastSwapSequence = data[1];
+                    lucent::debug("gpu", "swap packet: front buffer {:#x} (seq {})",
+                        data[0], data[1]);
+                }
+                else
+                {
+                    lucent::debug("gpu", "stale swap packet ignored (seq {} <= {})",
+                        data[1], lastSwapSequence);
+                }
+            }
+            break;
+
+        case kOpEventWriteZpd:
+            // Z-pass-done event: the GPU writes an xe_gpu_depth_sample_counts
+            // record (0x20 bytes: Total/ZFail/ZPass/StencilFail A+B pairs,
+            // little-endian) at the record the address in RB_SAMPLE_COUNT_ADDR
+            // selects. D3D pre-fills records with the 0xFFFFFEED sentinel and
+            // its occlusion-query GetData (0x822306A0) polls until the event
+            // overwrites it -- the post-load no-present spin was exactly this
+            // poll against a record no one wrote. A GPU that rasterises
+            // nothing has zero samples in every counter, so the record is
+            // zero-filled, which also clears the sentinel. Layout and
+            // addressing per Xenia's xenos_zpd_report.h (record = addr &
+            // ~0x1F; END at slot+0, BEGIN at slot+0x20).
+            {
+                const uint32_t reportAddress = g_gpuRegisters[kRegSampleCountAddr];
+                const uint32_t recordBase = reportAddress & ~0x1Fu;
+                if (recordBase != 0)
+                {
+                    uint8_t* record = gears::Memory().Translate<uint8_t>(recordBase);
+                    memset(record, 0, 0x20);
+                    lucent::debug("gpu", "EVENT_WRITE_ZPD: zero samples -> {:#x}"
+                        " (initiator {:#x})", recordBase, count >= 1 ? data[0] : 0u);
+                }
+            }
+            break;
+
+        case kOpEventWriteExt:
+            // Screen-extent event: writes six 16-bit values (min/max x, y, z
+            // of pixels affected by the previous draw) 8-in-16 swapped. With
+            // nothing rasterised the truthful extent is empty, but the
+            // consumer computes tile bounds from it and an inverted empty box
+            // is a shape hardware never produces; the full-surface extent is
+            // the conservative answer a tiling optimiser must always accept.
+            // Values and byte order follow Xenia's EVENT_WRITE_EXT handler.
+            if (count >= 2)
+            {
+                const uint32_t address = data[1] & ~3u;
+                const uint16_t extents[6] = {
+                    0,            // min x (in 8px blocks)
+                    8192 >> 3,    // max x
+                    0,            // min y
+                    8192 >> 3,    // max y
+                    0,            // min z
+                    1,            // max z
+                };
+                auto* out = gears::Memory().Translate<uint16_t>(address);
+                for (int i = 0; i < 6; i++)
+                    out[i] = uint16_t(extents[i] << 8 | extents[i] >> 8);
+                lucent::debug("gpu", "EVENT_WRITE_EXT -> {:#x}", address);
+            }
             break;
 
         case kOpInterrupt:
@@ -649,7 +724,8 @@ void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
         StoreGuest32(block, (3u << 30) | ((kSwapReservationDwords - 2) << 16)
             | (kOpRuntimeSwap << 8));
         StoreGuest32(block + 4, frontBuffer);
-        for (uint32_t i = 2; i < kSwapReservationDwords; i++)
+        StoreGuest32(block + 8, uint32_t(frame)); // sequence, see kOpRuntimeSwap
+        for (uint32_t i = 3; i < kSwapReservationDwords; i++)
             StoreGuest32(block + i * 4, 0);
 
         lucent::debug("gpu", "VdSwap: swap packet at {:#x}, front buffer {:#x}",
