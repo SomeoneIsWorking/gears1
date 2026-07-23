@@ -48,6 +48,8 @@
 #include <SDL3/SDL_vulkan.h>
 #include <vulkan/vulkan.h>
 
+#include "gpu_draw.h"
+
 namespace
 {
 
@@ -112,6 +114,15 @@ struct Presenter
     // recycled per in-flight frame without a race.
     std::vector<VkSemaphore> presentReady;
 
+    VkPhysicalDeviceMemoryProperties memProps{};
+
+    // Staging buffer for uploading a real guest frame (from the guest-draw
+    // backend) into the swapchain image instead of the synthetic clear.
+    VkBuffer guestStaging = VK_NULL_HANDLE;
+    VkDeviceMemory guestStagingMem = VK_NULL_HANDLE;
+    void* guestStagingMapped = nullptr;
+    VkDeviceSize guestStagingSize = 0;
+
     VkCommandPool commandPool = VK_NULL_HANDLE;
     static constexpr uint32_t kInFlight = 2;
     VkCommandBuffer commands[kInFlight]{};
@@ -142,6 +153,7 @@ struct Presenter
     bool CreateInstanceAndDevice();
     bool CreateSwapchain();
     void DestroySwapchain();
+    bool EnsureGuestStaging(VkDeviceSize size);
     bool PresentOne(uint32_t sequence);
     void PumpEvents();
 };
@@ -253,6 +265,7 @@ bool Presenter::CreateInstanceAndDevice()
         return false;
     }
     vkGetDeviceQueue(device, queueFamily, 0, &queue);
+    vkGetPhysicalDeviceMemoryProperties(physical, &memProps);
 
     VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -404,6 +417,56 @@ void Presenter::DestroySwapchain()
     }
 }
 
+bool Presenter::EnsureGuestStaging(VkDeviceSize size)
+{
+    if (guestStaging != VK_NULL_HANDLE && guestStagingSize >= size)
+        return true;
+    if (guestStaging != VK_NULL_HANDLE)
+    {
+        vkDestroyBuffer(device, guestStaging, nullptr);
+        vkFreeMemory(device, guestStagingMem, nullptr);
+        guestStaging = VK_NULL_HANDLE;
+        guestStagingMapped = nullptr;
+    }
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size = size;
+    bi.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(device, &bi, nullptr, &guestStaging) != VK_SUCCESS)
+        return false;
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(device, guestStaging, &req);
+    uint32_t type = UINT32_MAX;
+    const VkMemoryPropertyFlags want =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i)
+        if ((req.memoryTypeBits & (1u << i)) &&
+            (memProps.memoryTypes[i].propertyFlags & want) == want)
+        {
+            type = i;
+            break;
+        }
+    if (type == UINT32_MAX)
+    {
+        vkDestroyBuffer(device, guestStaging, nullptr);
+        guestStaging = VK_NULL_HANDLE;
+        return false;
+    }
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = type;
+    if (vkAllocateMemory(device, &ai, nullptr, &guestStagingMem) != VK_SUCCESS ||
+        vkBindBufferMemory(device, guestStaging, guestStagingMem, 0) != VK_SUCCESS ||
+        vkMapMemory(device, guestStagingMem, 0, req.size, 0, &guestStagingMapped) != VK_SUCCESS)
+    {
+        vkDestroyBuffer(device, guestStaging, nullptr);
+        guestStaging = VK_NULL_HANDLE;
+        return false;
+    }
+    guestStagingSize = req.size;
+    return true;
+}
+
 bool Presenter::PresentOne(uint32_t sequence)
 {
     if (swapchain == VK_NULL_HANDLE && !CreateSwapchain())
@@ -458,15 +521,45 @@ bool Presenter::PresentOne(uint32_t sequence)
     vkCmdPipelineBarrier(commands[slot], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toClear);
 
-    float rgb[3];
-    FrameColour(sequence, rgb);
-    VkClearColorValue colour{};
-    colour.float32[0] = rgb[0];
-    colour.float32[1] = rgb[1];
-    colour.float32[2] = rgb[2];
-    colour.float32[3] = 1.0f;
-    vkCmdClearColorImage(commands[slot], images[imageIndex],
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &colour, 1, &range);
+    // If the guest-draw backend has produced a real frame, present THAT (copied
+    // in through a staging buffer) instead of the synthetic colour. The guest
+    // frame is R8G8B8A8; the swapchain image is B8G8R8A8, so swap R/B on the way
+    // in. When there is no guest frame, fall back to the synthetic hue sweep so
+    // the present path is still exercised.
+    const std::vector<uint8_t>& guest = gears::GuestFramePixels();
+    const uint32_t gw = gears::GuestFrameWidth();
+    const uint32_t gh = gears::GuestFrameHeight();
+    bool uploadedGuest = false;
+    if (!guest.empty() && gw == extent.width && gh == extent.height &&
+        EnsureGuestStaging(VkDeviceSize(guest.size())))
+    {
+        uint8_t* dst = static_cast<uint8_t*>(guestStagingMapped);
+        for (size_t i = 0; i < guest.size(); i += 4)
+        {
+            dst[i + 0] = guest[i + 2]; // B
+            dst[i + 1] = guest[i + 1]; // G
+            dst[i + 2] = guest[i + 0]; // R
+            dst[i + 3] = guest[i + 3]; // A
+        }
+        VkBufferImageCopy copy{};
+        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        copy.imageExtent = {extent.width, extent.height, 1};
+        vkCmdCopyBufferToImage(commands[slot], guestStaging, images[imageIndex],
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        uploadedGuest = true;
+    }
+    if (!uploadedGuest)
+    {
+        float rgb[3];
+        FrameColour(sequence, rgb);
+        VkClearColorValue colour{};
+        colour.float32[0] = rgb[0];
+        colour.float32[1] = rgb[1];
+        colour.float32[2] = rgb[2];
+        colour.float32[3] = 1.0f;
+        vkCmdClearColorImage(commands[slot], images[imageIndex],
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &colour, 1, &range);
+    }
 
     VkImageMemoryBarrier toPresent = toClear;
     toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
