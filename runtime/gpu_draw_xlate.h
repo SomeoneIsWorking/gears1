@@ -36,6 +36,18 @@ struct ShaderSamplerBinding
     uint32_t magFilter = 3, minFilter = 3, mipFilter = 3, anisoFilter = 0;
 };
 
+// One vertex buffer the translated vertex shader fetches from, as the shader
+// itself declared it. `fetchConstant` indexes the 96 two-dword VERTEX fetch
+// constants that overlay the same 0x4800 file the texture fetches use
+// (xe_gpu_vertex_fetch_t: dword0 = type:2 | address:30 in dwords,
+// dword1 = endian:2 | size:24 in dwords). The renderer needs this to know which
+// guest address range a draw's geometry actually comes from.
+struct ShaderVertexBinding
+{
+    uint32_t fetchConstant = 0; // [0, 96)
+    uint32_t strideWords = 0;   // stride of the whole binding, in dwords
+};
+
 struct ShaderXlate
 {
     bool ok = false;
@@ -44,22 +56,43 @@ struct ShaderXlate
     uint32_t floatCount = 0;         // number of float4 constants the UBO holds
     std::vector<ShaderTextureBinding> textures; // binding index == vector index
     std::vector<ShaderSamplerBinding> samplers; // binding textures.size() + index
+    std::vector<ShaderVertexBinding> vertexBindings; // vertex stage only
     uint32_t samplerCount = 0;       // == samplers.size(); bindings [textures.size(), +samplerCount)
 };
+
+// A shader's translation is NOT a function of its microcode alone. Xenia's
+// SpirvShaderTranslator::Modification selects, among other things, WHICH
+// INTERPOLATORS the pair passes between the stages -- and that is a property of
+// the vertex shader, the pixel shader and the draw's own SQ_PROGRAM_CNTL /
+// SQ_CONTEXT_MISC registers together, not of either stage on its own. Translated
+// with a zero modification, the vertex shader exports no interpolators at all
+// and the pixel shader reads them as zero, so any shader whose colour comes from
+// an interpolant (a texture coordinate, a vertex colour) shades pure black while
+// position, clipping and rasterisation still look perfectly healthy.
+//
+// So the modification must be derived per draw from the pair plus the registers,
+// exactly as VulkanPipelineCache::GetCurrentVertex/PixelShaderModification does,
+// and the caller must cache translations by (hash, modification), not by hash.
+bool DeriveShaderModifications(const uint32_t* registerFile,
+                               const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
+                               const uint8_t* psUcode, size_t psSize, uint64_t psHash,
+                               uint64_t& vsModification, uint64_t& psModification);
 
 // Translates the bound hot pair's microcode (big-endian bytes) via Xenia's
 // front end + SPIR-V back end -- the same path that produced the verified .spv.
 // Returns the SPIR-V plus each stage's float-constant map (which real constants
 // the packed float UBO holds, and in what order). false if either stage fails.
-bool TranslateHotPair(const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
+bool TranslateHotPair(const uint32_t* registerFile,
+                      const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
                       const uint8_t* psUcode, size_t psSize, uint64_t psHash,
                       ShaderXlate& outVs, ShaderXlate& outPs);
 
-// Translates a single stage (vertex or pixel) with the same widest-path
-// translator configuration TranslateHotPair uses. Lets the whole-frame backend
-// translate and cache each distinct shader once, keyed on its hash.
+// Translates a single stage (vertex or pixel) under the given modification --
+// the value DeriveShaderModifications produced for the draw's pair. Lets the
+// whole-frame backend translate and cache each distinct (shader, modification)
+// once.
 bool TranslateShader(bool isVertex, const uint8_t* ucode, size_t size,
-                     uint64_t hash, ShaderXlate& out);
+                     uint64_t hash, uint64_t modification, ShaderXlate& out);
 
 // Derives the system-constants UBO (Xenia's SpirvShaderTranslator::
 // SystemConstants) from our tracked register file, returned as raw bytes.
