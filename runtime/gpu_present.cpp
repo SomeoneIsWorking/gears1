@@ -49,6 +49,7 @@
 #include <vulkan/vulkan.h>
 
 #include "gpu_draw.h"
+#include "input.h"
 
 namespace
 {
@@ -609,6 +610,7 @@ void Presenter::PumpEvents()
     SDL_Event event;
     while (SDL_PollEvent(&event))
     {
+
         if (event.type == SDL_EVENT_QUIT ||
             event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
         {
@@ -620,6 +622,9 @@ void Presenter::PumpEvents()
             running = false;
         }
     }
+    // The presenter thread owns SDL, so it is the thread that reads the pad and
+    // the keyboard. Everything else sees the published snapshot.
+    gears::PollHostInput();
 }
 
 void Presenter::Thread()
@@ -630,9 +635,11 @@ void Presenter::Thread()
     // here. The window layer must not take over the process's signal disposition.
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
 
-    if (!SDL_Init(SDL_INIT_VIDEO))
+    // GAMEPAD as well as VIDEO: the presenter thread is the one that reads the
+    // pad, because it is the thread that owns the SDL event queue.
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
     {
-        lucent::warn("present", "SDL_Init(VIDEO) failed: {} -- running headless",
+        lucent::warn("present", "SDL_Init(VIDEO|GAMEPAD) failed: {} -- running headless",
             SDL_GetError());
         return;
     }

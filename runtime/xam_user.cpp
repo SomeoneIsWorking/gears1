@@ -19,6 +19,8 @@
 
 #include <byteswap.h>
 
+#include "input.h"
+
 namespace
 {
 constexpr uint32_t kLocalUser = 0;
@@ -44,6 +46,33 @@ void Store64(uint8_t* base, uint32_t address, uint64_t value)
     if (address != 0)
         *reinterpret_cast<uint64_t*>(base + address) = ByteSwap(value);
 }
+
+void Store16(uint8_t* base, uint32_t address, uint16_t value)
+{
+    if (address != 0)
+        *reinterpret_cast<uint16_t*>(base + address) = ByteSwap(value);
+}
+
+// X_INPUT_GAMEPAD, 12 bytes: buttons (BE u16), the two triggers as bytes, then
+// four big-endian signed thumb axes.
+void StoreGamepad(uint8_t* base, uint32_t address, const gears::PadState& pad)
+{
+    Store16(base, address + 0, pad.buttons);
+    base[address + 2] = pad.leftTrigger;
+    base[address + 3] = pad.rightTrigger;
+    Store16(base, address + 4, uint16_t(pad.thumbLX));
+    Store16(base, address + 6, uint16_t(pad.thumbLY));
+    Store16(base, address + 8, uint16_t(pad.thumbRX));
+    Store16(base, address + 10, uint16_t(pad.thumbRY));
+}
+
+constexpr uint32_t kInputStateBytes = 16;        // packet number + gamepad
+constexpr uint32_t kInputCapabilitiesBytes = 20; // type/sub_type/flags + gamepad + vibration
+
+// XamInput's user index carries a "any user" marker in its high bits, which
+// pins to slot 0 -- one local profile is the only user this runtime has.
+constexpr uint32_t kUserIndexAny = 0x000000FF;
+constexpr uint32_t kMaxUsers = 4;
 
 bool IsLocalUser(uint32_t index)
 {
@@ -151,23 +180,90 @@ void __imp__XamUserCreateStatsEnumerator(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = gears::kErrorNotFound; // leaderboards are a Live service
 }
 
-// Controllers. Nothing is wired to input yet, and an unconnected pad is a state
-// every title handles -- unlike a connected pad whose buttons never change,
-// which reads as a player who is simply not pressing anything and can leave a
-// title waiting at a "press start" prompt forever.
-void __imp__XamInputGetState(PPCContext& __restrict ctx, uint8_t*)
+// Controllers. The pad is reported CONNECTED only when a host input source
+// actually exists -- a gamepad or keyboard behind the window, or a scripted
+// run. Reporting a connected pad with no source behind it would read as a
+// player who never presses anything, which leaves a title waiting at its
+// "press start" prompt for ever; reporting disconnected is a state hardware
+// really produces and every title handles.
+
+// DWORD XamInputGetState(DWORD UserIndex, DWORD Flags, PXINPUT_STATE State)
+void __imp__XamInputGetState(PPCContext& __restrict ctx, uint8_t* base)
 {
-    ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+    // A scripted run has no event loop of its own; the guest's own poll is what
+    // advances it, which is also what makes the timings line up with the frames
+    // the guest is actually producing.
+    gears::UpdateScriptedInput();
+
+    const uint32_t userIndex = ctx.r3.u32;
+    const uint32_t stateAddress = ctx.r5.u32;
+
+    // The console zeroes the structure before anything else, so a title that
+    // ignores the return code still reads a defined state.
+    if (stateAddress != 0)
+        std::memset(base + stateAddress, 0, kInputStateBytes);
+
+    if ((userIndex & kUserIndexAny) != kUserIndexAny && userIndex >= kMaxUsers)
+    {
+        ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+        return;
+    }
+    const uint32_t slot = (userIndex & kUserIndexAny) == kUserIndexAny ? kLocalUser : userIndex;
+    if (!IsLocalUser(slot) || !gears::PadConnected())
+    {
+        ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+        return;
+    }
+
+    // Titles call this with a null pointer as a "is anything plugged in" query.
+    if (stateAddress != 0)
+    {
+        uint32_t packet = 0;
+        const gears::PadState pad = gears::CurrentPad(packet);
+        Store32(base, stateAddress, packet);
+        StoreGamepad(base, stateAddress + 4, pad);
+    }
+    ctx.r3.u64 = gears::kErrorSuccess;
 }
 
-void __imp__XamInputGetCapabilities(PPCContext& __restrict ctx, uint8_t*)
+// DWORD XamInputGetCapabilities(DWORD UserIndex, DWORD Flags, PXINPUT_CAPABILITIES Caps)
+void __imp__XamInputGetCapabilities(PPCContext& __restrict ctx, uint8_t* base)
 {
-    ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+    const uint32_t userIndex = ctx.r3.u32;
+    const uint32_t capsAddress = ctx.r5.u32;
+    const uint32_t slot = (userIndex & kUserIndexAny) == kUserIndexAny ? kLocalUser : userIndex;
+    if (!IsLocalUser(slot) || !gears::PadConnected())
+    {
+        ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+        return;
+    }
+    if (capsAddress != 0)
+    {
+        std::memset(base + capsAddress, 0, kInputCapabilitiesBytes);
+        base[capsAddress + 0] = 1; // XINPUT_DEVTYPE_GAMEPAD
+        base[capsAddress + 1] = 1; // XINPUT_DEVSUBTYPE_GAMEPAD
+        // The gamepad field of the capabilities is a MASK of what the device
+        // can report, not a reading: every button, both triggers, both sticks.
+        gears::PadState mask;
+        mask.buttons = 0xFFFF;
+        mask.leftTrigger = mask.rightTrigger = 0xFF;
+        mask.thumbLX = mask.thumbLY = mask.thumbRX = mask.thumbRY = int16_t(0xFFC0);
+        StoreGamepad(base, capsAddress + 4, mask);
+        Store16(base, capsAddress + 16, 0xFFFF); // left motor range
+        Store16(base, capsAddress + 18, 0xFFFF); // right motor range
+    }
+    ctx.r3.u64 = gears::kErrorSuccess;
 }
 
+// DWORD XamInputSetState(DWORD UserIndex, DWORD Unknown, PXINPUT_VIBRATION Vibration)
+// Accepted and dropped: there is no motor to drive, and failing the call would
+// be a lie about a pad we have just reported as connected and capable.
 void __imp__XamInputSetState(PPCContext& __restrict ctx, uint8_t*)
 {
-    ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+    const uint32_t slot = (ctx.r3.u32 & kUserIndexAny) == kUserIndexAny ? kLocalUser : ctx.r3.u32;
+    ctx.r3.u64 = (IsLocalUser(slot) && gears::PadConnected())
+        ? gears::kErrorSuccess
+        : gears::kErrorDeviceNotConnected;
 }
 
 // Storage. No memory unit or hard disc is attached, so there is no content to

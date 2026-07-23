@@ -49,6 +49,7 @@
 
 #include "guest_heap.h"
 #include "gpu_present.h"
+#include "input.h"
 #include "gpu_draw.h"
 #include "hle_d3d.h"
 #include "guest_thread.h"
@@ -1933,7 +1934,10 @@ void CommandProcessorThread()
     // do once there is a command stream, and this keeps the whole graphics
     // backend off the guest's own threads. A false return means no display --
     // a supported outcome, and the command processor is unchanged by it.
-    gears::PresenterStart();
+    const bool haveWindow = gears::PresenterStart();
+    // The pad's source depends on whether a window came up, so input is brought
+    // up once that is known.
+    gears::InitialiseInput(haveWindow);
 
     CommandProcessor cp;
     cp.Run();

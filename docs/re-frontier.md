@@ -141,3 +141,14 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap: Still driven by a frame COUNT from GEARS_DRAW_FRAME_AT, not by the guest's own swaps for the whole run, and the rendered pixels still reach the window by readback plus a staging upload because gpu_draw.cpp and gpu_present.cpp each create their own VkDevice. Unifying the two devices removes the readback and the upload entirely. Also: cached guest textures are keyed on the fetch constant and never invalidated, so a texture the guest overwrites at the same address would go stale -- not yet observed, not yet handled.
 - notes: 
 
+
+## kernel
+
+### input — Controller input: XamInput* from a host pad, keyboard or script
+- status: re-verified
+- deps: 
+- evidence: The XamInput imports fill the console's own structures: X_INPUT_STATE (big-endian packet number + 12-byte X_INPUT_GAMEPAD) and X_INPUT_CAPABILITIES (type/sub_type/flags + a gamepad MASK + vibration ranges), with Xenia's X_INPUT_GAMEPAD_* button bits, hid/input.h. The packet number increments only when the state changes, which is the console's contract. Three host sources: an SDL gamepad, the keyboard, and GEARS_INPUT_SCRIPT (timed button states, so a headless run is reproducible). The pad reports CONNECTED only when a source exists -- a connected pad that never changes reads as a player who is not pressing anything and strands the title at 'press start'. VERIFIED headless: GEARS_INPUT_SCRIPT='25000:START,25300:,26000:START,26300:,30000:A,30300:' fired at 25001/25302/26019/26323/30002/30303 ms; the script only advances when the guest polls, so its firing IS proof the title polls XamInputGetState. The title left the title screen, its draw count went from ~169 to 178-183 per frame, and scratch/screenshots/rect/after_start.png is the MAIN MENU with the 'NO STORAGE DEVICE' dialog, 'PROFILE 1: PLAYER' and the story-mode description -- all consistent with what the other xam stubs report (one local profile named Player, no storage device).
+- where: runtime/input.h, runtime/input.cpp (sources + the published snapshot), runtime/xam_user.cpp (XamInputGetState/GetCapabilities/SetState), runtime/gpu_present.cpp (the presenter thread polls SDL), runtime/vd_null_gpu.cpp (InitialiseInput once the window state is known)
+- gap: 
+- notes: 
+
