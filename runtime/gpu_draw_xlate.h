@@ -87,6 +87,43 @@ bool TranslateHotPair(const uint32_t* registerFile,
                       const uint8_t* psUcode, size_t psSize, uint64_t psHash,
                       ShaderXlate& outVs, ShaderXlate& outPs);
 
+// The rectangle-list geometry shader's shape. Everything in it is derived from
+// the draw's own vertex-shader modification, so it is exactly as cacheable as
+// the pipeline is.
+struct RectangleGeometryShaderKey
+{
+    uint32_t interpolatorCount = 0;  // how many vec4s the VS/PS pair exchanges
+    uint32_t clipDistanceCount = 0;  // gl_ClipDistance array size, 0 if unused
+    uint32_t cullDistanceCount = 0;  // gl_CullDistance array size, 0 if unused
+
+    auto operator<=>(const RectangleGeometryShaderKey&) const = default;
+};
+
+// A rectangle list gives three vertices per rectangle and the hardware infers
+// the fourth by mirroring one across the longest edge. The fourth vertex's
+// ATTRIBUTES are derived the same way, so it cannot be synthesized on the CPU
+// ahead of the vertex shader -- the expansion has to happen after the vertices
+// are shaded. Xenia does it in a geometry shader (its VS-expansion fallback,
+// kRectangleListAsTriangleStrip, is an unimplemented TODO in the SPIR-V
+// translator), and this is a port of that shader:
+// VulkanPipelineCache::GetGeometryShader, kRectangleList branch.
+//
+// Not ported: the point-list and quad-list branches, the point system-constants
+// UBO, gl_PointSize input and the point-coordinates output. All three of the
+// point-related key fields are gated in Xenia on the draw's prim_type being
+// kPointList, so they are unreachable for a rectangle list rather than being
+// left out for convenience.
+//
+// Deviation from Xenia, deliberate: the clip/cull distance arrays are sized by
+// the modification's ACTUAL user_clip_plane_count, not rounded up to 6. Xenia
+// rounds up "to reduce variants", but the vertex shader it pairs with declares
+// the real count (spirv_shader_translator.cc), so rounding up makes the two
+// stages disagree about a built-in array's size.
+bool DeriveRectangleGeometryShaderKey(uint64_t vsModification,
+                                      RectangleGeometryShaderKey& out);
+bool BuildRectangleGeometryShader(const RectangleGeometryShaderKey& key,
+                                  std::vector<uint32_t>& spirv);
+
 // Translates a single stage (vertex or pixel) under the given modification --
 // the value DeriveShaderModifications produced for the draw's pair. Lets the
 // whole-frame backend translate and cache each distinct (shader, modification)
