@@ -61,6 +61,7 @@ add_executable(gears1
     pm4_trace.cpp
     vd_null_gpu.cpp
     gpu_present.cpp
+    input.cpp
     gpu_draw.cpp
     hle_d3d.cpp
     kernel_rtl.cpp
