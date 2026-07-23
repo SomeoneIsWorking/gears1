@@ -95,6 +95,10 @@ struct FrameDrawInputs
     // summary lines and the PPM screenshot. ~40 ms, which is most of a warm
     // frame -- it belongs to a capture, not to every frame of a live run.
     bool report = true;
+    // A monotonic frame index. When >= 0, a reported frame's screenshot is named
+    // frame_<sequence>.ppm rather than overwriting frame.ppm, so a menu walk
+    // leaves a filmstrip instead of only its last frame.
+    long sequence = -1;
 };
 
 // Renders every draw of the frame into one persistent target and writes a PPM
