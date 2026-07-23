@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstring>
 #include <deque>
 #include <filesystem>
@@ -1035,6 +1036,21 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     const uint32_t W = in.width ? in.width : kWidth;
     const uint32_t H = in.height ? in.height : kHeight;
 
+    // Phase timing. A whole-frame render costs ~390 ms today, which is two
+    // orders of magnitude away from presenting live; before any of this is made
+    // persistent it has to be clear WHICH phase the time is in, rather than
+    // assuming it is the caches.
+    using Clock = std::chrono::steady_clock;
+    const auto tStart = Clock::now();
+    auto sinceStartMs = [&] {
+        return std::chrono::duration<double, std::milli>(Clock::now() - tStart).count();
+    };
+    double msSetup = 0, msDrawLoop = 0, msSubmit = 0, msReadback = 0;
+    double msTranslate = 0, msPipeline = 0, msTexture = 0;
+    auto accumulate = [](double& into, Clock::time_point from) {
+        into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
+    };
+
     // --- translate + cache each distinct (shader, modification) ----------
     // The key is the PAIR (microcode hash, modification), not the hash alone:
     // the modification carries the interpolator mask the vertex and pixel
@@ -1051,7 +1067,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (xit == xlate.end())
         {
             draw::ShaderXlate x;
-            if (!draw::TranslateShader(isVertex, uc, sz, hash, modification, x))
+            const auto t0 = Clock::now();
+            const bool translated =
+                draw::TranslateShader(isVertex, uc, sz, hash, modification, x);
+            accumulate(msTranslate, t0);
+            if (!translated)
                 return false;
             xit = xlate.emplace(key, std::move(x)).first;
             VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
@@ -1828,8 +1848,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         gp.renderPass = renderPass;
         gp.subpass = 0;
         VkPipeline pipe = VK_NULL_HANDLE;
-        if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipe)
-            != VK_SUCCESS)
+        const auto tPipe = Clock::now();
+        const VkResult pipeResult =
+            vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipe);
+        accumulate(msPipeline, tPipe);
+        if (pipeResult != VK_SUCCESS)
             return false;
         pipelines[key] = pipe;
         out = pipe;
@@ -1837,6 +1860,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
 
     // --- descriptor pool sized for every draw ----------------------------
+    msSetup = sinceStartMs();
     const uint32_t nDraws = uint32_t(in.draws.size());
     VkDescriptorPool pool = 0;
     {
@@ -1957,7 +1981,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // below is only reached when the decode reports a reason it cannot.
         if (texUploadEnabled)
         {
+            const auto tTex = Clock::now();
             VkImageView v = uploadTexture(&R[0x4800 + fc * 6], tb.dimension);
+            accumulate(msTexture, tTex);
             if (v != VK_NULL_HANDLE)
             {
                 ++texBindsGuest;
@@ -2610,6 +2636,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         readback, 1, &region);
     VK_CHECK(vkEndCommandBuffer(cmd));
 
+    msDrawLoop = sinceStartMs() - msSetup;
+    const auto tSubmit = Clock::now();
     VkFence fence = 0;
     { VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
       VK_CHECK(vkCreateFence(device, &fi, nullptr, &fence)); }
@@ -2618,6 +2646,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     submit.pCommandBuffers = &cmd;
     VK_CHECK(vkQueueSubmit(queue, 1, &submit, fence));
     VK_CHECK(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
+    accumulate(msSubmit, tSubmit);
 
     if (statPool != VK_NULL_HANDLE)
     {
@@ -2681,6 +2710,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         texBindsRt + texBindsStub + texBindsGuest, texBindsGuest, texBindsRt,
         texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
         changed, 100.0 * double(changed) / (double(W) * H));
+    msReadback = sinceStartMs() - msSetup - msDrawLoop - msSubmit;
+    lucent::info("draw", "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f}"
+        " (of which shader translation {:.0f}, pipeline creation {:.0f},"
+        " texture upload {:.0f}), submit+wait {:.0f}, readback+report {:.0f}",
+        sinceStartMs(), msSetup, msDrawLoop, msTranslate, msPipeline, msTexture,
+        msSubmit, msReadback);
     if (rectDraws)
         lucent::info("draw", "frame rectangle lists: {} of {} draws expanded by a"
             " geometry shader ({} distinct)", rectDrawsExpanded, rectDraws,
