@@ -38,6 +38,7 @@ add_subdirectory(runtime)
 
 if(GEARS_HAVE_XENOS_TRANSLATOR)
     add_subdirectory(tools/xenos_translate)
+    add_subdirectory(tools/system_constants)
 endif()
 
 enable_testing()
