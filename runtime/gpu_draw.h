@@ -91,6 +91,10 @@ struct FrameDrawInputs
     uint32_t width = 1280;
     uint32_t height = 720;
     std::vector<FrameDrawItem> draws;      // in submission order
+    // Whether this frame gets the full census: the per-pixel coverage scan, the
+    // summary lines and the PPM screenshot. ~40 ms, which is most of a warm
+    // frame -- it belongs to a capture, not to every frame of a live run.
+    bool report = true;
 };
 
 // Renders every draw of the frame into one persistent target and writes a PPM

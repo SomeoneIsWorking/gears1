@@ -103,6 +103,7 @@ struct Renderer
     VkPhysicalDeviceMemoryProperties memProps{};
     bool hasPipelineStats = false; // pipelineStatisticsQuery feature enabled
     bool hasGeometryShader = false; // geometryShader feature enabled
+    VkDeviceSize uniformOffsetAlignment = 256;
 
     // Built on the first frame, reused by every frame after it, released by
     // Shutdown. A raw pointer rather than a unique_ptr so the type can stay
@@ -114,7 +115,7 @@ struct Renderer
     void Shutdown();
     bool FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_t& out);
     bool MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf,
-                    VkDeviceMemory& mem);
+                    VkDeviceMemory& mem, bool wantCached = false);
     bool Render(const HotDrawInputs& in);
     bool RenderFrameImpl(const FrameDrawInputs& in);
     void ReleasePersistent();
@@ -184,6 +185,9 @@ bool Renderer::Init()
     vkGetPhysicalDeviceMemoryProperties(physical, &memProps);
     VkPhysicalDeviceProperties p{};
     vkGetPhysicalDeviceProperties(physical, &p);
+    // Suballocating uniform blocks out of one buffer means honouring the
+    // device's uniform-buffer offset alignment; index offsets need 4.
+    uniformOffsetAlignment = std::max<VkDeviceSize>(p.limits.minUniformBufferOffsetAlignment, 4);
 
     const float prio = 1.0f;
     VkDeviceQueueCreateInfo qi{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -278,7 +282,7 @@ bool Renderer::FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_
 }
 
 bool Renderer::MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
-                          VkBuffer& buf, VkDeviceMemory& mem)
+                          VkBuffer& buf, VkDeviceMemory& mem, bool wantCached)
 {
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bi.size = size;
@@ -288,9 +292,15 @@ bool Renderer::MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     VkMemoryRequirements req{};
     vkGetBufferMemoryRequirements(device, buf, &req);
     uint32_t type = 0;
-    if (!FindMemory(req.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-            type))
+    // A buffer the CPU READS -- the pixel readback -- wants HOST_CACHED, or the
+    // memcpy out of it runs at uncached-write-combined speed: 3.7 MiB took
+    // ~15 ms that way. Everything else the CPU only writes, where coherent
+    // uncached is the right choice.
+    const VkMemoryPropertyFlags base =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    if (!(wantCached &&
+          FindMemory(req.memoryTypeBits, base | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, type)) &&
+        !FindMemory(req.memoryTypeBits, base, type))
     {
         lucent::warn("draw", "no host-visible memory type for buffer");
         return false;
@@ -458,6 +468,32 @@ struct RendererPersistent
     // memory is exactly what changes between frames.
     VkBuffer ssbo = VK_NULL_HANDLE; VkDeviceMemory ssboMem = VK_NULL_HANDLE;
     VkDeviceSize ssboBytes = 0;
+
+    // One persistently-mapped buffer the per-draw uniform blocks and expanded
+    // index buffers are suballocated from, reset at the start of every frame.
+    // They used to be a VkBuffer plus a VkDeviceMemory each -- five uniform
+    // blocks per draw, created and destroyed every frame, which is 870
+    // allocations on a 174-draw frame and where ~40 ms of a warm frame went.
+    // It grows to the previous frame's high-water mark; a frame that outgrows
+    // it mid-way falls back to standalone buffers for the remainder rather than
+    // dropping draws, and the next frame is sized to fit.
+    VkBuffer arena = VK_NULL_HANDLE; VkDeviceMemory arenaMem = VK_NULL_HANDLE;
+    void* arenaMapped = nullptr;
+    VkDeviceSize arenaBytes = 0;
+    VkDeviceSize arenaHighWater = 0;
+
+    // The frame's own command recording and pixel readback. These were created
+    // and destroyed every frame too; the descriptor pool is RESET each frame
+    // rather than rebuilt.
+    VkCommandPool cmdPool = VK_NULL_HANDLE;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VkFence fence = VK_NULL_HANDLE;
+    VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
+    uint32_t descriptorPoolDraws = 0; // what it was sized for
+    VkBuffer readback = VK_NULL_HANDLE; VkDeviceMemory readbackMem = VK_NULL_HANDLE;
+    void* readbackMapped = nullptr;
+    VkDeviceSize readbackBytes = 0;
+    void* ssboMapped = nullptr;
 };
 
 void Renderer::ReleasePersistent()
@@ -496,7 +532,19 @@ void Renderer::ReleasePersistent()
     vkDestroyImage(device, P.depth, nullptr); vkFreeMemory(device, P.depthMem, nullptr);
     vkDestroyImageView(device, P.colorView, nullptr);
     vkDestroyImage(device, P.color, nullptr); vkFreeMemory(device, P.colorMem, nullptr);
+    if (P.ssboMapped)
+        vkUnmapMemory(device, P.ssboMem);
     vkDestroyBuffer(device, P.ssbo, nullptr); vkFreeMemory(device, P.ssboMem, nullptr);
+    if (P.arenaMapped)
+        vkUnmapMemory(device, P.arenaMem);
+    vkDestroyBuffer(device, P.arena, nullptr); vkFreeMemory(device, P.arenaMem, nullptr);
+    if (P.readbackMapped)
+        vkUnmapMemory(device, P.readbackMem);
+    vkDestroyBuffer(device, P.readback, nullptr);
+    vkFreeMemory(device, P.readbackMem, nullptr);
+    vkDestroyDescriptorPool(device, P.descriptorPool, nullptr);
+    vkDestroyFence(device, P.fence, nullptr);
+    vkDestroyCommandPool(device, P.cmdPool, nullptr);
     delete persistent;
     persistent = nullptr;
 }
@@ -1234,13 +1282,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             return false;
         P.ssboBytes = in.guestPhysicalMirrorBytes;
     }
-    VkBuffer ssbo = P.ssbo; VkDeviceMemory ssboMem = P.ssboMem;
-    {
-        void* p = nullptr;
-        VK_CHECK(vkMapMemory(device, ssboMem, 0, in.guestPhysicalMirrorBytes, 0, &p));
-        std::memcpy(p, in.guestBase, in.guestPhysicalMirrorBytes);
-        vkUnmapMemory(device, ssboMem);
-    }
+    VkBuffer ssbo = P.ssbo;
+    if (!P.ssboMapped)
+        VK_CHECK(vkMapMemory(device, P.ssboMem, 0, in.guestPhysicalMirrorBytes, 0,
+            &P.ssboMapped));
+    std::memcpy(P.ssboMapped, in.guestBase, in.guestPhysicalMirrorBytes);
 
     // --- stub textures (1x1 white), one per image dimension --------------
     // A translated shader declares its image variables with the dimension the
@@ -2007,7 +2053,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // --- descriptor pool sized for every draw ----------------------------
     msSetup = sinceStartMs();
     const uint32_t nDraws = uint32_t(in.draws.size());
-    VkDescriptorPool pool = 0;
+    VkDescriptorPool& pool = P.descriptorPool;
+    if (pool != VK_NULL_HANDLE && P.descriptorPoolDraws < nDraws)
+    {
+        vkDestroyDescriptorPool(device, pool, nullptr);
+        pool = VK_NULL_HANDLE;
+    }
+    if (pool != VK_NULL_HANDLE)
+    {
+        VK_CHECK(vkResetDescriptorPool(device, pool, 0));
+    }
+    else
     {
         // Image/sampler counts are per shader (up to 32 texture fetch constants
         // per stage on Xenos), so size for the worst case rather than the two
@@ -2022,20 +2078,101 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ci.poolSizeCount = 4;
         ci.pPoolSizes = sizes;
         VK_CHECK(vkCreateDescriptorPool(device, &ci, nullptr, &pool));
+        P.descriptorPoolDraws = nDraws;
     }
 
-    // Per-draw resources, kept alive until after the submit completes.
+    // Per-draw resources, kept alive until after the submit completes. The
+    // fallback path only runs when a frame outgrows the arena.
     std::vector<VkBuffer> keepBuffers;
     std::vector<VkDeviceMemory> keepMem;
-    auto makeUbo = [&](const void* data, size_t size, VkBuffer& b) -> bool {
+
+    // Size the arena to the previous frame's high-water mark before the frame
+    // starts, so the common case never allocates. The first frame has no mark
+    // to go on and estimates from the draw count; if the estimate is short the
+    // overflow path covers the rest and the real mark sizes the next frame.
+    if (P.arenaHighWater == 0)
+        P.arenaHighWater = VkDeviceSize(nDraws) * 16384;
+    if (P.arenaHighWater > P.arenaBytes)
+    {
+        if (P.arenaMapped)
+            vkUnmapMemory(device, P.arenaMem);
+        vkDestroyBuffer(device, P.arena, nullptr);
+        vkFreeMemory(device, P.arenaMem, nullptr);
+        P.arena = VK_NULL_HANDLE; P.arenaMem = VK_NULL_HANDLE; P.arenaMapped = nullptr;
+        const VkDeviceSize want = P.arenaHighWater + P.arenaHighWater / 4 + 0x10000;
+        if (MakeBuffer(want, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
+                             VK_BUFFER_USAGE_INDEX_BUFFER_BIT, P.arena, P.arenaMem))
+        {
+            P.arenaBytes = want;
+            VK_CHECK(vkMapMemory(device, P.arenaMem, 0, want, 0, &P.arenaMapped));
+            lucent::info("draw", "per-draw arena grown to {} KiB", want / 1024);
+        }
+        else
+        {
+            P.arenaBytes = 0;
+        }
+    }
+    VkDeviceSize arenaCursor = 0;
+    uint32_t arenaOverflows = 0;
+
+    // Copies `size` bytes into the arena and reports where they landed, or
+    // returns false when the arena is full (the caller then falls back).
+    auto arenaWrite = [&](const void* data, size_t size, VkDeviceSize alignment,
+                          VkDeviceSize& outOffset) -> bool {
+        if (!P.arenaMapped)
+            return false;
+        const VkDeviceSize offset = (arenaCursor + alignment - 1) & ~(alignment - 1);
+        if (offset + size > P.arenaBytes)
+            return false;
+        std::memcpy(static_cast<uint8_t*>(P.arenaMapped) + offset, data, size);
+        arenaCursor = offset + size;
+        outOffset = offset;
+        return true;
+    };
+
+    // An index buffer for one draw, from the same arena. Index offsets need
+    // 4-byte alignment; the buffer is bound with that offset.
+    auto makeIndexBuffer = [&](const void* data, size_t bytes, VkBuffer& outBuf,
+                               VkDeviceSize& outOffset) -> bool {
+        if (arenaWrite(data, bytes, 4, outOffset))
+        {
+            outBuf = P.arena;
+            return true;
+        }
+        ++arenaOverflows;
         VkDeviceMemory m = VK_NULL_HANDLE;
-        if (!MakeBuffer(std::max<size_t>(size, 16), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, b, m))
+        if (!MakeBuffer(bytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, outBuf, m))
             return false;
         void* p = nullptr;
-        VK_CHECK(vkMapMemory(device, m, 0, std::max<size_t>(size, 16), 0, &p));
+        VK_CHECK(vkMapMemory(device, m, 0, bytes, 0, &p));
+        std::memcpy(p, data, bytes);
+        vkUnmapMemory(device, m);
+        keepBuffers.push_back(outBuf); keepMem.push_back(m);
+        outOffset = 0;
+        return true;
+    };
+
+    // A uniform block for one draw: (buffer, offset, range) rather than a whole
+    // VkBuffer of its own.
+    auto makeUbo = [&](const void* data, size_t size,
+                       VkDescriptorBufferInfo& out) -> bool {
+        const size_t bytes = std::max<size_t>(size, 16);
+        VkDeviceSize offset = 0;
+        if (arenaWrite(data, bytes, uniformOffsetAlignment, offset))
+        {
+            out = {P.arena, offset, bytes};
+            return true;
+        }
+        ++arenaOverflows;
+        VkBuffer b = VK_NULL_HANDLE; VkDeviceMemory m = VK_NULL_HANDLE;
+        if (!MakeBuffer(bytes, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, b, m))
+            return false;
+        void* p = nullptr;
+        VK_CHECK(vkMapMemory(device, m, 0, bytes, 0, &p));
         std::memcpy(p, data, size);
         vkUnmapMemory(device, m);
         keepBuffers.push_back(b); keepMem.push_back(m);
+        out = {b, 0, bytes};
         return true;
     };
 
@@ -2045,6 +2182,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkPipelineLayout layout;
         VkDescriptorSet sets[4];
         VkBuffer ibuf;       // VK_NULL_HANDLE for a non-indexed (auto) draw
+        VkDeviceSize ibufOffset; // where in the arena this draw's indices live
         uint32_t count;      // index count, or vertex count when !indexed
         bool indexed;
         bool samplesRt;      // reads the rendered colour target (RT link)
@@ -2193,12 +2331,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         std::vector<uint8_t> fetch(sizeof(uint32_t) * 6 * 32);
         std::memcpy(fetch.data(), &R[0x4800], fetch.size());
 
-        VkBuffer uSys = 0, uFvs = 0, uFps = 0, uBl = 0, uFetch = 0;
-        if (!makeUbo(sysc.data(), sysc.size(), uSys) ||
-            !makeUbo(fVs.data(), fVs.size(), uFvs) ||
-            !makeUbo(fPs.data(), fPs.size(), uFps) ||
-            !makeUbo(boolLoop.data(), boolLoop.size(), uBl) ||
-            !makeUbo(fetch.data(), fetch.size(), uFetch))
+        VkDescriptorBufferInfo biSys{}, biFvs{}, biFps{}, biBl{}, biFetch{};
+        if (!makeUbo(sysc.data(), sysc.size(), biSys) ||
+            !makeUbo(fVs.data(), fVs.size(), biFvs) ||
+            !makeUbo(fPs.data(), fPs.size(), biFps) ||
+            !makeUbo(boolLoop.data(), boolLoop.size(), biBl) ||
+            !makeUbo(fetch.data(), fetch.size(), biFetch))
         { ++skipped; ++skipReasons[4]; continue; }
 
         // Index buffer: only for kDMA (indexed) draws. A kAutoIndex draw feeds
@@ -2213,6 +2351,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // regrouped into unrelated triangles, and this frame's ENTIRE world
         // geometry is quad_list -- it drew nothing.
         VkBuffer ibuf = VK_NULL_HANDLE;
+        VkDeviceSize ibufOffset = 0;
         uint32_t drawCount = d.indexCount;
         bool drawIndexed = d.indexed;
         if (d.primType == 13 /*kQuadList*/)
@@ -2248,21 +2387,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 for (uint32_t i = 0; i < d.indexCount; ++i)
                     src[i] = i;
             }
-            VkDeviceMemory qMem = 0;
-            if (!MakeBuffer(triIndices * 4u, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, ibuf, qMem))
-            { ++skipped; ++skipReasons[5]; continue; }
-            void* p = nullptr;
-            if (vkMapMemory(device, qMem, 0, triIndices * 4u, 0, &p) != VK_SUCCESS)
-            { ++skipped; ++skipReasons[5]; continue; }
-            uint32_t* dst = static_cast<uint32_t*>(p);
+            std::vector<uint32_t> expanded(triIndices);
+            uint32_t* dst = expanded.data();
             for (uint32_t q = 0; q < quads; ++q)
             {
                 const uint32_t* v = &src[q * 4];
                 *dst++ = v[0]; *dst++ = v[1]; *dst++ = v[2];
                 *dst++ = v[0]; *dst++ = v[2]; *dst++ = v[3];
             }
-            vkUnmapMemory(device, qMem);
-            keepBuffers.push_back(ibuf); keepMem.push_back(qMem);
+            if (!makeIndexBuffer(expanded.data(), triIndices * 4u, ibuf, ibufOffset))
+            { ++skipped; ++skipReasons[5]; continue; }
             drawCount = triIndices;
             drawIndexed = true;
         }
@@ -2275,12 +2409,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // VUID-vkCmdDrawIndexed-robustBufferAccess2-08798) and rasterise
             // garbage indices.
             const uint32_t idxBytes = std::max(d.indexCount * 4u, 4u);
-            VkDeviceMemory ibufMem = 0;
-            if (!MakeBuffer(idxBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, ibuf, ibufMem))
-            { ++skipped; ++skipReasons[5]; continue; }
-            void* p = nullptr;
-            if (vkMapMemory(device, ibufMem, 0, idxBytes, 0, &p) != VK_SUCCESS)
-            { ++skipped; ++skipReasons[5]; continue; }
+            std::vector<uint32_t> widened(idxBytes / 4, 0);
+            void* p = widened.data();
             const uint8_t* base = in.guestBase + d.indexGuestBase;
             const bool inRange = d.indexGuestBase + idxBytes <= in.guestPhysicalMirrorBytes;
             if (d.indexIs32)
@@ -2305,8 +2435,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     dst[i] = v;
                 }
             }
-            vkUnmapMemory(device, ibufMem);
-            keepBuffers.push_back(ibuf); keepMem.push_back(ibufMem);
+            if (!makeIndexBuffer(widened.data(), idxBytes, ibuf, ibufOffset))
+            { ++skipped; ++skipReasons[5]; continue; }
         }
 
         // Descriptor sets for this draw. Sets 2/3 use this shader pair's own
@@ -2320,11 +2450,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (vkAllocateDescriptorSets(device, &ai, sets) != VK_SUCCESS)
         { ++skipped; ++skipReasons[6]; continue; }
 
-        VkDescriptorBufferInfo biSys{uSys, 0, VK_WHOLE_SIZE};
-        VkDescriptorBufferInfo biFvs{uFvs, 0, VK_WHOLE_SIZE};
-        VkDescriptorBufferInfo biFps{uFps, 0, VK_WHOLE_SIZE};
-        VkDescriptorBufferInfo biBl{uBl, 0, VK_WHOLE_SIZE};
-        VkDescriptorBufferInfo biFetch{uFetch, 0, VK_WHOLE_SIZE};
         std::vector<VkWriteDescriptorSet> w;
         // Image infos must outlive the vkUpdateDescriptorSets call, so they are
         // held in a deque-stable store rather than a vector that may reallocate.
@@ -2389,6 +2514,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pd.layout = pipeLayout;
         pd.sets[0] = sets[0]; pd.sets[1] = sets[1]; pd.sets[2] = sets[2]; pd.sets[3] = sets[3];
         pd.ibuf = ibuf;
+        pd.ibufOffset = ibufOffset;
         pd.count = drawCount;
         pd.indexed = drawIndexed;
         pd.samplesRt = drawSamplesRt;
@@ -2527,18 +2653,26 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
     // --- readback buffer -------------------------------------------------
     const VkDeviceSize rbBytes = VkDeviceSize(W) * H * 4;
-    VkBuffer readback = 0; VkDeviceMemory readbackMem = 0;
-    if (!MakeBuffer(rbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, readback, readbackMem))
-        return false;
+    if (P.readback == VK_NULL_HANDLE)
+    {
+        if (!MakeBuffer(rbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, P.readback,
+                P.readbackMem, /*wantCached=*/true))
+            return false;
+        P.readbackBytes = rbBytes;
+        VK_CHECK(vkMapMemory(device, P.readbackMem, 0, rbBytes, 0, &P.readbackMapped));
+    }
+    VkBuffer readback = P.readback;
 
     // --- command buffer: clear once, draw all in order -------------------
-    VkCommandPool cmdPool = 0;
+    VkCommandPool& cmdPool = P.cmdPool;
+    if (cmdPool == VK_NULL_HANDLE)
     {
         VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         ci.queueFamilyIndex = queueFamily;
         VK_CHECK(vkCreateCommandPool(device, &ci, nullptr, &cmdPool));
     }
-    VkCommandBuffer cmd = 0;
+    VkCommandBuffer& cmd = P.cmd;
+    if (cmd == VK_NULL_HANDLE)
     {
         VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
         ai.commandPool = cmdPool;
@@ -2546,6 +2680,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ai.commandBufferCount = 1;
         VK_CHECK(vkAllocateCommandBuffers(device, &ai, &cmd));
     }
+    VK_CHECK(vkResetCommandPool(device, cmdPool, 0));
     VkCommandBufferBeginInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(cmd, &cbi));
@@ -2761,7 +2896,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             vkCmdBeginQuery(cmd, statPool, drawn, 0);
         if (pd.indexed)
         {
-            vkCmdBindIndexBuffer(cmd, pd.ibuf, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdBindIndexBuffer(cmd, pd.ibuf, pd.ibufOffset, VK_INDEX_TYPE_UINT32);
             vkCmdDrawIndexed(cmd, pd.count, 1, 0, 0, 0);
         }
         else
@@ -2781,11 +2916,19 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         readback, 1, &region);
     VK_CHECK(vkEndCommandBuffer(cmd));
 
+    P.arenaHighWater = std::max(P.arenaHighWater, arenaCursor);
+    if (arenaOverflows)
+        lucent::info("draw", "per-draw arena overflowed on {} allocations"
+            " ({} KiB in use, {} KiB sized); next frame will fit",
+            arenaOverflows, arenaCursor / 1024, P.arenaBytes / 1024);
     msDrawLoop = sinceStartMs() - msSetup;
     const auto tSubmit = Clock::now();
-    VkFence fence = 0;
+    VkFence& fence = P.fence;
+    if (fence == VK_NULL_HANDLE)
     { VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
       VK_CHECK(vkCreateFence(device, &fi, nullptr, &fence)); }
+    else
+    { VK_CHECK(vkResetFences(device, 1, &fence)); }
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
@@ -2822,108 +2965,114 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
     // --- read pixels + coverage numbers ----------------------------------
     g_frame.resize(rbBytes);
+    std::memcpy(g_frame.data(), P.readbackMapped, rbBytes);
+    // The per-frame census -- a full per-pixel scan, a dozen summary lines and a
+    // PPM write -- costs ~40 ms, which is most of a warm frame. It answers
+    // "what did this frame do", so it belongs to a CAPTURE, not to every frame
+    // of a live run; in.report selects the frames that get it.
+    if (in.report)
     {
-        void* p = nullptr;
-        VK_CHECK(vkMapMemory(device, readbackMem, 0, rbBytes, 0, &p));
-        std::memcpy(g_frame.data(), p, rbBytes);
-        vkUnmapMemory(device, readbackMem);
+        // Two different numbers, because one alone lies. "Changed" counts pixels the
+        // draws touched at all (!= the clear colour); "lit" counts pixels that carry
+        // actual light (non-black). A frame painted uniformly black by a multiply
+        // pass scores 100% changed and 0% lit -- reporting only the first read as
+        // full coverage of a frame that shows nothing.
+        uint64_t lit = 0, changed = 0;
+        for (uint32_t i = 0; i < W * H; ++i)
+        {
+            const uint8_t* px = &g_frame[size_t(i) * 4];
+            if (!(px[0] == 13 && px[1] == 13 && px[2] == 20)) // != the clear
+                ++changed;
+            if (px[0] || px[1] || px[2])
+                ++lit;
+        }
+        std::set<std::pair<uint64_t, uint64_t>> pairs;
+        for (const FrameDrawItem& d : in.draws)
+            pairs.emplace(d.vsHash, d.psHash);
+        lucent::info("draw", "frame: {} of {} draws issued, {} skipped; {} distinct shader"
+            " pairs, {} distinct shaders, {} pipelines, {} texture layouts,"
+            " {} pipeline layouts; {} texture bindings ({} guest textures,"
+            " {} from the rendered RT, {} from a stub); {}/{} px non-black"
+            " ({:.1f}%), {} px changed from the clear ({:.1f}%)",
+            issued, in.draws.size(), skipped, pairs.size(), modules.size(), pipelines.size(),
+            texLayouts.size(), pipeLayouts.size(),
+            texBindsRt + texBindsStub + texBindsGuest, texBindsGuest, texBindsRt,
+            texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
+            changed, 100.0 * double(changed) / (double(W) * H));
+        if (rectDraws)
+            lucent::info("draw", "frame rectangle lists: {} of {} draws expanded by a"
+                " geometry shader ({} distinct)", rectDrawsExpanded, rectDraws,
+                geomShaders.size());
+        lucent::info("draw", "frame geometry reach: {} draws fetch vertices inside the"
+            " {:#x}-byte SSBO mirror, {} draws fetch PAST it (those read zero and"
+            " collapse); highest vertex-buffer end seen {:#x}",
+            vfDrawsInMirror, in.guestPhysicalMirrorBytes, vfDrawsPastMirror, vfHighestByte);
+        lucent::info("draw", "frame textures: {} distinct fetch constants, {} uploaded"
+            " ({:.1f} MiB), {} samplers", texDistinct.size(), uploads.size(),
+            double(uploadedBytes) / (1024.0 * 1024.0), samplerCache.size());
+        for (const auto& [fmt, n] : texFormatBindings)
+            lucent::info("draw", "  format {}: {} distinct fetches", fmt, n);
+        for (const auto& [why, n] : texSkips)
+            lucent::warn("draw", "  NOT uploaded, {} distinct fetches: {}", n, why);
+        for (const auto& [what, n] : texFormatCensus)
+            lucent::info("draw", "  texture {} x{}", what, n);
+        for (const auto& [what, n] : viewportCensus)
+            lucent::info("draw", "  guest viewport {} x{} draws", what, n);
+        {
+            std::map<uint32_t, uint32_t> prims;
+            for (const FrameDrawItem& d : in.draws)
+                ++prims[d.primType];
+            lucent::Line pl;
+            pl.add("frame primitive types:");
+            for (const auto& [p, n] : prims)
+                pl.add(" {}x{}", PrimName(p), n);
+            pl.flush(lucent::Level::Info, "draw");
+        }
+        if (skipped)
+        {
+            for (const auto& [code, n] : skipReasons)
+            {
+                const char* why =
+                    code == 1 ? "no snapshot/ucode" :
+                    code == 2 ? "shader translate failed" :
+                    code == 3 ? "pipeline create failed" :
+                    code == 4 ? "UBO alloc failed" :
+                    code == 5 ? "index buffer failed" :
+                    code == 6 ? "descriptor alloc failed" :
+                    code == 7 ? "quad list with fewer than 4 vertices" : "unknown";
+                lucent::warn("draw", "  skipped {}x: {}", n, why);
+            }
+        }
+
+        {
+            lucent::Line tb;
+            tb.add("frame texture bases ({} distinct):", texBaseCount.size());
+            for (const auto& [base, n] : texBaseCount)
+                tb.add(" {:#x}x{}{}", base, n, texBaseRtCount.count(base) ? "(RT)" : "");
+            tb.flush(lucent::Level::Info, "draw");
+        }
+        lucent::info("draw", "frame render pass: {} segments, {} RT snapshots"
+            " (RT link {})", segments, rtSnapshots, rtLinkEnabled ? "on" : "off");
+
+        const char* dir = std::getenv("GEARS_DRAW_DIR");
+        const std::filesystem::path reportDir =
+            dir ? std::filesystem::path(dir) : std::filesystem::path("scratch/screenshots");
+        std::filesystem::path out = reportDir / "frame.ppm";
+        if (WritePpm(out, g_frame.data(), W, H))
+            lucent::info("draw", "frame screenshot written to {}", out.string());
+
     }
-    // Two different numbers, because one alone lies. "Changed" counts pixels the
-    // draws touched at all (!= the clear colour); "lit" counts pixels that carry
-    // actual light (non-black). A frame painted uniformly black by a multiply
-    // pass scores 100% changed and 0% lit -- reporting only the first read as
-    // full coverage of a frame that shows nothing.
-    uint64_t lit = 0, changed = 0;
-    for (uint32_t i = 0; i < W * H; ++i)
-    {
-        const uint8_t* px = &g_frame[size_t(i) * 4];
-        if (!(px[0] == 13 && px[1] == 13 && px[2] == 20)) // != the clear
-            ++changed;
-        if (px[0] || px[1] || px[2])
-            ++lit;
-    }
-    std::set<std::pair<uint64_t, uint64_t>> pairs;
-    for (const FrameDrawItem& d : in.draws)
-        pairs.emplace(d.vsHash, d.psHash);
-    lucent::info("draw", "frame: {} of {} draws issued, {} skipped; {} distinct shader"
-        " pairs, {} distinct shaders, {} pipelines, {} texture layouts,"
-        " {} pipeline layouts; {} texture bindings ({} guest textures,"
-        " {} from the rendered RT, {} from a stub); {}/{} px non-black"
-        " ({:.1f}%), {} px changed from the clear ({:.1f}%)",
-        issued, in.draws.size(), skipped, pairs.size(), modules.size(), pipelines.size(),
-        texLayouts.size(), pipeLayouts.size(),
-        texBindsRt + texBindsStub + texBindsGuest, texBindsGuest, texBindsRt,
-        texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
-        changed, 100.0 * double(changed) / (double(W) * H));
     msReadback = sinceStartMs() - msSetup - msDrawLoop - msSubmit;
     lucent::info("draw", "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f}"
         " (of which shader translation {:.0f}, pipeline creation {:.0f},"
         " texture upload {:.0f}), submit+wait {:.0f}, readback+report {:.0f}",
         sinceStartMs(), msSetup, msDrawLoop, msTranslate, msPipeline, msTexture,
         msSubmit, msReadback);
-    if (rectDraws)
-        lucent::info("draw", "frame rectangle lists: {} of {} draws expanded by a"
-            " geometry shader ({} distinct)", rectDrawsExpanded, rectDraws,
-            geomShaders.size());
-    lucent::info("draw", "frame geometry reach: {} draws fetch vertices inside the"
-        " {:#x}-byte SSBO mirror, {} draws fetch PAST it (those read zero and"
-        " collapse); highest vertex-buffer end seen {:#x}",
-        vfDrawsInMirror, in.guestPhysicalMirrorBytes, vfDrawsPastMirror, vfHighestByte);
-    lucent::info("draw", "frame textures: {} distinct fetch constants, {} uploaded"
-        " ({:.1f} MiB), {} samplers", texDistinct.size(), uploads.size(),
-        double(uploadedBytes) / (1024.0 * 1024.0), samplerCache.size());
-    for (const auto& [fmt, n] : texFormatBindings)
-        lucent::info("draw", "  format {}: {} distinct fetches", fmt, n);
-    for (const auto& [why, n] : texSkips)
-        lucent::warn("draw", "  NOT uploaded, {} distinct fetches: {}", n, why);
-    for (const auto& [what, n] : texFormatCensus)
-        lucent::info("draw", "  texture {} x{}", what, n);
-    for (const auto& [what, n] : viewportCensus)
-        lucent::info("draw", "  guest viewport {} x{} draws", what, n);
-    {
-        std::map<uint32_t, uint32_t> prims;
-        for (const FrameDrawItem& d : in.draws)
-            ++prims[d.primType];
-        lucent::Line pl;
-        pl.add("frame primitive types:");
-        for (const auto& [p, n] : prims)
-            pl.add(" {}x{}", PrimName(p), n);
-        pl.flush(lucent::Level::Info, "draw");
-    }
-    if (skipped)
-    {
-        for (const auto& [code, n] : skipReasons)
-        {
-            const char* why =
-                code == 1 ? "no snapshot/ucode" :
-                code == 2 ? "shader translate failed" :
-                code == 3 ? "pipeline create failed" :
-                code == 4 ? "UBO alloc failed" :
-                code == 5 ? "index buffer failed" :
-                code == 6 ? "descriptor alloc failed" :
-                code == 7 ? "quad list with fewer than 4 vertices" : "unknown";
-            lucent::warn("draw", "  skipped {}x: {}", n, why);
-        }
-    }
-
-    {
-        lucent::Line tb;
-        tb.add("frame texture bases ({} distinct):", texBaseCount.size());
-        for (const auto& [base, n] : texBaseCount)
-            tb.add(" {:#x}x{}{}", base, n, texBaseRtCount.count(base) ? "(RT)" : "");
-        tb.flush(lucent::Level::Info, "draw");
-    }
-    lucent::info("draw", "frame render pass: {} segments, {} RT snapshots"
-        " (RT link {})", segments, rtSnapshots, rtLinkEnabled ? "on" : "off");
-
-    const char* dir = std::getenv("GEARS_DRAW_DIR");
-    const std::filesystem::path outDir =
-        dir ? std::filesystem::path(dir) : std::filesystem::path("scratch/screenshots");
-    std::filesystem::path out = outDir / "frame.ppm";
-    if (WritePpm(out, g_frame.data(), W, H))
-        lucent::info("draw", "frame screenshot written to {}", out.string());
-
     // Checkpoint images, each labelled with how many draws had run.
+    const char* checkpointDir = std::getenv("GEARS_DRAW_DIR");
+    const std::filesystem::path outDir = checkpointDir
+        ? std::filesystem::path(checkpointDir)
+        : std::filesystem::path("scratch/screenshots");
     std::vector<uint8_t> cp(rbBytes);
     for (size_t i = 0; i < checkpoints.size(); ++i)
     {
@@ -2948,9 +3097,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     }
 
     // --- teardown --------------------------------------------------------
-    vkDestroyFence(device, fence, nullptr);
-    vkDestroyCommandPool(device, cmdPool, nullptr);
-    vkDestroyBuffer(device, readback, nullptr); vkFreeMemory(device, readbackMem, nullptr);
     for (size_t i = 0; i < checkpoints.size(); ++i)
     {
         vkDestroyBuffer(device, checkpoints[i].second, nullptr);
@@ -2959,7 +3105,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Only this frame's own transients are destroyed here. The render target,
     // passes, layouts, pipelines, shader modules, textures and samplers belong
     // to RendererPersistent and are released by ReleasePersistent.
-    vkDestroyDescriptorPool(device, pool, nullptr);
     for (size_t i = 0; i < stagingBufs.size(); ++i)
     {
         vkDestroyBuffer(device, stagingBufs[i], nullptr);
