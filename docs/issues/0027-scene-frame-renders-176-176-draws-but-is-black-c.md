@@ -1,7 +1,7 @@
 ---
 id: 27
 title: Scene frame renders 176/176 draws but is black: cause is stub textures, not the render target
-status: open
+status: resolved
 symptom: post-load scene frame issues every draw yet the screenshot is entirely black (0 non-black px); earlier the whole frame went black from draw 2
 tags: gpu,draw,draw-backend,frame,vulkan,textures,rt,blend,colormask,descriptors,radv
 created: 2026-07-23
@@ -55,3 +55,25 @@ NEXT STEP: find why draws 32+ contribute no pixels. Ruled out already: textures,
 
 ### Reopened (2026-07-23)
 REOPENED deliberately: the SYMPTOM in the title (the scene frame is black) is NOT fixed. Only the diagnosis was -- and it was falsified. Stub textures were necessary but not sufficient; 80.7% of bindings now carry verified real guest data and the frame is still 0 of 921600 px non-black. Keep this entry open until a scene frame shows guest imagery; the resolution note above is the current state of the investigation, not a fix.
+
+### Resolution (2026-07-23)
+RESOLVED. The scene frame renders the game: 919796-921600 of 921600 px non-black (99.8%-100.0%) over 4 runs of the fixed build, against 0 of 921600 in every one of 9 runs before it. scratch/screenshots/fixed/frame.png is the real Gears of War title screen -- logo, PRESS START, the Epic copyright line, and the wall art that tools/decode_bc.py had already decoded from the texture dump.
+
+ROOT CAUSE: the SHADER MODIFICATION, not anything in the output merger, the textures, the geometry or the render target.
+
+A Xenos shader's SPIR-V translation is not a function of its microcode alone. Xenia's SpirvShaderTranslator::Modification carries the INTERPOLATOR MASK the vertex and pixel shader exchange, and that mask is a property of the PAIR plus the draw's own SQ_PROGRAM_CNTL / SQ_CONTEXT_MISC registers -- vertex_shader->writes_interpolators() & pixel_shader->GetInterpolatorInputMask(...). Both stages were being translated with GetDefaultVertexShaderModification / GetDefaultPixelShaderModification, and those leave interpolator_mask = 0. So every vertex shader exported NO interpolators and every pixel shader read them as zero.
+
+Why it hid so well: oPos is a builtin, not an interpolator, so position, clipping, culling and rasterisation were completely unaffected. GEARS_DRAW_STATS=1 (new: per-draw VK_QUERY_TYPE_PIPELINE_STATISTICS) measured 149 of 170 draws running the fragment shader, some with 1.8M invocations on a 921600-pixel target -- every one shading pure black. The only draws that ever produced colour were the few whose oC0 comes from float constants alone (ps_b49ec2b161f2352e: `mul oC0.xyz, c0.xyz, c255.x`), which is exactly the 7910 px in the top-left this entry recorded. Every pixel shader in the frame's world geometry ends in a multiply by an interpolant (ps_e435892336fbffc8: `mul r0.xyz, r0.zyx, r4.wwww` then `mul oC0.xyz, r0.zyx, c255.x`), so r4 = 0 made them black regardless of texture, blend, depth or viewport.
+
+THE FIX: DeriveShaderModifications (runtime/gpu_draw_xlate.cpp) ports VulkanPipelineCache::GetCurrentVertexShaderModification / GetCurrentPixelShaderModification in full -- interpolator mask, centroid mask (GetInterpolatorSamplingPattern over RB_SURFACE_INFO msaa_samples / SQ_CONTEXT_MISC sc_sample_cntl / SQ_INTERPOLATOR_CNTL), dynamic addressable register counts from vs_num_reg/ps_num_reg (they were passed as 0), user clip planes from PA_CL_CLIP_CNTL, point parameters, param-gen, the depth/stencil early-Z hint, and the MIN/MAX blend pre-multiply factors. It runs per draw, before either stage is translated. TranslateShader now takes the modification, and the renderer's shader/module cache is keyed by (microcode hash, modification) rather than hash alone -- frame 600 holds 34 translations of 26 distinct microcodes as a result. One analysed Shader object is cached per microcode (GetAnalyzedShader), as Xenia does, because ucode analysis is what answers the interpolator question.
+
+RULED OUT BY CONTROLLED ARMS, none of them the cause:
+- The 64 MiB guestPhysicalMirrorBytes SSBO bound, which was the leading suspect. New 'frame geometry reach' census (from the vertex bindings the shader itself declares, now carried out of the translator): 0 of 170 draws fetch vertices past the mirror; highest vertex-buffer end 0xc3f780 = 12.8 MiB. The mirror was never the limit and must not be bumped.
+- Blending. GEARS_DRAW_NOBLEND=1 (new arm) writes the shader's own output straight to the target: still 0 non-black.
+- Texture content. GEARS_DRAW_NOTEX=1 white stubs: still 0 non-black.
+- Vertex data. GEARS_DRAW_VDUMP=N (new arm) dumped draw 32's vertices at the shader's own 16-dword stride: real world positions, per-corner selectors and a (0.808, 0.623, 0.960, 0.912) colour float4. The data was always fine.
+- Float constants. Per-draw census of the packed VS/PS constant UBOs: c255.x = 8.0 on the world draws, not 0.
+
+DIAGNOSTICS DEFECT FIXED IN PASSING: the frame report's single coverage number counted pixels != the clear colour, so a uniformly BLACK frame scored 100%. It now reports 'px non-black' and 'px changed from the clear' separately.
+
+WHAT REMAINS (new entry territory, not this one): the frame is tinted pink/red -- a colour path is still wrong, undiagnosed -- and a hard diagonal split runs across it, which is kRectangleList still falling through to a triangle list instead of getting its synthesized 4th vertex, so half of every rectangle is missing.
