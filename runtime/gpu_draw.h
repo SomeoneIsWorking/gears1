@@ -50,6 +50,50 @@ struct HotDrawInputs
 // caller's responsibility.
 bool RenderHotDraw(const HotDrawInputs& in);
 
+// ---------------------------------------------------------------------------
+// Whole-frame rendering: every DRAW_INDX/_2 of one frame, in submission order,
+// into a single persistent colour+depth target, then presented/screenshotted.
+// This generalises RenderHotDraw beyond the hot pair -- each draw carries its
+// own bound VS+PS and the register-file state that was live when it executed
+// (constants change between draws), so the backend translates+caches each
+// distinct shader pair, fills that draw's UBOs from its own snapshot, and
+// accumulates the geometry.
+struct FrameDrawItem
+{
+    // The register file as it stood at THIS draw (0x8000 dwords). Constants,
+    // fetch slots and the draw initiator all live here; each draw needs its own
+    // because the command stream reprograms them between draws.
+    std::vector<uint32_t> registerFile;
+
+    const uint8_t* vsUcode = nullptr; // borrowed, stable for the call
+    size_t vsUcodeSize = 0;
+    uint64_t vsHash = 0;
+    const uint8_t* psUcode = nullptr;
+    size_t psUcodeSize = 0;
+    uint64_t psHash = 0;
+
+    uint32_t primType = 0;
+    uint32_t indexCount = 0;   // == vertex count for a non-indexed (auto) draw
+    bool indexed = true;       // false: auto/sequential index (source_select kAutoIndex)
+    bool indexIs32 = true;
+    uint32_t indexGuestBase = 0;
+};
+
+struct FrameDrawInputs
+{
+    const uint8_t* guestBase = nullptr;    // gears::Memory().Base()
+    uint32_t guestPhysicalMirrorBytes = 0; // low guest memory mirrored into the SSBO
+    uint32_t width = 1280;
+    uint32_t height = 720;
+    std::vector<FrameDrawItem> draws;      // in submission order
+};
+
+// Renders every draw of the frame into one persistent target and writes a PPM
+// screenshot (scratch/screenshots/frame.ppm, or GEARS_DRAW_DIR/frame.ppm).
+// Reports per-frame: draws issued vs total, distinct shader pairs, and any draw
+// it could not issue with the reason. Returns true if the frame rendered.
+bool RenderFrame(const FrameDrawInputs& in);
+
 // The last frame RenderHotDraw produced, as tightly-packed R8G8B8A8 rows,
 // 1280x720, or empty if none. The presenter uploads this into the swapchain so
 // the real guest frame shows in the window instead of the synthetic clear.
