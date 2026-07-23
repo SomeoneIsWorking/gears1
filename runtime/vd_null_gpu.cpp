@@ -520,6 +520,10 @@ struct CommandProcessor
     std::vector<gears::FrameDrawItem> frameDraws;
     bool frameRenderDone = false;
     long framesRendered = 0;
+    long lastRenderFrames = 0;
+    uint64_t renderedMs = 0;
+    std::chrono::steady_clock::time_point lastRenderReport =
+        std::chrono::steady_clock::now();
     uint32_t frameSwaps = 0; // swaps seen while DRAW_FRAME is arming
 
     // Predication (Xenos PFP bin mask/select). Bit 0 of a TYPE3 header marks the
@@ -1177,8 +1181,11 @@ struct CommandProcessor
             return;
         }
         ++framesRendered;
-        const long frameCount = std::max<long>(1, lucent::config::number("DRAW_FRAME_COUNT", 1));
-        if (framesRendered >= frameCount)
+        // GEARS_DRAW_FRAME_COUNT=0 renders EVERY frame from GEARS_DRAW_FRAME_AT
+        // onward -- the live path. A positive count stops after that many,
+        // which is what the capture and measurement runs use.
+        const long frameCount = lucent::config::number("DRAW_FRAME_COUNT", 1);
+        if (frameCount > 0 && framesRendered >= frameCount)
             frameRenderDone = true;
 
         gears::FrameDrawInputs in;
@@ -1195,15 +1202,42 @@ struct CommandProcessor
         in.draws = std::move(frameDraws);
         // Only the last frame of the run gets the census and the screenshot;
         // it costs ~40 ms, which is most of a warm frame.
-        in.report = framesRendered >= frameCount;
+        // A capture run reports on its last frame. A live run reports never,
+        // unless GEARS_DRAW_FRAME_REPORT_EVERY=N asks for a periodic census and
+        // screenshot -- it costs ~40 ms, so it is a visible hitch by design.
+        const long reportEvery = lucent::config::number("DRAW_FRAME_REPORT_EVERY", 0);
+        in.report = frameCount > 0
+            ? framesRendered >= frameCount
+            : reportEvery > 0 && framesRendered % reportEvery == 0;
         lucent::info("gpu", "guest-draw: rendering whole frame ({} draws captured)",
             in.draws.size());
         const auto t0 = std::chrono::steady_clock::now();
         gears::RenderFrame(in);
         const uint64_t ms = uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - t0).count());
-        lucent::info("gpu", "guest-draw: frame {} of {}: RenderFrame blocked the"
-            " command processor for {} ms", framesRendered, frameCount, ms);
+        if (frameCount > 0)
+        {
+            lucent::info("gpu", "guest-draw: frame {} of {}: RenderFrame blocked the"
+                " command processor for {} ms", framesRendered, frameCount, ms);
+        }
+        else
+        {
+            // Live: one line a second rather than one a frame.
+            renderedMs += ms;
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastRenderReport >= std::chrono::seconds(1))
+            {
+                const double elapsed = std::chrono::duration<double>(
+                    now - lastRenderReport).count();
+                lucent::info("gpu", "guest-draw: {:.1f} rendered frames/s"
+                    " ({} ms/frame in RenderFrame)",
+                    double(framesRendered - lastRenderFrames) / elapsed,
+                    renderedMs / std::max<uint64_t>(1, framesRendered - lastRenderFrames));
+                lastRenderReport = now;
+                lastRenderFrames = framesRendered;
+                renderedMs = 0;
+            }
+        }
         ++frameSwaps;
     }
 
