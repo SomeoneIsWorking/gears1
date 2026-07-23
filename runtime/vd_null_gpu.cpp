@@ -1163,7 +1163,9 @@ struct CommandProcessor
         const long target = lucent::config::number("DRAW_FRAME_AT", 0);
         if (long(frameSwaps) < target)
         {
-            lucent::debug("gpu", "guest-draw: skipping frame {} ({} draws), waiting for {}",
+            // Info, not debug: this line IS the draws-per-frame profile used to
+            // choose which frame to capture. One line per frame, no other cost.
+            lucent::info("gpu", "guest-draw: frame {} has {} draws (waiting for {})",
                 frameSwaps, frameDraws.size(), target);
             ++frameSwaps;
             frameDraws.clear();

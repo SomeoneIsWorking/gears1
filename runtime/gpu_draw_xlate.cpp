@@ -72,10 +72,24 @@ bool TranslateOne(SpirvShaderTranslator& translator, xenos::ShaderType type,
     for (int i = 0; i < 4; ++i)
         out.floatBitmap[i] = map.float_bitmap[i];
     out.floatCount = map.float_count;
+    // The stage's texture descriptor set layout is decided by the shader, not
+    // by us: binding i is texture_bindings_[i] (with its own image dimension),
+    // and sampler j lands at binding texture_count + j. Carry that out so the
+    // host builds a matching VkDescriptorSetLayout per shader.
+    out.textures.clear();
+    for (const auto& tb : shader.GetTextureBindingsAfterTranslation())
+    {
+        ShaderTextureBinding b;
+        b.fetchConstant = tb.fetch_constant;
+        b.dimension = uint32_t(tb.dimension);
+        out.textures.push_back(b);
+    }
+    out.samplerCount = uint32_t(shader.GetSamplerBindingsAfterTranslation().size());
     out.ok = true;
-    lucent::info("draw", "translated {} {:#018x}: {} bytes SPIR-V, {} float constants",
+    lucent::info("draw", "translated {} {:#018x}: {} bytes SPIR-V, {} float constants,"
+        " {} textures, {} samplers",
         type == xenos::ShaderType::kVertex ? "VS" : "PS", hash, spirv.size(),
-        out.floatCount);
+        out.floatCount, out.textures.size(), out.samplerCount);
     return true;
 }
 
