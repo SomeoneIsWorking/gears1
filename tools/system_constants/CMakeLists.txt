@@ -1,0 +1,2 @@
+add_executable(system_constants main.cpp)
+target_link_libraries(system_constants PRIVATE xenia_gpu)

@@ -41,6 +41,8 @@
 
 #include <byteswap.h>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 #include <vector>
 #include <lucent/config.h>
 #include <lucent/log.h>
@@ -484,6 +486,7 @@ struct CommandProcessor
     uint64_t type0AluWrites = 0;        // TYPE0 dwords into 0x4000..0x47FF
     uint64_t type0FetchWrites = 0;      // TYPE0 dwords into 0x4800..0x48FF
     bool constDumpDone = false;         // one-shot verification dump latch
+    bool drawCaptureDone = false;       // one-shot hot-pair draw-param capture latch
 
     // Predication (Xenos PFP bin mask/select). Bit 0 of a TYPE3 header marks the
     // packet predicated; hardware skips it when (bin_select & bin_mask) == 0.
@@ -879,6 +882,264 @@ struct CommandProcessor
             nonZeroLoop += g_gpuRegisters[kConstBaseLoop + i] != 0;
         lucent::info("gpu", "  bool file non-zero dwords: {}/8; loop file non-zero: {}/32",
             nonZeroBool, nonZeroLoop);
+
+        // Raw register-file snapshot for the offline system-constants verifier
+        // (tools/system_constants). It reloads these dwords into a Xenia
+        // RegisterFile and runs Xenia's own draw_util + SystemConstants
+        // derivation against them, so the NDC/index-endian bytes it produces are
+        // checked against the actual register state of this draw rather than an
+        // assumed one. The whole 0x8000-dword space is written little-endian;
+        // Xenia's RegisterFile only spans the first 0x5003, which is a prefix.
+        {
+            namespace fs = std::filesystem;
+            const char* dir = std::getenv("GEARS_CONST_DUMP_DIR");
+            fs::path outdir = dir ? fs::path(dir) : fs::path("scratch/bin");
+            std::error_code ec;
+            fs::create_directories(outdir, ec);
+            const fs::path out = outdir / "regfile_hotpair.bin";
+            std::ofstream f(out, std::ios::binary);
+            if (f)
+            {
+                f.write(reinterpret_cast<const char*>(g_gpuRegisters.data()),
+                    std::streamsize(g_gpuRegisters.size() * sizeof(uint32_t)));
+                lucent::info("gpu", "  wrote register-file snapshot ({} dwords) to {}",
+                    g_gpuRegisters.size(), out.string());
+            }
+            else
+            {
+                lucent::warn("gpu", "  could not open {} for register dump", out.string());
+            }
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Hot-pair draw-parameter capture.
+    //
+    // At a DRAW_INDX / DRAW_INDX_2 whose bound shaders are the hot pair, capture
+    // the full draw parameters and the geometry source, so a pipeline could be
+    // fed. Packet layout mirrors extern/xenia
+    // src/xenia/gpu/pm4_command_processor_implement.h
+    // (ExecutePacketType3_DRAW_INDX / _DRAW_INDX_2 / ExecutePacketType3Draw) and
+    // the bitfields in src/xenia/gpu/registers.h (VGT_DRAW_INITIATOR,
+    // VGT_DMA_SIZE) and xenos.h (SourceSelect, IndexFormat, PrimitiveType,
+    // Endian, xe_gpu_vertex_fetch_t):
+    //
+    //   DRAW_INDX:   data[0]=viz token, data[1]=VGT_DRAW_INITIATOR,
+    //                then if source_select==kDMA: data[2]=VGT_DMA_BASE,
+    //                data[3]=VGT_DMA_SIZE.
+    //   DRAW_INDX_2: no viz token; data[0]=VGT_DRAW_INITIATOR, then DMA words.
+    //
+    //   VGT_DRAW_INITIATOR: prim_type[0:5], source_select[6:7], major_mode[8:9],
+    //                       index_size[11] (0=int16,1=int32), num_indices[16:31].
+    //   VGT_DMA_SIZE:       num_words[0:23], swap_mode[30:31].
+    //
+    // The vertex geometry source is NOT in the draw packet: the hot VS fetches it
+    // from the shared-memory SSBO using vertex fetch constant #95 (Xenia disasm
+    // "vf0" == 95 - storage_index; verified via spirv-dis: the shader reads
+    // fetch_constants[0][47][2..3] == fetch-file dwords 190,191 == register
+    // 0x48BE/0x48BF) with a baked Stride=12 dwords (48 bytes). Base address comes
+    // from that fetch constant's dword_0 (address = dword_0 >> 2, in dwords).
+    static constexpr uint32_t kHotVertexFetchIndex = 95;   // from vf0 disasm
+    static constexpr uint32_t kHotVertexStrideDwords = 12; // baked Stride=12
+
+    static uint16_t SwapIndex16(uint16_t v, uint32_t endian)
+    {
+        // xenos::Endian: k8in16 (1) swaps the two bytes of each 16-bit index.
+        return endian == 1 ? uint16_t((v >> 8) | (v << 8)) : v;
+    }
+
+    void CaptureHotDraw(uint32_t opcode, const uint32_t* raw, uint32_t usable)
+    {
+        if (drawCaptureDone || !lucent::config::flag("DRAW_CAPTURE"))
+            return;
+        const bool anyShader = lucent::config::flag("DRAW_CAPTURE_ANY");
+        if (!anyShader && g_shaderCapture.activeVertexHash != kHotVertexHash)
+            return;
+
+        // DRAW_INDX carries a viz-query token before VGT_DRAW_INITIATOR;
+        // DRAW_INDX_2 does not (Xenia ExecutePacketType3_DRAW_INDX vs _2).
+        const uint32_t initiatorIdx = (opcode == 0x22) ? 1u : 0u;
+        if (usable <= initiatorIdx)
+            return;
+        const uint32_t initiator = raw[initiatorIdx];
+
+        const uint32_t primType = initiator & 0x3F;
+        const uint32_t sourceSelect = (initiator >> 6) & 0x3;
+        const uint32_t majorMode = (initiator >> 8) & 0x3;
+        const uint32_t indexSizeBit = (initiator >> 11) & 0x1; // 0=int16,1=int32
+        const uint32_t numIndices = (initiator >> 16) & 0xFFFF;
+
+        // A hot-pair draw with a populated fetch #95 is the target; gate the
+        // one-shot on that so we do not latch on an early degenerate draw.
+        const uint32_t fetchBase = kConstBaseFetch + kHotVertexFetchIndex * 2;
+        const uint32_t vf0 = g_gpuRegisters[fetchBase];
+        const uint32_t vf1 = g_gpuRegisters[fetchBase + 1];
+        if (!anyShader && vf0 == 0)
+            return;
+        drawCaptureDone = true;
+
+        namespace fs = std::filesystem;
+        const char* dir = std::getenv("GEARS_DRAW_CAPTURE_DIR");
+        fs::path outdir = dir ? fs::path(dir) : fs::path("scratch/draw-params");
+        std::error_code ec;
+        fs::create_directories(outdir, ec);
+        std::ofstream rep(outdir / "hot_draw.txt");
+
+        auto emit = [&](const std::string& s) {
+            lucent::info("gpu", "{}", s);
+            if (rep) rep << s << '\n';
+        };
+
+        static const char* kPrim[16] = {
+            "none", "point_list", "line_list", "line_strip", "triangle_list",
+            "triangle_fan", "triangle_strip", "triangle_w_wflags",
+            "rectangle_list", "unused1", "unused2", "unused3", "line_loop",
+            "quad_list", "quad_strip", "polygon"};
+        static const char* kSrc[4] = {"kDMA(indexed)", "kImmediate(inline)",
+                                      "kAutoIndex", "invalid"};
+
+        emit(std::format("=== hot-pair {} draw parameters ===", OpcodeName(opcode)));
+        emit(std::format("bound shaders: vertex {:#018x} pixel {:#018x}",
+            g_shaderCapture.activeVertexHash, g_shaderCapture.activePixelHash));
+        emit(std::format("VGT_DRAW_INITIATOR = {:#010x}", initiator));
+        emit(std::format("  prim_type       = {:#x} ({})", primType,
+            primType < 16 ? kPrim[primType] : "explicit/other"));
+        emit(std::format("  source_select   = {} ({})", sourceSelect, kSrc[sourceSelect]));
+        emit(std::format("  major_mode      = {}", majorMode));
+        emit(std::format("  index_size      = {} ({})", indexSizeBit,
+            indexSizeBit ? "int32" : "int16"));
+        emit(std::format("  num_indices     = {}", numIndices));
+
+        uint32_t dmaBase = 0, dmaSize = 0, dmaNumWords = 0, dmaSwap = 0;
+        const uint32_t indexSizeBytes = indexSizeBit ? 4u : 2u;
+        uint32_t indexGuestBase = 0, indexLenBytes = 0;
+        if (sourceSelect == 0) // kDMA
+        {
+            const uint32_t baseIdx = initiatorIdx + 1;
+            const uint32_t sizeIdx = initiatorIdx + 2;
+            if (usable > sizeIdx)
+            {
+                dmaBase = raw[baseIdx];
+                dmaSize = raw[sizeIdx];
+                dmaNumWords = dmaSize & 0xFFFFFF;
+                dmaSwap = (dmaSize >> 30) & 0x3;
+                indexGuestBase = dmaBase & ~(indexSizeBytes - 1);
+                indexLenBytes = dmaNumWords * indexSizeBytes;
+            }
+            emit(std::format("VGT_DMA_BASE = {:#010x}  VGT_DMA_SIZE = {:#010x}"
+                " (num_words {}, swap_mode {})", dmaBase, dmaSize, dmaNumWords, dmaSwap));
+            emit(std::format("  index buffer: guest_base {:#x}, {} indices,"
+                " {}-bit, {} bytes, endian {}", indexGuestBase, numIndices,
+                indexSizeBytes * 8, indexLenBytes, dmaSwap));
+        }
+        else if (sourceSelect == 2)
+        {
+            emit("index source: kAutoIndex (no index buffer; indices 0..num_indices-1)");
+        }
+
+        // Geometry source: vertex fetch constant #95 (the hot VS's vf0).
+        const uint32_t vfType = vf0 & 0x3;
+        const uint32_t vertexBaseBytes = (vf0 >> 2) << 2; // address<<2, byte addr
+        const uint32_t vfEndian = vf1 & 0x3;
+        const uint32_t vfSizeWords = (vf1 >> 2) & 0xFFFFFF;
+        const uint32_t strideBytes = kHotVertexStrideDwords * 4;
+        emit(std::format("vertex fetch constant #95 (reg {:#x}): {:#010x} {:#010x}",
+            fetchBase, vf0, vf1));
+        emit(std::format("  type {} vertex_base {:#x} (dword addr {:#x}) stride {} dwords"
+            " ({} bytes) endian {} size {} words ({} bytes)", vfType, vertexBaseBytes,
+            vf0 >> 2, kHotVertexStrideDwords, strideBytes, vfEndian, vfSizeWords,
+            vfSizeWords * 4));
+
+        // First N indices from guest memory.
+        const uint32_t nIdx = std::min(numIndices, 32u);
+        std::vector<uint32_t> indices;
+        if (sourceSelect == 0 && indexGuestBase)
+        {
+            lucent::Line line;
+            line.add("first {} indices:", nIdx);
+            uint32_t minI = 0xFFFFFFFF, maxI = 0;
+            for (uint32_t i = 0; i < numIndices; ++i)
+            {
+                uint32_t idx;
+                if (indexSizeBytes == 2)
+                {
+                    // Read the physical bytes as a host-native u16 (== Xenia's
+                    // load<uint16_t> from its physical buffer), then apply the
+                    // GpuSwap the swap_mode selects (k8in16 == byte swap), exactly
+                    // as Xenia's xenos::GpuSwap(uint16_t, endian) does.
+                    const uint16_t* p = gears::Memory().Translate<uint16_t>(
+                        indexGuestBase + i * 2);
+                    idx = SwapIndex16(*p, dmaSwap);
+                }
+                else
+                    idx = ReadGuest32(indexGuestBase + i * 4);
+                if (i < nIdx) { indices.push_back(idx); line.add(" {}", idx); }
+                minI = std::min(minI, idx);
+                maxI = std::max(maxI, idx);
+            }
+            line.flush(lucent::Level::Info, "gpu");
+            if (rep)
+            {
+                rep << "first " << nIdx << " indices:";
+                for (uint32_t v : indices) rep << ' ' << v;
+                rep << "\n";
+            }
+            emit(std::format("  index range: min {} max {} (vertex-buffer size {} bytes"
+                " admits index < {})", minI, maxI, vfSizeWords * 4,
+                strideBytes ? vfSizeWords * 4 / strideBytes : 0));
+        }
+
+        // First few vertices from the shared-memory SSBO source. The hot VS's
+        // first vfetch_full is FMT_32_32_32_32_FLOAT at dword offset 0 of the
+        // vertex, so dwords 0..3 are the position attribute (x,y,z,w) in floats.
+        const uint32_t nVtx = 6;
+        emit(std::format("first {} vertices (dwords 0..3 = FMT_32_32_32_32_FLOAT"
+            " position attribute):", nVtx));
+        // Which vertices to sample: the first few referenced indices, or 0..n.
+        std::vector<uint32_t> sampleVerts;
+        if (!indices.empty())
+            for (uint32_t i = 0; i < nVtx && i < indices.size(); ++i)
+                sampleVerts.push_back(indices[i]);
+        else
+            for (uint32_t i = 0; i < nVtx; ++i) sampleVerts.push_back(i);
+
+        for (uint32_t vi : sampleVerts)
+        {
+            const uint32_t vaddr = vertexBaseBytes + vi * strideBytes;
+            uint32_t d[12];
+            for (uint32_t k = 0; k < 12; ++k)
+            {
+                const uint32_t w = ReadGuest32(vaddr + k * 4); // k8in32 == full swap
+                // vf endian: 2 (k8in32) matches ReadGuest32's full byteswap.
+                d[k] = (vfEndian == 2) ? w : ReadGuest32Raw(vaddr + k * 4, vfEndian);
+            }
+            float pos[4];
+            for (int k = 0; k < 4; ++k) std::memcpy(&pos[k], &d[k], 4);
+            emit(std::format("  v[{}] @ {:#x}: pos ({}, {}, {}, {})  raw"
+                " {:#010x} {:#010x} {:#010x} {:#010x}", vi, vaddr,
+                pos[0], pos[1], pos[2], pos[3], d[0], d[1], d[2], d[3]));
+        }
+        emit(std::format("(wrote to {})", (outdir / "hot_draw.txt").string()));
+    }
+
+    // Read a guest dword applying an explicit xenos::Endian swap, for vertex
+    // data whose fetch-constant endian differs from the ring's default.
+    static uint32_t ReadGuest32Raw(uint32_t addr, uint32_t endian)
+    {
+        const uint8_t* p = gears::Memory().Translate<uint8_t>(addr);
+        const uint32_t b = uint32_t(p[0]) | (uint32_t(p[1]) << 8) |
+                           (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
+        switch (endian)
+        {
+        case 1: // k8in16
+            return ((b & 0x00FF00FF) << 8) | ((b & 0xFF00FF00) >> 8);
+        case 2: // k8in32
+            return __builtin_bswap32(b);
+        case 3: // k16in32
+            return ((b & 0x0000FFFF) << 16) | ((b & 0xFFFF0000) >> 16);
+        default:
+            return b;
+        }
     }
 
     void HandleType3(uint32_t opcode, const uint32_t* data, uint32_t count, int depth)
@@ -1225,7 +1486,10 @@ struct CommandProcessor
 
         // Verification hook: dump the constant files at the first real draw.
         if (opcode == 0x22 || opcode == 0x36) // DRAW_INDX / DRAW_INDX_2
+        {
             DumpConstantFiles(opcode);
+            CaptureHotDraw(opcode, data, copy);
+        }
 
         HandleType3(opcode, data, copy, depth);
         return count;
