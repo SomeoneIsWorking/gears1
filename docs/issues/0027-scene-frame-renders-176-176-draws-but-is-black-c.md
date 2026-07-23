@@ -35,3 +35,23 @@ It lights up NOTHING, because what it samples is itself black. Two fidelity gaps
 NOT DONE / still host-fixed rather than guest-derived: cull mode (PA_SU_SC_MODE_CNTL), viewport and scissor.
 
 NEXT STEP: texture upload. Nothing else in this chain can be judged while every sample returns the stub.
+
+### Resolution (2026-07-23)
+PARTIALLY RESOLVED, and the diagnosis in this entry is FALSIFIED as the sole cause.
+
+Texture upload is DONE and VERIFIED (re_frontier draw-backend-textures). Fetch constants are decoded with Xenia's texture_util/texture_address/FormatInfo; endianness is an XOR on the source byte offset; the guest swizzle is composed with the host format's component order and applied via the VkImageView component mapping. MEASURED on frame 600: 26 distinct fetch constants, 20 uploaded (1.5 MiB), 176 of 218 texture bindings (80.7%) served by real guest data, 30 by the rendered RT, 12 by a stub. Formats: k_DXT4_5 x13, k_DXT1 x7, k_24_8_FLOAT x2, k_16_16, k_16_16_16_16_EXPAND, k_16_16_16_16_FLOAT, k_8_8_8_8 -- all 2D, all tiled, endian k8in16, identity swizzle. DXT1+DXT4_5 are 20 of 26.
+
+THE DECODE IS VERIFIED ON REAL DATA, not merely plausible: GEARS_DRAW_TEX_DUMP=1 writes each decoded blob and tools/decode_bc.py renders it. scratch/screenshots/texdump/01caf000_k_DXT4_5_1024x512x1_tiled.png is unmistakable Gears world art (a grimy concrete/steel wall with grating shadows); 02eb1000_k_DXT1_256x256x1_tiled.png is a clean radial falloff map. Detiling, endian and block decode are right.
+
+THE FRAME IS STILL BLACK (0 of 921600 px non-black), so 'stub textures' was necessary but not sufficient. Controlled A/B, 3 arms in one batch on identical code: real textures + guest viewport, real textures + host-fixed viewport, stub textures + guest viewport -- ALL give exactly 0 non-black. Depth is ruled out too: GEARS_DRAW_DEPTH_CLEAR=0.0 vs 1.0 and GEARS_DRAW_NODEPTH=1 all give 0.
+
+WHAT THE CHECKPOINTS NOW SHOW, per draw: draws 1-28 light only 7910 of 921600 px (0.86%), in the top-left corner. Draws 29-31 are full-screen quad_list passes with RB_BLENDCONTROL0 = 0x1000400 = src*ZERO + dst*SRC_COLOR (a pure multiply) sampling the guest's own 256x32 k_DXT1 at 0x1f45000, which is genuinely near-black, so the target goes to (0,0,0). Draws 32-170 -- where this frame's actual world geometry lives, all quad_list with 2- and 10-texture shaders and additive/alpha blending -- add EXACTLY ZERO pixels on top of that. So the world draws are not rasterising, or are shading zero, upstream of the output merger. That is the open question now.
+
+TWO MORE REAL DEFECTS were fixed while isolating this, both guest-derived, neither a workaround:
+4. VIEWPORT AND SCISSOR were host-fixed to the full target. They are now the guest's own per draw (draw_util::GetHostViewportInfo/GetScissor, the same call DeriveSystemConstants already made for NDC scale/offset) as Vulkan dynamic state. Frame 600 carries 13 distinct viewport/scissor combinations -- 48 draws scissored to 16x16, 4 draws with a 1280x208 viewport; the fixed viewport was wrong for 77 of 171 draws.
+5. kQuadList (0x0D) fell through to VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, which regroups the vertices into unrelated triangles. It is now expanded to a triangle list (0,1,2 / 0,2,3 per group of 4) as Xenia's PrimitiveProcessor does. This frame's ENTIRE world geometry is quad_list. Measured effect: the full-screen multiply passes now cover the whole target instead of one triangle of it -- which is exactly why the frame changed from 'left at the clear colour' to 'uniformly black'. kRectangleList (19 draws) is still NOT converted; it needs a synthesized 4th vertex, not just an index remap.
+
+NEXT STEP: find why draws 32+ contribute no pixels. Ruled out already: textures, depth test, depth clear value, viewport/scissor. Candidates not yet tested: kRectangleList conversion, cull mode (PA_SU_SC_MODE_CNTL is still host-fixed to NONE), the vertex fetch reading past the 64 MiB SSBO mirror (guestPhysicalMirrorBytes) for world vertex buffers, and missing mip tails making the full-screen passes sample level 0 under heavy minification.
+
+### Reopened (2026-07-23)
+REOPENED deliberately: the SYMPTOM in the title (the scene frame is black) is NOT fixed. Only the diagnosis was -- and it was falsified. Stub textures were necessary but not sufficient; 80.7% of bindings now carry verified real guest data and the frame is still 0 of 921600 px non-black. Keep this entry open until a scene frame shows guest imagery; the resolution note above is the current state of the investigation, not a fix.

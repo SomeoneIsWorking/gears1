@@ -83,6 +83,11 @@ struct FrameDrawInputs
 {
     const uint8_t* guestBase = nullptr;    // gears::Memory().Base()
     uint32_t guestPhysicalMirrorBytes = 0; // low guest memory mirrored into the SSBO
+    // How much physical RAM is mapped at the 0x0 alias (512 MiB on the
+    // console). Texture fetch constants name addresses across the whole of it,
+    // well past the SSBO mirror, so the texture decoder reads guestBase
+    // directly and bounds-checks against this.
+    uint32_t guestWindowBytes = 0;
     uint32_t width = 1280;
     uint32_t height = 720;
     std::vector<FrameDrawItem> draws;      // in submission order
