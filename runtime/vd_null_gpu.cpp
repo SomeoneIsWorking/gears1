@@ -1193,6 +1193,9 @@ struct CommandProcessor
         // directly (bounds-checked) rather than through the SSBO mirror.
         in.guestWindowBytes = 0x20000000; // 512 MiB
         in.draws = std::move(frameDraws);
+        // Only the last frame of the run gets the census and the screenshot;
+        // it costs ~40 ms, which is most of a warm frame.
+        in.report = framesRendered >= frameCount;
         lucent::info("gpu", "guest-draw: rendering whole frame ({} draws captured)",
             in.draws.size());
         const auto t0 = std::chrono::steady_clock::now();
