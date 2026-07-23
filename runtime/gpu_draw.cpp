@@ -11,6 +11,7 @@
 // exist yet.
 #include "gpu_draw.h"
 
+#include <lucent/config.h>
 #include <lucent/log.h>
 
 #ifdef GEARS_HAVE_GUEST_DRAW
@@ -18,7 +19,9 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <deque>
 #include <filesystem>
+#include <string>
 #include <fstream>
 #include <map>
 #include <set>
@@ -292,6 +295,99 @@ VkPrimitiveTopology TopologyOf(uint32_t primType)
     // Rectangle list has no direct Vulkan topology; the hot pair is a triangle
     // list, so anything else is reported and drawn as a triangle list.
     default: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    }
+}
+
+// --- Xenos output-merger state -> Vulkan --------------------------------
+// The output-merger state is per draw and lives in the register file the draw
+// carries: RB_COLOR_MASK (0x2104), RB_BLENDCONTROL0 (0x2201) and RB_DEPTHCONTROL
+// (0x2200). Ignoring it is not a cosmetic simplification: a scene frame issues
+// depth-only passes with colour writes fully masked off, and rendering those
+// with an unconditional RGBA write paints the frame black.
+VkBlendFactor BlendFactorOf(uint32_t f)
+{
+    switch (f)
+    {
+    case 0: return VK_BLEND_FACTOR_ZERO;
+    case 1: return VK_BLEND_FACTOR_ONE;
+    case 4: return VK_BLEND_FACTOR_SRC_COLOR;
+    case 5: return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+    case 6: return VK_BLEND_FACTOR_SRC_ALPHA;
+    case 7: return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    case 8: return VK_BLEND_FACTOR_DST_COLOR;
+    case 9: return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+    case 10: return VK_BLEND_FACTOR_DST_ALPHA;
+    case 11: return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+    case 12: return VK_BLEND_FACTOR_CONSTANT_COLOR;
+    case 13: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+    case 14: return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+    case 15: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+    case 16: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+    default: return VK_BLEND_FACTOR_ONE;
+    }
+}
+
+VkBlendOp BlendOpOf(uint32_t op)
+{
+    switch (op)
+    {
+    case 0: return VK_BLEND_OP_ADD;
+    case 1: return VK_BLEND_OP_SUBTRACT;
+    case 2: return VK_BLEND_OP_MIN;
+    case 3: return VK_BLEND_OP_MAX;
+    case 4: return VK_BLEND_OP_REVERSE_SUBTRACT;
+    default: return VK_BLEND_OP_ADD;
+    }
+}
+
+VkCompareOp CompareOpOf(uint32_t f)
+{
+    switch (f & 7)
+    {
+    case 0: return VK_COMPARE_OP_NEVER;
+    case 1: return VK_COMPARE_OP_LESS;
+    case 2: return VK_COMPARE_OP_EQUAL;
+    case 3: return VK_COMPARE_OP_LESS_OR_EQUAL;
+    case 4: return VK_COMPARE_OP_GREATER;
+    case 5: return VK_COMPARE_OP_NOT_EQUAL;
+    case 6: return VK_COMPARE_OP_GREATER_OR_EQUAL;
+    default: return VK_COMPARE_OP_ALWAYS;
+    }
+}
+
+// The output-merger registers that select a pipeline, kept together so the
+// pipeline cache is keyed on exactly the state the pipeline bakes in.
+struct OutputMergerState
+{
+    uint32_t colorMask = 0;    // RB_COLOR_MASK
+    uint32_t blend0 = 0;       // RB_BLENDCONTROL0
+    uint32_t depthControl = 0; // RB_DEPTHCONTROL
+
+    bool operator<(const OutputMergerState& o) const
+    {
+        return std::tie(colorMask, blend0, depthControl) <
+               std::tie(o.colorMask, o.blend0, o.depthControl);
+    }
+};
+
+// Xenos VGT_DRAW_INITIATOR prim_type names, for the frame census.
+const char* PrimName(uint32_t primType)
+{
+    switch (primType)
+    {
+    case 1: return "point_list";
+    case 2: return "line_list";
+    case 3: return "line_strip";
+    case 4: return "triangle_list";
+    case 5: return "triangle_fan";
+    case 6: return "triangle_strip";
+    case 7: return "triangle_w_wflags";
+    case 8: return "rectangle_list";
+    case 12: return "line_loop";
+    case 13: return "quad_list";
+    case 14: return "quad_strip";
+    case 15: return "polygon";
+    default: return "other";
     }
 }
 
@@ -963,38 +1059,60 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vkUnmapMemory(device, ssboMem);
     }
 
-    // --- stub texture0 (1x1 white) + sampler -----------------------------
-    // Textures are the next milestone step; every sampling draw reads this stub
-    // for now, so a sampling pass shows its geometry modulated by white rather
-    // than nothing.
-    VkImage tex = 0; VkDeviceMemory texMem = 0; VkImageView texView = 0; VkSampler samp = 0;
+    // --- stub textures (1x1 white), one per image dimension --------------
+    // A translated shader declares its image variables with the dimension the
+    // guest's texture fetch used: 1D/2D become a 2D ARRAY image, k3DOrStacked a
+    // 3D image, kCube a cube image (Xenia
+    // SpirvShaderTranslator::FindOrAddTextureBinding). The descriptor written to
+    // a binding must have the matching view type, so one stub of each kind is
+    // created here and picked per binding. Real texture upload is the next step;
+    // until then a sampling draw reads white rather than nothing.
+    struct StubTex
     {
+        VkImage image = 0;
+        VkDeviceMemory mem = 0;
+        VkImageView view = 0;
+    };
+    StubTex stub2D{}, stub3D{}, stubCube{};
+    VkSampler samp = 0;
+    auto makeStub = [&](VkImageType imageType, VkImageViewType viewType,
+                        uint32_t layers, uint32_t depth3d, VkImageCreateFlags flags,
+                        StubTex& out) -> bool {
         VkImageCreateInfo ti{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        ti.imageType = VK_IMAGE_TYPE_2D;
+        ti.flags = flags;
+        ti.imageType = imageType;
         ti.format = VK_FORMAT_R8G8B8A8_UNORM;
-        ti.extent = {1, 1, 1};
+        ti.extent = {1, 1, depth3d};
         ti.mipLevels = 1;
-        ti.arrayLayers = 1;
+        ti.arrayLayers = layers;
         ti.samples = VK_SAMPLE_COUNT_1_BIT;
         ti.tiling = VK_IMAGE_TILING_OPTIMAL;
         ti.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        VK_CHECK(vkCreateImage(device, &ti, nullptr, &tex));
+        VK_CHECK(vkCreateImage(device, &ti, nullptr, &out.image));
         VkMemoryRequirements req{};
-        vkGetImageMemoryRequirements(device, tex, &req);
+        vkGetImageMemoryRequirements(device, out.image, &req);
         uint32_t type = 0;
         if (!FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
             FindMemory(req.memoryTypeBits, 0, type);
         VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
         ai.allocationSize = req.size;
         ai.memoryTypeIndex = type;
-        VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &texMem));
-        VK_CHECK(vkBindImageMemory(device, tex, texMem, 0));
+        VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &out.mem));
+        VK_CHECK(vkBindImageMemory(device, out.image, out.mem, 0));
         VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        vi.image = tex;
-        vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        vi.image = out.image;
+        vi.viewType = viewType;
         vi.format = VK_FORMAT_R8G8B8A8_UNORM;
-        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &texView));
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
+        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &out.view));
+        return true;
+    };
+    if (!makeStub(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 1, 1, 0, stub2D) ||
+        !makeStub(VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D, 1, 1, 0, stub3D) ||
+        !makeStub(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_CUBE, 6, 1,
+                  VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT, stubCube))
+        return false;
+    {
         VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         si.magFilter = si.minFilter = VK_FILTER_LINEAR;
         si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
@@ -1033,6 +1151,40 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(device, &vi, nullptr, &colorView));
     }
+    // Snapshot of the colour target that sampling draws read (the RT link). It
+    // is a separate image because Vulkan forbids sampling the image that is
+    // currently a colour attachment; the render pass is split at each sampling
+    // draw and the colour target copied here first.
+    VkImage rtSample = 0; VkDeviceMemory rtSampleMem = 0;
+    VkImageView rtSampleViewStorage = VK_NULL_HANDLE;
+    {
+        VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ci.imageType = VK_IMAGE_TYPE_2D;
+        ci.format = VK_FORMAT_R8G8B8A8_UNORM;
+        ci.extent = {W, H, 1};
+        ci.mipLevels = 1;
+        ci.arrayLayers = 1;
+        ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        VK_CHECK(vkCreateImage(device, &ci, nullptr, &rtSample));
+        VkMemoryRequirements req{};
+        vkGetImageMemoryRequirements(device, rtSample, &req);
+        uint32_t type = 0;
+        if (!FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
+            FindMemory(req.memoryTypeBits, 0, type);
+        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = type;
+        VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &rtSampleMem));
+        VK_CHECK(vkBindImageMemory(device, rtSample, rtSampleMem, 0));
+        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vi.image = rtSample;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        vi.format = VK_FORMAT_R8G8B8A8_UNORM;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &rtSampleViewStorage));
+    }
     VkImage depth = 0; VkDeviceMemory depthMem = 0; VkImageView depthView = 0;
     const VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
     {
@@ -1065,24 +1217,32 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     }
 
     // --- render pass (colour + depth) ------------------------------------
-    VkRenderPass renderPass = 0;
-    {
+    // Two variants of the same pass. The frame is one logical pass, but it has
+    // to be SPLIT wherever a draw samples the colour target we are rendering
+    // into (Vulkan forbids reading the bound attachment): at that point the pass
+    // ends, colour is copied into rtSample, and the pass resumes with LOAD so
+    // everything drawn so far is preserved. Without a sampling draw there is one
+    // segment and the behaviour is identical to before.
+    VkRenderPass renderPass = 0, renderPassLoad = 0;
+    auto makeRenderPass = [&](bool load, VkRenderPass& out) {
         VkAttachmentDescription att[2]{};
         att[0].format = VK_FORMAT_R8G8B8A8_UNORM;
         att[0].samples = VK_SAMPLE_COUNT_1_BIT;
-        att[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att[0].loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
         att[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         att[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         att[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        att[0].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        att[0].initialLayout = load ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                                    : VK_IMAGE_LAYOUT_UNDEFINED;
         att[0].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         att[1].format = depthFormat;
         att[1].samples = VK_SAMPLE_COUNT_1_BIT;
-        att[1].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-        att[1].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        att[1].loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
+        att[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         att[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
         att[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-        att[1].initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        att[1].initialLayout = load ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+                                    : VK_IMAGE_LAYOUT_UNDEFINED;
         att[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         VkAttachmentReference cref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
         VkAttachmentReference dref{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
@@ -1111,8 +1271,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         rp.pSubpasses = &sub;
         rp.dependencyCount = 2;
         rp.pDependencies = deps;
-        VK_CHECK(vkCreateRenderPass(device, &rp, nullptr, &renderPass));
-    }
+        VK_CHECK(vkCreateRenderPass(device, &rp, nullptr, &out));
+        return true;
+    };
+    if (!makeRenderPass(false, renderPass) || !makeRenderPass(true, renderPassLoad))
+        return false;
     VkFramebuffer fb = 0;
     {
         VkImageView atts[2] = {colorView, depthView};
@@ -1137,35 +1300,87 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
     const VkShaderStageFlags allStages =
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    VkDescriptorSetLayout set0 = 0, set1 = 0, set2 = 0, set3 = 0;
+    VkDescriptorSetLayout set0 = 0, set1 = 0;
     if (!makeSetLayout({{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, allStages, nullptr}}, set0) ||
         !makeSetLayout({
             {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
             {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
             {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
             {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
-            {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr}}, set1) ||
-        !makeSetLayout({}, set2) ||
-        !makeSetLayout({
-            {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-            {1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr},
-            {2, VK_DESCRIPTOR_TYPE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr}}, set3))
+            {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr}}, set1))
         return false;
-    VkDescriptorSetLayout setLayouts[4] = {set0, set1, set2, set3};
-    VkPipelineLayout pipeLayout = 0;
-    {
+
+    // --- per-shader texture descriptor set layouts (sets 2 and 3) --------
+    // Sets 2/3 are Xenia's kDescriptorSetTexturesVertex/Pixel: their contents
+    // are decided by the SHADER (N images at bindings 0..N-1, then M samplers at
+    // bindings N..N+M-1), so one fixed layout cannot serve every draw. Build a
+    // layout per distinct (image dimensions, sampler count) signature, cached.
+    // Getting this wrong is not a validation warning -- it is undefined
+    // behaviour that crashed the RADV compiler inside lower_immediate_samplers.
+    auto texSignature = [](const draw::ShaderXlate& x, VkShaderStageFlags stage) {
+        std::string s;
+        s.reserve(x.textures.size() * 2 + 8);
+        for (const auto& t : x.textures)
+            s.push_back(char('0' + (t.dimension & 3)));
+        s.push_back('|');
+        s += std::to_string(x.samplerCount);
+        s.push_back('|');
+        s += std::to_string(stage);
+        return s;
+    };
+    std::map<std::string, VkDescriptorSetLayout> texLayouts;
+    auto getTexLayout = [&](const draw::ShaderXlate& x, VkShaderStageFlags stage,
+                            VkDescriptorSetLayout& out) -> bool {
+        const std::string key = texSignature(x, stage);
+        auto it = texLayouts.find(key);
+        if (it != texLayouts.end()) { out = it->second; return true; }
+        std::vector<VkDescriptorSetLayoutBinding> b;
+        for (uint32_t i = 0; i < uint32_t(x.textures.size()); ++i)
+            b.push_back({i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, stage, nullptr});
+        for (uint32_t j = 0; j < x.samplerCount; ++j)
+            b.push_back({uint32_t(x.textures.size()) + j, VK_DESCRIPTOR_TYPE_SAMPLER, 1,
+                         stage, nullptr});
+        VkDescriptorSetLayout l = 0;
+        if (!makeSetLayout(b, l))
+            return false;
+        texLayouts[key] = l;
+        out = l;
+        return true;
+    };
+
+    // A pipeline layout per (vertex texture signature, pixel texture signature).
+    std::map<std::pair<std::string, std::string>, VkPipelineLayout> pipeLayouts;
+    auto getPipeLayout = [&](const draw::ShaderXlate& vsX, const draw::ShaderXlate& psX,
+                             VkDescriptorSetLayout& outVsTex,
+                             VkDescriptorSetLayout& outPsTex,
+                             VkPipelineLayout& out) -> bool {
+        if (!getTexLayout(vsX, VK_SHADER_STAGE_VERTEX_BIT, outVsTex) ||
+            !getTexLayout(psX, VK_SHADER_STAGE_FRAGMENT_BIT, outPsTex))
+            return false;
+        auto key = std::make_pair(texSignature(vsX, VK_SHADER_STAGE_VERTEX_BIT),
+                                  texSignature(psX, VK_SHADER_STAGE_FRAGMENT_BIT));
+        auto it = pipeLayouts.find(key);
+        if (it != pipeLayouts.end()) { out = it->second; return true; }
+        VkDescriptorSetLayout sets[4] = {set0, set1, outVsTex, outPsTex};
         VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         pi.setLayoutCount = 4;
-        pi.pSetLayouts = setLayouts;
-        VK_CHECK(vkCreatePipelineLayout(device, &pi, nullptr, &pipeLayout));
-    }
+        pi.pSetLayouts = sets;
+        VkPipelineLayout pl = 0;
+        if (vkCreatePipelineLayout(device, &pi, nullptr, &pl) != VK_SUCCESS)
+            return false;
+        pipeLayouts[key] = pl;
+        out = pl;
+        return true;
+    };
 
-    // --- pipeline cache keyed on (vs,ps,prim) ----------------------------
-    std::map<std::tuple<uint64_t, uint64_t, uint32_t>, VkPipeline> pipelines;
+    // --- pipeline cache keyed on (vs,ps,prim,output-merger state) --------
+    std::map<std::tuple<uint64_t, uint64_t, uint32_t, OutputMergerState>, VkPipeline>
+        pipelines;
     auto getPipeline = [&](VkShaderModule vsMod, VkShaderModule psMod,
                            uint64_t vsHash, uint64_t psHash, uint32_t primType,
-                           VkPipeline& out) -> bool {
-        auto key = std::make_tuple(vsHash, psHash, primType);
+                           const OutputMergerState& om,
+                           VkPipelineLayout pipeLayout, VkPipeline& out) -> bool {
+        auto key = std::make_tuple(vsHash, psHash, primType, om);
         auto it = pipelines.find(key);
         if (it != pipelines.end()) { out = it->second; return true; }
         VkPipelineShaderStageCreateInfo stages[2]{};
@@ -1197,12 +1412,35 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
         VkPipelineDepthStencilStateCreateInfo ds{
             VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-        ds.depthTestEnable = VK_TRUE;
-        ds.depthWriteEnable = VK_TRUE;
-        ds.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+        // Depth from RB_DEPTHCONTROL: z_enable +1, z_write_enable +2, zfunc +4.
+        ds.depthTestEnable = ((om.depthControl >> 1) & 1) ? VK_TRUE : VK_FALSE;
+        ds.depthWriteEnable = ((om.depthControl >> 2) & 1) ? VK_TRUE : VK_FALSE;
+        ds.depthCompareOp = CompareOpOf(om.depthControl >> 4);
+        // Colour write mask from RB_COLOR_MASK's RT0 nibble (r,g,b,a in bits
+        // 0..3), and blending from RB_BLENDCONTROL0. A draw the guest masked off
+        // entirely writes nothing, as on hardware.
         VkPipelineColorBlendAttachmentState cba{};
-        cba.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                             VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        if (om.colorMask & 1) cba.colorWriteMask |= VK_COLOR_COMPONENT_R_BIT;
+        if (om.colorMask & 2) cba.colorWriteMask |= VK_COLOR_COMPONENT_G_BIT;
+        if (om.colorMask & 4) cba.colorWriteMask |= VK_COLOR_COMPONENT_B_BIT;
+        if (om.colorMask & 8) cba.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
+        const uint32_t cSrc = om.blend0 & 0x1F;
+        const uint32_t cOp = (om.blend0 >> 5) & 0x7;
+        const uint32_t cDst = (om.blend0 >> 8) & 0x1F;
+        const uint32_t aSrc = (om.blend0 >> 16) & 0x1F;
+        const uint32_t aOp = (om.blend0 >> 21) & 0x7;
+        const uint32_t aDst = (om.blend0 >> 24) & 0x1F;
+        // "src ONE, dst ZERO, add" on both colour and alpha is the identity, so
+        // blending is only switched on when the guest actually asked for it.
+        const bool blendIsIdentity = cSrc == 1 && cDst == 0 && cOp == 0 &&
+                                     aSrc == 1 && aDst == 0 && aOp == 0;
+        cba.blendEnable = blendIsIdentity ? VK_FALSE : VK_TRUE;
+        cba.srcColorBlendFactor = BlendFactorOf(cSrc);
+        cba.dstColorBlendFactor = BlendFactorOf(cDst);
+        cba.colorBlendOp = BlendOpOf(cOp);
+        cba.srcAlphaBlendFactor = BlendFactorOf(aSrc);
+        cba.dstAlphaBlendFactor = BlendFactorOf(aDst);
+        cba.alphaBlendOp = BlendOpOf(aOp);
         VkPipelineColorBlendStateCreateInfo cb{
             VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
         cb.attachmentCount = 1; cb.pAttachments = &cba;
@@ -1231,11 +1469,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     const uint32_t nDraws = uint32_t(in.draws.size());
     VkDescriptorPool pool = 0;
     {
+        // Image/sampler counts are per shader (up to 32 texture fetch constants
+        // per stage on Xenos), so size for the worst case rather than the two
+        // the loading frame happened to use.
         VkDescriptorPoolSize sizes[] = {
             {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, std::max(nDraws, 1u)},
             {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, std::max(nDraws * 5, 1u)},
-            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, std::max(nDraws * 2, 1u)},
-            {VK_DESCRIPTOR_TYPE_SAMPLER, std::max(nDraws, 1u)}};
+            {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, std::max(nDraws * 64, 1u)},
+            {VK_DESCRIPTOR_TYPE_SAMPLER, std::max(nDraws * 64, 1u)}};
         VkDescriptorPoolCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
         ci.maxSets = std::max(nDraws * 4, 4u);
         ci.poolSizeCount = 4;
@@ -1261,21 +1502,82 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     struct PreparedDraw
     {
         VkPipeline pipeline;
+        VkPipelineLayout layout;
         VkDescriptorSet sets[4];
         VkBuffer ibuf;       // VK_NULL_HANDLE for a non-indexed (auto) draw
         uint32_t count;      // index count, or vertex count when !indexed
         bool indexed;
+        bool samplesRt;      // reads the rendered colour target (RT link)
     };
     std::vector<PreparedDraw> prepared;
     uint32_t issued = 0, skipped = 0;
     std::map<uint64_t, uint64_t> skipReasons; // reason code -> count (for a summary)
+    uint64_t texBindsStub = 0;   // texture bindings served by a stub image
+    uint64_t texBindsRt = 0;     // texture bindings served by the rendered RT
 
-    VkDescriptorImageInfo iiTex{};
-    iiTex.imageView = texView;
-    iiTex.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     VkDescriptorImageInfo iiSamp{};
     iiSamp.sampler = samp;
     VkDescriptorBufferInfo biSsbo{ssbo, 0, VK_WHOLE_SIZE};
+
+    // --- which guest address is "the render target this frame drew into" --
+    // We do not model EDRAM. What we can read straight out of the frame's own
+    // register snapshots is RB_COPY_DEST_BASE (0x2319): the main-memory address
+    // the guest resolves the EDRAM surface to. A later draw that samples a
+    // texture whose fetch-constant base address equals one of those resolve
+    // destinations is sampling this frame's render target, and that is the link
+    // between "the draws that wrote the scene" and "the passes that read it".
+    std::set<uint32_t> resolveDests;
+    for (const FrameDrawItem& d : in.draws)
+    {
+        if (d.registerFile.size() < 0x8000)
+            continue;
+        const uint32_t base = d.registerFile[0x2319] & ~0xFFFu;
+        if (base)
+            resolveDests.insert(base);
+    }
+    {
+        lucent::Line rd;
+        rd.add("frame: {} distinct RB_COPY_DEST_BASE resolve destinations:",
+               resolveDests.size());
+        for (uint32_t b : resolveDests)
+            rd.add(" {:#x}", b);
+        rd.flush(lucent::Level::Info, "draw");
+    }
+
+    // Picks the image view for one texture binding. The stub matching the
+    // shader's declared image dimension is the floor; a binding whose fetch
+    // constant points at a resolve destination of THIS frame is served by the
+    // rendered colour target instead (rtView, null until the segmented pass
+    // below has something to give it).
+    const bool rtLinkEnabled = std::getenv("GEARS_DRAW_RT") != nullptr;
+    const bool listDraws = lucent::config::flag("DRAW_FRAME_LIST");
+    const VkImageView rtSampleView = rtLinkEnabled ? rtSampleViewStorage : VK_NULL_HANDLE;
+    std::map<uint32_t, uint64_t> texBaseCount;    // fetch base address -> bindings
+    std::map<uint32_t, uint64_t> texBaseRtCount;  // ... restricted to resolve destinations
+    bool drawSamplesRt = false;                   // set per draw by selectTexView
+    auto selectTexView = [&](const uint32_t* R, const draw::ShaderTextureBinding& tb)
+        -> VkImageView {
+        const uint32_t fc = tb.fetchConstant & 31;
+        const uint32_t dword1 = R[0x4800 + fc * 6 + 1];
+        const uint32_t base = (dword1 >> 12) << 12;
+        const bool isRt = base != 0 && resolveDests.count(base) != 0;
+        ++texBaseCount[base];
+        if (isRt)
+            ++texBaseRtCount[base];
+        if (isRt && rtLinkEnabled && rtSampleView != VK_NULL_HANDLE && tb.dimension <= 1)
+        {
+            ++texBindsRt;
+            drawSamplesRt = true;
+            return rtSampleView;
+        }
+        ++texBindsStub;
+        switch (tb.dimension)
+        {
+            case 2: return stub3D.view;
+            case 3: return stubCube.view;
+            default: return stub2D.view;
+        }
+    };
 
     for (const FrameDrawItem& d : in.draws)
     {
@@ -1289,8 +1591,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psX, psMod))
         { ++skipped; ++skipReasons[2]; continue; }
 
+        VkDescriptorSetLayout vsTexLayout = 0, psTexLayout = 0;
+        VkPipelineLayout pipeLayout = 0;
+        if (!getPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
+        { ++skipped; ++skipReasons[3]; continue; }
+        OutputMergerState om;
+        om.colorMask = R[0x2104];
+        om.blend0 = R[0x2201];
+        om.depthControl = R[0x2200];
         VkPipeline pipe = VK_NULL_HANDLE;
-        if (!getPipeline(vsMod, psMod, d.vsHash, d.psHash, d.primType, pipe))
+        if (!getPipeline(vsMod, psMod, d.vsHash, d.psHash, d.primType, om, pipeLayout, pipe))
         { ++skipped; ++skipReasons[3]; continue; }
 
         // Per-draw constant UBOs from this draw's own register snapshot.
@@ -1317,7 +1627,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkBuffer ibuf = VK_NULL_HANDLE;
         if (d.indexed)
         {
-            const uint32_t idxBytes = std::max(d.indexCount * (d.indexIs32 ? 4u : 2u), 4u);
+            // The buffer is ALWAYS 32-bit: guest 16-bit indices are widened on
+            // the way in. The draw binds VK_INDEX_TYPE_UINT32 unconditionally,
+            // so sizing it by the guest's index width made every 16-bit indexed
+            // draw read twice its buffer (validation
+            // VUID-vkCmdDrawIndexed-robustBufferAccess2-08798) and rasterise
+            // garbage indices.
+            const uint32_t idxBytes = std::max(d.indexCount * 4u, 4u);
             VkDeviceMemory ibufMem = 0;
             if (!MakeBuffer(idxBytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, ibuf, ibufMem))
             { ++skipped; ++skipReasons[5]; continue; }
@@ -1338,11 +1654,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             }
             else
             {
-                uint16_t* dst = static_cast<uint16_t*>(p);
+                uint32_t* dst = static_cast<uint32_t*>(p);
+                const bool in16 = d.indexGuestBase + d.indexCount * 2u <=
+                                  in.guestPhysicalMirrorBytes;
                 for (uint32_t i = 0; i < d.indexCount; ++i)
                 {
                     uint16_t v = 0;
-                    if (inRange) { std::memcpy(&v, base + i * 2, 2); v = uint16_t((v >> 8) | (v << 8)); }
+                    if (in16) { std::memcpy(&v, base + i * 2, 2); v = uint16_t((v >> 8) | (v << 8)); }
                     dst[i] = v;
                 }
             }
@@ -1350,12 +1668,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             keepBuffers.push_back(ibuf); keepMem.push_back(ibufMem);
         }
 
-        // Descriptor sets for this draw.
+        // Descriptor sets for this draw. Sets 2/3 use this shader pair's own
+        // texture layouts, so their binding counts match the SPIR-V exactly.
         VkDescriptorSet sets[4] = {};
+        VkDescriptorSetLayout drawLayouts[4] = {set0, set1, vsTexLayout, psTexLayout};
         VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
         ai.descriptorPool = pool;
         ai.descriptorSetCount = 4;
-        ai.pSetLayouts = setLayouts;
+        ai.pSetLayouts = drawLayouts;
         if (vkAllocateDescriptorSets(device, &ai, sets) != VK_SUCCESS)
         { ++skipped; ++skipReasons[6]; continue; }
 
@@ -1364,36 +1684,78 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkDescriptorBufferInfo biFps{uFps, 0, VK_WHOLE_SIZE};
         VkDescriptorBufferInfo biBl{uBl, 0, VK_WHOLE_SIZE};
         VkDescriptorBufferInfo biFetch{uFetch, 0, VK_WHOLE_SIZE};
-        VkWriteDescriptorSet w[9]{};
-        auto setBuf = [&](int i, VkDescriptorSet s, uint32_t b, VkDescriptorType t,
+        std::vector<VkWriteDescriptorSet> w;
+        // Image infos must outlive the vkUpdateDescriptorSets call, so they are
+        // held in a deque-stable store rather than a vector that may reallocate.
+        std::deque<VkDescriptorImageInfo> imgInfos;
+        auto setBuf = [&](VkDescriptorSet s, uint32_t b, VkDescriptorType t,
                           VkDescriptorBufferInfo* bi) {
-            w[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            w[i].dstSet = s; w[i].dstBinding = b; w[i].descriptorCount = 1;
-            w[i].descriptorType = t; w[i].pBufferInfo = bi;
+            VkWriteDescriptorSet ws{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            ws.dstSet = s; ws.dstBinding = b; ws.descriptorCount = 1;
+            ws.descriptorType = t; ws.pBufferInfo = bi;
+            w.push_back(ws);
         };
-        auto setImg = [&](int i, VkDescriptorSet s, uint32_t b, VkDescriptorType t,
-                          VkDescriptorImageInfo* ii) {
-            w[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-            w[i].dstSet = s; w[i].dstBinding = b; w[i].descriptorCount = 1;
-            w[i].descriptorType = t; w[i].pImageInfo = ii;
+        setBuf(sets[0], 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &biSsbo);
+        setBuf(sets[1], 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biSys);
+        setBuf(sets[1], 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFvs);
+        setBuf(sets[1], 2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFps);
+        setBuf(sets[1], 3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biBl);
+        setBuf(sets[1], 4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFetch);
+
+        // One image per texture the shader declared, then one sampler each,
+        // exactly in the translator's binding order.
+        auto writeTextures = [&](const draw::ShaderXlate& x, VkDescriptorSet set) {
+            for (uint32_t i = 0; i < uint32_t(x.textures.size()); ++i)
+            {
+                VkDescriptorImageInfo ii{};
+                ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+                ii.imageView = selectTexView(R, x.textures[i]);
+                imgInfos.push_back(ii);
+                VkWriteDescriptorSet ws{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                ws.dstSet = set; ws.dstBinding = i; ws.descriptorCount = 1;
+                ws.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                ws.pImageInfo = &imgInfos.back();
+                w.push_back(ws);
+            }
+            for (uint32_t j = 0; j < x.samplerCount; ++j)
+            {
+                imgInfos.push_back(iiSamp);
+                VkWriteDescriptorSet ws{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+                ws.dstSet = set; ws.dstBinding = uint32_t(x.textures.size()) + j;
+                ws.descriptorCount = 1;
+                ws.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                ws.pImageInfo = &imgInfos.back();
+                w.push_back(ws);
+            }
         };
-        setBuf(0, sets[0], 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &biSsbo);
-        setBuf(1, sets[1], 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biSys);
-        setBuf(2, sets[1], 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFvs);
-        setBuf(3, sets[1], 2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFps);
-        setBuf(4, sets[1], 3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biBl);
-        setBuf(5, sets[1], 4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFetch);
-        setImg(6, sets[3], 0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &iiTex);
-        setImg(7, sets[3], 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, &iiTex);
-        setImg(8, sets[3], 2, VK_DESCRIPTOR_TYPE_SAMPLER, &iiSamp);
-        vkUpdateDescriptorSets(device, 9, w, 0, nullptr);
+        drawSamplesRt = false;
+        writeTextures(*vsX, sets[2]);
+        writeTextures(*psX, sets[3]);
+        if (!w.empty())
+            vkUpdateDescriptorSets(device, uint32_t(w.size()), w.data(), 0, nullptr);
 
         PreparedDraw pd{};
         pd.pipeline = pipe;
+        pd.layout = pipeLayout;
         pd.sets[0] = sets[0]; pd.sets[1] = sets[1]; pd.sets[2] = sets[2]; pd.sets[3] = sets[3];
         pd.ibuf = ibuf;
         pd.count = d.indexCount;
         pd.indexed = d.indexed;
+        pd.samplesRt = drawSamplesRt;
+        if (listDraws)
+        {
+            lucent::Line dl;
+            dl.add("  draw {}: {} {} {} verts, vs {:#018x} ({} tex) ps {:#018x} ({} tex),"
+                   " colormask {:#x} blend {:#x} depth {:#x}",
+                   issued, PrimName(d.primType), d.indexed ? "indexed" : "auto",
+                   d.indexCount, d.vsHash, vsX->textures.size(), d.psHash,
+                   psX->textures.size(), R[0x2104] /*RB_COLOR_MASK*/,
+                   R[0x2201] /*RB_BLENDCONTROL0*/, R[0x2200] /*RB_DEPTHCONTROL*/);
+            for (const auto& t : psX->textures)
+                dl.add(" tex[fc{}]={:#x}", t.fetchConstant,
+                       (R[0x4800 + (t.fetchConstant & 31) * 6 + 1] >> 12) << 12);
+            dl.flush(lucent::Level::Info, "draw");
+        }
         prepared.push_back(pd);
         ++issued;
     }
@@ -1423,27 +1785,35 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(cmd, &cbi));
 
-    // Stub texture -> white -> shader-read.
+    // Every stub image -> white -> shader-read, one per declared dimension.
+    // rtSample joins them but is cleared BLACK, not white: before the first
+    // segment boundary nothing has been rendered into it, and black says that
+    // honestly. It is overwritten with real colour at each boundary.
+    for (const auto& [img, layers, isRt] :
+         std::initializer_list<std::tuple<VkImage, uint32_t, bool>>{
+             {stub2D.image, 1u, false}, {stub3D.image, 1u, false},
+             {stubCube.image, 6u, false}, {rtSample, 1u, true}})
     {
-        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
         VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         toDst.srcAccessMask = 0; toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toDst.image = tex; toDst.subresourceRange = range;
+        toDst.image = img; toDst.subresourceRange = range;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
-        VkClearColorValue white{};
-        white.float32[0] = white.float32[1] = white.float32[2] = white.float32[3] = 1.0f;
-        vkCmdClearColorImage(cmd, tex, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &white, 1, &range);
+        VkClearColorValue fill{};
+        fill.float32[0] = fill.float32[1] = fill.float32[2] = isRt ? 0.0f : 1.0f;
+        fill.float32[3] = 1.0f;
+        vkCmdClearColorImage(cmd, img, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &fill, 1, &range);
         VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         toRead.srcQueueFamilyIndex = toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toRead.image = tex; toRead.subresourceRange = range;
+        toRead.image = img; toRead.subresourceRange = range;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
     }
@@ -1460,11 +1830,88 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     rpb.renderArea = {{0, 0}, {W, H}};
     rpb.clearValueCount = 2;
     rpb.pClearValues = clears;
+    // Checkpoint dumps (GEARS_DRAW_FRAME_STEP=N): after every N draws the colour
+    // target is copied to its own readback buffer and written out, so the frame
+    // can be attributed to individual draws instead of guessed at.
+    const long stepEvery = lucent::config::number("DRAW_FRAME_STEP", 0);
+    std::vector<std::pair<uint32_t, VkBuffer>> checkpoints; // draws-so-far -> buffer
+    std::vector<VkDeviceMemory> checkpointMem;
+
+    // The colour target leaves a render pass in TRANSFER_SRC_OPTIMAL, so a
+    // segment boundary is: end pass -> copy colour where it is needed ->
+    // begin the LOAD pass again.
+    auto copyColorToImage = [&](VkImage dst) {
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        b.image = dst; b.subresourceRange = range;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+        VkImageCopy c{};
+        c.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        c.extent = {W, H, 1};
+        vkCmdCopyImage(cmd, color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+        VkImageMemoryBarrier r{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        r.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        r.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        r.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        r.srcQueueFamilyIndex = r.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        r.image = dst; r.subresourceRange = range;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &r);
+    };
+    // Each checkpoint costs a full-frame readback buffer, so STEP=1 on a
+    // 170-draw frame is capped rather than allocating 170 of them.
+    const size_t kMaxCheckpoints = 48;
+    auto checkpointHere = [&](uint32_t drawsSoFar) {
+        if (checkpoints.size() >= kMaxCheckpoints)
+            return;
+        VkBuffer b = 0; VkDeviceMemory m = 0;
+        if (!MakeBuffer(rbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m))
+            return;
+        VkBufferImageCopy rg{};
+        rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        rg.imageExtent = {W, H, 1};
+        vkCmdCopyImageToBuffer(cmd, color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b, 1, &rg);
+        checkpoints.emplace_back(drawsSoFar, b);
+        checkpointMem.push_back(m);
+    };
+
+    uint32_t segments = 1, rtSnapshots = 0;
     vkCmdBeginRenderPass(cmd, &rpb, VK_SUBPASS_CONTENTS_INLINE);
+    VkRenderPassBeginInfo rpbLoad = rpb;
+    rpbLoad.renderPass = renderPassLoad;
+    rpbLoad.clearValueCount = 0;
+    rpbLoad.pClearValues = nullptr;
+    uint32_t drawn = 0, drawnSinceSnapshot = 0;
     for (const PreparedDraw& pd : prepared)
     {
+        const bool needRtSnapshot = pd.samplesRt && drawnSinceSnapshot > 0;
+        const bool needCheckpoint = stepEvery > 0 && drawn > 0 &&
+                                    (drawn % uint32_t(stepEvery)) == 0;
+        if (needRtSnapshot || needCheckpoint)
+        {
+            vkCmdEndRenderPass(cmd);
+            if (needCheckpoint)
+                checkpointHere(drawn);
+            if (needRtSnapshot)
+            {
+                copyColorToImage(rtSample);
+                drawnSinceSnapshot = 0;
+                ++rtSnapshots;
+            }
+            vkCmdBeginRenderPass(cmd, &rpbLoad, VK_SUBPASS_CONTENTS_INLINE);
+            ++segments;
+        }
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pd.pipeline);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeLayout, 0,
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pd.layout, 0,
             4, pd.sets, 0, nullptr);
         if (pd.indexed)
         {
@@ -1475,6 +1922,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         {
             vkCmdDraw(cmd, pd.count, 1, 0, 0);
         }
+        ++drawn;
+        ++drawnSinceSnapshot;
     }
     vkCmdEndRenderPass(cmd);
     VkBufferImageCopy region{};
@@ -1512,9 +1961,22 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     for (const FrameDrawItem& d : in.draws)
         pairs.emplace(d.vsHash, d.psHash);
     lucent::info("draw", "frame: {} of {} draws issued, {} skipped; {} distinct shader"
-        " pairs, {} distinct shaders, {} pipelines; {}/{} px lit by geometry ({:.1f}%)",
+        " pairs, {} distinct shaders, {} pipelines, {} texture layouts,"
+        " {} pipeline layouts; {} texture bindings ({} from the rendered RT,"
+        " {} from a stub); {}/{} px lit by geometry ({:.1f}%)",
         issued, in.draws.size(), skipped, pairs.size(), modules.size(), pipelines.size(),
-        lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H));
+        texLayouts.size(), pipeLayouts.size(), texBindsRt + texBindsStub, texBindsRt,
+        texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H));
+    {
+        std::map<uint32_t, uint32_t> prims;
+        for (const FrameDrawItem& d : in.draws)
+            ++prims[d.primType];
+        lucent::Line pl;
+        pl.add("frame primitive types:");
+        for (const auto& [p, n] : prims)
+            pl.add(" {}x{}", PrimName(p), n);
+        pl.flush(lucent::Level::Info, "draw");
+    }
     if (skipped)
     {
         for (const auto& [code, n] : skipReasons)
@@ -1530,24 +1992,65 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
     }
 
+    {
+        lucent::Line tb;
+        tb.add("frame texture bases ({} distinct):", texBaseCount.size());
+        for (const auto& [base, n] : texBaseCount)
+            tb.add(" {:#x}x{}{}", base, n, texBaseRtCount.count(base) ? "(RT)" : "");
+        tb.flush(lucent::Level::Info, "draw");
+    }
+    lucent::info("draw", "frame render pass: {} segments, {} RT snapshots"
+        " (RT link {})", segments, rtSnapshots, rtLinkEnabled ? "on" : "off");
+
     const char* dir = std::getenv("GEARS_DRAW_DIR");
-    std::filesystem::path out =
-        (dir ? std::filesystem::path(dir) : std::filesystem::path("scratch/screenshots"))
-        / "frame.ppm";
+    const std::filesystem::path outDir =
+        dir ? std::filesystem::path(dir) : std::filesystem::path("scratch/screenshots");
+    std::filesystem::path out = outDir / "frame.ppm";
     if (WritePpm(out, g_frame.data(), W, H))
         lucent::info("draw", "frame screenshot written to {}", out.string());
+
+    // Checkpoint images, each labelled with how many draws had run.
+    std::vector<uint8_t> cp(rbBytes);
+    for (size_t i = 0; i < checkpoints.size(); ++i)
+    {
+        void* p = nullptr;
+        if (vkMapMemory(device, checkpointMem[i], 0, rbBytes, 0, &p) != VK_SUCCESS)
+            continue;
+        std::memcpy(cp.data(), p, rbBytes);
+        vkUnmapMemory(device, checkpointMem[i]);
+        uint64_t cpLit = 0, cpNonBlack = 0;
+        for (uint32_t k = 0; k < W * H; ++k)
+        {
+            const uint8_t* px = &cp[size_t(k) * 4];
+            if (!(px[0] == 13 && px[1] == 13 && px[2] == 20))
+                ++cpLit;
+            if (px[0] || px[1] || px[2])
+                ++cpNonBlack;
+        }
+        const std::string name = std::format("frame_after{:04}.ppm", checkpoints[i].first);
+        WritePpm(outDir / name, cp.data(), W, H);
+        lucent::info("draw", "  checkpoint after {} draws: {} px != clear, {} px non-black"
+            " -> {}", checkpoints[i].first, cpLit, cpNonBlack, name);
+    }
 
     // --- teardown --------------------------------------------------------
     vkDestroyFence(device, fence, nullptr);
     vkDestroyCommandPool(device, cmdPool, nullptr);
     vkDestroyBuffer(device, readback, nullptr); vkFreeMemory(device, readbackMem, nullptr);
+    for (size_t i = 0; i < checkpoints.size(); ++i)
+    {
+        vkDestroyBuffer(device, checkpoints[i].second, nullptr);
+        vkFreeMemory(device, checkpointMem[i], nullptr);
+    }
+    vkDestroyImageView(device, rtSampleViewStorage, nullptr);
+    vkDestroyImage(device, rtSample, nullptr); vkFreeMemory(device, rtSampleMem, nullptr);
+    vkDestroyRenderPass(device, renderPassLoad, nullptr);
     vkDestroyDescriptorPool(device, pool, nullptr);
     for (auto& [k, p] : pipelines) vkDestroyPipeline(device, p, nullptr);
-    vkDestroyPipelineLayout(device, pipeLayout, nullptr);
+    for (auto& [k, l] : pipeLayouts) vkDestroyPipelineLayout(device, l, nullptr);
+    for (auto& [k, l] : texLayouts) vkDestroyDescriptorSetLayout(device, l, nullptr);
     vkDestroyDescriptorSetLayout(device, set0, nullptr);
     vkDestroyDescriptorSetLayout(device, set1, nullptr);
-    vkDestroyDescriptorSetLayout(device, set2, nullptr);
-    vkDestroyDescriptorSetLayout(device, set3, nullptr);
     vkDestroyFramebuffer(device, fb, nullptr);
     vkDestroyRenderPass(device, renderPass, nullptr);
     vkDestroyImageView(device, depthView, nullptr);
@@ -1555,8 +2058,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     vkDestroyImageView(device, colorView, nullptr);
     vkDestroyImage(device, color, nullptr); vkFreeMemory(device, colorMem, nullptr);
     vkDestroySampler(device, samp, nullptr);
-    vkDestroyImageView(device, texView, nullptr);
-    vkDestroyImage(device, tex, nullptr); vkFreeMemory(device, texMem, nullptr);
+    for (StubTex* s : {&stub2D, &stub3D, &stubCube})
+    {
+        vkDestroyImageView(device, s->view, nullptr);
+        vkDestroyImage(device, s->image, nullptr);
+        vkFreeMemory(device, s->mem, nullptr);
+    }
     for (size_t i = 0; i < keepBuffers.size(); ++i)
     {
         vkDestroyBuffer(device, keepBuffers[i], nullptr);

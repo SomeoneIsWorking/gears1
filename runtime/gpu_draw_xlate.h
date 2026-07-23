@@ -12,12 +12,28 @@
 namespace gears::draw
 {
 
+// One texture the translated shader declared, in the SAME order the translator
+// assigned binding indices (binding i == index i in this list, within the
+// stage's texture descriptor set). Samplers follow the images: sampler j is at
+// binding textures.size() + j. This is Xenia's
+// SpirvShaderTranslator::FindOrAddTextureBinding/FindOrAddSamplerBinding
+// contract, and the host descriptor set layout must match it exactly -- a
+// layout with the wrong binding count or image type is undefined behaviour
+// (observed: a RADV null-deref inside lower_immediate_samplers).
+struct ShaderTextureBinding
+{
+    uint32_t fetchConstant = 0; // which of the 32 texture fetch constants feeds it
+    uint32_t dimension = 1;     // xenos::FetchOpDimension: 0/1 -> 2D array, 2 -> 3D, 3 -> cube
+};
+
 struct ShaderXlate
 {
     bool ok = false;
     std::vector<uint8_t> spirv;      // translated SPIR-V module
     uint64_t floatBitmap[4] = {0, 0, 0, 0}; // ConstantRegisterMap::float_bitmap
     uint32_t floatCount = 0;         // number of float4 constants the UBO holds
+    std::vector<ShaderTextureBinding> textures; // binding index == vector index
+    uint32_t samplerCount = 0;       // samplers occupy bindings [textures.size(), +samplerCount)
 };
 
 // Translates the bound hot pair's microcode (big-endian bytes) via Xenia's
