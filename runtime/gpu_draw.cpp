@@ -1121,6 +1121,282 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VK_CHECK(vkCreateSampler(device, &si, nullptr, &samp));
     }
 
+    // --- guest texture upload --------------------------------------------
+    // Every texture the frame samples is described by its own texture fetch
+    // constant. gpu_draw_xlate decodes one (Xenia's texture_util /
+    // texture_address / FormatInfo do the layout, detiling and format
+    // classification); here it becomes a host image. A fetch whose format has
+    // no host mapping keeps the stub AND is counted with its reason -- nothing
+    // is ever substituted to make the frame look better.
+    struct GuestTex
+    {
+        VkImage image = 0;
+        VkDeviceMemory mem = 0;
+        VkImageView view = 0;
+    };
+    std::vector<GuestTex> guestTextures;          // owned, destroyed at teardown
+    std::map<std::array<uint32_t, 4>, VkImageView> texCache; // fetch key -> view (0 = failed)
+    std::vector<VkBuffer> stagingBufs;
+    std::vector<VkDeviceMemory> stagingMems;
+    struct PendingUpload
+    {
+        VkImage image; VkBuffer staging;
+        uint32_t w, h, d, layers;
+    };
+    std::vector<PendingUpload> uploads;
+    std::map<std::string, uint64_t> texSkips;  // reason -> bindings affected
+    std::map<std::string, uint64_t> texFormatCensus;   // "fmt WxH dim tiled" summary
+    std::map<std::string, uint64_t> texFormatBindings; // format name -> bindings
+    std::set<std::array<uint32_t, 4>> texDistinct;
+    uint64_t uploadedBytes = 0;
+
+    auto hostVkFormat = [](draw::TexHostFormat f) -> VkFormat {
+        switch (f)
+        {
+            case draw::TexHostFormat::kR8Unorm: return VK_FORMAT_R8_UNORM;
+            case draw::TexHostFormat::kR8G8Unorm: return VK_FORMAT_R8G8_UNORM;
+            case draw::TexHostFormat::kR8G8B8A8Unorm: return VK_FORMAT_R8G8B8A8_UNORM;
+            case draw::TexHostFormat::kR5G6B5Pack16: return VK_FORMAT_B5G6R5_UNORM_PACK16;
+            case draw::TexHostFormat::kA1R5G5B5Pack16: return VK_FORMAT_A1R5G5B5_UNORM_PACK16;
+            case draw::TexHostFormat::kB4G4R4A4Pack16: return VK_FORMAT_B4G4R4A4_UNORM_PACK16;
+            case draw::TexHostFormat::kA2B10G10R10Pack32:
+                return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+            case draw::TexHostFormat::kR16Sfloat: return VK_FORMAT_R16_SFLOAT;
+            case draw::TexHostFormat::kR16G16Sfloat: return VK_FORMAT_R16G16_SFLOAT;
+            case draw::TexHostFormat::kR16G16B16A16Sfloat:
+                return VK_FORMAT_R16G16B16A16_SFLOAT;
+            case draw::TexHostFormat::kR16Unorm: return VK_FORMAT_R16_UNORM;
+            case draw::TexHostFormat::kR16G16Unorm: return VK_FORMAT_R16G16_UNORM;
+            case draw::TexHostFormat::kR16G16B16A16Unorm:
+                return VK_FORMAT_R16G16B16A16_UNORM;
+            case draw::TexHostFormat::kR32Sfloat: return VK_FORMAT_R32_SFLOAT;
+            case draw::TexHostFormat::kR32G32Sfloat: return VK_FORMAT_R32G32_SFLOAT;
+            case draw::TexHostFormat::kR32G32B32A32Sfloat:
+                return VK_FORMAT_R32G32B32A32_SFLOAT;
+            case draw::TexHostFormat::kBc1RgbaUnorm: return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+            case draw::TexHostFormat::kBc2Unorm: return VK_FORMAT_BC2_UNORM_BLOCK;
+            case draw::TexHostFormat::kBc3Unorm: return VK_FORMAT_BC3_UNORM_BLOCK;
+            case draw::TexHostFormat::kBc4Unorm: return VK_FORMAT_BC4_UNORM_BLOCK;
+            case draw::TexHostFormat::kBc5Unorm: return VK_FORMAT_BC5_UNORM_BLOCK;
+            default: return VK_FORMAT_UNDEFINED;
+        }
+    };
+    auto compSwizzle = [](uint8_t s) -> VkComponentSwizzle {
+        switch (s)
+        {
+            case 0: return VK_COMPONENT_SWIZZLE_R;
+            case 1: return VK_COMPONENT_SWIZZLE_G;
+            case 2: return VK_COMPONENT_SWIZZLE_B;
+            case 3: return VK_COMPONENT_SWIZZLE_A;
+            case 4: return VK_COMPONENT_SWIZZLE_ZERO;
+            default: return VK_COMPONENT_SWIZZLE_ONE;
+        }
+    };
+
+    // Builds (once per distinct fetch) the host image for one texture fetch
+    // constant, or returns VK_NULL_HANDLE with the reason counted.
+    auto uploadTexture = [&](const uint32_t* fetch6, uint32_t wantDim) -> VkImageView {
+        const std::array<uint32_t, 4> key{fetch6[0], fetch6[1], fetch6[2],
+                                          fetch6[3] & 0x1FFEu /*swizzle bits*/};
+        auto it = texCache.find(key);
+        if (it != texCache.end())
+            return it->second;
+        texDistinct.insert(key);
+
+        draw::GuestTexture gt;
+        if (!draw::DecodeGuestTexture(fetch6, in.guestBase,
+                uint64_t(in.guestWindowBytes), /*wantData=*/true, gt))
+        {
+            ++texSkips["not a texture fetch constant"];
+            texCache[key] = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        ++texFormatBindings[gt.formatName];
+        {
+            std::string s = std::format(
+                "{:#x} {} {}x{}x{} dim{} {} endian{} swizzle{:#05x} mips{}-{}{}",
+                gt.baseAddress, gt.formatName, gt.width, gt.height,
+                gt.depthOrArraySize, gt.dimension, gt.tiled ? "tiled" : "linear",
+                gt.endian, gt.guestSwizzle, gt.mipMin, gt.mipMax,
+                gt.packedMips ? " packed" : "");
+            ++texFormatCensus[s];
+        }
+        if (gt.skipReason)
+        {
+            ++texSkips[gt.skipReason];
+            texCache[key] = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        // The shader's declared image type has to match the view type, and the
+        // shader derived it from this same fetch's dimension -- a mismatch
+        // means our decode disagrees with the translator, which we report
+        // rather than paper over.
+        const uint32_t declDim = gt.dimension <= 1 ? 1 : gt.dimension;
+        if ((wantDim <= 1 ? 1u : wantDim) != declDim)
+        {
+            ++texSkips["shader/fetch dimension mismatch"];
+            texCache[key] = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        const VkFormat vf = hostVkFormat(gt.hostFormat);
+        if (vf == VK_FORMAT_UNDEFINED)
+        {
+            ++texSkips["no host VkFormat"];
+            texCache[key] = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        VkFormatProperties fp{};
+        vkGetPhysicalDeviceFormatProperties(physical, vf, &fp);
+        if (!(fp.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
+        {
+            ++texSkips["host format not sampleable on this device"];
+            texCache[key] = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+
+        const bool is3D = gt.dimension == 2;
+        const bool isCube = gt.dimension == 3;
+        GuestTex tex;
+        VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ci.flags = isCube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
+        ci.imageType = is3D ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
+        ci.format = vf;
+        ci.extent = {gt.width, gt.height, gt.depth3D};
+        ci.mipLevels = 1;
+        ci.arrayLayers = gt.layers;
+        ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        if (vkCreateImage(device, &ci, nullptr, &tex.image) != VK_SUCCESS)
+        {
+            ++texSkips["vkCreateImage failed"];
+            texCache[key] = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        VkMemoryRequirements req{};
+        vkGetImageMemoryRequirements(device, tex.image, &req);
+        uint32_t mtype = 0;
+        if (!FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, mtype))
+            FindMemory(req.memoryTypeBits, 0, mtype);
+        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = mtype;
+        if (vkAllocateMemory(device, &ai, nullptr, &tex.mem) != VK_SUCCESS ||
+            vkBindImageMemory(device, tex.image, tex.mem, 0) != VK_SUCCESS)
+        {
+            vkDestroyImage(device, tex.image, nullptr);
+            ++texSkips["image memory allocation failed"];
+            texCache[key] = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vi.image = tex.image;
+        vi.viewType = is3D ? VK_IMAGE_VIEW_TYPE_3D
+                   : isCube ? VK_IMAGE_VIEW_TYPE_CUBE
+                            : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        vi.format = vf;
+        vi.components.r = compSwizzle(gt.hostSwizzle[0]);
+        vi.components.g = compSwizzle(gt.hostSwizzle[1]);
+        vi.components.b = compSwizzle(gt.hostSwizzle[2]);
+        vi.components.a = compSwizzle(gt.hostSwizzle[3]);
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, gt.layers};
+        if (vkCreateImageView(device, &vi, nullptr, &tex.view) != VK_SUCCESS)
+        {
+            vkDestroyImage(device, tex.image, nullptr);
+            vkFreeMemory(device, tex.mem, nullptr);
+            ++texSkips["vkCreateImageView failed"];
+            texCache[key] = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+
+        VkBuffer staging = 0; VkDeviceMemory stagingMem = 0;
+        if (!MakeBuffer(gt.data.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                        staging, stagingMem))
+        {
+            vkDestroyImageView(device, tex.view, nullptr);
+            vkDestroyImage(device, tex.image, nullptr);
+            vkFreeMemory(device, tex.mem, nullptr);
+            ++texSkips["staging buffer allocation failed"];
+            texCache[key] = VK_NULL_HANDLE;
+            return VK_NULL_HANDLE;
+        }
+        {
+            void* p = nullptr;
+            vkMapMemory(device, stagingMem, 0, gt.data.size(), 0, &p);
+            std::memcpy(p, gt.data.data(), gt.data.size());
+            vkUnmapMemory(device, stagingMem);
+        }
+        // GEARS_DRAW_TEX_DUMP=1 writes the decoded (detiled, endian-swapped)
+        // blob so the decode can be checked outside the renderer -- the only
+        // way to tell "detiling is right" from "the shader is dark".
+        if (std::getenv("GEARS_DRAW_TEX_DUMP"))
+        {
+            std::filesystem::create_directories("scratch/raw/textures");
+            const std::string fn = std::format(
+                "scratch/raw/textures/{:08x}_{}_{}x{}x{}_{}.bin", gt.baseAddress,
+                gt.formatName, gt.width, gt.height, gt.layers * gt.depth3D,
+                gt.tiled ? "tiled" : "linear");
+            if (FILE* f = std::fopen(fn.c_str(), "wb"))
+            {
+                std::fwrite(gt.data.data(), 1, gt.data.size(), f);
+                std::fclose(f);
+            }
+        }
+        stagingBufs.push_back(staging);
+        stagingMems.push_back(stagingMem);
+        uploadedBytes += gt.data.size();
+        uploads.push_back({tex.image, staging, gt.width, gt.height, gt.depth3D,
+                           gt.layers});
+        guestTextures.push_back(tex);
+        texCache[key] = tex.view;
+        return tex.view;
+    };
+
+    // Sampler per distinct guest sampler state, built from the shader's sampler
+    // binding resolved against its own fetch constant (clamp modes, filters,
+    // anisotropy) -- not a fixed host sampler.
+    std::map<uint64_t, VkSampler> samplerCache;
+    auto vkAddressMode = [](uint32_t clamp) -> VkSamplerAddressMode {
+        switch (clamp)
+        {
+            case 0: return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+            case 1: return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+            case 2: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            case 3: return VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;
+            // Half-way clamps have no host equivalent; edge is the closest and
+            // is recorded as such rather than silently pretended to be exact.
+            case 4: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+            case 5: return VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;
+            case 6: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+            default: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+        }
+    };
+    auto getSampler = [&](const draw::GuestSamplerState& gs) -> VkSampler {
+        const uint64_t k = uint64_t(gs.magFilter) | (uint64_t(gs.minFilter) << 4) |
+                           (uint64_t(gs.mipFilter) << 8) |
+                           (uint64_t(gs.clamp[0]) << 12) | (uint64_t(gs.clamp[1]) << 16) |
+                           (uint64_t(gs.clamp[2]) << 20) | (uint64_t(gs.anisoMax) << 24);
+        auto it = samplerCache.find(k);
+        if (it != samplerCache.end())
+            return it->second;
+        VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        si.magFilter = gs.magFilter == 1 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        si.minFilter = gs.minFilter == 1 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
+        si.mipmapMode = gs.mipFilter == 1 ? VK_SAMPLER_MIPMAP_MODE_LINEAR
+                                          : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+        si.addressModeU = vkAddressMode(gs.clamp[0]);
+        si.addressModeV = vkAddressMode(gs.clamp[1]);
+        si.addressModeW = vkAddressMode(gs.clamp[2]);
+        si.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
+        si.maxLod = VK_LOD_CLAMP_NONE;
+        VkSampler s = VK_NULL_HANDLE;
+        if (vkCreateSampler(device, &si, nullptr, &s) != VK_SUCCESS)
+            return samp;
+        samplerCache[k] = s;
+        return s;
+    };
+
     // --- persistent colour + depth target --------------------------------
     VkImage color = 0; VkDeviceMemory colorMem = 0; VkImageView colorView = 0;
     {
@@ -1395,12 +1671,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkPipelineInputAssemblyStateCreateInfo ia{
             VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
         ia.topology = TopologyOf(primType);
-        VkViewport vp{0, 0, float(W), float(H), 0, 1};
-        VkRect2D scRect{{0, 0}, {W, H}};
+        // Viewport and scissor are the GUEST's, per draw (PA_CL_VPORT_* /
+        // PA_SC_*), so they are dynamic state rather than baked in -- a
+        // host-fixed full-target viewport put this frame's geometry in the
+        // top-left corner at the wrong scale.
         VkPipelineViewportStateCreateInfo vps{
             VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-        vps.viewportCount = 1; vps.pViewports = &vp;
-        vps.scissorCount = 1; vps.pScissors = &scRect;
+        vps.viewportCount = 1;
+        vps.scissorCount = 1;
+        const VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT,
+                                            VK_DYNAMIC_STATE_SCISSOR};
+        VkPipelineDynamicStateCreateInfo dyn{
+            VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+        dyn.dynamicStateCount = 2;
+        dyn.pDynamicStates = dynStates;
         VkPipelineRasterizationStateCreateInfo rs{
             VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
         rs.polygonMode = VK_POLYGON_MODE_FILL;
@@ -1413,7 +1697,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkPipelineDepthStencilStateCreateInfo ds{
             VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
         // Depth from RB_DEPTHCONTROL: z_enable +1, z_write_enable +2, zfunc +4.
-        ds.depthTestEnable = ((om.depthControl >> 1) & 1) ? VK_TRUE : VK_FALSE;
+        // GEARS_DRAW_NODEPTH=1 is a DIAGNOSTIC control arm only: it separates
+        // "this draw is depth-rejected" from "this draw shades black". It is
+        // never a fix -- the depth state below is the guest's own.
+        static const bool noDepth = std::getenv("GEARS_DRAW_NODEPTH") != nullptr;
+        ds.depthTestEnable =
+            (!noDepth && ((om.depthControl >> 1) & 1)) ? VK_TRUE : VK_FALSE;
         ds.depthWriteEnable = ((om.depthControl >> 2) & 1) ? VK_TRUE : VK_FALSE;
         ds.depthCompareOp = CompareOpOf(om.depthControl >> 4);
         // Colour write mask from RB_COLOR_MASK's RT0 nibble (r,g,b,a in bits
@@ -1453,6 +1742,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         gp.pMultisampleState = &ms;
         gp.pDepthStencilState = &ds;
         gp.pColorBlendState = &cb;
+        gp.pDynamicState = &dyn;
         gp.layout = pipeLayout;
         gp.renderPass = renderPass;
         gp.subpass = 0;
@@ -1508,12 +1798,19 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         uint32_t count;      // index count, or vertex count when !indexed
         bool indexed;
         bool samplesRt;      // reads the rendered colour target (RT link)
+        VkViewport viewport; // the guest's own, per draw
+        VkRect2D scissor;
     };
     std::vector<PreparedDraw> prepared;
     uint32_t issued = 0, skipped = 0;
     std::map<uint64_t, uint64_t> skipReasons; // reason code -> count (for a summary)
     uint64_t texBindsStub = 0;   // texture bindings served by a stub image
     uint64_t texBindsRt = 0;     // texture bindings served by the rendered RT
+    uint64_t texBindsGuest = 0;  // texture bindings served by real guest texture data
+    std::map<std::string, uint64_t> viewportCensus; // guest viewport/scissor -> draws
+    // Upload is on by default; GEARS_DRAW_NOTEX=1 is the control arm that
+    // restores the stub-only frame for an A/B comparison.
+    const bool texUploadEnabled = std::getenv("GEARS_DRAW_NOTEX") == nullptr;
 
     VkDescriptorImageInfo iiSamp{};
     iiSamp.sampler = samp;
@@ -1570,6 +1867,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             drawSamplesRt = true;
             return rtSampleView;
         }
+        // The guest's own texture, decoded from this fetch constant. The stub
+        // below is only reached when the decode reports a reason it cannot.
+        if (texUploadEnabled)
+        {
+            VkImageView v = uploadTexture(&R[0x4800 + fc * 6], tb.dimension);
+            if (v != VK_NULL_HANDLE)
+            {
+                ++texBindsGuest;
+                return v;
+            }
+        }
         ++texBindsStub;
         switch (tb.dimension)
         {
@@ -1624,8 +1932,68 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // gl_VertexIndex = 0..count-1 directly (vkCmdDraw), matching how the
         // hardware sequences an auto-indexed primitive; the shader's vfetch then
         // reads the vertex from the SSBO by that index.
+        //
+        // kQuadList (0x0D) has no Vulkan topology. The hardware draws each
+        // group of 4 vertices as a quad; Xenia's PrimitiveProcessor expands
+        // that to a triangle list (0,1,2 / 0,2,3) rather than pretending a
+        // quad list is a triangle list. Without the expansion the vertices are
+        // regrouped into unrelated triangles, and this frame's ENTIRE world
+        // geometry is quad_list -- it drew nothing.
         VkBuffer ibuf = VK_NULL_HANDLE;
-        if (d.indexed)
+        uint32_t drawCount = d.indexCount;
+        bool drawIndexed = d.indexed;
+        if (d.primType == 13 /*kQuadList*/)
+        {
+            const uint32_t quads = d.indexCount / 4;
+            const uint32_t triIndices = quads * 6;
+            if (quads == 0)
+            { ++skipped; ++skipReasons[7]; continue; }
+            // Guest indices (when present) are read first, then regrouped, so
+            // the expansion works for both auto and DMA quad lists.
+            std::vector<uint32_t> src(d.indexCount);
+            if (d.indexed)
+            {
+                const uint8_t* base = in.guestBase + d.indexGuestBase;
+                const uint32_t width = d.indexIs32 ? 4u : 2u;
+                const bool inRange = d.indexGuestBase + d.indexCount * width <=
+                                     in.guestPhysicalMirrorBytes;
+                for (uint32_t i = 0; i < d.indexCount; ++i)
+                {
+                    uint32_t v = 0;
+                    if (inRange && d.indexIs32)
+                    { std::memcpy(&v, base + i * 4, 4); v = __builtin_bswap32(v); }
+                    else if (inRange)
+                    {
+                        uint16_t h = 0; std::memcpy(&h, base + i * 2, 2);
+                        v = uint16_t((h >> 8) | (h << 8));
+                    }
+                    src[i] = v;
+                }
+            }
+            else
+            {
+                for (uint32_t i = 0; i < d.indexCount; ++i)
+                    src[i] = i;
+            }
+            VkDeviceMemory qMem = 0;
+            if (!MakeBuffer(triIndices * 4u, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, ibuf, qMem))
+            { ++skipped; ++skipReasons[5]; continue; }
+            void* p = nullptr;
+            if (vkMapMemory(device, qMem, 0, triIndices * 4u, 0, &p) != VK_SUCCESS)
+            { ++skipped; ++skipReasons[5]; continue; }
+            uint32_t* dst = static_cast<uint32_t*>(p);
+            for (uint32_t q = 0; q < quads; ++q)
+            {
+                const uint32_t* v = &src[q * 4];
+                *dst++ = v[0]; *dst++ = v[1]; *dst++ = v[2];
+                *dst++ = v[0]; *dst++ = v[2]; *dst++ = v[3];
+            }
+            vkUnmapMemory(device, qMem);
+            keepBuffers.push_back(ibuf); keepMem.push_back(qMem);
+            drawCount = triIndices;
+            drawIndexed = true;
+        }
+        else if (d.indexed)
         {
             // The buffer is ALWAYS 32-bit: guest 16-bit indices are widened on
             // the way in. The draw binds VK_INDEX_TYPE_UINT32 unconditionally,
@@ -1719,7 +2087,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             }
             for (uint32_t j = 0; j < x.samplerCount; ++j)
             {
-                imgInfos.push_back(iiSamp);
+                // Sampler state is the guest's: filters and clamp modes come
+                // from the fetch constant this sampler binding names.
+                VkDescriptorImageInfo si = iiSamp;
+                draw::GuestSamplerState gs;
+                if (j < x.samplers.size() &&
+                    draw::DeriveSamplerState(
+                        &R[0x4800 + (x.samplers[j].fetchConstant & 31) * 6],
+                        x.samplers[j], gs))
+                    si.sampler = getSampler(gs);
+                imgInfos.push_back(si);
                 VkWriteDescriptorSet ws{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                 ws.dstSet = set; ws.dstBinding = uint32_t(x.textures.size()) + j;
                 ws.descriptorCount = 1;
@@ -1739,9 +2116,38 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pd.layout = pipeLayout;
         pd.sets[0] = sets[0]; pd.sets[1] = sets[1]; pd.sets[2] = sets[2]; pd.sets[3] = sets[3];
         pd.ibuf = ibuf;
-        pd.count = d.indexCount;
-        pd.indexed = d.indexed;
+        pd.count = drawCount;
+        pd.indexed = drawIndexed;
         pd.samplesRt = drawSamplesRt;
+        // Viewport/scissor from this draw's own registers, clamped to the host
+        // target. A zero extent is a legitimately empty viewport on Xenos.
+        {
+            draw::GuestViewport gv;
+            draw::DeriveViewport(R, gv);
+            // GEARS_DRAW_FIXEDVP=1 restores the old host-fixed full-target
+            // viewport: the control arm for measuring what the guest-derived
+            // viewport/scissor changed.
+            static const bool fixedVp = std::getenv("GEARS_DRAW_FIXEDVP") != nullptr;
+            if (fixedVp)
+            {
+                gv.x = gv.y = gv.scissorX = gv.scissorY = 0;
+                gv.w = gv.scissorW = W; gv.h = gv.scissorH = H;
+                gv.zMin = 0.0f; gv.zMax = 1.0f;
+            }
+            ++viewportCensus[std::format("{},{} {}x{} scissor {},{} {}x{}",
+                gv.x, gv.y, gv.w, gv.h, gv.scissorX, gv.scissorY,
+                gv.scissorW, gv.scissorH)];
+            pd.viewport.x = float(std::min(gv.x, W));
+            pd.viewport.y = float(std::min(gv.y, H));
+            pd.viewport.width = float(std::min(gv.w, W - std::min(gv.x, W)));
+            pd.viewport.height = float(std::min(gv.h, H - std::min(gv.y, H)));
+            pd.viewport.minDepth = gv.zMin;
+            pd.viewport.maxDepth = gv.zMax;
+            pd.scissor.offset = {int32_t(std::min(gv.scissorX, W)),
+                                 int32_t(std::min(gv.scissorY, H))};
+            pd.scissor.extent = {std::min(gv.scissorW, W - std::min(gv.scissorX, W)),
+                                 std::min(gv.scissorH, H - std::min(gv.scissorY, H))};
+        }
         if (listDraws)
         {
             lucent::Line dl;
@@ -1818,12 +2224,51 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
     }
 
+    // Guest textures: staging buffer -> image, once each, before any draw.
+    for (const PendingUpload& u : uploads)
+    {
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, u.layers};
+        VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        toDst.srcAccessMask = 0; toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toDst.image = u.image; toDst.subresourceRange = range;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
+        // The decoded blob is tightly packed, layer-major, so one region with
+        // zero row/image length (meaning "tightly packed") covers it.
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, u.layers};
+        region.imageExtent = {u.w, u.h, u.d};
+        vkCmdCopyBufferToImage(cmd, u.staging, u.image,
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+        VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toRead.srcQueueFamilyIndex = toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toRead.image = u.image; toRead.subresourceRange = range;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toRead);
+    }
+
     VkClearValue clears[2]{};
     clears[0].color.float32[0] = 0.05f; // dark slate: any lit pixel is guest geometry
     clears[0].color.float32[1] = 0.05f;
     clears[0].color.float32[2] = 0.08f;
     clears[0].color.float32[3] = 1.0f;
-    clears[1].depthStencil = {1.0f, 0};
+    // Diagnostic only: the depth clear is still HOST-FIXED (the guest's own
+    // comes from its clear packet / RB_DEPTH_CLEAR, which we do not yet track).
+    // This frame's draws test GEQUAL, which is a reverse-Z convention, so 1.0
+    // may be the wrong initial value -- GEARS_DRAW_DEPTH_CLEAR=<float> is the
+    // control arm for measuring that, not a fix.
+    {
+        const char* dc = std::getenv("GEARS_DRAW_DEPTH_CLEAR");
+        clears[1].depthStencil = {dc ? float(std::atof(dc)) : 1.0f, 0};
+    }
     VkRenderPassBeginInfo rpb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rpb.renderPass = renderPass;
     rpb.framebuffer = fb;
@@ -1911,6 +2356,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             ++segments;
         }
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pd.pipeline);
+        vkCmdSetViewport(cmd, 0, 1, &pd.viewport);
+        vkCmdSetScissor(cmd, 0, 1, &pd.scissor);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pd.layout, 0,
             4, pd.sets, 0, nullptr);
         if (pd.indexed)
@@ -1962,11 +2409,24 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pairs.emplace(d.vsHash, d.psHash);
     lucent::info("draw", "frame: {} of {} draws issued, {} skipped; {} distinct shader"
         " pairs, {} distinct shaders, {} pipelines, {} texture layouts,"
-        " {} pipeline layouts; {} texture bindings ({} from the rendered RT,"
-        " {} from a stub); {}/{} px lit by geometry ({:.1f}%)",
+        " {} pipeline layouts; {} texture bindings ({} guest textures,"
+        " {} from the rendered RT, {} from a stub); {}/{} px lit by geometry"
+        " ({:.1f}%)",
         issued, in.draws.size(), skipped, pairs.size(), modules.size(), pipelines.size(),
-        texLayouts.size(), pipeLayouts.size(), texBindsRt + texBindsStub, texBindsRt,
+        texLayouts.size(), pipeLayouts.size(),
+        texBindsRt + texBindsStub + texBindsGuest, texBindsGuest, texBindsRt,
         texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H));
+    lucent::info("draw", "frame textures: {} distinct fetch constants, {} uploaded"
+        " ({:.1f} MiB), {} samplers", texDistinct.size(), uploads.size(),
+        double(uploadedBytes) / (1024.0 * 1024.0), samplerCache.size());
+    for (const auto& [fmt, n] : texFormatBindings)
+        lucent::info("draw", "  format {}: {} distinct fetches", fmt, n);
+    for (const auto& [why, n] : texSkips)
+        lucent::warn("draw", "  NOT uploaded, {} distinct fetches: {}", n, why);
+    for (const auto& [what, n] : texFormatCensus)
+        lucent::info("draw", "  texture {} x{}", what, n);
+    for (const auto& [what, n] : viewportCensus)
+        lucent::info("draw", "  guest viewport {} x{} draws", what, n);
     {
         std::map<uint32_t, uint32_t> prims;
         for (const FrameDrawItem& d : in.draws)
@@ -1987,7 +2447,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 code == 3 ? "pipeline create failed" :
                 code == 4 ? "UBO alloc failed" :
                 code == 5 ? "index buffer failed" :
-                code == 6 ? "descriptor alloc failed" : "unknown";
+                code == 6 ? "descriptor alloc failed" :
+                code == 7 ? "quad list with fewer than 4 vertices" : "unknown";
             lucent::warn("draw", "  skipped {}x: {}", n, why);
         }
     }
@@ -2058,6 +2519,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     vkDestroyImageView(device, colorView, nullptr);
     vkDestroyImage(device, color, nullptr); vkFreeMemory(device, colorMem, nullptr);
     vkDestroySampler(device, samp, nullptr);
+    for (auto& [k, s] : samplerCache) vkDestroySampler(device, s, nullptr);
+    for (GuestTex& t : guestTextures)
+    {
+        vkDestroyImageView(device, t.view, nullptr);
+        vkDestroyImage(device, t.image, nullptr);
+        vkFreeMemory(device, t.mem, nullptr);
+    }
+    for (size_t i = 0; i < stagingBufs.size(); ++i)
+    {
+        vkDestroyBuffer(device, stagingBufs[i], nullptr);
+        vkFreeMemory(device, stagingMems[i], nullptr);
+    }
     for (StubTex* s : {&stub2D, &stub3D, &stubCube})
     {
         vkDestroyImageView(device, s->view, nullptr);

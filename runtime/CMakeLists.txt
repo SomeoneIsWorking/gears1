@@ -110,6 +110,10 @@ if(Vulkan_FOUND AND GEARS_HAVE_XENOS_TRANSLATOR)
     target_compile_definitions(gears_draw_xlate PRIVATE GEARS_HAVE_GUEST_DRAW)
     target_include_directories(gears_draw_xlate PRIVATE .)
     target_link_libraries(gears_draw_xlate PRIVATE xenia_gpu lucent::lucent)
+    # Xenia's texture_info.h GetBaseFormat is an SSSE3 shuffle on x86-64; the
+    # xenia_gpu island is built with -mavx for the same reason. This TU now
+    # includes it, so it needs the same target features.
+    target_compile_options(gears_draw_xlate PRIVATE -mavx)
     target_compile_definitions(gears1 PRIVATE GEARS_HAVE_GUEST_DRAW)
     target_link_libraries(gears1 PRIVATE Vulkan::Vulkan gears_draw_xlate)
     message(STATUS "gears1: guest-draw backend enabled (Vulkan + Xenos translator)")
