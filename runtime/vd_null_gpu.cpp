@@ -1180,6 +1180,10 @@ struct CommandProcessor
         // the low MBs; a draw whose fetch base exceeds this reads zero and is
         // reported by the backend as empty geometry rather than faked.
         in.guestPhysicalMirrorBytes = 0x4000000; // 64 MiB
+        // Textures live anywhere in the console's 512 MiB of physical RAM,
+        // which is mapped at the 0x0 alias; the texture decoder reads it
+        // directly (bounds-checked) rather than through the SSBO mirror.
+        in.guestWindowBytes = 0x20000000; // 512 MiB
         in.draws = std::move(frameDraws);
         lucent::info("gpu", "guest-draw: rendering whole frame ({} draws captured)",
             in.draws.size());

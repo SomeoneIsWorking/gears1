@@ -18,6 +18,9 @@
 #include "xenia/gpu/shader.h"
 #include "xenia/gpu/spirv_shader.h"
 #include "xenia/gpu/spirv_shader_translator.h"
+#include "xenia/gpu/texture_address.h"
+#include "xenia/gpu/texture_info.h"
+#include "xenia/gpu/texture_util.h"
 #include "xenia/gpu/xenos.h"
 
 namespace gears::draw
@@ -84,7 +87,18 @@ bool TranslateOne(SpirvShaderTranslator& translator, xenos::ShaderType type,
         b.dimension = uint32_t(tb.dimension);
         out.textures.push_back(b);
     }
-    out.samplerCount = uint32_t(shader.GetSamplerBindingsAfterTranslation().size());
+    out.samplers.clear();
+    for (const auto& sb : shader.GetSamplerBindingsAfterTranslation())
+    {
+        ShaderSamplerBinding s;
+        s.fetchConstant = sb.fetch_constant;
+        s.magFilter = uint32_t(sb.mag_filter);
+        s.minFilter = uint32_t(sb.min_filter);
+        s.mipFilter = uint32_t(sb.mip_filter);
+        s.anisoFilter = uint32_t(sb.aniso_filter);
+        out.samplers.push_back(s);
+    }
+    out.samplerCount = uint32_t(out.samplers.size());
     out.ok = true;
     lucent::info("draw", "translated {} {:#018x}: {} bytes SPIR-V, {} float constants,"
         " {} textures, {} samplers",
@@ -227,6 +241,314 @@ std::vector<uint8_t> DeriveSystemConstants(const uint32_t* registerFile)
     std::vector<uint8_t> out(sizeof(sc));
     std::memcpy(out.data(), &sc, sizeof(sc));
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// Guest texture decode. Every piece of hardware knowledge here is Xenia's:
+// texture_util::GetSubresourcesFromFetchConstant (extents/mip range from the
+// fetch), texture_util::GetGuestTextureLayout (row pitch, slice strides),
+// texture_address::Tiled2D/Tiled3D (the tiled address function), FormatInfo
+// (block size / bytes per block) and TextureCache::GuestToHostSwizzle
+// (component order). What is ours is the loop that walks blocks and the
+// guest-format -> host-format table, which mirrors Xenia's Vulkan host format
+// table (vulkan_texture_cache.cc) for the formats we support.
+
+namespace
+{
+
+// Endianness is a byte permutation within a 2- or 4-byte unit, uniform across
+// the whole texture, so it can be applied as an XOR on the source byte offset
+// instead of a separate conversion pass. This is exactly what Xenia's load
+// shaders do with XeEndianSwap, expressed per byte.
+uint32_t EndianOffsetXor(xenos::Endian e)
+{
+    switch (e)
+    {
+        case xenos::Endian::k8in16: return 1;
+        case xenos::Endian::k8in32: return 3;
+        case xenos::Endian::k16in32: return 2;
+        default: return 0;
+    }
+}
+
+struct HostFormat
+{
+    TexHostFormat fmt = TexHostFormat::kUnsupported;
+    // Indexed by GUEST component (0=R 1=G 2=B 3=A), yields the HOST component
+    // that carries it -- Xenia's host_format_swizzle.
+    uint8_t sw[4] = {0, 1, 2, 3};
+    const char* unsupportedWhy = nullptr;
+};
+
+#define SW(a, b, c, d) {uint8_t(a), uint8_t(b), uint8_t(c), uint8_t(d)}
+
+HostFormat MapFormat(xenos::TextureFormat f)
+{
+    using TF = xenos::TextureFormat;
+    switch (f)
+    {
+        // Uncompressed, byte-for-byte after the endian swap.
+        case TF::k_8:
+        case TF::k_8_A:      return {TexHostFormat::kR8Unorm, SW(0, 0, 0, 0)};
+        case TF::k_8_8:      return {TexHostFormat::kR8G8Unorm, SW(0, 1, 1, 1)};
+        case TF::k_8_8_8_8:  return {TexHostFormat::kR8G8B8A8Unorm, SW(0, 1, 2, 3)};
+        // Guest 5_6_5 packs R in the low bits, which is what Vulkan calls
+        // B5G6R5_UNORM_PACK16 -- no component conversion needed. (Xenia maps it
+        // to R5G6B5 and swaps R/B inside its load shader instead.)
+        case TF::k_5_6_5:    return {TexHostFormat::kR5G6B5Pack16, SW(2, 1, 0, 2)};
+        // Guest 1_5_5_5 packs R in the low bits; host A1R5G5B5_UNORM_PACK16 has
+        // B there, so guest R lands in host B and vice versa.
+        case TF::k_1_5_5_5:  return {TexHostFormat::kA1R5G5B5Pack16, SW(2, 1, 0, 3)};
+        case TF::k_2_10_10_10:
+            return {TexHostFormat::kA2B10G10R10Pack32, SW(0, 1, 2, 3)};
+        case TF::k_16:       return {TexHostFormat::kR16Unorm, SW(0, 0, 0, 0)};
+        case TF::k_16_16:    return {TexHostFormat::kR16G16Unorm, SW(0, 1, 1, 1)};
+        case TF::k_16_16_16_16:
+            return {TexHostFormat::kR16G16B16A16Unorm, SW(0, 1, 2, 3)};
+        case TF::k_16_FLOAT: return {TexHostFormat::kR16Sfloat, SW(0, 0, 0, 0)};
+        case TF::k_16_16_FLOAT:
+            return {TexHostFormat::kR16G16Sfloat, SW(0, 1, 1, 1)};
+        case TF::k_16_16_16_16_FLOAT:
+            return {TexHostFormat::kR16G16B16A16Sfloat, SW(0, 1, 2, 3)};
+        case TF::k_32_FLOAT: return {TexHostFormat::kR32Sfloat, SW(0, 0, 0, 0)};
+        case TF::k_32_32_FLOAT:
+            return {TexHostFormat::kR32G32Sfloat, SW(0, 1, 1, 1)};
+        case TF::k_32_32_32_32_FLOAT:
+            return {TexHostFormat::kR32G32B32A32Sfloat, SW(0, 1, 2, 3)};
+        // Block-compressed: the host consumes the guest blocks verbatim.
+        case TF::k_DXT1:     return {TexHostFormat::kBc1RgbaUnorm, SW(0, 1, 2, 3)};
+        case TF::k_DXT2_3:   return {TexHostFormat::kBc2Unorm, SW(0, 1, 2, 3)};
+        case TF::k_DXT4_5:   return {TexHostFormat::kBc3Unorm, SW(0, 1, 2, 3)};
+        case TF::k_DXT5A:    return {TexHostFormat::kBc4Unorm, SW(0, 0, 0, 0)};
+        case TF::k_DXN:      return {TexHostFormat::kBc5Unorm, SW(0, 1, 1, 1)};
+        default:
+            return {TexHostFormat::kUnsupported, SW(0, 1, 2, 3),
+                    "no host format mapping"};
+    }
+}
+
+#undef SW
+
+} // namespace
+
+bool DeriveViewport(const uint32_t* registerFile, GuestViewport& out)
+{
+    RegisterFile regs;
+    std::memcpy(regs.values, registerFile,
+        RegisterFile::kRegisterCount * sizeof(uint32_t));
+
+    reg::RB_DEPTHCONTROL normalized_depth_control =
+        draw_util::GetNormalizedDepthControl(regs);
+    draw_util::ViewportInfo vi;
+    draw_util::GetViewportInfoArgs args{};
+    const uint32_t host_max_viewport_dim = 16384;
+    args.Setup(1, 1, xe::divisors::MagicDiv(1), xe::divisors::MagicDiv(1),
+               /*origin_bottom_left=*/false, host_max_viewport_dim,
+               host_max_viewport_dim, /*allow_reverse_z=*/true,
+               normalized_depth_control, /*convert_z_to_float24=*/false,
+               /*full_float24_in_0_to_1=*/false,
+               /*pixel_shader_writes_depth=*/false);
+    args.SetupRegisterValues(regs);
+    draw_util::GetHostViewportInfo(&args, vi);
+
+    out.x = vi.xy_offset[0];
+    out.y = vi.xy_offset[1];
+    out.w = vi.xy_extent[0];
+    out.h = vi.xy_extent[1];
+    out.zMin = vi.z_min;
+    out.zMax = vi.z_max;
+
+    draw_util::Scissor sc{};
+    draw_util::GetScissor(regs, sc);
+    out.scissorX = sc.offset[0];
+    out.scissorY = sc.offset[1];
+    out.scissorW = sc.extent[0];
+    out.scissorH = sc.extent[1];
+    return true;
+}
+
+bool DeriveSamplerState(const uint32_t* fetch6, const ShaderSamplerBinding& sb,
+                        GuestSamplerState& out)
+{
+    xenos::xe_gpu_texture_fetch_t fetch{};
+    std::memcpy(&fetch, fetch6, sizeof(fetch));
+    if (fetch.type != xenos::FetchConstantType::kTexture)
+        return false;
+
+    // kUseFetchConst means the shader's fetch instruction deferred the filter
+    // to the fetch constant; that is the whole point of the encoding.
+    auto pick = [](uint32_t fromShader, xenos::TextureFilter fromFetch) {
+        return fromShader == uint32_t(xenos::TextureFilter::kUseFetchConst)
+                   ? uint32_t(fromFetch) : fromShader;
+    };
+    out.magFilter = pick(sb.magFilter, fetch.mag_filter);
+    out.minFilter = pick(sb.minFilter, fetch.min_filter);
+    out.mipFilter = pick(sb.mipFilter, fetch.mip_filter);
+
+    xenos::ClampMode cx, cy, cz;
+    texture_util::GetClampModesForDimension(fetch, cx, cy, cz);
+    out.clamp[0] = uint32_t(cx);
+    out.clamp[1] = uint32_t(cy);
+    out.clamp[2] = uint32_t(cz);
+
+    xenos::AnisoFilter aniso =
+        xenos::AnisoFilter(sb.anisoFilter) == xenos::AnisoFilter::kUseFetchConst
+            ? fetch.aniso_filter : xenos::AnisoFilter(sb.anisoFilter);
+    out.anisoMax = aniso == xenos::AnisoFilter::kDisabled
+                       ? 0u : (1u << (uint32_t(aniso) - 1));
+    return true;
+}
+
+bool DecodeGuestTexture(const uint32_t* fetch6, const uint8_t* guestBase,
+                        uint64_t guestSize, bool wantData, GuestTexture& out)
+{
+    xenos::xe_gpu_texture_fetch_t fetch{};
+    std::memcpy(&fetch, fetch6, sizeof(fetch));
+    if (fetch.type != xenos::FetchConstantType::kTexture)
+        return false;
+
+    uint32_t w1 = 0, h1 = 0, d1 = 0, basePage = 0, mipPage = 0, mipMin = 0, mipMax = 0;
+    texture_util::GetSubresourcesFromFetchConstant(fetch, &w1, &h1, &d1,
+        &basePage, &mipPage, &mipMin, &mipMax);
+
+    out.formatRaw = uint32_t(fetch.format);
+    out.baseFormatRaw = uint32_t(xe::gpu::GetBaseFormat(fetch.format));
+    out.formatName = xe::gpu::FormatInfo::GetName(uint32_t(fetch.format));
+    out.dimension = uint32_t(fetch.dimension);
+    out.width = w1 + 1;
+    out.height = (fetch.dimension == xenos::DataDimension::k1D) ? 1 : h1 + 1;
+    out.depthOrArraySize = d1 + 1;
+    out.tiled = fetch.tiled != 0;
+    out.packedMips = fetch.packed_mips != 0;
+    out.mipMin = mipMin;
+    out.mipMax = mipMax;
+    out.baseAddress = basePage << 12;
+    out.endian = uint32_t(fetch.endianness);
+    out.guestSwizzle = fetch.swizzle;
+
+    const xenos::TextureFormat baseFormat = xe::gpu::GetBaseFormat(fetch.format);
+    const HostFormat hf = MapFormat(baseFormat);
+    out.hostFormat = hf.fmt;
+    // Guest swizzle composed with the host format's own component order,
+    // exactly as Xenia's TextureCache::GuestToHostSwizzle does it.
+    for (uint32_t i = 0; i < 4; ++i)
+    {
+        const uint32_t g = (fetch.swizzle >> (3 * i)) & 0b111;
+        out.hostSwizzle[i] = (g >= 4) ? uint8_t(g & 0b101) : hf.sw[g];
+    }
+
+    if (basePage == 0)
+    {
+        out.skipReason = "base level not stored (mip_min_level > 0)";
+        return true;
+    }
+    if (hf.fmt == TexHostFormat::kUnsupported)
+    {
+        out.skipReason = hf.unsupportedWhy;
+        return true;
+    }
+    if (!wantData)
+        return true;
+
+    const xe::gpu::FormatInfo* fi = xe::gpu::FormatInfo::Get(baseFormat);
+    if (!fi || !fi->bytes_per_block())
+    {
+        out.skipReason = "no block size for format";
+        return true;
+    }
+    out.blockWidth = fi->block_width;
+    out.blockHeight = fi->block_height;
+    out.bytesPerBlock = fi->bytes_per_block();
+
+    const bool is3D = fetch.dimension == xenos::DataDimension::k3D;
+    const bool isCube = fetch.dimension == xenos::DataDimension::kCube;
+    const uint32_t arraySize = isCube ? 6
+                             : (fetch.dimension == xenos::DataDimension::k2DOrStacked
+                                    ? out.depthOrArraySize : 1);
+    out.layers = is3D ? 1 : arraySize;
+    out.depth3D = is3D ? out.depthOrArraySize : 1;
+
+    xe::gpu::texture_util::TextureGuestLayout layout =
+        xe::gpu::texture_util::GetGuestTextureLayout(
+            fetch.dimension, fetch.pitch, out.width, out.height,
+            out.depthOrArraySize, out.tiled, baseFormat,
+            /*has_packed_levels=*/out.packedMips, /*has_base=*/true,
+            /*max_level=*/0);
+    if (!layout.base.row_pitch_bytes)
+    {
+        out.skipReason = "degenerate guest layout";
+        return true;
+    }
+
+    out.blocksX = (out.width + out.blockWidth - 1) / out.blockWidth;
+    out.blocksY = (out.height + out.blockHeight - 1) / out.blockHeight;
+    out.rowPitchBytes = out.blocksX * out.bytesPerBlock;
+
+    const uint32_t pitchBlocks = layout.base.row_pitch_bytes / out.bytesPerBlock;
+    const unsigned bpbLog2 = xe::log2_floor(out.bytesPerBlock);
+    // For 3D, array_slice_stride_bytes covers the whole volume; the distance
+    // between Z slices is the row pitch times the tile-aligned block rows.
+    const uint32_t zSliceStrideBytes =
+        layout.base.row_pitch_bytes * layout.base.z_slice_stride_block_rows;
+    const uint32_t layerStrideBytes =
+        is3D ? 0 : layout.base.array_slice_stride_bytes;
+
+    const uint64_t total = uint64_t(out.rowPitchBytes) * out.blocksY *
+                           out.depth3D * out.layers;
+    if (total == 0 || total > (uint64_t(256) << 20))
+    {
+        out.skipReason = "implausible decoded size";
+        return true;
+    }
+    // Everything the decode will touch must be inside the guest window; the
+    // guest layout's own extent estimate is the upper bound Xenia uses.
+    const uint64_t srcSpan = uint64_t(out.baseAddress) +
+        uint64_t(layout.base.level_data_extent_bytes);
+    if (srcSpan > guestSize)
+    {
+        out.skipReason = "texture data outside the guest window";
+        return true;
+    }
+
+    out.data.assign(size_t(total), 0);
+    const uint32_t exor = EndianOffsetXor(fetch.endianness);
+    const uint8_t* src = guestBase + out.baseAddress;
+    uint8_t* dst = out.data.data();
+    const uint32_t bpb = out.bytesPerBlock;
+
+    for (uint32_t layer = 0; layer < out.layers; ++layer)
+    {
+        const uint64_t layerSrc = uint64_t(layer) * layerStrideBytes;
+        for (uint32_t z = 0; z < out.depth3D; ++z)
+        {
+            for (uint32_t by = 0; by < out.blocksY; ++by)
+            {
+                for (uint32_t bx = 0; bx < out.blocksX; ++bx)
+                {
+                    uint64_t so;
+                    if (out.tiled)
+                    {
+                        so = is3D
+                            ? uint64_t(xe::gpu::texture_address::Tiled3D(
+                                  int32_t(bx), int32_t(by), int32_t(z), pitchBlocks,
+                                  layout.base.z_slice_stride_block_rows, bpbLog2))
+                            : uint64_t(uint32_t(xe::gpu::texture_address::Tiled2D(
+                                  int32_t(bx), int32_t(by), pitchBlocks, bpbLog2)));
+                    }
+                    else
+                    {
+                        so = uint64_t(z) * zSliceStrideBytes +
+                             uint64_t(by) * layout.base.row_pitch_bytes +
+                             uint64_t(bx) * bpb;
+                    }
+                    so += layerSrc;
+                    for (uint32_t b = 0; b < bpb; ++b)
+                        *dst++ = src[(so + b) ^ exor];
+                }
+            }
+        }
+    }
+    return true;
 }
 
 } // namespace gears::draw
