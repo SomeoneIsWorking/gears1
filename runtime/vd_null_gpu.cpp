@@ -1201,8 +1201,6 @@ struct CommandProcessor
         // directly (bounds-checked) rather than through the SSBO mirror.
         in.guestWindowBytes = 0x20000000; // 512 MiB
         in.draws = std::move(frameDraws);
-        // Only the last frame of the run gets the census and the screenshot;
-        // it costs ~40 ms, which is most of a warm frame.
         // A capture run reports on its last frame. A live run reports never,
         // unless GEARS_DRAW_FRAME_REPORT_EVERY=N asks for a periodic census and
         // screenshot -- it costs ~40 ms, so it is a visible hitch by design.
@@ -1210,6 +1208,11 @@ struct CommandProcessor
         in.report = frameCount > 0
             ? framesRendered >= frameCount
             : reportEvery > 0 && framesRendered % reportEvery == 0;
+        // Number the reported screenshots in a live run so a menu walk leaves a
+        // filmstrip rather than overwriting one file.
+        if (frameCount <= 0 && in.report)
+            in.sequence = framesRendered;
+
         lucent::info("gpu", "guest-draw: rendering whole frame ({} draws captured)",
             in.draws.size());
         const auto t0 = std::chrono::steady_clock::now();

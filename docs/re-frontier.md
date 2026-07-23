@@ -141,6 +141,14 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap: Still driven by a frame COUNT from GEARS_DRAW_FRAME_AT, not by the guest's own swaps for the whole run, and the rendered pixels still reach the window by readback plus a staging upload because gpu_draw.cpp and gpu_present.cpp each create their own VkDevice. Unifying the two devices removes the readback and the upload entirely. Also: cached guest textures are keyed on the fetch constant and never invalidated, so a texture the guest overwrites at the same address would go stale -- not yet observed, not yet handled.
 - notes: 
 
+### gameplay-scene — In-game 3D scene rendering (deferred pipeline)
+- status: todo
+- deps: draw-backend-live, draw-backend-rt
+- evidence: 
+- where: 
+- gap: The title now reaches actual gameplay (Act 1 'Ashes', the prison cell) with a working HUD and the 'Exit the cell area' objective, but the 3D SCENE renders black -- only 2D HUD text and the occasional white-stub texture show. Menus rendered fine because they are mostly 2D UI over a static background; gameplay drives the full deferred renderer, which bounces through many render targets (g-buffer, lighting, post) and needs the 8 resolve destinations kept DISTINCT. draw-backend-rt still conflates all 8 onto one host colour target -- the likely cause. This is the next real frontier: measure the in-game frame's resolve destinations and render-target usage, then give each its own host target.
+- notes: 
+
 
 ## kernel
 
@@ -149,6 +157,14 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - deps: 
 - evidence: The XamInput imports fill the console's own structures: X_INPUT_STATE (big-endian packet number + 12-byte X_INPUT_GAMEPAD) and X_INPUT_CAPABILITIES (type/sub_type/flags + a gamepad MASK + vibration ranges), with Xenia's X_INPUT_GAMEPAD_* button bits, hid/input.h. The packet number increments only when the state changes, which is the console's contract. Three host sources: an SDL gamepad, the keyboard, and GEARS_INPUT_SCRIPT (timed button states, so a headless run is reproducible). The pad reports CONNECTED only when a source exists -- a connected pad that never changes reads as a player who is not pressing anything and strands the title at 'press start'. VERIFIED headless: GEARS_INPUT_SCRIPT='25000:START,25300:,26000:START,26300:,30000:A,30300:' fired at 25001/25302/26019/26323/30002/30303 ms; the script only advances when the guest polls, so its firing IS proof the title polls XamInputGetState. The title left the title screen, its draw count went from ~169 to 178-183 per frame, and scratch/screenshots/rect/after_start.png is the MAIN MENU with the 'NO STORAGE DEVICE' dialog, 'PROFILE 1: PLAYER' and the story-mode description -- all consistent with what the other xam stubs report (one local profile named Player, no storage device).
 - where: runtime/input.h, runtime/input.cpp (sources + the published snapshot), runtime/xam_user.cpp (XamInputGetState/GetCapabilities/SetState), runtime/gpu_present.cpp (the presenter thread polls SDL), runtime/vd_null_gpu.cpp (InitialiseInput once the window state is known)
+- gap: 
+- notes: 
+
+### rtl-time — RtlTimeToTimeFields / RtlTimeFieldsToTime
+- status: re-verified
+- deps: 
+- evidence: Both convert against a plain proleptic Gregorian calendar with no timezone or clock scaling, as the RTL routines do: the value is 100 ns ticks since the 1601-01-01 Windows epoch, std::chrono::system_clock uses 1970, and they differ by the fixed 116444736000000000-tick constant. TimeToTimeFields floors to whole days (correct for pre-1970 ticks too), splits with std::chrono::year_month_day/hh_mm_ss/weekday, and writes the eight big-endian X_TIME_FIELDS shorts (year,month,day,hour,minute,second,ms,weekday; weekday 0=Sunday via weekday::c_encoding). FieldsToTime is the inverse and validates the range, returning FALSE like the real routine. UNIT-VERIFIED against known values: 2024-01-01 -> Monday(1), the 1601 epoch -> Monday(1), and 1234567.8901234 s past 1970 -> 1970-01-15 06:56:07.890, matching Python datetime to the millisecond. It was the unblock that let the campaign load: before it, entering a new campaign trapped on the unimplemented import and aborted (SIGABRT); after it the title reaches ACTUAL GAMEPLAY -- see the campaign filmstrip in scratch/screenshots/camp2 (Campaign -> Single Player -> Select Difficulty with character art -> GEARS OF WAR loading screen -> 'ASHES 14 YEARS AFTER E-DAY' -> in-game HUD 'Exit the cell area').
+- where: runtime/kernel_rtl.cpp (__imp__RtlTimeToTimeFields, __imp__RtlTimeFieldsToTime), runtime/implemented_imports.h
 - gap: 
 - notes: 
 

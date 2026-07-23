@@ -1,6 +1,7 @@
 // Counted-string helpers and status translation.
 #include "import_stub.h"
 
+#include <chrono>
 #include <cstring>
 
 #include <byteswap.h>
@@ -181,4 +182,101 @@ void __imp__RtlCompareMemoryUlong(PPCContext& __restrict ctx, uint8_t* base)
     }
 
     ctx.r3.u64 = matched;
+}
+
+namespace
+{
+// X_TIME_FIELDS: eight big-endian 16-bit fields, in this order.
+struct GuestTimeFields
+{
+    uint16_t year;
+    uint16_t month;        // 1..12
+    uint16_t day;          // 1..31
+    uint16_t hour;         // 0..23
+    uint16_t minute;       // 0..59
+    uint16_t second;       // 0..59
+    uint16_t milliseconds; // 0..999
+    uint16_t weekday;      // 0..6, 0 = Sunday
+};
+
+// Both directions convert against a plain calendar with no timezone or clock
+// scaling, exactly as the RTL routines do: the value is 100 ns ticks since the
+// 1601-01-01 Windows epoch, and std::chrono::system_clock uses the 1970 Unix
+// epoch, so the two differ by a fixed constant.
+constexpr int64_t kEpochDelta100ns = 116444736000000000; // 1601-01-01 -> 1970-01-01
+
+using days = std::chrono::duration<int64_t, std::ratio<86400>>;
+} // namespace
+
+// VOID RtlTimeToTimeFields(PLARGE_INTEGER Time, PTIME_FIELDS TimeFields)
+void __imp__RtlTimeToTimeFields(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t timeAddress = ctx.r3.u32;
+    const uint32_t fieldsAddress = ctx.r4.u32;
+    if (timeAddress == 0 || fieldsAddress == 0)
+        return;
+
+    const int64_t ticks1601 = int64_t(ByteSwap(*reinterpret_cast<uint64_t*>(base + timeAddress)));
+    const int64_t ticksUnix = ticks1601 - kEpochDelta100ns;
+
+    // Split into whole days and the time within the day, flooring so that a
+    // negative pre-1970 tick count still lands on the correct calendar day.
+    const auto totalNs = std::chrono::duration<int64_t, std::ratio<1, 10000000>>(ticksUnix);
+    const auto sinceEpoch = std::chrono::floor<std::chrono::milliseconds>(totalNs);
+    const auto dayPart = std::chrono::floor<days>(sinceEpoch);
+    const auto timeOfDay = sinceEpoch - dayPart;
+
+    const std::chrono::year_month_day ymd{std::chrono::sys_days{dayPart}};
+    const std::chrono::hh_mm_ss<std::chrono::milliseconds> hms{
+        std::chrono::duration_cast<std::chrono::milliseconds>(timeOfDay)};
+    const std::chrono::weekday weekday{std::chrono::sys_days{dayPart}};
+
+    GuestTimeFields out;
+    out.year = ByteSwap(uint16_t(int(ymd.year())));
+    out.month = ByteSwap(uint16_t(unsigned(ymd.month())));
+    out.day = ByteSwap(uint16_t(unsigned(ymd.day())));
+    out.hour = ByteSwap(uint16_t(hms.hours().count()));
+    out.minute = ByteSwap(uint16_t(hms.minutes().count()));
+    out.second = ByteSwap(uint16_t(hms.seconds().count()));
+    out.milliseconds = ByteSwap(uint16_t(hms.subseconds().count()));
+    out.weekday = ByteSwap(uint16_t(weekday.c_encoding())); // 0 = Sunday
+    std::memcpy(base + fieldsAddress, &out, sizeof(out));
+}
+
+// BOOLEAN RtlTimeFieldsToTime(PTIME_FIELDS TimeFields, PLARGE_INTEGER Time)
+// The inverse, provided alongside because titles that convert one way convert
+// back, and a lone forward routine would trap on the return trip.
+void __imp__RtlTimeFieldsToTime(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t fieldsAddress = ctx.r3.u32;
+    const uint32_t timeAddress = ctx.r4.u32;
+
+    GuestTimeFields in;
+    std::memcpy(&in, base + fieldsAddress, sizeof(in));
+    const int year = int(ByteSwap(in.year));
+    const unsigned month = ByteSwap(in.month);
+    const unsigned day = ByteSwap(in.day);
+    const unsigned hour = ByteSwap(in.hour);
+    const unsigned minute = ByteSwap(in.minute);
+    const unsigned second = ByteSwap(in.second);
+    const unsigned ms = ByteSwap(in.milliseconds);
+
+    const std::chrono::year_month_day ymd{
+        std::chrono::year{year}, std::chrono::month{month}, std::chrono::day{day}};
+    if (year < 1601 || month < 1 || month > 12 || day < 1 || day > 31 ||
+        hour > 23 || minute > 59 || second > 59 || ms > 999 || !ymd.ok())
+    {
+        ctx.r3.u64 = 0; // FALSE: the fields do not describe a valid time
+        return;
+    }
+
+    const auto dayPart = std::chrono::sys_days{ymd}.time_since_epoch();
+    const int64_t ticksUnix =
+        std::chrono::duration_cast<std::chrono::duration<int64_t, std::ratio<1, 10000000>>>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(dayPart) +
+            std::chrono::hours{hour} + std::chrono::minutes{minute} +
+            std::chrono::seconds{second} + std::chrono::milliseconds{ms}).count();
+    const uint64_t ticks1601 = uint64_t(ticksUnix + kEpochDelta100ns);
+    *reinterpret_cast<uint64_t*>(base + timeAddress) = ByteSwap(ticks1601);
+    ctx.r3.u64 = 1; // TRUE
 }
