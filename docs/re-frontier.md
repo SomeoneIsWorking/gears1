@@ -73,12 +73,12 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - notes: 
 
 ### const-capture — Track SET_CONSTANT: ALU-float/fetch/bool-loop constant files
-- status: todo
+- status: re-verified
 - deps: cmd-processor
-- evidence: 
-- where: runtime/vd_null_gpu.cpp ~798
-- gap: SET_CONSTANT (0x2D) currently falls through default: and is skipped; the UBO bytes the shaders need are not captured. Verifiable by dumping and comparing against Xenia.
-- notes: 
+- evidence: catalog #23; at the hot-pair DRAW_INDX the ALU float file decodes to a real transform (c0-c3 identity + c4/c5 -1.209 screen scale, matching the hot VS's own c0-c3 usage) and the fetch file to 3 well-formed textures (1280x720 tiled RT + two 640x360); reproducible across runs. Bases (0x4000/0x4800/0x4900/0x4908) match Xenia register_table.inc + command_processor.cc.
+- where: runtime/vd_null_gpu.cpp (TrackConstantLoad, DumpConstantFiles); GEARS_CONST_DUMP=1
+- gap: 
+- notes: This title feeds ALU-float + fetch constants via plain TYPE0 register writes (already handled), NOT ring SET_CONSTANT type-0/1 (0 over 950 frames). What WAS being dropped and is now handled: LOAD_ALU_CONSTANT 0x2F (type-0 ALU-from-memory, ~12/hot-pair-draw) and SET_CONSTANT 0x2D type-4 REGISTERS (~38/draw); SET_CONSTANT2/SET_SHADER_CONSTANTS never fire. The hot VS's vertex fetch constant is NOT present in the fetch file at draw time (0 type-3 constants; only textures) -- the vfetch base is not in the register file, consistent with the catalog #22 instruction-patch mechanism. Locating the vertex geometry source is draw-params/draw-backend work, not a capture defect.
 
 ### draw-params — Detect hot pair at DRAW_INDX and capture draw params
 - status: todo

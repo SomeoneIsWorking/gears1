@@ -32,6 +32,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <format>
 #include <map>
 #include <string>
@@ -194,6 +195,32 @@ constexpr uint32_t kSwapReservationDwords = 64;
 constexpr uint32_t kOpImLoad = 0x27;
 constexpr uint32_t kOpImLoadImmediate = 0x2B;
 
+// Constant-file loads. The sequencer keeps four constant files plus the general
+// register block, all addressed inside the same register space the rest of the
+// stream writes. SET_CONSTANT loads them from the ring by (index,type);
+// LOAD_ALU_CONSTANT loads a range from physical memory; SET_CONSTANT2 /
+// SET_SHADER_CONSTANTS write a raw register index directly. Opcodes and
+// semantics mirror extern/xenia src/xenia/gpu/xenos.h (PM4_* enum) and
+// pm4_command_processor_implement.h (ExecutePacketType3_SET_CONSTANT etc).
+constexpr uint32_t kOpSetConstant = 0x2D;
+constexpr uint32_t kOpLoadAluConstant = 0x2F;
+constexpr uint32_t kOpSetConstant2 = 0x55;
+constexpr uint32_t kOpSetShaderConstants = 0x56;
+
+// Base register index of each constant file, from Xenia's WriteALURangeFromRing
+// et al (src/xenia/gpu/command_processor.cc): the (index,type) pair in a
+// SET_CONSTANT resolves to one of these plus index.
+//   type 0 ALU float   -> 0x4000 (256 vec4 = 1024 dwords)
+//   type 1 FETCH        -> 0x4800 (32 * 6 = 192 dwords; vertex fetch is 2/slot)
+//   type 2 BOOL         -> 0x4900
+//   type 3 LOOP         -> 0x4908
+//   type 4 REGISTERS    -> 0x2000 (general register block)
+constexpr uint32_t kConstBaseAlu = 0x4000;
+constexpr uint32_t kConstBaseFetch = 0x4800;
+constexpr uint32_t kConstBaseBool = 0x4900;
+constexpr uint32_t kConstBaseLoop = 0x4908;
+constexpr uint32_t kConstBaseRegisters = 0x2000;
+
 // ---------------------------------------------------------------------------
 // Bound-shader capture.
 //
@@ -226,6 +253,8 @@ struct ShaderCaptureState
     uint64_t imLoadsImmediate = 0;
     uint64_t truncated = 0;   // packet claimed more ucode than the buffer held
     uint64_t rejected = 0;    // implausible size
+    uint64_t activeVertexHash = 0; // last vertex ucode bound (for the const dump)
+    uint64_t activePixelHash = 0;  // last pixel ucode bound
 } g_shaderCapture;
 
 uint64_t Fnv1a64(const uint8_t* p, size_t n)
@@ -246,6 +275,7 @@ void RecordBoundShader(uint32_t type, uint32_t address, bool immediate,
 {
     auto& cap = g_shaderCapture;
     const uint64_t hash = Fnv1a64(ucode.data(), ucode.size());
+    (type == 0 ? cap.activeVertexHash : cap.activePixelHash) = hash;
     auto it = cap.shaders.find(hash);
     if (it != cap.shaders.end())
     {
@@ -375,6 +405,7 @@ std::string OpcodeName(uint32_t op)
     case 0x25: return "SET_STATE";
     case 0x26: return "WAIT_FOR_IDLE";
     case 0x2D: return "SET_CONSTANT";
+    case 0x2F: return "LOAD_ALU_CONSTANT";
     case 0x36: return "DRAW_INDX_2";
     case 0x37: return "IB_PFD";
     case 0x3B: return "INVALIDATE_STATE";
@@ -388,6 +419,8 @@ std::string OpcodeName(uint32_t op)
     case 0x50: return "SET_BIN_MASK";
     case 0x51: return "SET_BIN_SELECT";
     case 0x54: return "INTERRUPT";
+    case 0x55: return "SET_CONSTANT2";
+    case 0x56: return "SET_SHADER_CONSTANTS";
     case 0x58: return "EVENT_WRITE_SHD";
     case 0x5A: return "EVENT_WRITE_EXT";
     case 0x5B: return "EVENT_WRITE_ZPD";
@@ -439,6 +472,18 @@ struct CommandProcessor
     std::map<uint32_t, uint64_t> ringOpcodes;  // depth 0 TYPE3 opcode -> count
     std::map<uint32_t, uint64_t> innerOpcodes; // depth > 0 TYPE3 opcode -> count
     std::map<uint32_t, uint64_t> ibCounts;     // IB address -> submissions
+
+    // Census of how the constant files are actually fed, to establish the path
+    // rather than assume it: SET_CONSTANT by type, the memory/raw variants, and
+    // the plain TYPE0 register writes that land in the ALU/fetch ranges (the
+    // stream also programs these files directly, so both paths must be seen).
+    uint64_t setConstantByType[8]{};   // SET_CONSTANT (0x2D) by type field
+    uint64_t loadAluConstantByType[8]{}; // LOAD_ALU_CONSTANT (0x2F) by type field
+    uint64_t setConstant2Packets = 0;
+    uint64_t setShaderConstantsPackets = 0;
+    uint64_t type0AluWrites = 0;        // TYPE0 dwords into 0x4000..0x47FF
+    uint64_t type0FetchWrites = 0;      // TYPE0 dwords into 0x4800..0x48FF
+    bool constDumpDone = false;         // one-shot verification dump latch
 
     // Predication (Xenos PFP bin mask/select). Bit 0 of a TYPE3 header marks the
     // packet predicated; hardware skips it when (bin_select & bin_mask) == 0.
@@ -505,6 +550,15 @@ struct CommandProcessor
         for (const auto& [op, n] : innerOpcodes)
             inner.add(" {}x{}", OpcodeName(op), n);
         inner.flush_debug("gpu");
+
+        if (lucent::config::flag("CONST_DUMP"))
+            lucent::debug("gpu", "  constant feed (cumulative): SET_CONSTANT"
+                "[alu {} fetch {} bool {} loop {} reg {}] LOAD_ALU_CONSTANT[alu {} fetch {}]"
+                " SET_CONSTANT2 {} SET_SHADER_CONSTANTS {} TYPE0[alu {} fetch {}]",
+                setConstantByType[0], setConstantByType[1], setConstantByType[2],
+                setConstantByType[3], setConstantByType[4], loadAluConstantByType[0],
+                loadAluConstantByType[1], setConstant2Packets, setShaderConstantsPackets,
+                type0AluWrites, type0FetchWrites);
 
         lucent::Line pred;
         pred.add("  predication: select {:#x} mask {:#x}; packets seen while OFF {};"
@@ -602,6 +656,229 @@ struct CommandProcessor
             ++cap.imLoads;
         }
         RecordBoundShader(type, address, immediate, ucode);
+    }
+
+    // Resolve a SET_CONSTANT/LOAD_ALU_CONSTANT (index,type) pair to the base
+    // register index of the target constant file. Mirrors Xenia's
+    // WriteALURangeFromRing / WriteFetchRangeFromRing / ... in
+    // src/xenia/gpu/command_processor.cc. Returns false for an unknown type.
+    static bool ConstFileBase(uint32_t type, uint32_t& base)
+    {
+        switch (type)
+        {
+        case 0: base = kConstBaseAlu; return true;       // ALU float
+        case 1: base = kConstBaseFetch; return true;     // vertex/texture fetch
+        case 2: base = kConstBaseBool; return true;      // bool
+        case 3: base = kConstBaseLoop; return true;      // loop
+        case 4: base = kConstBaseRegisters; return true; // general registers
+        default: return false;
+        }
+    }
+
+    // Loads the sequencer constant files from the command stream, so the bytes
+    // the translated shaders read as UBOs (ALU float constants at 0x4000, fetch
+    // constants at 0x4800, bool/loop at 0x4900/0x4908) are actually tracked in
+    // the register file. Semantics mirror extern/xenia
+    // src/xenia/gpu/pm4_command_processor_implement.h
+    // (ExecutePacketType3_SET_CONSTANT / _SET_CONSTANT2 / _LOAD_ALU_CONSTANT /
+    // _SET_SHADER_CONSTANTS). Uses fetch() rather than HandleType3's 20-word
+    // copy because a constant load can carry the whole 1024-dword ALU file.
+    template <typename Fetch>
+    void TrackConstantLoad(uint32_t opcode, Fetch&& fetch, uint32_t usable, uint32_t count)
+    {
+        switch (opcode)
+        {
+        case kOpSetConstant:
+        {
+            if (usable < 1)
+                return;
+            const uint32_t offsetType = fetch(0);
+            const uint32_t index = offsetType & 0x7FF;
+            const uint32_t type = (offsetType >> 16) & 0xFF;
+            ++setConstantByType[type & 7];
+            uint32_t base;
+            if (!ConstFileBase(type, base))
+            {
+                lucent::warn("gpu", "SET_CONSTANT unknown type {} (offset_type {:#x})",
+                    type, offsetType);
+                return;
+            }
+            const uint32_t n = count - 1; // constant dwords after offset_type
+            for (uint32_t i = 0; i < n && (1 + i) < usable; ++i)
+                WriteGpuRegister(base + index + i, fetch(1 + i));
+            break;
+        }
+        case kOpLoadAluConstant:
+        {
+            if (usable < 3)
+                return;
+            const uint32_t address = fetch(0) & 0x3FFFFFFF;
+            const uint32_t offsetType = fetch(1);
+            const uint32_t sizeDwords = fetch(2) & 0xFFF;
+            const uint32_t index = offsetType & 0x7FF;
+            const uint32_t type = (offsetType >> 16) & 0xFF;
+            ++loadAluConstantByType[type & 7];
+            uint32_t base;
+            if (!ConstFileBase(type, base))
+            {
+                lucent::warn("gpu", "LOAD_ALU_CONSTANT unknown type {} (offset_type {:#x})",
+                    type, offsetType);
+                return;
+            }
+            for (uint32_t i = 0; i < sizeDwords; ++i)
+                WriteGpuRegister(base + index + i, ReadGuest32(address + i * 4));
+            break;
+        }
+        case kOpSetConstant2:
+        case kOpSetShaderConstants:
+        {
+            // Raw register index, no per-type base (Xenia writes index directly).
+            if (usable < 1)
+                return;
+            const uint32_t index = fetch(0) & 0xFFFF;
+            (opcode == kOpSetConstant2 ? setConstant2Packets
+                                       : setShaderConstantsPackets)++;
+            const uint32_t n = count - 1;
+            for (uint32_t i = 0; i < n && (1 + i) < usable; ++i)
+                WriteGpuRegister(index + i, fetch(1 + i));
+            break;
+        }
+        default:
+            break;
+        }
+    }
+
+    // One-shot verification dump of the constant files, so the captured bytes
+    // can be checked against Xenia's expectations. Targets the hot pair's
+    // vertex shader (vs_5363d074) by default, whose disassembly reads vertex
+    // fetch constant vf0 (Stride=12) -- so vf0 at register 0x4800 is decoded as
+    // xe_gpu_vertex_fetch_t and the texture slots as xe_gpu_texture_fetch_t.
+    // Gated on GEARS_CONST_DUMP; GEARS_CONST_DUMP_ANY drops the hot-pair filter.
+    static constexpr uint64_t kHotVertexHash = 0x5363d0746b3ef666ull;
+
+    void DumpConstantFiles(uint32_t drawOpcode)
+    {
+        if (constDumpDone || !lucent::config::flag("CONST_DUMP"))
+            return;
+
+        // Wait for the specific draw whose constants we want to check: the hot
+        // pair's vertex shader must be the bound one (unless CONST_DUMP_ANY), and
+        // the ALU float file must be populated (skips the movie-phase quad, whose
+        // built-in shader uses no float constants).
+        const bool anyShader = lucent::config::flag("CONST_DUMP_ANY");
+        if (!anyShader && g_shaderCapture.activeVertexHash != kHotVertexHash)
+            return;
+        uint32_t aluNonZeroGate = 0;
+        for (uint32_t i = 0; i < 1024; ++i)
+            aluNonZeroGate += g_gpuRegisters[kConstBaseAlu + i] != 0;
+        if (aluNonZeroGate == 0)
+            return;
+        constDumpDone = true;
+
+        lucent::info("gpu", "bound shaders at dump: vertex {:#018x} pixel {:#018x}",
+            g_shaderCapture.activeVertexHash, g_shaderCapture.activePixelHash);
+        lucent::info("gpu", "constant dump at {} -- feed census:"
+            " SET_CONSTANT[alu {} fetch {} bool {} loop {} reg {}]"
+            " LOAD_ALU_CONSTANT[alu {} fetch {}] SET_CONSTANT2 {} SET_SHADER_CONSTANTS {}"
+            " TYPE0[alu {} fetch {}]",
+            OpcodeName(drawOpcode), setConstantByType[0], setConstantByType[1],
+            setConstantByType[2], setConstantByType[3], setConstantByType[4],
+            loadAluConstantByType[0], loadAluConstantByType[1],
+            setConstant2Packets, setShaderConstantsPackets,
+            type0AluWrites, type0FetchWrites);
+
+        // Raw fetch register block (0x4800.., 96 dwords = 32 six-dword slots),
+        // so the whole file can be inspected. The vertex and texture fetch
+        // constants share this file; Xenia reads a vertex fetch at word_0 =
+        // (const_index << 1) and a texture fetch at (6 * const_index), so they
+        // can alias -- Xenia itself only validates the type at draw time
+        // (spirv_shader_translator_fetch.cc:67). Rather than assume where vf0
+        // lands, scan for the vertex-typed (type 3) entries and report them.
+        {
+            lucent::Line raw;
+            raw.add("  fetch block:");
+            for (uint32_t i = 0; i < 96; ++i)
+            {
+                if ((i & 5) == 0 && i)
+                    raw.add(" |");
+                raw.add(" {:08x}", g_gpuRegisters[kConstBaseFetch + i]);
+            }
+            raw.flush(lucent::Level::Info, "gpu");
+        }
+
+        // Classify per 6-dword slot by the type in the slot's first dword: a
+        // slot holds EITHER one texture fetch constant (type 2, 6 dwords) OR up
+        // to three vertex fetch constants (type 3, 2 dwords each). Classifying by
+        // slot avoids misreading a texture's interior dwords (e.g. its size
+        // field) as a spurious vertex constant.
+        uint32_t vertexConsts = 0, textureSlots = 0;
+        for (uint32_t slot = 0; slot < 32; ++slot)
+        {
+            const uint32_t* s = &g_gpuRegisters[kConstBaseFetch + slot * 6];
+            const uint32_t slotType = s[0] & 3;
+            if (slotType == 2) // xe_gpu_texture_fetch_t
+            {
+                ++textureSlots;
+                const uint32_t base = (s[1] >> 12) << 12;
+                const uint32_t pitch = ((s[0] >> 22) & 0x1FF) << 5;
+                const uint32_t width = (s[2] & 0x1FFF) + 1;   // size_2d.width
+                const uint32_t height = ((s[2] >> 13) & 0x1FFF) + 1; // size_2d.height
+                const uint32_t format = s[1] & 0x3F;
+                const uint32_t tiled = s[0] >> 31;
+                const uint32_t endian = (s[1] >> 6) & 3;
+                if (textureSlots <= 12)
+                    lucent::info("gpu", "  texfetch[slot {}] (reg {:#x}): base {:#x} {}x{}"
+                        " pitch {} px format {:#x} tiled {} endian {}", slot,
+                        kConstBaseFetch + slot * 6, base, width, height, pitch, format,
+                        tiled, endian);
+            }
+            else if (slotType == 3) // xe_gpu_vertex_fetch_t (up to 3 per slot)
+            {
+                for (uint32_t j = 0; j < 3; ++j)
+                {
+                    const uint32_t d0 = s[j * 2 + 0];
+                    const uint32_t d1 = s[j * 2 + 1];
+                    if ((d0 & 3) != 3)
+                        continue;
+                    ++vertexConsts;
+                    const uint32_t byteAddr = (d0 >> 2) << 2;
+                    const uint32_t endian = d1 & 3;
+                    const uint32_t sizeWords = (d1 >> 2) & 0xFFFFFF;
+                    lucent::info("gpu", "  vfetch const #{} (reg {:#x}): {:#010x} {:#010x} ->"
+                        " base {:#x} size {} words ({} bytes) endian {}",
+                        slot * 3 + j, kConstBaseFetch + slot * 6 + j * 2, d0, d1,
+                        byteAddr, sizeWords, sizeWords * 4, endian);
+                }
+            }
+        }
+        lucent::info("gpu", "  fetch file: {} texture slots, {} vertex-fetch constants"
+            " (type 3)", textureSlots, vertexConsts);
+
+        // ALU float constants: 256 vec4 at 0x4000. Count non-zero dwords and show
+        // the first few vec4 so the transform matrices are visibly present.
+        uint32_t nonZeroAlu = 0;
+        for (uint32_t i = 0; i < 1024; ++i)
+            if (g_gpuRegisters[kConstBaseAlu + i] != 0)
+                ++nonZeroAlu;
+        lucent::info("gpu", "  ALU float constants non-zero: {} of 1024 dwords", nonZeroAlu);
+        for (uint32_t v = 0; v < 6; ++v)
+        {
+            const uint32_t* p = &g_gpuRegisters[kConstBaseAlu + v * 4];
+            float f[4];
+            for (int k = 0; k < 4; ++k)
+                std::memcpy(&f[k], &p[k], 4);
+            lucent::info("gpu", "  c[{}] = {} {} {} {}  (raw {:#010x} {:#010x} {:#010x} {:#010x})",
+                v, f[0], f[1], f[2], f[3], p[0], p[1], p[2], p[3]);
+        }
+
+        // Bool/loop files.
+        uint32_t nonZeroBool = 0, nonZeroLoop = 0;
+        for (uint32_t i = 0; i < 8; ++i)
+            nonZeroBool += g_gpuRegisters[kConstBaseBool + i] != 0;
+        for (uint32_t i = 0; i < 32; ++i)
+            nonZeroLoop += g_gpuRegisters[kConstBaseLoop + i] != 0;
+        lucent::info("gpu", "  bool file non-zero dwords: {}/8; loop file non-zero: {}/32",
+            nonZeroBool, nonZeroLoop);
     }
 
     void HandleType3(uint32_t opcode, const uint32_t* data, uint32_t count, int depth)
@@ -886,7 +1163,17 @@ struct CommandProcessor
             const uint32_t baseRegister = header & 0x7FFF;
             const bool oneRegister = (header & 0x8000) != 0;
             for (uint32_t w = 0; w < usable; w++)
-                WriteGpuRegister(oneRegister ? baseRegister : baseRegister + w, fetch(w));
+            {
+                const uint32_t reg = oneRegister ? baseRegister : baseRegister + w;
+                // Census the direct-register path into the constant files: the
+                // stream also programs the ALU/fetch files as plain TYPE0 writes,
+                // so this counts them separately from the SET_CONSTANT path.
+                if (reg >= kConstBaseAlu && reg < kConstBaseFetch)
+                    ++type0AluWrites;
+                else if (reg >= kConstBaseFetch && reg < kConstBaseBool)
+                    ++type0FetchWrites;
+                WriteGpuRegister(reg, fetch(w));
+            }
             return count;
         }
         if (type == 1)
@@ -928,6 +1215,17 @@ struct CommandProcessor
         // does not fit the 20-word copy above.
         if (opcode == kOpImLoad || opcode == kOpImLoadImmediate)
             CaptureShaderLoad(opcode, fetch, usable, count);
+
+        // Constant-file loads are likewise handled from fetch(): a SET_CONSTANT
+        // can carry the whole 1024-dword ALU file, far past the 20-word copy.
+        // This populates the register file the translated shaders read as UBOs.
+        if (opcode == kOpSetConstant || opcode == kOpLoadAluConstant ||
+            opcode == kOpSetConstant2 || opcode == kOpSetShaderConstants)
+            TrackConstantLoad(opcode, fetch, usable, count);
+
+        // Verification hook: dump the constant files at the first real draw.
+        if (opcode == 0x22 || opcode == 0x36) // DRAW_INDX / DRAW_INDX_2
+            DumpConstantFiles(opcode);
 
         HandleType3(opcode, data, copy, depth);
         return count;
