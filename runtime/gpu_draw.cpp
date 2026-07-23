@@ -101,6 +101,7 @@ struct Renderer
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memProps{};
     bool hasPipelineStats = false; // pipelineStatisticsQuery feature enabled
+    bool hasGeometryShader = false; // geometryShader feature enabled
 
     bool Init();
     void Shutdown();
@@ -196,6 +197,10 @@ bool Renderer::Init()
     // clipped away" or "this draw shaded black".
     feats.pipelineStatisticsQuery = avail.pipelineStatisticsQuery;
     hasPipelineStats = avail.pipelineStatisticsQuery != VK_FALSE;
+    // A rectangle list gives three vertices and the hardware infers the fourth;
+    // deriving it needs the shaded vertices, so it happens in a geometry shader.
+    feats.geometryShader = avail.geometryShader;
+    hasGeometryShader = avail.geometryShader != VK_FALSE;
     VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     di.queueCreateInfoCount = 1;
     di.pQueueCreateInfos = &qi;
@@ -299,8 +304,9 @@ VkPrimitiveTopology TopologyOf(uint32_t primType)
     case 4: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     case 5: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
     case 6: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
-    // Rectangle list has no direct Vulkan topology; the hot pair is a triangle
-    // list, so anything else is reported and drawn as a triangle list.
+    // A rectangle list has no Vulkan topology of its own: its three vertices go
+    // in as a triangle list and the geometry shader emits the two-triangle strip
+    // (see getRectGeomShader). Anything else unhandled also falls here.
     default: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     }
 }
@@ -1663,23 +1669,77 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         return true;
     };
 
-    // --- pipeline cache keyed on (vs,ps,prim,output-merger state) --------
-    std::map<std::tuple<uint64_t, uint64_t, uint32_t, OutputMergerState>, VkPipeline>
-        pipelines;
+    // --- rectangle-list geometry shaders, cached by their derived shape ---
+    // A rectangle list carries three vertices per rectangle and the hardware
+    // infers the fourth by mirroring one across the longest edge. The fourth
+    // vertex's ATTRIBUTES are mirrored the same way, so it cannot be synthesized
+    // in the index buffer ahead of the vertex shader -- the expansion has to see
+    // shaded vertices. draw::BuildRectangleGeometryShader is the port of the
+    // shader Xenia uses for exactly this.
+    std::map<draw::RectangleGeometryShaderKey, VkShaderModule> geomShaders;
+    uint32_t rectDraws = 0, rectDrawsExpanded = 0;
+    auto getRectGeomShader = [&](uint64_t vsModification, VkShaderModule& out) -> bool {
+        out = VK_NULL_HANDLE;
+        if (!hasGeometryShader)
+            return false;
+        draw::RectangleGeometryShaderKey key;
+        if (!draw::DeriveRectangleGeometryShaderKey(vsModification, key))
+            return false;
+        auto it = geomShaders.find(key);
+        if (it != geomShaders.end())
+        { out = it->second; return out != VK_NULL_HANDLE; }
+        std::vector<uint32_t> spirv;
+        VkShaderModule mod = VK_NULL_HANDLE;
+        if (draw::BuildRectangleGeometryShader(key, spirv))
+        {
+            VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+            ci.codeSize = spirv.size() * sizeof(uint32_t);
+            ci.pCode = spirv.data();
+            if (vkCreateShaderModule(device, &ci, nullptr, &mod) != VK_SUCCESS)
+                mod = VK_NULL_HANDLE;
+            else
+                lucent::info("draw", "rectangle geometry shader: {} interpolators,"
+                    " {} clip, {} cull distances, {} SPIR-V words",
+                    key.interpolatorCount, key.clipDistanceCount,
+                    key.cullDistanceCount, spirv.size());
+        }
+        if (mod == VK_NULL_HANDLE)
+            lucent::warn("draw", "rectangle geometry shader build failed");
+        geomShaders[key] = mod;
+        out = mod;
+        return mod != VK_NULL_HANDLE;
+    };
+
+    // --- pipeline cache keyed on (vs,ps,gs,prim,output-merger state) ------
+    // Keyed on the MODULE HANDLES, not the microcode hashes: one microcode now
+    // translates to several distinct shaders (one per modification), so a hash
+    // does not identify a stage.
+    std::map<std::tuple<VkShaderModule, VkShaderModule, VkShaderModule, uint32_t,
+                        OutputMergerState>, VkPipeline> pipelines;
     auto getPipeline = [&](VkShaderModule vsMod, VkShaderModule psMod,
-                           uint64_t vsHash, uint64_t psHash, uint32_t primType,
+                           VkShaderModule gsMod, uint32_t primType,
                            const OutputMergerState& om,
                            VkPipelineLayout pipeLayout, VkPipeline& out) -> bool {
-        auto key = std::make_tuple(vsHash, psHash, primType, om);
+        auto key = std::make_tuple(vsMod, psMod, gsMod, primType, om);
         auto it = pipelines.find(key);
         if (it != pipelines.end()) { out = it->second; return true; }
-        VkPipelineShaderStageCreateInfo stages[2]{};
-        stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
-        stages[0].module = vsMod; stages[0].pName = "main";
-        stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        stages[1].module = psMod; stages[1].pName = "main";
+        VkPipelineShaderStageCreateInfo stages[3]{};
+        uint32_t stageCount = 0;
+        stages[stageCount] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        stages[stageCount].stage = VK_SHADER_STAGE_VERTEX_BIT;
+        stages[stageCount].module = vsMod; stages[stageCount].pName = "main";
+        ++stageCount;
+        if (gsMod != VK_NULL_HANDLE)
+        {
+            stages[stageCount] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+            stages[stageCount].stage = VK_SHADER_STAGE_GEOMETRY_BIT;
+            stages[stageCount].module = gsMod; stages[stageCount].pName = "main";
+            ++stageCount;
+        }
+        stages[stageCount] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+        stages[stageCount].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+        stages[stageCount].module = psMod; stages[stageCount].pName = "main";
+        ++stageCount;
         VkPipelineVertexInputStateCreateInfo vin{
             VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
         VkPipelineInputAssemblyStateCreateInfo ia{
@@ -1755,7 +1815,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
         cb.attachmentCount = 1; cb.pAttachments = &cba;
         VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        gp.stageCount = 2; gp.pStages = stages;
+        gp.stageCount = stageCount; gp.pStages = stages;
         gp.pVertexInputState = &vin;
         gp.pInputAssemblyState = &ia;
         gp.pViewportState = &vps;
@@ -1940,8 +2000,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         om.colorMask = R[0x2104];
         om.blend0 = R[0x2201];
         om.depthControl = R[0x2200];
+        // Rectangle lists go through the geometry shader that builds the fourth
+        // vertex. Everything else runs with no geometry stage at all.
+        VkShaderModule gsMod = VK_NULL_HANDLE;
+        if (d.primType == 8 /*kRectangleList*/)
+        {
+            ++rectDraws;
+            if (getRectGeomShader(vsModification, gsMod))
+                ++rectDrawsExpanded;
+        }
         VkPipeline pipe = VK_NULL_HANDLE;
-        if (!getPipeline(vsMod, psMod, d.vsHash, d.psHash, d.primType, om, pipeLayout, pipe))
+        if (!getPipeline(vsMod, psMod, gsMod, d.primType, om, pipeLayout, pipe))
         { ++skipped; ++skipReasons[3]; continue; }
 
         // Per-draw constant UBOs from this draw's own register snapshot.
@@ -2612,6 +2681,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         texBindsRt + texBindsStub + texBindsGuest, texBindsGuest, texBindsRt,
         texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
         changed, 100.0 * double(changed) / (double(W) * H));
+    if (rectDraws)
+        lucent::info("draw", "frame rectangle lists: {} of {} draws expanded by a"
+            " geometry shader ({} distinct)", rectDrawsExpanded, rectDraws,
+            geomShaders.size());
     lucent::info("draw", "frame geometry reach: {} draws fetch vertices inside the"
         " {:#x}-byte SSBO mirror, {} draws fetch PAST it (those read zero and"
         " collapse); highest vertex-buffer end seen {:#x}",
@@ -2744,6 +2817,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     }
     vkDestroyBuffer(device, ssbo, nullptr); vkFreeMemory(device, ssboMem, nullptr);
     for (auto& [h, m] : modules) vkDestroyShaderModule(device, m, nullptr);
+    for (auto& [k, m] : geomShaders)
+        if (m != VK_NULL_HANDLE) vkDestroyShaderModule(device, m, nullptr);
     return true;
 }
 

@@ -11,6 +11,7 @@
 #include <bit>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <unordered_map>
 
 #include "xenia/base/string_buffer.h"
@@ -18,6 +19,10 @@
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/registers.h"
 #include "xenia/gpu/shader.h"
+#include "xenia/gpu/spirv_builder.h"
+// Maps glslang's scoped SPIR-V enums back onto the flat spv::CapabilityFoo
+// names; every one of Xenia's own SPIR-V translation units includes it.
+#include "xenia/gpu/spirv_compatibility.h"
 #include "xenia/gpu/spirv_shader.h"
 #include "xenia/gpu/spirv_shader_translator.h"
 #include "xenia/gpu/texture_address.h"
@@ -273,6 +278,398 @@ bool TranslateShader(bool isVertex, const uint8_t* ucode, size_t size,
     return TranslateOne(translator,
         isVertex ? xenos::ShaderType::kVertex : xenos::ShaderType::kPixel,
         ucode, size, hash, modification, out);
+}
+
+bool DeriveRectangleGeometryShaderKey(uint64_t vsModification,
+                                      RectangleGeometryShaderKey& out)
+{
+    const SpirvShaderTranslator::Modification m(vsModification);
+    // The VS-expansion fallback and the geometry shader are alternatives, never
+    // both; if the modification ever asks for the fallback, refusing here is
+    // better than silently emitting a shader whose input interface is wrong.
+    if (m.vertex.host_vertex_shader_type !=
+        xe::gpu::Shader::HostVertexShaderType::kVertex)
+    {
+        lucent::warn("draw", "rectangle list with host vertex shader type {}",
+            uint32_t(m.vertex.host_vertex_shader_type));
+        return false;
+    }
+    out = {};
+    out.interpolatorCount = xe::bit_count(m.vertex.interpolator_mask);
+    if (m.vertex.user_clip_plane_cull)
+        out.cullDistanceCount = m.vertex.user_clip_plane_count;
+    else
+        out.clipDistanceCount = m.vertex.user_clip_plane_count;
+    return true;
+}
+
+bool BuildRectangleGeometryShader(const RectangleGeometryShaderKey& key,
+                                  std::vector<uint32_t>& spirv)
+{
+    // A triangle in, a strip of two triangles out -- the guest's three vertices
+    // plus the mirrored fourth.
+    constexpr uint32_t kInputVertexCount = 3;
+    constexpr uint32_t kOutputMaxVertices = 4;
+
+    const uint32_t clipDistanceCount = key.clipDistanceCount;
+    const uint32_t cullDistanceCount = key.cullDistanceCount;
+
+    std::vector<spv::Id> ids;
+
+    xe::gpu::SpirvBuilder builder(spv::Spv_1_0,
+        (SpirvShaderTranslator::kSpirvMagicToolId << 16) | 1, nullptr);
+    builder.addCapability(spv::CapabilityGeometry);
+    if (clipDistanceCount)
+        builder.addCapability(spv::CapabilityClipDistance);
+    if (cullDistanceCount)
+        builder.addCapability(spv::CapabilityCullDistance);
+    builder.setMemoryModel(spv::AddressingModelLogical, spv::MemoryModelGLSL450);
+    builder.setSource(spv::SourceLanguageUnknown, 0);
+
+    const spv::Id typeVoid = builder.makeVoidType();
+    const spv::Id typeBool = builder.makeBoolType();
+    const spv::Id typeBool4 = builder.makeVectorType(typeBool, 4);
+    const spv::Id typeInt = builder.makeIntType(32);
+    const spv::Id typeFloat = builder.makeFloatType(32);
+    const spv::Id typeFloat4 = builder.makeVectorType(typeFloat, 4);
+    const spv::Id typeClipDistances = clipDistanceCount
+        ? builder.makeArrayType(typeFloat,
+              builder.makeUintConstant(clipDistanceCount), 0)
+        : spv::NoType;
+    const spv::Id typeCullDistances = cullDistanceCount
+        ? builder.makeArrayType(typeFloat,
+              builder.makeUintConstant(cullDistanceCount), 0)
+        : spv::NoType;
+
+    std::vector<spv::Id> mainInterface;
+    const spv::Id constInputVertexCount = builder.makeUintConstant(kInputVertexCount);
+
+    // in gl_PerVertex gl_in[3]. Member order must match the vertex shader's own
+    // block, which is position, then clip distances, then cull distances.
+    ids.clear();
+    const uint32_t memberInPosition = uint32_t(ids.size());
+    ids.push_back(typeFloat4);
+    const spv::Id constMemberInPosition = builder.makeIntConstant(int32_t(memberInPosition));
+    uint32_t memberInClipDistance = UINT32_MAX;
+    spv::Id constMemberInClipDistance = spv::NoResult;
+    if (clipDistanceCount)
+    {
+        memberInClipDistance = uint32_t(ids.size());
+        ids.push_back(typeClipDistances);
+        constMemberInClipDistance = builder.makeIntConstant(int32_t(memberInClipDistance));
+    }
+    uint32_t memberInCullDistance = UINT32_MAX;
+    if (cullDistanceCount)
+    {
+        memberInCullDistance = uint32_t(ids.size());
+        ids.push_back(typeCullDistances);
+    }
+    const spv::Id typeStructInPerVertex = builder.makeStructType(ids, "gl_PerVertex");
+    builder.addMemberName(typeStructInPerVertex, memberInPosition, "gl_Position");
+    builder.addMemberDecoration(typeStructInPerVertex, memberInPosition,
+        spv::DecorationBuiltIn, int(spv::BuiltIn::Position));
+    if (clipDistanceCount)
+    {
+        builder.addMemberName(typeStructInPerVertex, memberInClipDistance, "gl_ClipDistance");
+        builder.addMemberDecoration(typeStructInPerVertex, memberInClipDistance,
+            spv::DecorationBuiltIn, int(spv::BuiltIn::ClipDistance));
+    }
+    if (cullDistanceCount)
+    {
+        builder.addMemberName(typeStructInPerVertex, memberInCullDistance, "gl_CullDistance");
+        builder.addMemberDecoration(typeStructInPerVertex, memberInCullDistance,
+            spv::DecorationBuiltIn, int(spv::BuiltIn::CullDistance));
+    }
+    builder.addDecoration(typeStructInPerVertex, spv::DecorationBlock);
+    const spv::Id inPerVertex = builder.createVariable(spv::NoPrecision,
+        spv::StorageClassInput,
+        builder.makeArrayType(typeStructInPerVertex, constInputVertexCount, 0), "gl_in");
+    mainInterface.push_back(inPerVertex);
+
+    // Interpolator outputs, then interpolator inputs -- glslang's declaration
+    // order, and the locations the translated vertex and pixel shaders use.
+    std::vector<spv::Id> outInterpolators(key.interpolatorCount);
+    for (uint32_t i = 0; i < key.interpolatorCount; ++i)
+    {
+        outInterpolators[i] = builder.createVariable(spv::NoPrecision,
+            spv::StorageClassOutput, typeFloat4,
+            ("xe_out_interpolator_" + std::to_string(i)).c_str());
+        builder.addDecoration(outInterpolators[i], spv::DecorationLocation, int(i));
+        builder.addDecoration(outInterpolators[i], spv::DecorationInvariant);
+        mainInterface.push_back(outInterpolators[i]);
+    }
+    std::vector<spv::Id> inInterpolators(key.interpolatorCount);
+    for (uint32_t i = 0; i < key.interpolatorCount; ++i)
+    {
+        inInterpolators[i] = builder.createVariable(spv::NoPrecision,
+            spv::StorageClassInput,
+            builder.makeArrayType(typeFloat4, constInputVertexCount, 0),
+            ("xe_in_interpolator_" + std::to_string(i)).c_str());
+        builder.addDecoration(inInterpolators[i], spv::DecorationLocation, int(i));
+        mainInterface.push_back(inInterpolators[i]);
+    }
+
+    // out gl_PerVertex. Cull distances are consumed here, not forwarded.
+    ids.clear();
+    const uint32_t memberOutPosition = uint32_t(ids.size());
+    ids.push_back(typeFloat4);
+    const spv::Id constMemberOutPosition = builder.makeIntConstant(int32_t(memberOutPosition));
+    uint32_t memberOutClipDistance = UINT32_MAX;
+    spv::Id constMemberOutClipDistance = spv::NoResult;
+    if (clipDistanceCount)
+    {
+        memberOutClipDistance = uint32_t(ids.size());
+        ids.push_back(typeClipDistances);
+        constMemberOutClipDistance = builder.makeIntConstant(int32_t(memberOutClipDistance));
+    }
+    const spv::Id typeStructOutPerVertex = builder.makeStructType(ids, "gl_PerVertex");
+    builder.addMemberName(typeStructOutPerVertex, memberOutPosition, "gl_Position");
+    builder.addMemberDecoration(typeStructOutPerVertex, memberOutPosition,
+        spv::DecorationBuiltIn, int(spv::BuiltIn::Position));
+    if (clipDistanceCount)
+    {
+        builder.addMemberName(typeStructOutPerVertex, memberOutClipDistance, "gl_ClipDistance");
+        builder.addMemberDecoration(typeStructOutPerVertex, memberOutClipDistance,
+            spv::DecorationBuiltIn, int(spv::BuiltIn::ClipDistance));
+    }
+    builder.addDecoration(typeStructOutPerVertex, spv::DecorationBlock);
+    const spv::Id outPerVertex = builder.createVariable(spv::NoPrecision,
+        spv::StorageClassOutput, typeStructOutPerVertex, "");
+    builder.addDecoration(outPerVertex, spv::DecorationInvariant);
+    mainInterface.push_back(outPerVertex);
+
+    std::vector<spv::Id> mainParamTypes;
+    std::vector<std::vector<spv::Decoration>> mainPrecisions;
+    spv::Block* mainEntry = nullptr;
+    spv::Function* mainFunction = builder.makeFunctionEntry(spv::NoPrecision, typeVoid,
+        "main", mainParamTypes, mainPrecisions, &mainEntry);
+    spv::Instruction* entryPoint =
+        builder.addEntryPoint(spv::ExecutionModelGeometry, mainFunction, "main");
+    for (spv::Id id : mainInterface)
+        entryPoint->addIdOperand(id);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeTriangles);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeInvocations, 1);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeOutputTriangleStrip);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeOutputVertices,
+        int(kOutputMaxVertices));
+
+    // Returning early from a geometry shader emits nothing, which is how both
+    // the NaN and the cull tests below drop the whole primitive.
+    auto discardIf = [&](spv::Id condition) {
+        spv::Block& predecessor = *builder.getBuildPoint();
+        spv::Block& thenBlock = builder.makeNewBlock();
+        spv::Block& mergeBlock = builder.makeNewBlock();
+        builder.createSelectionMerge(&mergeBlock, spv::SelectionControlDontFlattenMask);
+        {
+            auto branch = std::make_unique<spv::Instruction>(spv::OpBranchConditional);
+            branch->addIdOperand(condition);
+            branch->addIdOperand(thenBlock.getId());
+            branch->addIdOperand(mergeBlock.getId());
+            branch->addImmediateOperand(1);
+            branch->addImmediateOperand(2);
+            predecessor.addInstruction(std::move(branch));
+        }
+        thenBlock.addPredecessor(&predecessor);
+        mergeBlock.addPredecessor(&predecessor);
+        builder.setBuildPoint(&thenBlock);
+        builder.createNoResultOp(spv::OpReturn);
+        builder.setBuildPoint(&mergeBlock);
+    };
+
+    // A NaN position marks a killed vertex; the whole primitive goes.
+    for (uint32_t i = 0; i < kInputVertexCount; ++i)
+    {
+        ids.clear();
+        ids.push_back(builder.makeIntConstant(int32_t(i)));
+        ids.push_back(constMemberInPosition);
+        discardIf(builder.createUnaryOp(spv::OpAny, typeBool,
+            builder.createUnaryOp(spv::OpIsNan, typeBool4,
+                builder.createLoad(
+                    builder.createAccessChain(spv::StorageClassInput, inPerVertex, ids),
+                    spv::NoPrecision))));
+    }
+
+    // Cull the primitive when a cull distance is negative at every vertex.
+    if (cullDistanceCount)
+    {
+        const spv::Id constMemberInCullDistance =
+            builder.makeIntConstant(int32_t(memberInCullDistance));
+        const spv::Id constFloat0 = builder.makeFloatConstant(0.0f);
+        spv::Id cullCondition = spv::NoResult;
+        for (uint32_t i = 0; i < cullDistanceCount; ++i)
+        {
+            for (uint32_t j = 0; j < kInputVertexCount; ++j)
+            {
+                ids.clear();
+                ids.push_back(builder.makeIntConstant(int32_t(j)));
+                ids.push_back(constMemberInCullDistance);
+                ids.push_back(builder.makeIntConstant(int32_t(i)));
+                const spv::Id negative = builder.createBinOp(spv::OpFOrdLessThan, typeBool,
+                    builder.createLoad(
+                        builder.createAccessChain(spv::StorageClassInput, inPerVertex, ids),
+                        spv::NoPrecision),
+                    constFloat0);
+                cullCondition = cullCondition == spv::NoResult
+                    ? negative
+                    : builder.createBinOp(spv::OpLogicalAnd, typeBool, cullCondition, negative);
+            }
+        }
+        discardIf(cullCondition);
+    }
+
+    // Which of the three edges is the longest decides where the fourth vertex
+    // goes -- it is the mirror of the first across the diagonal:
+    //
+    //   0---1
+    //   |  /|   12 longest -> strip 0 1 2 3, v3 = -v0 + v1 + v2
+    //   | / |   20 longest -> strip 1 2 0 3
+    //   |/  |   01 longest -> strip 2 0 1 3
+    //   2--[3]
+    //
+    // Edge lengths are compared squared and in screen X/Y only, as on Xenia.
+    const spv::Id constInt0 = builder.makeIntConstant(0);
+    const spv::Id constInt1 = builder.makeIntConstant(1);
+    const spv::Id constInt2 = builder.makeIntConstant(2);
+    const spv::Id constInt3 = builder.makeIntConstant(3);
+
+    spv::Id edgeLengths[3];
+    ids.resize(3);
+    ids[1] = constMemberInPosition;
+    auto loadPositionComponent = [&](uint32_t vertex, spv::Id component) {
+        ids[0] = builder.makeIntConstant(int32_t(vertex));
+        ids[2] = component;
+        return builder.createLoad(
+            builder.createAccessChain(spv::StorageClassInput, inPerVertex, ids),
+            spv::NoPrecision);
+    };
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        const spv::Id x0 = loadPositionComponent((1 + i) % 3, constInt0);
+        const spv::Id y0 = loadPositionComponent((1 + i) % 3, constInt1);
+        const spv::Id x1 = loadPositionComponent((2 + i) % 3, constInt0);
+        const spv::Id y1 = loadPositionComponent((2 + i) % 3, constInt1);
+        const spv::Id ex = builder.createBinOp(spv::OpFSub, typeFloat, x1, x0);
+        const spv::Id ey = builder.createBinOp(spv::OpFSub, typeFloat, y1, y0);
+        edgeLengths[i] = builder.createBinOp(spv::OpFAdd, typeFloat,
+            builder.createBinOp(spv::OpFMul, typeFloat, ex, ex),
+            builder.createBinOp(spv::OpFMul, typeFloat, ey, ey));
+    }
+
+    spv::Id vertexIndices[3];
+    vertexIndices[0] = builder.createTriOp(spv::OpSelect, typeInt,
+        builder.createBinOp(spv::OpLogicalAnd, typeBool,
+            builder.createBinOp(spv::OpFOrdGreaterThan, typeBool,
+                edgeLengths[0], edgeLengths[1]),
+            builder.createBinOp(spv::OpFOrdGreaterThan, typeBool,
+                edgeLengths[0], edgeLengths[2])),
+        constInt0,
+        builder.createTriOp(spv::OpSelect, typeInt,
+            builder.createBinOp(spv::OpFOrdGreaterThan, typeBool,
+                edgeLengths[1], edgeLengths[2]),
+            constInt1, constInt2));
+    for (uint32_t i = 1; i < 3; ++i)
+    {
+        const spv::Id unwrapped = builder.createBinOp(spv::OpIAdd, typeInt,
+            vertexIndices[0], builder.makeIntConstant(int32_t(i)));
+        vertexIndices[i] = builder.createTriOp(spv::OpSelect, typeInt,
+            builder.createBinOp(spv::OpSLessThan, typeBool, unwrapped, constInt3),
+            unwrapped,
+            builder.createBinOp(spv::OpISub, typeInt, unwrapped, constInt3));
+    }
+
+    // The three guest vertices, in strip order.
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        const spv::Id vertexIndex = vertexIndices[i];
+        ids.clear();
+        ids.push_back(vertexIndex);
+        for (uint32_t j = 0; j < key.interpolatorCount; ++j)
+        {
+            builder.createStore(
+                builder.createLoad(
+                    builder.createAccessChain(spv::StorageClassInput, inInterpolators[j], ids),
+                    spv::NoPrecision),
+                outInterpolators[j]);
+        }
+        ids.clear();
+        ids.push_back(vertexIndex);
+        ids.push_back(constMemberInPosition);
+        const spv::Id position = builder.createLoad(
+            builder.createAccessChain(spv::StorageClassInput, inPerVertex, ids),
+            spv::NoPrecision);
+        ids.clear();
+        ids.push_back(constMemberOutPosition);
+        builder.createStore(position,
+            builder.createAccessChain(spv::StorageClassOutput, outPerVertex, ids));
+        if (clipDistanceCount)
+        {
+            ids.clear();
+            ids.push_back(vertexIndex);
+            ids.push_back(constMemberInClipDistance);
+            const spv::Id clip = builder.createLoad(
+                builder.createAccessChain(spv::StorageClassInput, inPerVertex, ids),
+                spv::NoPrecision);
+            ids.clear();
+            ids.push_back(constMemberOutClipDistance);
+            builder.createStore(clip,
+                builder.createAccessChain(spv::StorageClassOutput, outPerVertex, ids));
+        }
+        builder.createNoResultOp(spv::OpEmitVertex);
+    }
+
+    // The fourth: every attribute mirrored the same way the position is,
+    // v3 = v2 + (v1 - v0).
+    auto mirror = [&](spv::Id type, spv::Id variable, const spv::Id* member,
+                      size_t memberCount) {
+        auto load = [&](spv::Id vertex) {
+            ids.clear();
+            ids.push_back(vertex);
+            for (size_t i = 0; i < memberCount; ++i)
+                ids.push_back(member[i]);
+            return builder.createLoad(
+                builder.createAccessChain(spv::StorageClassInput, variable, ids),
+                spv::NoPrecision);
+        };
+        const spv::Id v0 = load(vertexIndices[0]);
+        const spv::Id v01 = builder.createNoContractionBinOp(spv::OpFSub, type,
+            load(vertexIndices[1]), v0);
+        return builder.createNoContractionBinOp(spv::OpFAdd, type, v01,
+            load(vertexIndices[2]));
+    };
+
+    for (uint32_t i = 0; i < key.interpolatorCount; ++i)
+    {
+        builder.createStore(mirror(typeFloat4, inInterpolators[i], nullptr, 0),
+            outInterpolators[i]);
+    }
+    {
+        const spv::Id member[] = {constMemberInPosition};
+        const spv::Id position = mirror(typeFloat4, inPerVertex, member, 1);
+        ids.clear();
+        ids.push_back(constMemberOutPosition);
+        builder.createStore(position,
+            builder.createAccessChain(spv::StorageClassOutput, outPerVertex, ids));
+    }
+    for (uint32_t i = 0; i < clipDistanceCount; ++i)
+    {
+        const spv::Id constI = builder.makeIntConstant(int32_t(i));
+        const spv::Id member[] = {constMemberInClipDistance, constI};
+        const spv::Id clip = mirror(typeFloat, inPerVertex, member, 2);
+        ids.clear();
+        ids.push_back(constMemberOutClipDistance);
+        ids.push_back(constI);
+        builder.createStore(clip,
+            builder.createAccessChain(spv::StorageClassOutput, outPerVertex, ids));
+    }
+    builder.createNoResultOp(spv::OpEmitVertex);
+    builder.createNoResultOp(spv::OpEndPrimitive);
+
+    builder.leaveFunction();
+
+    std::vector<unsigned int> code;
+    builder.dump(code);
+    spirv.assign(code.begin(), code.end());
+    return !spirv.empty();
 }
 
 std::vector<uint8_t> DeriveSystemConstants(const uint32_t* registerFile)

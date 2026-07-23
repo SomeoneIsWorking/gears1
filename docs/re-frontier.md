@@ -27,17 +27,6 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 <!-- Machine-edited by tools/re_frontier.py add/set. Format: `## <area>` sections;
      each entry is `### <id> — <title>` followed by `- <field>: <value>` lines. -->
 
-## core
-
-### area.first-step — Describe the first RE step in this chain
-- status: todo
-- deps: 
-- evidence: 
-- where: 
-- gap: Fill in real steps; add deps to encode the RE dependency order.
-- notes: 
-
-
 ## gpu
 
 ### cmd-processor — PM4 command processor executes the ring
@@ -127,4 +116,20 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - where: runtime/gpu_draw_xlate.h/.cpp (DecodeGuestTexture, DeriveSamplerState, TexHostFormat/GuestTexture/GuestSamplerState -- the plain-type bridge, because Xenia's bundled Vulkan-Headers cannot share a TU with the system ones), runtime/gpu_draw.cpp (uploadTexture: host VkFormat table mirroring Xenia's vulkan_texture_cache host format table, image+view+staging creation, the census; getSampler; selectTexView tries the guest texture before the stub; the copy-buffer-to-image pass before the render pass). Knobs: GEARS_DRAW_NOTEX=1 control arm (stubs only), GEARS_DRAW_TEX_DUMP=1 decoded-blob dump.
 - gap: Only the BASE level is uploaded -- mip tails are not read, so a minified sample reads the full-resolution level. 6 of 26 distinct fetches are not uploaded and are counted with their reason: 6 'not a texture fetch constant' (a shader declares a texture binding whose fetch slot the draw left unprogrammed). k_24_8_FLOAT (tiled depth, 2 fetches) and k_16_16_16_16_EXPAND have no host format mapping in the table yet. Half-way clamp modes (kClampToHalfway/kMirrorClampToHalfway) fall back to the nearest edge mode -- no host equivalent exists. No texture cache across frames: every frame re-decodes and re-uploads.
 - notes: This step is DONE. It did not by itself explain the black frame -- that was the reason to do it, and doing it falsified it -- but with the shader-modification defect fixed the uploaded textures are visibly the ones on screen (the title-screen wall art in scratch/screenshots/fixed/frame.png is the same blob tools/decode_bc.py rendered from the dump).
+
+### draw-backend-primitives — Convert every guest primitive type Xenia's PrimitiveProcessor does
+- status: re-verified
+- deps: draw-backend-frame
+- evidence: kQuadList is expanded to a triangle list (0,1,2 / 0,2,3 per group of 4) as Xenia's PrimitiveProcessor does; this frame's entire world geometry is quad_list. kRectangleList is expanded by a GEOMETRY SHADER ported from Xenia's VulkanPipelineCache::GetGeometryShader (kRectangleList branch): the guest gives three vertices and the hardware infers the fourth by mirroring one across the LONGEST EDGE, comparing the three squared edge lengths in screen X/Y, and every attribute (position, interpolators, clip distances) is mirrored the same way -- so it cannot be synthesized in the index buffer ahead of the vertex shader. Xenia's VS-expansion fallback (kRectangleListAsTriangleStrip) is an unimplemented TODO in its SPIR-V translator, so the geometry shader is the real path. MEASURED headless on scene frame 600, 3 runs: 19 of 19 rectangle_list draws expanded, 2 distinct geometry shaders (1 and 0 interpolators), 171-174 of 171-174 draws issued, 0 skipped, 917090-921600 of 921600 px non-black; Vulkan validation clean for the geometry stage. It removed BOTH the diagonal split AND the pink tint -- they were one defect: the rectangles are the full-screen colour-grade passes, so half of every one was going ungraded. Zero pixels match the pink test anywhere in the frame. scratch/screenshots/rect/frame.png.
+- where: runtime/gpu_draw_xlate.cpp (DeriveRectangleGeometryShaderKey, BuildRectangleGeometryShader), runtime/gpu_draw.cpp (getRectGeomShader cache, geometry stage in getPipeline, quad-list index expansion), runtime/gpu_draw_xlate.h
+- gap: 
+- notes: 
+
+### draw-backend-colour — Colour path: target format, gamma and swizzle
+- status: re-partial
+- deps: draw-backend-frame
+- evidence: The pink/red cast that motivated this step turned out to be the unexpanded rectangle lists, not a colour path -- see draw-backend-primitives and catalog #28. Zero pixels match the pink test (r>150 and b>g+40) in the rendered frame now.
+- where: 
+- gap: Open question, not a known defect: whether the frame's overall colour is exactly the guest's. Untested candidates -- host target VkFormat vs the guest's RB_COLOR_INFO color_format (one host target still serves all 8 resolve destinations), the gamma flag, the render-target component swizzle, color_exp_bias per surface. Needs a measurement per candidate, not an eyeball.
+- notes: 
 
