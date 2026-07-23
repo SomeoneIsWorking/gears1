@@ -1133,6 +1133,23 @@ struct CommandProcessor
         frameDraws.push_back(std::move(item));
     }
 
+    // Diagnostic control (GEARS_CP_STALL_MS=N): block the command-processor
+    // thread for N ms at the first swap, doing nothing else. This isolates
+    // "a long stall on the CP thread" from "the capture touched guest state":
+    // if the pure stall reproduces the guest's quit path and the capture-free
+    // run does not, the stall is the mechanism.
+    bool cpStallDone = false;
+    void TriggerCpStall()
+    {
+        const long ms = lucent::config::number("CP_STALL_MS", 0);
+        if (cpStallDone || ms <= 0)
+            return;
+        cpStallDone = true;
+        lucent::info("gpu", "cp-stall: blocking the command processor for {} ms", ms);
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        lucent::info("gpu", "cp-stall: resumed");
+    }
+
     // At the frame boundary, render every accumulated draw into one persistent
     // target and screenshot it. One-shot per run.
     void TriggerFrameRender()
@@ -1164,7 +1181,12 @@ struct CommandProcessor
         in.draws = std::move(frameDraws);
         lucent::info("gpu", "guest-draw: rendering whole frame ({} draws captured)",
             in.draws.size());
+        const auto t0 = std::chrono::steady_clock::now();
         gears::RenderFrame(in);
+        const uint64_t ms = uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count());
+        lucent::info("gpu", "guest-draw: RenderFrame blocked the command processor"
+            " for {} ms", ms);
     }
 
     static uint16_t SwapIndex16(uint16_t v, uint32_t endian)
@@ -1472,6 +1494,7 @@ struct CommandProcessor
                     ReportWaitStats();
                     // Whole-frame guest-draw backend: at the first swap that has
                     // accumulated draws, render them all into a persistent target.
+                    TriggerCpStall();
                     TriggerFrameRender();
                     // The frame boundary is here, at the point in the stream
                     // where the hardware would flip -- so this is where the
