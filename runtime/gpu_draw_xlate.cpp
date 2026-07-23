@@ -99,6 +99,19 @@ bool TranslateHotPair(const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
     return a && b;
 }
 
+bool TranslateShader(bool isVertex, const uint8_t* ucode, size_t size,
+                     uint64_t hash, ShaderXlate& out)
+{
+    SpirvShaderTranslator translator(
+        SpirvShaderTranslator::Features(/*all=*/true),
+        /*native_2x_msaa_with_attachments=*/true,
+        /*native_2x_msaa_no_attachments=*/true,
+        /*edram_fragment_shader_interlock=*/false);
+    return TranslateOne(translator,
+        isVertex ? xenos::ShaderType::kVertex : xenos::ShaderType::kPixel,
+        ucode, size, hash, out);
+}
+
 std::vector<uint8_t> DeriveSystemConstants(const uint32_t* registerFile)
 {
     RegisterFile regs;
