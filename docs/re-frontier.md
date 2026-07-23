@@ -133,3 +133,11 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap: Open question, not a known defect: whether the frame's overall colour is exactly the guest's. Untested candidates -- host target VkFormat vs the guest's RB_COLOR_INFO color_format (one host target still serves all 8 resolve destinations), the gamma flag, the render-target component swizzle, color_exp_bias per surface. Needs a measurement per candidate, not an eyeball.
 - notes: 
 
+### draw-backend-live — Render every frame live instead of one captured frame
+- status: todo
+- deps: draw-backend-frame, draw-backend-primitives
+- evidence: 
+- where: runtime/gpu_draw.cpp (Renderer, RenderFrameImpl), runtime/gpu_present.cpp (Presenter has its own instance+device), runtime/vd_null_gpu.cpp (frameRenderDone one-shot gate)
+- gap: RenderFrame builds and tears down its entire world per call, so it is a one-shot capture, not a renderer. MEASURED breakdown of a 296 ms whole-frame render (scene frame 600, 174 draws): setup 47 ms, draw loop 218 ms (shader translation 116, pipeline creation 21, texture upload 7, and ~74 ms of per-draw buffer/descriptor churn -- 5 UBOs created and freed per draw), submit+wait 6 ms, readback+report 25 ms. THE GPU WORK IS 6 ms. Everything else is setup that a persistent renderer pays once: hoist the shader/pipeline/texture/layout caches and the render target out of RenderFrameImpl into the Renderer, suballocate per-draw UBOs and index buffers from a reset-per-frame arena, and drop the readback. The readback and the present upload only vanish once the renderer and gpu_present.cpp share one VkDevice -- they each create their own today.
+- notes: 
+
