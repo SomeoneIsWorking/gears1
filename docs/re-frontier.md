@@ -97,10 +97,18 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - notes: ndc_scale[0]=0.99999994 (not exactly 1) is Xenia's ArchReciprocalRefined, reproduced faithfully. VGT_DRAW_INITIATOR is a register (0x21FC) the tool already reads, but our command processor does not mirror the DRAW_INDX packet into it (draw-params owns DRAW_INDX). draw-params measured 0x00060804 (triangle_list) for this same draw; pass `--draw-initiator=0x00060804` to inject it -> flags 0x3c20 becomes 0x3c60 (+PrimitivePolygonal). The clean permanent fix is for the DRAW_INDX handler to mirror VGT_DRAW_INITIATOR into the register file; that belongs to draw-params, not here.
 
 ### draw-backend — First real draw: hot pair geometry into swapchain
-- status: todo
+- status: re-partial
 - deps: shader-xlate, present, draw-params, system-constants
+- evidence: runtime/gpu_draw.cpp renders the hot pair (vs_5363d074/ps_501ac5d8) into a 1280x720 offscreen target headless (GEARS_DRAW=1) and reads it back to scratch/screenshots/hot_draw.ppm. PROVEN on a real run: (1) runtime translation reproduces the verified SPIR-V byte-for-byte (VS 12420, PS 18588 bytes); (2) the four vertices read from the guest shared-memory SSBO at physical 0x97810 are the real full-screen NDC quad (-1.0007813,1.0013889)(0.9992187,1.0013889)(-1.0007813,-0.9986111)(0.9992187,-0.9986111) z=0 w=1 (half-texel offset for a 1280 RT); (3) with the render target cleared to a magenta sentinel, all 921600 px are overwritten by the draw -> the full-screen quad rasterised (triangle_list, 6 int32 indices 0 1 3 0 3 2 from guest 0x978d0) and the pixel shader ran over every pixel; (4) Vulkan validation is clean. Output is BLACK, not a console-matching frame -> re-partial not re-verified.
+- where: runtime/gpu_draw.cpp (Vulkan renderer: SSBO mirror of guest phys mem, system/float(packed per Xenia constant map)/bool-loop/fetch UBOs, 1x1 stub texture0+sampler, pipeline from the 2 runtime-translated SPIR-V modules), runtime/gpu_draw_xlate.cpp (Xenos->SPIR-V + system-constants derivation, isolated from system Vulkan headers), runtime/vd_null_gpu.cpp (VGT_DRAW_INITIATOR mirrored into the register file at DRAW_INDX; TriggerHotDraw fires the backend once), runtime/gpu_present.cpp (uploads the rendered frame into the swapchain). GEARS_DRAW_VALIDATE=1 enables Vulkan validation.
+- gap: HONEST GAP (why re-partial): this hot pair is a full-screen RT-sampling post-process (samples a 1280x720 render target, catalog #23). texture0 is a 1x1 stub, so the sample returns 0 and the pixel shader's log()/exp() path collapses the frame to black -- verified this is the sole cause (identity-swizzle diagnostic still black -> the stub sample itself is 0, not a pipeline bug; VS position is correct so SSBO/UBO feeding all work). Recognisable output needs the RT it samples to be produced first.
+- notes: NEXT RE STEP (see draw-backend-rt below): execute the upstream draws that render the scene into the RT this pair samples, OR target a self-contained hot pair that emits its own geometry+shading, so a console-matching frame can be verified. The pipeline, constant feeding, geometry fetch and present path are all in place and proven; only the sampled RT content is missing.
+
+### draw-backend-rt — Produce the render target the hot pair samples
+- status: todo
+- deps: draw-backend
 - evidence: 
 - where: 
-- gap: shared-memory SSBO, 4 constant UBOs, 1x1 stub texture0, render pass into swapchain, one pipeline from the 2 SPIR-V modules. Shaders read geometry from SSBO via vfetch, NOT Vulkan vertex input -- confirmed: hot VS declares only gl_VertexIndex as Input.
-- notes: 
+- gap: the hot pair is a post-process that samples a 1280x720 scene RT (fetch slot0 base 0xbde0000, catalog #23). The scene is drawn by OTHER (non-hot) draws into that RT/EDRAM surface; none are executed yet. Needs: run the scene draws into a host render target (EDRAM/resolve model), bind that as texture0 instead of the 1x1 stub, then the hot pair's tone-map produces a real frame.
+- notes: this is the honest prerequisite that keeps draw-backend at re-partial rather than re-verified.
 

@@ -49,6 +49,7 @@
 
 #include "guest_heap.h"
 #include "gpu_present.h"
+#include "gpu_draw.h"
 #include "hle_d3d.h"
 #include "guest_thread.h"
 #include "guest_memory.h"
@@ -178,6 +179,12 @@ constexpr uint32_t kOpEventWriteZpd = 0x5B;
 // RB_SAMPLE_COUNT_ADDR: where EVENT_WRITE_ZPD writes its sample-count record.
 constexpr uint32_t kRegSampleCountAddr = 0x2325;
 
+// VGT_DRAW_INITIATOR (Xenia registers.h / register_table.inc). The DRAW_INDX /
+// DRAW_INDX_2 packet carries this value in its payload; the sequencer latches it
+// into the register file on hardware. Mirroring it makes prim_type / index_size
+// live for the system-constants derivation instead of reading stale-zero.
+constexpr uint32_t kRegDrawInitiator = 0x21FC;
+
 // The runtime's own swap packet. D3D reserves 64 dwords in the command buffer
 // and passes their address to VdSwap; the KERNEL is what fills them with the
 // swap commands (leaving them unwritten desyncs any parser: the stale bytes
@@ -243,6 +250,10 @@ struct BoundShader
     uint32_t address = 0;   // physical address (IM_LOAD) or 0 (immediate)
     uint64_t loads = 0;
     bool immediate = false;
+    // The microcode as big-endian bytes (as the GPU reads it, and as the Xenos
+    // translator consumes it). Kept so the guest-draw backend can translate the
+    // bound pair at draw time without re-reading it from a capture file.
+    std::vector<uint8_t> ucode;
 };
 
 struct ShaderCaptureState
@@ -290,6 +301,7 @@ void RecordBoundShader(uint32_t type, uint32_t address, bool immediate,
     s.address = address;
     s.immediate = immediate;
     s.loads = 1;
+    s.ucode = ucode;
     cap.shaders.emplace(hash, s);
 
     const std::string path = std::format("{}/{}_{:016x}.ucode",
@@ -327,7 +339,9 @@ void ShaderCaptureInit()
     if (cap.ready)
         return;
     cap.ready = true;
-    cap.enabled = lucent::config::flag("SHADER_CAPTURE");
+    // The guest-draw backend (GEARS_DRAW) needs the bound pair's microcode, so
+    // it turns capture on too -- capture is how the microcode is kept in memory.
+    cap.enabled = lucent::config::flag("SHADER_CAPTURE") || lucent::config::flag("DRAW");
     if (!cap.enabled)
         return;
     const std::string& dir = lucent::config::text("SHADER_CAPTURE_DIR");
@@ -941,6 +955,92 @@ struct CommandProcessor
     // from that fetch constant's dword_0 (address = dword_0 >> 2, in dwords).
     static constexpr uint32_t kHotVertexFetchIndex = 95;   // from vf0 disasm
     static constexpr uint32_t kHotVertexStrideDwords = 12; // baked Stride=12
+    static constexpr uint64_t kHotPixelHash = 0x501ac5d8692bf7b6ull;
+
+    bool drawDone = false; // one-shot latch for the guest-draw backend
+
+    // At the hot-pair DRAW_INDX, hand the draw to the guest-draw graphics
+    // backend (runtime/gpu_draw.cpp): translate the bound pair, fill the UBOs
+    // and shared-memory SSBO from the register file and guest memory, and
+    // rasterise the full-screen quad into an offscreen target for a screenshot.
+    // Gated on GEARS_DRAW so the measurement harnesses are unaffected; one-shot.
+    // `raw`/`usable` are the DRAW_INDX packet payload (for VGT_DMA_BASE); the
+    // initiator has already been mirrored into the register file by the caller.
+    void TriggerHotDraw(uint32_t opcode, const uint32_t* raw, uint32_t usable,
+                        uint32_t initiator)
+    {
+        if (drawDone || !lucent::config::flag("DRAW"))
+            return;
+        if (g_shaderCapture.activeVertexHash != kHotVertexHash ||
+            g_shaderCapture.activePixelHash != kHotPixelHash)
+            return;
+        // Require fetch #95 (the vertex geometry source) to be populated, so we
+        // do not fire on an early degenerate draw before the buffer is bound.
+        const uint32_t fetchBase = kConstBaseFetch + kHotVertexFetchIndex * 2;
+        const uint32_t vf0 = g_gpuRegisters[fetchBase];
+        const uint32_t vf1 = g_gpuRegisters[fetchBase + 1];
+        if ((vf0 & 0x3) != 3)
+            return;
+
+        auto vsIt = g_shaderCapture.shaders.find(kHotVertexHash);
+        auto psIt = g_shaderCapture.shaders.find(kHotPixelHash);
+        if (vsIt == g_shaderCapture.shaders.end() ||
+            psIt == g_shaderCapture.shaders.end() ||
+            vsIt->second.ucode.empty() || psIt->second.ucode.empty())
+            return;
+        drawDone = true;
+
+        const uint32_t primType = initiator & 0x3F;
+        const uint32_t sourceSelect = (initiator >> 6) & 0x3;
+        const uint32_t indexSizeBit = (initiator >> 11) & 0x1; // 0=int16,1=int32
+        const uint32_t numIndices = (initiator >> 16) & 0xFFFF;
+        const uint32_t indexSizeBytes = indexSizeBit ? 4u : 2u;
+        const uint32_t vertexBase = (vf0 >> 2) << 2;
+        const uint32_t vertexSize = ((vf1 >> 2) & 0xFFFFFF) * 4;
+
+        // Index buffer base: VGT_DMA_BASE, in the packet (DRAW_INDX has a viz
+        // token before the initiator, DRAW_INDX_2 does not). Mirrors the layout
+        // decoded in CaptureHotDraw.
+        uint32_t indexGuestBase = 0, indexSwap = 0;
+        if (sourceSelect == 0) // kDMA (indexed)
+        {
+            const uint32_t initiatorIdx = (opcode == 0x22) ? 1u : 0u;
+            const uint32_t baseIdx = initiatorIdx + 1;
+            const uint32_t sizeIdx = initiatorIdx + 2;
+            if (usable > sizeIdx)
+            {
+                indexGuestBase = raw[baseIdx] & ~(indexSizeBytes - 1);
+                indexSwap = (raw[sizeIdx] >> 30) & 0x3;
+            }
+        }
+
+        // Mirror enough low guest physical memory into the SSBO to cover the
+        // vertex buffer this draw fetches from (rounded up, with headroom).
+        uint32_t mirror = vertexBase + vertexSize + 0x10000;
+        mirror = (mirror + 0xFFFFu) & ~0xFFFFu;
+
+        gears::HotDrawInputs in{};
+        in.registerFile = g_gpuRegisters.data();
+        in.guestBase = gears::Memory().Base();
+        in.guestPhysicalMirrorBytes = mirror;
+        in.vsUcode = vsIt->second.ucode.data();
+        in.vsUcodeSize = vsIt->second.ucode.size();
+        in.psUcode = psIt->second.ucode.data();
+        in.psUcodeSize = psIt->second.ucode.size();
+        in.vsHash = kHotVertexHash;
+        in.psHash = kHotPixelHash;
+        in.primType = primType;
+        in.indexCount = numIndices;
+        in.indexIs32 = indexSizeBit != 0;
+        in.indexGuestBase = indexGuestBase;
+        in.indexSwap = indexSwap;
+
+        lucent::info("gpu", "guest-draw: hot pair bound, firing backend"
+            " (prim {:#x}, {} {}-bit indices at {:#x}, vertex base {:#x} size {} bytes,"
+            " mirror {:#x})", primType, numIndices, indexSizeBytes * 8, indexGuestBase,
+            vertexBase, vertexSize, mirror);
+        gears::RenderHotDraw(in);
+    }
 
     static uint16_t SwapIndex16(uint16_t v, uint32_t endian)
     {
@@ -1487,8 +1587,19 @@ struct CommandProcessor
         // Verification hook: dump the constant files at the first real draw.
         if (opcode == 0x22 || opcode == 0x36) // DRAW_INDX / DRAW_INDX_2
         {
+            // Mirror VGT_DRAW_INITIATOR from the packet into the register file so
+            // prim_type / index_size are live for the system-constants
+            // derivation (DRAW_INDX carries a viz token before the initiator,
+            // DRAW_INDX_2 does not). This is the seam fix: the value is tracked,
+            // not injected by flag.
+            const uint32_t initiatorIdx = (opcode == 0x22) ? 1u : 0u;
+            const uint32_t initiator = copy > initiatorIdx ? data[initiatorIdx] : 0u;
+            if (copy > initiatorIdx)
+                WriteGpuRegister(kRegDrawInitiator, initiator);
+
             DumpConstantFiles(opcode);
             CaptureHotDraw(opcode, data, copy);
+            TriggerHotDraw(opcode, data, copy, initiator);
         }
 
         HandleType3(opcode, data, copy, depth);
