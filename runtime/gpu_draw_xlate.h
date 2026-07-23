@@ -28,6 +28,12 @@ bool TranslateHotPair(const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
                       const uint8_t* psUcode, size_t psSize, uint64_t psHash,
                       ShaderXlate& outVs, ShaderXlate& outPs);
 
+// Translates a single stage (vertex or pixel) with the same widest-path
+// translator configuration TranslateHotPair uses. Lets the whole-frame backend
+// translate and cache each distinct shader once, keyed on its hash.
+bool TranslateShader(bool isVertex, const uint8_t* ucode, size_t size,
+                     uint64_t hash, ShaderXlate& out);
+
 // Derives the system-constants UBO (Xenia's SpirvShaderTranslator::
 // SystemConstants) from our tracked register file, returned as raw bytes.
 // Ports UpdateSystemConstantValues (non-FSI host-render-targets path).
