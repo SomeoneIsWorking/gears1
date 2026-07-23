@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <memory>
+#include <unordered_map>
 
 #include "xenia/base/string_buffer.h"
 #include "xenia/gpu/draw_util.h"
@@ -35,30 +37,44 @@ namespace draw_util = xe::gpu::draw_util;
 namespace reg = xe::gpu::reg;
 namespace xenos = xe::gpu::xenos;
 
-bool TranslateOne(SpirvShaderTranslator& translator, xenos::ShaderType type,
-                  const uint8_t* ucode, size_t size, uint64_t hash,
-                  ShaderXlate& out)
+// Analysed shaders, keyed by microcode hash. One Shader object per microcode is
+// how Xenia works too: ucode analysis is what answers "which interpolators does
+// this stage write / read", which the modification derivation needs BEFORE any
+// translation happens, and the object then holds one translation per
+// modification.
+xe::gpu::SpirvShader* GetAnalyzedShader(xenos::ShaderType type,
+                                        const uint8_t* ucode, size_t size,
+                                        uint64_t hash)
 {
+    static std::unordered_map<uint64_t, std::unique_ptr<xe::gpu::SpirvShader>> cache;
+    auto it = cache.find(hash);
+    if (it != cache.end())
+        return it->second.get();
     if (size == 0 || size % 4 != 0)
     {
         lucent::warn("draw", "microcode size {} not a dword multiple", size);
-        return false;
+        return nullptr;
     }
-    xe::gpu::SpirvShader shader(type, hash,
+    auto shader = std::make_unique<xe::gpu::SpirvShader>(type, hash,
         reinterpret_cast<const uint32_t*>(ucode), size / 4, std::endian::big);
     xe::StringBuffer disasm;
-    shader.AnalyzeUcode(disasm);
-    if (!shader.is_ucode_analyzed())
+    shader->AnalyzeUcode(disasm);
+    if (!shader->is_ucode_analyzed())
     {
         lucent::warn("draw", "ucode analyze failed for {:#018x}", hash);
-        return false;
+        return nullptr;
     }
-    uint64_t modification =
-        type == xenos::ShaderType::kVertex
-            ? translator.GetDefaultVertexShaderModification(
-                  shader.GetDynamicAddressableRegisterCount(0))
-            : translator.GetDefaultPixelShaderModification(
-                  shader.GetDynamicAddressableRegisterCount(0));
+    return cache.emplace(hash, std::move(shader)).first->second.get();
+}
+
+bool TranslateOne(SpirvShaderTranslator& translator, xenos::ShaderType type,
+                  const uint8_t* ucode, size_t size, uint64_t hash,
+                  uint64_t modification, ShaderXlate& out)
+{
+    xe::gpu::SpirvShader* shaderPtr = GetAnalyzedShader(type, ucode, size, hash);
+    if (!shaderPtr)
+        return false;
+    xe::gpu::SpirvShader& shader = *shaderPtr;
     xe::gpu::Shader::Translation* translation =
         shader.GetOrCreateTranslation(modification);
     if (!translator.TranslateAnalyzedShader(*translation) ||
@@ -99,6 +115,16 @@ bool TranslateOne(SpirvShaderTranslator& translator, xenos::ShaderType type,
         out.samplers.push_back(s);
     }
     out.samplerCount = uint32_t(out.samplers.size());
+    // Which vertex fetch constants this stage's geometry comes from. The shader
+    // decides these, exactly as it decides its texture bindings.
+    out.vertexBindings.clear();
+    for (const auto& vb : shader.vertex_bindings())
+    {
+        ShaderVertexBinding v;
+        v.fetchConstant = vb.fetch_constant;
+        v.strideWords = vb.stride_words;
+        out.vertexBindings.push_back(v);
+    }
     out.ok = true;
     lucent::info("draw", "translated {} {:#018x}: {} bytes SPIR-V, {} float constants,"
         " {} textures, {} samplers",
@@ -107,37 +133,146 @@ bool TranslateOne(SpirvShaderTranslator& translator, xenos::ShaderType type,
     return true;
 }
 
-}  // namespace
-
-bool TranslateHotPair(const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
-                      const uint8_t* psUcode, size_t psSize, uint64_t psHash,
-                      ShaderXlate& outVs, ShaderXlate& outPs)
+// The widest translator path (non-FSI host render targets) -- the configuration
+// tools/xenos_translate uses and the one the verified .spv were built for.
+SpirvShaderTranslator MakeTranslator()
 {
-    // Same configuration as tools/xenos_translate (the widest translator path,
-    // non-FSI host render targets -- what the verified .spv were built for).
-    SpirvShaderTranslator translator(
+    return SpirvShaderTranslator(
         SpirvShaderTranslator::Features(/*all=*/true),
         /*native_2x_msaa_with_attachments=*/true,
         /*native_2x_msaa_no_attachments=*/true,
         /*edram_fragment_shader_interlock=*/false);
+}
+
+}  // namespace
+
+bool DeriveShaderModifications(const uint32_t* registerFile,
+                               const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
+                               const uint8_t* psUcode, size_t psSize, uint64_t psHash,
+                               uint64_t& vsModification, uint64_t& psModification)
+{
+    vsModification = 0;
+    psModification = 0;
+    xe::gpu::SpirvShader* vs =
+        GetAnalyzedShader(xenos::ShaderType::kVertex, vsUcode, vsSize, vsHash);
+    xe::gpu::SpirvShader* ps =
+        GetAnalyzedShader(xenos::ShaderType::kPixel, psUcode, psSize, psHash);
+    if (!vs || !ps)
+        return false;
+
+    RegisterFile regs;
+    std::memcpy(regs.values, registerFile,
+        RegisterFile::kRegisterCount * sizeof(uint32_t));
+    auto sq_program_cntl = regs.Get<reg::SQ_PROGRAM_CNTL>();
+    auto sq_context_misc = regs.Get<reg::SQ_CONTEXT_MISC>();
+
+    // The set of interpolators the pair actually exchanges: written by the
+    // vertex shader AND read by the pixel shader. This is Xenia's
+    // VulkanCommandProcessor::IssueDraw computation verbatim.
+    uint32_t param_gen_pos = UINT32_MAX;
+    const uint32_t interpolator_mask =
+        vs->writes_interpolators() &
+        ps->GetInterpolatorInputMask(sq_program_cntl, sq_context_misc, param_gen_pos);
+
+    SpirvShaderTranslator translator = MakeTranslator();
+
+    // --- vertex stage (VulkanPipelineCache::GetCurrentVertexShaderModification)
+    {
+        SpirvShaderTranslator::Modification m(
+            translator.GetDefaultVertexShaderModification(
+                vs->GetDynamicAddressableRegisterCount(sq_program_cntl.vs_num_reg),
+                xe::gpu::Shader::HostVertexShaderType::kVertex));
+        m.vertex.interpolator_mask = interpolator_mask;
+        auto pa_cl_clip_cntl = regs.Get<reg::PA_CL_CLIP_CNTL>();
+        const uint32_t user_clip_planes =
+            pa_cl_clip_cntl.clip_disable ? 0 : pa_cl_clip_cntl.ucp_ena;
+        m.vertex.user_clip_plane_count = xe::bit_count(user_clip_planes);
+        m.vertex.user_clip_plane_cull =
+            uint32_t(user_clip_planes && pa_cl_clip_cntl.ucp_cull_only_ena);
+        m.vertex.output_point_parameters =
+            uint32_t((vs->writes_point_size_edge_flag_kill_vertex() & 0b001) &&
+                     regs.Get<reg::VGT_DRAW_INITIATOR>().prim_type ==
+                         xenos::PrimitiveType::kPointList);
+        vsModification = m.value;
+    }
+
+    // --- pixel stage (VulkanPipelineCache::GetCurrentPixelShaderModification)
+    {
+        SpirvShaderTranslator::Modification m(
+            translator.GetDefaultPixelShaderModification(
+                ps->GetDynamicAddressableRegisterCount(sq_program_cntl.ps_num_reg)));
+        m.pixel.interpolator_mask = interpolator_mask;
+        m.pixel.interpolators_centroid =
+            interpolator_mask &
+            ~xenos::GetInterpolatorSamplingPattern(
+                regs.Get<reg::RB_SURFACE_INFO>().msaa_samples,
+                sq_context_misc.sc_sample_cntl,
+                regs.Get<reg::SQ_INTERPOLATOR_CNTL>().sampling_pattern);
+        if (param_gen_pos < xenos::kMaxInterpolators)
+        {
+            m.pixel.param_gen_enable = 1;
+            m.pixel.param_gen_interpolator = param_gen_pos;
+            m.pixel.param_gen_point =
+                uint32_t(regs.Get<reg::VGT_DRAW_INITIATOR>().prim_type ==
+                         xenos::PrimitiveType::kPointList);
+        }
+        // Host render targets (this backend never takes the FSI path).
+        using DepthStencilMode = SpirvShaderTranslator::Modification::DepthStencilMode;
+        m.pixel.depth_stencil_mode =
+            (ps->implicit_early_z_write_allowed() &&
+             (!ps->writes_color_target(0) ||
+              !draw_util::DoesCoverageDependOnAlpha(regs.Get<reg::RB_COLORCONTROL>())))
+                ? DepthStencilMode::kEarlyHint
+                : DepthStencilMode::kNoModifiers;
+        // Vulkan's MIN/MAX blend ops ignore the blend factors; the Xenos applies
+        // them. When the destination factor is ONE the source factor can be
+        // folded into the shader output instead.
+        m.pixel.rt0_blend_rgb_factor_for_premult = xenos::BlendFactor::kOne;
+        m.pixel.rt0_blend_a_factor_for_premult = xenos::BlendFactor::kOne;
+        if (ps->writes_color_target(0))
+        {
+            auto blend_control =
+                regs.Get<reg::RB_BLENDCONTROL>(reg::RB_BLENDCONTROL::rt_register_indices[0]);
+            if ((blend_control.color_comb_fcn == xenos::BlendOp::kMin ||
+                 blend_control.color_comb_fcn == xenos::BlendOp::kMax) &&
+                blend_control.color_srcblend == xenos::BlendFactor::kSrcAlpha &&
+                blend_control.color_destblend == xenos::BlendFactor::kOne)
+                m.pixel.rt0_blend_rgb_factor_for_premult = xenos::BlendFactor::kSrcAlpha;
+            if ((blend_control.alpha_comb_fcn == xenos::BlendOp::kMin ||
+                 blend_control.alpha_comb_fcn == xenos::BlendOp::kMax) &&
+                blend_control.alpha_srcblend == xenos::BlendFactor::kSrcAlpha &&
+                blend_control.alpha_destblend == xenos::BlendFactor::kOne)
+                m.pixel.rt0_blend_a_factor_for_premult = xenos::BlendFactor::kSrcAlpha;
+        }
+        psModification = m.value;
+    }
+    return true;
+}
+
+bool TranslateHotPair(const uint32_t* registerFile,
+                      const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
+                      const uint8_t* psUcode, size_t psSize, uint64_t psHash,
+                      ShaderXlate& outVs, ShaderXlate& outPs)
+{
+    uint64_t vsMod = 0, psMod = 0;
+    if (!DeriveShaderModifications(registerFile, vsUcode, vsSize, vsHash,
+                                   psUcode, psSize, psHash, vsMod, psMod))
+        return false;
+    SpirvShaderTranslator translator = MakeTranslator();
     bool a = TranslateOne(translator, xenos::ShaderType::kVertex, vsUcode, vsSize,
-                          vsHash, outVs);
+                          vsHash, vsMod, outVs);
     bool b = TranslateOne(translator, xenos::ShaderType::kPixel, psUcode, psSize,
-                          psHash, outPs);
+                          psHash, psMod, outPs);
     return a && b;
 }
 
 bool TranslateShader(bool isVertex, const uint8_t* ucode, size_t size,
-                     uint64_t hash, ShaderXlate& out)
+                     uint64_t hash, uint64_t modification, ShaderXlate& out)
 {
-    SpirvShaderTranslator translator(
-        SpirvShaderTranslator::Features(/*all=*/true),
-        /*native_2x_msaa_with_attachments=*/true,
-        /*native_2x_msaa_no_attachments=*/true,
-        /*edram_fragment_shader_interlock=*/false);
+    SpirvShaderTranslator translator = MakeTranslator();
     return TranslateOne(translator,
         isVertex ? xenos::ShaderType::kVertex : xenos::ShaderType::kPixel,
-        ucode, size, hash, out);
+        ucode, size, hash, modification, out);
 }
 
 std::vector<uint8_t> DeriveSystemConstants(const uint32_t* registerFile)

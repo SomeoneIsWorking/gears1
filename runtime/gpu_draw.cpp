@@ -100,6 +100,7 @@ struct Renderer
     VkQueue queue = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memProps{};
+    bool hasPipelineStats = false; // pipelineStatisticsQuery feature enabled
 
     bool Init();
     void Shutdown();
@@ -189,6 +190,12 @@ bool Renderer::Init()
     VkPhysicalDeviceFeatures feats{};
     feats.vertexPipelineStoresAndAtomics = avail.vertexPipelineStoresAndAtomics;
     feats.fragmentStoresAndAtomics = avail.fragmentStoresAndAtomics;
+    // Pipeline statistics let a draw report how far it actually got -- vertices
+    // in, primitives after clipping, fragment shader invocations. Without it,
+    // "this draw added no pixels" cannot be told apart from "this draw was
+    // clipped away" or "this draw shaded black".
+    feats.pipelineStatisticsQuery = avail.pipelineStatisticsQuery;
+    hasPipelineStats = avail.pipelineStatisticsQuery != VK_FALSE;
     VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     di.queueCreateInfoCount = 1;
     di.pQueueCreateInfos = &qi;
@@ -419,7 +426,7 @@ bool Renderer::Render(const HotDrawInputs& in)
 {
     // --- translate the two shaders (SPIR-V + float-constant maps) -----------
     draw::ShaderXlate vs, ps;
-    if (!draw::TranslateHotPair(in.vsUcode, in.vsUcodeSize, in.vsHash,
+    if (!draw::TranslateHotPair(in.registerFile, in.vsUcode, in.vsUcodeSize, in.vsHash,
             in.psUcode, in.psUcodeSize, in.psHash, vs, ps))
         return false;
 
@@ -1022,28 +1029,35 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     const uint32_t W = in.width ? in.width : kWidth;
     const uint32_t H = in.height ? in.height : kHeight;
 
-    // --- translate + cache each distinct shader --------------------------
-    std::map<uint64_t, draw::ShaderXlate> xlate;   // hash -> translation
-    std::map<uint64_t, VkShaderModule> modules;    // hash -> module
+    // --- translate + cache each distinct (shader, modification) ----------
+    // The key is the PAIR (microcode hash, modification), not the hash alone:
+    // the modification carries the interpolator mask the vertex and pixel
+    // shaders exchange for THIS draw, so one microcode can legitimately need
+    // several translations across a frame.
+    using ShaderKey = std::pair<uint64_t, uint64_t>; // (hash, modification)
+    std::map<ShaderKey, draw::ShaderXlate> xlate;
+    std::map<ShaderKey, VkShaderModule> modules;
     auto getShader = [&](bool isVertex, const uint8_t* uc, size_t sz, uint64_t hash,
-                         draw::ShaderXlate*& outX, VkShaderModule& outM) -> bool {
-        auto xit = xlate.find(hash);
+                         uint64_t modification, draw::ShaderXlate*& outX,
+                         VkShaderModule& outM) -> bool {
+        const ShaderKey key{hash, modification};
+        auto xit = xlate.find(key);
         if (xit == xlate.end())
         {
             draw::ShaderXlate x;
-            if (!draw::TranslateShader(isVertex, uc, sz, hash, x))
+            if (!draw::TranslateShader(isVertex, uc, sz, hash, modification, x))
                 return false;
-            xit = xlate.emplace(hash, std::move(x)).first;
+            xit = xlate.emplace(key, std::move(x)).first;
             VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
             mi.codeSize = xit->second.spirv.size();
             mi.pCode = reinterpret_cast<const uint32_t*>(xit->second.spirv.data());
             VkShaderModule m = VK_NULL_HANDLE;
             if (vkCreateShaderModule(device, &mi, nullptr, &m) != VK_SUCCESS)
                 return false;
-            modules[hash] = m;
+            modules[key] = m;
         }
         outX = &xit->second;
-        outM = modules[hash];
+        outM = modules[key];
         return true;
     };
 
@@ -1723,7 +1737,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // blending is only switched on when the guest actually asked for it.
         const bool blendIsIdentity = cSrc == 1 && cDst == 0 && cOp == 0 &&
                                      aSrc == 1 && aDst == 0 && aOp == 0;
-        cba.blendEnable = blendIsIdentity ? VK_FALSE : VK_TRUE;
+        // GEARS_DRAW_NOBLEND=1 is a DIAGNOSTIC control arm only, never a fix: it
+        // disables blending so the pixel shader's own output lands in the target
+        // unmodified. It separates "this draw shades black" from "this draw
+        // shades something the blend equation multiplies away" -- every world
+        // draw of this frame uses colour src factor kSrcAlpha, so an output
+        // alpha of zero would erase it whatever its RGB is.
+        static const bool noBlend = std::getenv("GEARS_DRAW_NOBLEND") != nullptr;
+        cba.blendEnable = (noBlend || blendIsIdentity) ? VK_FALSE : VK_TRUE;
         cba.srcColorBlendFactor = BlendFactorOf(cSrc);
         cba.dstColorBlendFactor = BlendFactorOf(cDst);
         cba.colorBlendOp = BlendOpOf(cOp);
@@ -1807,6 +1828,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     uint64_t texBindsStub = 0;   // texture bindings served by a stub image
     uint64_t texBindsRt = 0;     // texture bindings served by the rendered RT
     uint64_t texBindsGuest = 0;  // texture bindings served by real guest texture data
+    // Geometry reach: how many draws fetch vertices from outside the SSBO
+    // mirror. Such a fetch reads zero, so every primitive collapses -- and the
+    // result looks exactly like "shaded black", which is why it is counted.
+    uint64_t vfDrawsPastMirror = 0, vfDrawsInMirror = 0;
+    uint32_t vfHighestByte = 0;
     std::map<std::string, uint64_t> viewportCensus; // guest viewport/scissor -> draws
     // Upload is on by default; GEARS_DRAW_NOTEX=1 is the control arm that
     // restores the stub-only frame for an A/B comparison.
@@ -1895,8 +1921,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
         draw::ShaderXlate *vsX = nullptr, *psX = nullptr;
         VkShaderModule vsMod = VK_NULL_HANDLE, psMod = VK_NULL_HANDLE;
-        if (!getShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsX, vsMod) ||
-            !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psX, psMod))
+        // The interpolator mask (and the rest of the modification) is a property
+        // of this draw's VS+PS pair and its own registers, so it is derived
+        // here, per draw, before either stage is translated.
+        uint64_t vsModification = 0, psModification = 0;
+        if (!draw::DeriveShaderModifications(R, d.vsUcode, d.vsUcodeSize, d.vsHash,
+                d.psUcode, d.psUcodeSize, d.psHash, vsModification, psModification))
+        { ++skipped; ++skipReasons[2]; continue; }
+        if (!getShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification, vsX, vsMod) ||
+            !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification, psX, psMod))
         { ++skipped; ++skipReasons[2]; continue; }
 
         VkDescriptorSetLayout vsTexLayout = 0, psTexLayout = 0;
@@ -2148,6 +2181,62 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             pd.scissor.extent = {std::min(gv.scissorW, W - std::min(gv.scissorX, W)),
                                  std::min(gv.scissorH, H - std::min(gv.scissorY, H))};
         }
+        // GEARS_DRAW_VDUMP=<draw index>: dump that draw's first vertices out of
+        // the mirror, as the vertex shader's own fetch describes them (stride
+        // from the shader's vertex binding, big-endian floats). Says whether a
+        // draw that rasterises but shades black is fed real vertex data.
+        {
+            static const long vdump = lucent::config::number("DRAW_VDUMP", -1);
+            if (vdump >= 0 && long(issued) == vdump)
+            {
+                for (const auto& vb : vsX->vertexBindings)
+                {
+                    const uint32_t fc = vb.fetchConstant & 95;
+                    const uint32_t d0 = R[0x4800 + fc * 2];
+                    if ((d0 & 3) != 3) continue;
+                    const uint32_t vbase = (d0 >> 2) << 2;
+                    const uint32_t stride = std::max(vb.strideWords, 1u);
+                    for (uint32_t v = 0; v < 4; ++v)
+                    {
+                        lucent::Line vl;
+                        vl.add("  draw {} vertex {} @ {:#x} (stride {} dwords):",
+                               issued, v, vbase + v * stride * 4, stride);
+                        for (uint32_t w = 0; w < stride; ++w)
+                        {
+                            const uint64_t off = uint64_t(vbase) + (v * stride + w) * 4;
+                            if (off + 4 > in.guestPhysicalMirrorBytes) break;
+                            uint32_t raw;
+                            std::memcpy(&raw, in.guestBase + off, 4);
+                            raw = __builtin_bswap32(raw);
+                            float f;
+                            std::memcpy(&f, &raw, 4);
+                            vl.add(" [{}]{:#010x}={}", w, raw, f);
+                        }
+                        vl.flush(lucent::Level::Info, "draw");
+                    }
+                }
+            }
+        }
+        // Geometry reach for this draw, counted whether or not the census is on.
+        {
+            bool anyPast = false, anyBinding = false;
+            for (const auto& vb : vsX->vertexBindings)
+            {
+                const uint32_t fc = vb.fetchConstant & 95;
+                const uint32_t d0 = R[0x4800 + fc * 2];
+                const uint32_t d1 = R[0x4800 + fc * 2 + 1];
+                if ((d0 & 3) != 3 /*kVertex*/)
+                    continue;
+                anyBinding = true;
+                const uint64_t end = uint64_t((d0 >> 2) << 2) +
+                                     ((d1 >> 2) & 0xFFFFFF) * 4ull;
+                vfHighestByte = std::max<uint32_t>(vfHighestByte, uint32_t(std::min<uint64_t>(end, 0xFFFFFFFFull)));
+                if (end > in.guestPhysicalMirrorBytes)
+                    anyPast = true;
+            }
+            if (anyBinding)
+                (anyPast ? vfDrawsPastMirror : vfDrawsInMirror) += 1;
+        }
         if (listDraws)
         {
             lucent::Line dl;
@@ -2160,6 +2249,36 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             for (const auto& t : psX->textures)
                 dl.add(" tex[fc{}]={:#x}", t.fetchConstant,
                        (R[0x4800 + (t.fetchConstant & 31) * 6 + 1] >> 12) << 12);
+            // Where this draw's GEOMETRY comes from, and whether the SSBO
+            // mirror actually covers it. A vfetch past the mirror reads zero,
+            // which collapses every triangle -- indistinguishable in the output
+            // from "shaded black", so it has to be reported explicitly.
+            for (const auto& vb : vsX->vertexBindings)
+            {
+                const uint32_t fc = vb.fetchConstant & 95;
+                const uint32_t d0 = R[0x4800 + fc * 2];
+                const uint32_t d1 = R[0x4800 + fc * 2 + 1];
+                const uint32_t vbase = (d0 >> 2) << 2;          // dword address -> bytes
+                const uint32_t vbytes = ((d1 >> 2) & 0xFFFFFF) * 4; // size in dwords -> bytes
+                dl.add(" vf[fc{}]type{}={:#x}+{:#x}{}", fc, d0 & 3, vbase, vbytes,
+                       uint64_t(vbase) + vbytes <= in.guestPhysicalMirrorBytes
+                           ? "" : " PAST-MIRROR");
+            }
+            // The float constants the shaders actually got. Nearly every pixel
+            // shader in this frame ends in `mul oC0.xyz, r, c255.x`, so a zero
+            // c255 makes the draw black no matter what it sampled.
+            auto nonZero = [](const std::vector<uint8_t>& v) {
+                size_t n = 0;
+                for (size_t i = 0; i + 4 <= v.size(); i += 4)
+                    if (v[i] || v[i + 1] || v[i + 2] || v[i + 3]) ++n;
+                return n;
+            };
+            float psC255 = 0.0f;
+            const uint32_t c255bits = R[0x4400 + 255 * 4];
+            std::memcpy(&psC255, &c255bits, 4);
+            dl.add(" vsconst {}/{} nz, psconst {}/{} nz, ps c255.x={} ({:#x})",
+                   nonZero(fVs), vsX->floatCount, nonZero(fPs), psX->floatCount,
+                   psC255, c255bits);
             dl.flush(lucent::Level::Info, "draw");
         }
         prepared.push_back(pd);
@@ -2329,15 +2448,53 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         checkpointMem.push_back(m);
     };
 
+    // Per-draw pipeline statistics: how far each draw actually got through the
+    // pipeline. Four counters per draw, in this order:
+    //   0 input-assembly vertices, 1 input-assembly primitives,
+    //   2 clipping primitives (what survived clip+cull), 3 fragment invocations.
+    // A draw that adds no pixels is one of three very different things, and only
+    // these numbers separate them: 0 primitives out of clipping (degenerate or
+    // culled geometry), 0 fragment invocations (rasterised nothing), or many
+    // fragment invocations (it ran and shaded/blended to nothing).
+    // Not combinable with DRAW_ONLY: unwritten queries would never resolve.
+    const bool statsEnabled = lucent::config::flag("DRAW_STATS") &&
+                              hasPipelineStats &&
+                              lucent::config::number("DRAW_ONLY", -1) < 0;
+    const uint32_t kStatCounters = 4;
+    VkQueryPool statPool = VK_NULL_HANDLE;
+    if (statsEnabled)
+    {
+        VkQueryPoolCreateInfo qpi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+        qpi.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
+        qpi.queryCount = uint32_t(prepared.size());
+        qpi.pipelineStatistics =
+            VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT |
+            VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT |
+            VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
+            VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT;
+        if (vkCreateQueryPool(device, &qpi, nullptr, &statPool) != VK_SUCCESS)
+            statPool = VK_NULL_HANDLE;
+        else
+            vkCmdResetQueryPool(cmd, statPool, 0, uint32_t(prepared.size()));
+    }
+
     uint32_t segments = 1, rtSnapshots = 0;
     vkCmdBeginRenderPass(cmd, &rpb, VK_SUBPASS_CONTENTS_INLINE);
     VkRenderPassBeginInfo rpbLoad = rpb;
     rpbLoad.renderPass = renderPassLoad;
     rpbLoad.clearValueCount = 0;
     rpbLoad.pClearValues = nullptr;
+    // GEARS_DRAW_ONLY=<index>: emit only that one draw, over the clear colour.
+    // A DIAGNOSTIC control arm: it shows what a single draw's shader produces
+    // without anything before it having painted the target, which is the only
+    // way to tell "this draw contributes nothing" from "something later
+    // overwrote it".
+    const long onlyDraw = lucent::config::number("DRAW_ONLY", -1);
     uint32_t drawn = 0, drawnSinceSnapshot = 0;
     for (const PreparedDraw& pd : prepared)
     {
+        if (onlyDraw >= 0 && long(drawn) != onlyDraw)
+        { ++drawn; continue; }
         const bool needRtSnapshot = pd.samplesRt && drawnSinceSnapshot > 0;
         const bool needCheckpoint = stepEvery > 0 && drawn > 0 &&
                                     (drawn % uint32_t(stepEvery)) == 0;
@@ -2360,6 +2517,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vkCmdSetScissor(cmd, 0, 1, &pd.scissor);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pd.layout, 0,
             4, pd.sets, 0, nullptr);
+        if (statPool != VK_NULL_HANDLE)
+            vkCmdBeginQuery(cmd, statPool, drawn, 0);
         if (pd.indexed)
         {
             vkCmdBindIndexBuffer(cmd, pd.ibuf, 0, VK_INDEX_TYPE_UINT32);
@@ -2369,6 +2528,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         {
             vkCmdDraw(cmd, pd.count, 1, 0, 0);
         }
+        if (statPool != VK_NULL_HANDLE)
+            vkCmdEndQuery(cmd, statPool, drawn);
         ++drawn;
         ++drawnSinceSnapshot;
     }
@@ -2389,6 +2550,33 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     VK_CHECK(vkQueueSubmit(queue, 1, &submit, fence));
     VK_CHECK(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
 
+    if (statPool != VK_NULL_HANDLE)
+    {
+        std::vector<uint64_t> st(size_t(drawn) * kStatCounters, 0);
+        if (drawn > 0 &&
+            vkGetQueryPoolResults(device, statPool, 0, drawn,
+                st.size() * sizeof(uint64_t), st.data(),
+                kStatCounters * sizeof(uint64_t),
+                VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS)
+        {
+            uint32_t noPrims = 0, noFrags = 0, shaded = 0;
+            for (uint32_t i = 0; i < drawn; ++i)
+            {
+                const uint64_t* s = &st[size_t(i) * kStatCounters];
+                if (s[2] == 0) ++noPrims;
+                else if (s[3] == 0) ++noFrags;
+                else ++shaded;
+                lucent::debug("draw", "  stats draw {}: {} verts, {} prims in,"
+                    " {} prims after clip+cull, {} fragment invocations",
+                    i, s[0], s[1], s[2], s[3]);
+            }
+            lucent::info("draw", "frame pipeline statistics: {} draws produced no"
+                " primitive after clip+cull, {} produced primitives but no fragment,"
+                " {} ran the fragment shader", noPrims, noFrags, shaded);
+        }
+        vkDestroyQueryPool(device, statPool, nullptr);
+    }
+
     // --- read pixels + coverage numbers ----------------------------------
     g_frame.resize(rbBytes);
     {
@@ -2397,11 +2585,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         std::memcpy(g_frame.data(), p, rbBytes);
         vkUnmapMemory(device, readbackMem);
     }
-    uint64_t lit = 0;
+    // Two different numbers, because one alone lies. "Changed" counts pixels the
+    // draws touched at all (!= the clear colour); "lit" counts pixels that carry
+    // actual light (non-black). A frame painted uniformly black by a multiply
+    // pass scores 100% changed and 0% lit -- reporting only the first read as
+    // full coverage of a frame that shows nothing.
+    uint64_t lit = 0, changed = 0;
     for (uint32_t i = 0; i < W * H; ++i)
     {
         const uint8_t* px = &g_frame[size_t(i) * 4];
         if (!(px[0] == 13 && px[1] == 13 && px[2] == 20)) // != the clear
+            ++changed;
+        if (px[0] || px[1] || px[2])
             ++lit;
     }
     std::set<std::pair<uint64_t, uint64_t>> pairs;
@@ -2410,12 +2605,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     lucent::info("draw", "frame: {} of {} draws issued, {} skipped; {} distinct shader"
         " pairs, {} distinct shaders, {} pipelines, {} texture layouts,"
         " {} pipeline layouts; {} texture bindings ({} guest textures,"
-        " {} from the rendered RT, {} from a stub); {}/{} px lit by geometry"
-        " ({:.1f}%)",
+        " {} from the rendered RT, {} from a stub); {}/{} px non-black"
+        " ({:.1f}%), {} px changed from the clear ({:.1f}%)",
         issued, in.draws.size(), skipped, pairs.size(), modules.size(), pipelines.size(),
         texLayouts.size(), pipeLayouts.size(),
         texBindsRt + texBindsStub + texBindsGuest, texBindsGuest, texBindsRt,
-        texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H));
+        texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
+        changed, 100.0 * double(changed) / (double(W) * H));
+    lucent::info("draw", "frame geometry reach: {} draws fetch vertices inside the"
+        " {:#x}-byte SSBO mirror, {} draws fetch PAST it (those read zero and"
+        " collapse); highest vertex-buffer end seen {:#x}",
+        vfDrawsInMirror, in.guestPhysicalMirrorBytes, vfDrawsPastMirror, vfHighestByte);
     lucent::info("draw", "frame textures: {} distinct fetch constants, {} uploaded"
         " ({:.1f} MiB), {} samplers", texDistinct.size(), uploads.size(),
         double(uploadedBytes) / (1024.0 * 1024.0), samplerCache.size());
