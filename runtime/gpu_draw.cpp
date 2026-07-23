@@ -3057,7 +3057,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         const char* dir = std::getenv("GEARS_DRAW_DIR");
         const std::filesystem::path reportDir =
             dir ? std::filesystem::path(dir) : std::filesystem::path("scratch/screenshots");
-        std::filesystem::path out = reportDir / "frame.ppm";
+        std::filesystem::path out = in.sequence >= 0
+            ? reportDir / std::format("frame_{:05}.ppm", in.sequence)
+            : reportDir / "frame.ppm";
         if (WritePpm(out, g_frame.data(), W, H))
             lucent::info("draw", "frame screenshot written to {}", out.string());
 
