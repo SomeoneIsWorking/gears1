@@ -142,11 +142,11 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - notes: 
 
 ### gameplay-scene — In-game 3D scene rendering (deferred pipeline)
-- status: todo
+- status: re-partial
 - deps: draw-backend-live, draw-backend-rt
-- evidence: 
+- evidence: MEASURED the in-game frame's EDRAM surfaces (new GEARS surface census in gpu_draw.cpp, RB_COLOR_INFO color_base per draw) and isolated each with GEARS_DRAW_ONLY_BASE. An Act 1 gameplay frame uses 4 EDRAM COLOUR surfaces: 0x400 = k_2_10_10_10_FLOAT (7e3 HDR), ~350 draws -- the WORLD; 0x2d0 = k_8_8_8_8, ~380 draws -- the tonemap/UI output that is presented; plus small 0x0 (f0) and 0x5a0 (k_16_16_16_16_FLOAT, 8 draws, a light/bloom accumulation). This is UE3-on-360's render model: the scene renders in HDR 7e3, then a tonemap+bloom pass composites to the LDR 8888 buffer by SAMPLING the resolved HDR buffer. Our whole-frame backend renders every surface's draws into ONE 8888 host target in submission order, so the later 0x2d0 tonemap draws -- which read a stale HDR texture and shade black -- stomp the 0x400 world drawn earlier. That is why the menu (one surface) renders and the deferred in-game frame does not. The 9 RB_COPY_DEST_BASE resolve destinations seen earlier are these surfaces resolved per predicated TILE plus the post chain, not 9 independent targets.
 - where: 
-- gap: The title now reaches actual gameplay (Act 1 'Ashes', the prison cell) with a working HUD and the 'Exit the cell area' objective, but the 3D SCENE renders black -- only 2D HUD text and the occasional white-stub texture show. Menus rendered fine because they are mostly 2D UI over a static background; gameplay drives the full deferred renderer, which bounces through many render targets (g-buffer, lighting, post) and needs the 8 resolve destinations kept DISTINCT. draw-backend-rt still conflates all 8 onto one host colour target -- the likely cause. This is the next real frontier: measure the in-game frame's resolve destinations and render-target usage, then give each its own host target.
+- gap: Build the render-target cache: a host target per (EDRAM color_base, format) with the RIGHT host format (R16G16B16A16_SFLOAT / a 7e3 encode for k_2_10_10_10_FLOAT, not 8888), route each draw to its surface's target by RB_COLOR_INFO, RESOLVE each surface to a host texture at its RB_COPY_DEST_BASE, and make sampling draws that fetch a resolved guest address read that host texture instead of decoding stale guest memory. Present the tonemapped 0x2d0. UE3-on-360 renders each surface in PREDICATED TILES (SET_BIN_MASK/SELECT, already tracked), so tiles of one surface must ACCUMULATE into one host target, not mint a target per resolve. Reference: UE3 FSceneRenderTargets / the Xbox 360 RHI. Depth (RB_DEPTH_INFO 0x2002) is per-surface too.
 - notes: 
 
 

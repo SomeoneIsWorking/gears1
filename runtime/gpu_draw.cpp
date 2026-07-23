@@ -2191,6 +2191,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
     std::vector<PreparedDraw> prepared;
     uint32_t issued = 0, skipped = 0;
+
+    // Per-EDRAM-surface census. A draw's RB_COLOR_INFO (0x2001) names the EDRAM
+    // tile base it renders into; distinct bases are distinct surfaces (scene
+    // colour, light attenuation, shadow depth, the post chain...). UE3-on-360
+    // renders each surface in predicated TILES, so several draws share a base.
+    // The whole-frame backend currently renders every draw into ONE host target
+    // regardless of this base, which is why a deferred in-game frame -- many
+    // surfaces -- comes out black while a one-surface menu does not. This tally
+    // is the ground truth for the render-target cache (re-frontier gameplay-scene).
+    struct SurfaceStat { uint32_t draws = 0; uint32_t format = 0; uint32_t mode = 0; };
+    std::map<uint32_t, SurfaceStat> surfaces; // RB_COLOR_INFO color_base -> stat
     std::map<uint64_t, uint64_t> skipReasons; // reason code -> count (for a summary)
     uint64_t texBindsStub = 0;   // texture bindings served by a stub image
     uint64_t texBindsRt = 0;     // texture bindings served by the rendered RT
@@ -2305,6 +2316,22 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkPipelineLayout pipeLayout = 0;
         if (!getPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
         { ++skipped; ++skipReasons[3]; continue; }
+        // Which EDRAM surface this draw targets (RB_COLOR_INFO: color_base is
+        // the low 12 bits in tiles, color_format bits 16..19).
+        const uint32_t colorBase = R[0x2001] & 0xFFF;
+        {
+            SurfaceStat& st = surfaces[colorBase];
+            ++st.draws;
+            st.format = (R[0x2001] >> 16) & 0xF;
+            st.mode = R[0x2208] & 0x7; // RB_MODECONTROL.edram_mode
+        }
+        // GEARS_DRAW_ONLY_BASE=<hex>: render only draws targeting one EDRAM
+        // surface. A DIAGNOSTIC control arm for the render-target cache -- it
+        // proves which surface holds the world before any cache is built -- not
+        // a fix; the real backend must route every surface to its own target.
+        static const long onlyBase = lucent::config::number("DRAW_ONLY_BASE", -1);
+        if (onlyBase >= 0 && colorBase != uint32_t(onlyBase))
+        { ++skipped; ++skipReasons[0]; continue; }
         OutputMergerState om;
         om.colorMask = R[0x2104];
         om.blend0 = R[0x2201];
@@ -3003,6 +3030,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             lucent::info("draw", "frame rectangle lists: {} of {} draws expanded by a"
                 " geometry shader ({} distinct)", rectDrawsExpanded, rectDraws,
                 geomShaders.size());
+        {
+            lucent::Line sl;
+            sl.add("frame EDRAM surfaces: {} distinct RB_COLOR_INFO bases (draws@base:fmt):",
+                surfaces.size());
+            for (const auto& [base, st] : surfaces)
+                sl.add(" {}@{:#x}:f{}", st.draws, base, st.format);
+            sl.flush(lucent::Level::Info, "draw");
+        }
         lucent::info("draw", "frame geometry reach: {} draws fetch vertices inside the"
             " {:#x}-byte SSBO mirror, {} draws fetch PAST it (those read zero and"
             " collapse); highest vertex-buffer end seen {:#x}",
