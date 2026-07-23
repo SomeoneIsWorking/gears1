@@ -104,6 +104,12 @@ struct Renderer
     bool hasPipelineStats = false; // pipelineStatisticsQuery feature enabled
     bool hasGeometryShader = false; // geometryShader feature enabled
 
+    // Built on the first frame, reused by every frame after it, released by
+    // Shutdown. A raw pointer rather than a unique_ptr so the type can stay
+    // incomplete here: it names OutputMergerState and the texture structs,
+    // which are declared further down.
+    struct RendererPersistent* persistent = nullptr;
+
     bool Init();
     void Shutdown();
     bool FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_t& out);
@@ -111,6 +117,7 @@ struct Renderer
                     VkDeviceMemory& mem);
     bool Render(const HotDrawInputs& in);
     bool RenderFrameImpl(const FrameDrawInputs& in);
+    void ReleasePersistent();
 };
 
 bool Renderer::Init()
@@ -244,6 +251,7 @@ void Renderer::Shutdown()
     if (device)
     {
         vkDeviceWaitIdle(device);
+        ReleasePersistent();
         vkDestroyDevice(device, nullptr);
     }
     if (messenger)
@@ -383,6 +391,115 @@ struct OutputMergerState
                std::tie(o.colorMask, o.blend0, o.depthControl);
     }
 };
+
+// A host image owned for the whole run: the guest's decoded textures, and the
+// 1x1 stand-ins a binding falls back to when its fetch constant cannot be
+// decoded (which is always COUNTED, never quietly substituted).
+struct GuestTex
+{
+    VkImage image = 0;
+    VkDeviceMemory mem = 0;
+    VkImageView view = 0;
+};
+struct StubTex
+{
+    VkImage image = 0;
+    VkDeviceMemory mem = 0;
+    VkImageView view = 0;
+};
+
+// Everything a frame render needs that does not change between frames.
+//
+// RenderFrameImpl used to build all of this per call and tear it down again,
+// which is why one frame cost ~300 ms while the GPU work inside it was 6 ms:
+// 116 ms translating shaders it had already translated, 21 ms creating
+// pipelines it had already created, plus the render target, render passes and
+// descriptor set layouts. Held here, it is paid once.
+//
+// Note the coupling: a VkPipeline is only valid against a compatible
+// VkRenderPass, and the cached texture views only outlive the frame because the
+// images they view are owned here too -- so these cannot be made persistent one
+// at a time.
+struct RendererPersistent
+{
+    bool built = false;
+    uint32_t width = 0, height = 0;
+
+    // (microcode hash, modification) -> translation and module.
+    std::map<std::pair<uint64_t, uint64_t>, draw::ShaderXlate> xlate;
+    std::map<std::pair<uint64_t, uint64_t>, VkShaderModule> modules;
+    std::map<draw::RectangleGeometryShaderKey, VkShaderModule> geomShaders;
+
+    std::map<std::string, VkDescriptorSetLayout> texLayouts;
+    std::map<std::pair<std::string, std::string>, VkPipelineLayout> pipeLayouts;
+    std::map<std::tuple<VkShaderModule, VkShaderModule, VkShaderModule, uint32_t,
+                        OutputMergerState>, VkPipeline> pipelines;
+    VkDescriptorSetLayout set0 = VK_NULL_HANDLE, set1 = VK_NULL_HANDLE;
+
+    // Guest textures, their views by fetch key, and their samplers.
+    std::vector<GuestTex> guestTextures;
+    std::map<std::array<uint32_t, 4>, VkImageView> texCache;
+    std::map<uint64_t, VkSampler> samplerCache;
+    StubTex stub2D{}, stub3D{}, stubCube{};
+    VkSampler stubSampler = VK_NULL_HANDLE;
+
+    // The render target, its passes and its framebuffer.
+    VkImage color = VK_NULL_HANDLE; VkDeviceMemory colorMem = VK_NULL_HANDLE;
+    VkImageView colorView = VK_NULL_HANDLE;
+    VkImage depth = VK_NULL_HANDLE; VkDeviceMemory depthMem = VK_NULL_HANDLE;
+    VkImageView depthView = VK_NULL_HANDLE;
+    VkImage rtSample = VK_NULL_HANDLE; VkDeviceMemory rtSampleMem = VK_NULL_HANDLE;
+    VkImageView rtSampleView = VK_NULL_HANDLE;
+    VkRenderPass renderPass = VK_NULL_HANDLE, renderPassLoad = VK_NULL_HANDLE;
+    VkFramebuffer fb = VK_NULL_HANDLE;
+
+    // The guest-memory mirror the translated shaders fetch through. The buffer
+    // is persistent; its CONTENTS are refreshed every frame, because guest
+    // memory is exactly what changes between frames.
+    VkBuffer ssbo = VK_NULL_HANDLE; VkDeviceMemory ssboMem = VK_NULL_HANDLE;
+    VkDeviceSize ssboBytes = 0;
+};
+
+void Renderer::ReleasePersistent()
+{
+    if (!persistent)
+        return;
+    RendererPersistent& P = *persistent;
+    for (auto& [k, p] : P.pipelines) vkDestroyPipeline(device, p, nullptr);
+    for (auto& [k, l] : P.pipeLayouts) vkDestroyPipelineLayout(device, l, nullptr);
+    for (auto& [k, l] : P.texLayouts) vkDestroyDescriptorSetLayout(device, l, nullptr);
+    for (auto& [k, m] : P.modules) vkDestroyShaderModule(device, m, nullptr);
+    for (auto& [k, m] : P.geomShaders)
+        if (m != VK_NULL_HANDLE) vkDestroyShaderModule(device, m, nullptr);
+    for (auto& [k, sm] : P.samplerCache) vkDestroySampler(device, sm, nullptr);
+    vkDestroyDescriptorSetLayout(device, P.set0, nullptr);
+    vkDestroyDescriptorSetLayout(device, P.set1, nullptr);
+    for (GuestTex& t : P.guestTextures)
+    {
+        vkDestroyImageView(device, t.view, nullptr);
+        vkDestroyImage(device, t.image, nullptr);
+        vkFreeMemory(device, t.mem, nullptr);
+    }
+    for (StubTex* t : {&P.stub2D, &P.stub3D, &P.stubCube})
+    {
+        vkDestroyImageView(device, t->view, nullptr);
+        vkDestroyImage(device, t->image, nullptr);
+        vkFreeMemory(device, t->mem, nullptr);
+    }
+    vkDestroySampler(device, P.stubSampler, nullptr);
+    vkDestroyFramebuffer(device, P.fb, nullptr);
+    vkDestroyRenderPass(device, P.renderPass, nullptr);
+    vkDestroyRenderPass(device, P.renderPassLoad, nullptr);
+    vkDestroyImageView(device, P.rtSampleView, nullptr);
+    vkDestroyImage(device, P.rtSample, nullptr); vkFreeMemory(device, P.rtSampleMem, nullptr);
+    vkDestroyImageView(device, P.depthView, nullptr);
+    vkDestroyImage(device, P.depth, nullptr); vkFreeMemory(device, P.depthMem, nullptr);
+    vkDestroyImageView(device, P.colorView, nullptr);
+    vkDestroyImage(device, P.color, nullptr); vkFreeMemory(device, P.colorMem, nullptr);
+    vkDestroyBuffer(device, P.ssbo, nullptr); vkFreeMemory(device, P.ssboMem, nullptr);
+    delete persistent;
+    persistent = nullptr;
+}
 
 // Xenos VGT_DRAW_INITIATOR prim_type names, for the frame census.
 const char* PrimName(uint32_t primType)
@@ -1051,14 +1168,28 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
     };
 
+    // Everything below that outlives a frame lives in P. It is built on the
+    // first frame and reused after that; a change of target size rebuilds it,
+    // since the render target and framebuffer are sized to the frame.
+    if (persistent && (persistent->width != W || persistent->height != H))
+        ReleasePersistent();
+    if (!persistent)
+    {
+        persistent = new RendererPersistent();
+        persistent->width = W;
+        persistent->height = H;
+    }
+    RendererPersistent& P = *persistent;
+    const bool firstFrame = !P.built;
+
     // --- translate + cache each distinct (shader, modification) ----------
     // The key is the PAIR (microcode hash, modification), not the hash alone:
     // the modification carries the interpolator mask the vertex and pixel
     // shaders exchange for THIS draw, so one microcode can legitimately need
     // several translations across a frame.
     using ShaderKey = std::pair<uint64_t, uint64_t>; // (hash, modification)
-    std::map<ShaderKey, draw::ShaderXlate> xlate;
-    std::map<ShaderKey, VkShaderModule> modules;
+    std::map<ShaderKey, draw::ShaderXlate>& xlate = P.xlate;
+    std::map<ShaderKey, VkShaderModule>& modules = P.modules;
     auto getShader = [&](bool isVertex, const uint8_t* uc, size_t sz, uint64_t hash,
                          uint64_t modification, draw::ShaderXlate*& outX,
                          VkShaderModule& outM) -> bool {
@@ -1088,10 +1219,22 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
 
     // --- shared SSBO: verbatim mirror of low guest physical memory --------
-    VkBuffer ssbo = VK_NULL_HANDLE; VkDeviceMemory ssboMem = VK_NULL_HANDLE;
-    if (!MakeBuffer(in.guestPhysicalMirrorBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-            ssbo, ssboMem))
-        return false;
+    // The buffer is persistent, its CONTENTS are not: guest memory is precisely
+    // what differs between frames, so it is re-uploaded every time.
+    if (P.ssbo != VK_NULL_HANDLE && P.ssboBytes != in.guestPhysicalMirrorBytes)
+    {
+        vkDestroyBuffer(device, P.ssbo, nullptr);
+        vkFreeMemory(device, P.ssboMem, nullptr);
+        P.ssbo = VK_NULL_HANDLE; P.ssboMem = VK_NULL_HANDLE;
+    }
+    if (P.ssbo == VK_NULL_HANDLE)
+    {
+        if (!MakeBuffer(in.guestPhysicalMirrorBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                P.ssbo, P.ssboMem))
+            return false;
+        P.ssboBytes = in.guestPhysicalMirrorBytes;
+    }
+    VkBuffer ssbo = P.ssbo; VkDeviceMemory ssboMem = P.ssboMem;
     {
         void* p = nullptr;
         VK_CHECK(vkMapMemory(device, ssboMem, 0, in.guestPhysicalMirrorBytes, 0, &p));
@@ -1107,14 +1250,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // a binding must have the matching view type, so one stub of each kind is
     // created here and picked per binding. Real texture upload is the next step;
     // until then a sampling draw reads white rather than nothing.
-    struct StubTex
-    {
-        VkImage image = 0;
-        VkDeviceMemory mem = 0;
-        VkImageView view = 0;
-    };
-    StubTex stub2D{}, stub3D{}, stubCube{};
-    VkSampler samp = 0;
+    StubTex& stub2D = P.stub2D; StubTex& stub3D = P.stub3D; StubTex& stubCube = P.stubCube;
+    VkSampler& samp = P.stubSampler;
     auto makeStub = [&](VkImageType imageType, VkImageViewType viewType,
                         uint32_t layers, uint32_t depth3d, VkImageCreateFlags flags,
                         StubTex& out) -> bool {
@@ -1147,11 +1284,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VK_CHECK(vkCreateImageView(device, &vi, nullptr, &out.view));
         return true;
     };
-    if (!makeStub(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 1, 1, 0, stub2D) ||
-        !makeStub(VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D, 1, 1, 0, stub3D) ||
-        !makeStub(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_CUBE, 6, 1,
-                  VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT, stubCube))
+    if (firstFrame &&
+        (!makeStub(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 1, 1, 0, stub2D) ||
+         !makeStub(VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D, 1, 1, 0, stub3D) ||
+         !makeStub(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_CUBE, 6, 1,
+                   VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT, stubCube)))
         return false;
+    if (firstFrame)
     {
         VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         si.magFilter = si.minFilter = VK_FILTER_LINEAR;
@@ -1168,14 +1307,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // classification); here it becomes a host image. A fetch whose format has
     // no host mapping keeps the stub AND is counted with its reason -- nothing
     // is ever substituted to make the frame look better.
-    struct GuestTex
-    {
-        VkImage image = 0;
-        VkDeviceMemory mem = 0;
-        VkImageView view = 0;
-    };
-    std::vector<GuestTex> guestTextures;          // owned, destroyed at teardown
-    std::map<std::array<uint32_t, 4>, VkImageView> texCache; // fetch key -> view (0 = failed)
+    std::vector<GuestTex>& guestTextures = P.guestTextures;
+    std::map<std::array<uint32_t, 4>, VkImageView>& texCache = P.texCache;
     std::vector<VkBuffer> stagingBufs;
     std::vector<VkDeviceMemory> stagingMems;
     struct PendingUpload
@@ -1396,7 +1529,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Sampler per distinct guest sampler state, built from the shader's sampler
     // binding resolved against its own fetch constant (clamp modes, filters,
     // anisotropy) -- not a fixed host sampler.
-    std::map<uint64_t, VkSampler> samplerCache;
+    std::map<uint64_t, VkSampler>& samplerCache = P.samplerCache;
     auto vkAddressMode = [](uint32_t clamp) -> VkSamplerAddressMode {
         switch (clamp)
         {
@@ -1438,7 +1571,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
 
     // --- persistent colour + depth target --------------------------------
-    VkImage color = 0; VkDeviceMemory colorMem = 0; VkImageView colorView = 0;
+    VkImage& color = P.color; VkDeviceMemory& colorMem = P.colorMem;
+    VkImageView& colorView = P.colorView;
+    if (firstFrame)
     {
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ci.imageType = VK_IMAGE_TYPE_2D;
@@ -1471,8 +1606,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // is a separate image because Vulkan forbids sampling the image that is
     // currently a colour attachment; the render pass is split at each sampling
     // draw and the colour target copied here first.
-    VkImage rtSample = 0; VkDeviceMemory rtSampleMem = 0;
-    VkImageView rtSampleViewStorage = VK_NULL_HANDLE;
+    VkImage& rtSample = P.rtSample; VkDeviceMemory& rtSampleMem = P.rtSampleMem;
+    VkImageView& rtSampleViewStorage = P.rtSampleView;
+    if (firstFrame)
     {
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ci.imageType = VK_IMAGE_TYPE_2D;
@@ -1501,8 +1637,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(device, &vi, nullptr, &rtSampleViewStorage));
     }
-    VkImage depth = 0; VkDeviceMemory depthMem = 0; VkImageView depthView = 0;
+    VkImage& depth = P.depth; VkDeviceMemory& depthMem = P.depthMem;
+    VkImageView& depthView = P.depthView;
     const VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+    if (firstFrame)
     {
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ci.imageType = VK_IMAGE_TYPE_2D;
@@ -1539,7 +1677,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // ends, colour is copied into rtSample, and the pass resumes with LOAD so
     // everything drawn so far is preserved. Without a sampling draw there is one
     // segment and the behaviour is identical to before.
-    VkRenderPass renderPass = 0, renderPassLoad = 0;
+    VkRenderPass& renderPass = P.renderPass;
+    VkRenderPass& renderPassLoad = P.renderPassLoad;
     auto makeRenderPass = [&](bool load, VkRenderPass& out) {
         VkAttachmentDescription att[2]{};
         att[0].format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -1590,9 +1729,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VK_CHECK(vkCreateRenderPass(device, &rp, nullptr, &out));
         return true;
     };
-    if (!makeRenderPass(false, renderPass) || !makeRenderPass(true, renderPassLoad))
+    if (firstFrame &&
+        (!makeRenderPass(false, renderPass) || !makeRenderPass(true, renderPassLoad)))
         return false;
-    VkFramebuffer fb = 0;
+    VkFramebuffer& fb = P.fb;
+    if (firstFrame)
     {
         VkImageView atts[2] = {colorView, depthView};
         VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
@@ -1616,14 +1757,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
     const VkShaderStageFlags allStages =
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    VkDescriptorSetLayout set0 = 0, set1 = 0;
-    if (!makeSetLayout({{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, allStages, nullptr}}, set0) ||
+    VkDescriptorSetLayout& set0 = P.set0;
+    VkDescriptorSetLayout& set1 = P.set1;
+    if (firstFrame &&
+        (!makeSetLayout({{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, allStages, nullptr}}, set0) ||
         !makeSetLayout({
             {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
             {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
             {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
             {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
-            {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr}}, set1))
+            {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr}}, set1)))
         return false;
 
     // --- per-shader texture descriptor set layouts (sets 2 and 3) --------
@@ -1644,7 +1787,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         s += std::to_string(stage);
         return s;
     };
-    std::map<std::string, VkDescriptorSetLayout> texLayouts;
+    std::map<std::string, VkDescriptorSetLayout>& texLayouts = P.texLayouts;
     auto getTexLayout = [&](const draw::ShaderXlate& x, VkShaderStageFlags stage,
                             VkDescriptorSetLayout& out) -> bool {
         const std::string key = texSignature(x, stage);
@@ -1665,7 +1808,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
 
     // A pipeline layout per (vertex texture signature, pixel texture signature).
-    std::map<std::pair<std::string, std::string>, VkPipelineLayout> pipeLayouts;
+    std::map<std::pair<std::string, std::string>, VkPipelineLayout>& pipeLayouts =
+        P.pipeLayouts;
     auto getPipeLayout = [&](const draw::ShaderXlate& vsX, const draw::ShaderXlate& psX,
                              VkDescriptorSetLayout& outVsTex,
                              VkDescriptorSetLayout& outPsTex,
@@ -1696,7 +1840,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // in the index buffer ahead of the vertex shader -- the expansion has to see
     // shaded vertices. draw::BuildRectangleGeometryShader is the port of the
     // shader Xenia uses for exactly this.
-    std::map<draw::RectangleGeometryShaderKey, VkShaderModule> geomShaders;
+    std::map<draw::RectangleGeometryShaderKey, VkShaderModule>& geomShaders =
+        P.geomShaders;
     uint32_t rectDraws = 0, rectDrawsExpanded = 0;
     auto getRectGeomShader = [&](uint64_t vsModification, VkShaderModule& out) -> bool {
         out = VK_NULL_HANDLE;
@@ -1735,7 +1880,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // translates to several distinct shaders (one per modification), so a hash
     // does not identify a stage.
     std::map<std::tuple<VkShaderModule, VkShaderModule, VkShaderModule, uint32_t,
-                        OutputMergerState>, VkPipeline> pipelines;
+                        OutputMergerState>, VkPipeline>& pipelines = P.pipelines;
     auto getPipeline = [&](VkShaderModule vsMod, VkShaderModule psMod,
                            VkShaderModule gsMod, uint32_t primType,
                            const OutputMergerState& om,
@@ -2811,49 +2956,21 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vkDestroyBuffer(device, checkpoints[i].second, nullptr);
         vkFreeMemory(device, checkpointMem[i], nullptr);
     }
-    vkDestroyImageView(device, rtSampleViewStorage, nullptr);
-    vkDestroyImage(device, rtSample, nullptr); vkFreeMemory(device, rtSampleMem, nullptr);
-    vkDestroyRenderPass(device, renderPassLoad, nullptr);
+    // Only this frame's own transients are destroyed here. The render target,
+    // passes, layouts, pipelines, shader modules, textures and samplers belong
+    // to RendererPersistent and are released by ReleasePersistent.
     vkDestroyDescriptorPool(device, pool, nullptr);
-    for (auto& [k, p] : pipelines) vkDestroyPipeline(device, p, nullptr);
-    for (auto& [k, l] : pipeLayouts) vkDestroyPipelineLayout(device, l, nullptr);
-    for (auto& [k, l] : texLayouts) vkDestroyDescriptorSetLayout(device, l, nullptr);
-    vkDestroyDescriptorSetLayout(device, set0, nullptr);
-    vkDestroyDescriptorSetLayout(device, set1, nullptr);
-    vkDestroyFramebuffer(device, fb, nullptr);
-    vkDestroyRenderPass(device, renderPass, nullptr);
-    vkDestroyImageView(device, depthView, nullptr);
-    vkDestroyImage(device, depth, nullptr); vkFreeMemory(device, depthMem, nullptr);
-    vkDestroyImageView(device, colorView, nullptr);
-    vkDestroyImage(device, color, nullptr); vkFreeMemory(device, colorMem, nullptr);
-    vkDestroySampler(device, samp, nullptr);
-    for (auto& [k, s] : samplerCache) vkDestroySampler(device, s, nullptr);
-    for (GuestTex& t : guestTextures)
-    {
-        vkDestroyImageView(device, t.view, nullptr);
-        vkDestroyImage(device, t.image, nullptr);
-        vkFreeMemory(device, t.mem, nullptr);
-    }
     for (size_t i = 0; i < stagingBufs.size(); ++i)
     {
         vkDestroyBuffer(device, stagingBufs[i], nullptr);
         vkFreeMemory(device, stagingMems[i], nullptr);
-    }
-    for (StubTex* s : {&stub2D, &stub3D, &stubCube})
-    {
-        vkDestroyImageView(device, s->view, nullptr);
-        vkDestroyImage(device, s->image, nullptr);
-        vkFreeMemory(device, s->mem, nullptr);
     }
     for (size_t i = 0; i < keepBuffers.size(); ++i)
     {
         vkDestroyBuffer(device, keepBuffers[i], nullptr);
         vkFreeMemory(device, keepMem[i], nullptr);
     }
-    vkDestroyBuffer(device, ssbo, nullptr); vkFreeMemory(device, ssboMem, nullptr);
-    for (auto& [h, m] : modules) vkDestroyShaderModule(device, m, nullptr);
-    for (auto& [k, m] : geomShaders)
-        if (m != VK_NULL_HANDLE) vkDestroyShaderModule(device, m, nullptr);
+    P.built = true;
     return true;
 }
 
@@ -2871,13 +2988,26 @@ bool RenderHotDraw(const HotDrawInputs& in)
     return ok;
 }
 
+// The renderer is built once and kept. Rebuilding it per frame was what made a
+// frame cost ~300 ms; the device, render target, shader translations, pipelines
+// and textures all survive from one frame to the next now.
+Renderer& FrameRenderer()
+{
+    static Renderer r;
+    static bool initialised = r.Init();
+    (void)initialised;
+    return r;
+}
+
 bool RenderFrame(const FrameDrawInputs& in)
 {
-    Renderer r;
-    bool ok = false;
-    if (r.Init())
-        ok = r.RenderFrameImpl(in);
-    r.Shutdown();
+    Renderer& r = FrameRenderer();
+    if (r.device == VK_NULL_HANDLE)
+    {
+        g_frame.clear();
+        return false;
+    }
+    const bool ok = r.RenderFrameImpl(in);
     if (!ok)
         g_frame.clear();
     return ok;

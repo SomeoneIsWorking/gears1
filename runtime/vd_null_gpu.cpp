@@ -519,6 +519,7 @@ struct CommandProcessor
     // race it away.
     std::vector<gears::FrameDrawItem> frameDraws;
     bool frameRenderDone = false;
+    long framesRendered = 0;
     uint32_t frameSwaps = 0; // swaps seen while DRAW_FRAME is arming
 
     // Predication (Xenos PFP bin mask/select). Bit 0 of a TYPE3 header marks the
@@ -1150,8 +1151,12 @@ struct CommandProcessor
         lucent::info("gpu", "cp-stall: resumed");
     }
 
-    // At the frame boundary, render every accumulated draw into one persistent
-    // target and screenshot it. One-shot per run.
+    // At the frame boundary, render every accumulated draw into the renderer's
+    // persistent target. GEARS_DRAW_FRAME_COUNT=N renders N consecutive frames
+    // from GEARS_DRAW_FRAME_AT instead of one, which is how the per-frame cost
+    // of a WARM renderer is measured -- the first frame pays for translating
+    // every shader and building every pipeline, and says nothing about the
+    // steady state.
     void TriggerFrameRender()
     {
         if (frameRenderDone || !lucent::config::flag("DRAW_FRAME") || frameDraws.empty())
@@ -1171,7 +1176,10 @@ struct CommandProcessor
             frameDraws.clear();
             return;
         }
-        frameRenderDone = true;
+        ++framesRendered;
+        const long frameCount = std::max<long>(1, lucent::config::number("DRAW_FRAME_COUNT", 1));
+        if (framesRendered >= frameCount)
+            frameRenderDone = true;
 
         gears::FrameDrawInputs in;
         in.guestBase = gears::Memory().Base();
@@ -1191,8 +1199,9 @@ struct CommandProcessor
         gears::RenderFrame(in);
         const uint64_t ms = uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - t0).count());
-        lucent::info("gpu", "guest-draw: RenderFrame blocked the command processor"
-            " for {} ms", ms);
+        lucent::info("gpu", "guest-draw: frame {} of {}: RenderFrame blocked the"
+            " command processor for {} ms", framesRendered, frameCount, ms);
+        ++frameSwaps;
     }
 
     static uint16_t SwapIndex16(uint16_t v, uint32_t endian)
