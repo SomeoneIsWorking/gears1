@@ -387,6 +387,64 @@ VkCompareOp CompareOpOf(uint32_t f)
     }
 }
 
+// RB_COLOR_INFO.color_format (a xenos::ColorRenderTargetFormat) -> the host
+// format the surface is rendered in. Ported from Xenia's
+// VulkanRenderTargetCache::GetColorOwnDrawVulkanFormat.
+//
+// This is not a cosmetic choice. UE3 on the 360 renders its scene into a
+// k_2_10_10_10_FLOAT (7e3) HDR surface whose values run to 32.0; rendering that
+// into an 8888 UNORM host target clamps every highlight to 1.0 before the
+// tonemap pass ever sees it, so the tonemap reads a flat white/black image.
+VkFormat HostColorFormat(uint32_t colorFormat)
+{
+    switch (colorFormat)
+    {
+    case 0:  // k_8_8_8_8
+    case 1:  // k_8_8_8_8_GAMMA -- gamma is applied on the way out, not stored
+        return VK_FORMAT_R8G8B8A8_UNORM;
+    case 2:  // k_2_10_10_10
+    case 10: // k_2_10_10_10_AS_10_10_10_10
+        return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+    case 3:  // k_2_10_10_10_FLOAT (7e3, [0,32) RGB + unorm alpha)
+    case 12: // k_2_10_10_10_FLOAT_AS_16_16_16_16
+        return VK_FORMAT_R16G16B16A16_SFLOAT;
+    case 4:  // k_16_16 (fixed point -32..32)
+        return VK_FORMAT_R16G16_SNORM;
+    case 5:  // k_16_16_16_16 (fixed point -32..32)
+        return VK_FORMAT_R16G16B16A16_SNORM;
+    case 6:  // k_16_16_FLOAT
+        return VK_FORMAT_R16G16_SFLOAT;
+    case 7:  // k_16_16_16_16_FLOAT
+        return VK_FORMAT_R16G16B16A16_SFLOAT;
+    case 14: // k_32_FLOAT
+        return VK_FORMAT_R32_SFLOAT;
+    case 15: // k_32_32_FLOAT
+        return VK_FORMAT_R32G32_SFLOAT;
+    default:
+        return VK_FORMAT_UNDEFINED;
+    }
+}
+
+const char* ColorFormatName(uint32_t f)
+{
+    switch (f)
+    {
+    case 0: return "k_8_8_8_8";
+    case 1: return "k_8_8_8_8_GAMMA";
+    case 2: return "k_2_10_10_10";
+    case 3: return "k_2_10_10_10_FLOAT";
+    case 4: return "k_16_16";
+    case 5: return "k_16_16_16_16";
+    case 6: return "k_16_16_FLOAT";
+    case 7: return "k_16_16_16_16_FLOAT";
+    case 10: return "k_2_10_10_10_AS_10_10_10_10";
+    case 12: return "k_2_10_10_10_FLOAT_AS_16_16_16_16";
+    case 14: return "k_32_FLOAT";
+    case 15: return "k_32_32_FLOAT";
+    default: return "?";
+    }
+}
+
 // The output-merger registers that select a pipeline, kept together so the
 // pipeline cache is keyed on exactly the state the pipeline bakes in.
 struct OutputMergerState
@@ -418,6 +476,79 @@ struct StubTex
     VkImageView view = 0;
 };
 
+// --- the render-target cache -------------------------------------------
+// One host colour target per EDRAM colour surface, keyed by the surface's
+// RB_COLOR_INFO.color_base. A UE3 frame on this title uses four of them: the
+// 7e3 HDR world, the 8888 tonemap/UI output that is presented, a 16-bit float
+// light accumulation buffer and a small 8888 one. Rendering them all into a
+// single 8888 target -- what this backend did before -- means the tonemap
+// draws, which run last, paint over the world they were supposed to composite.
+//
+// THE KEY IS THE BASE ALONE, not (base, format). An EDRAM tile base is a
+// location in EDRAM; the format is how the draw currently interprets the bytes
+// there, and a frame changes it. Measured on an Act 1 frame, base 0x2d0 is
+// rendered as k_8_8_8_8 (103 draws), k_2_10_10_10_FLOAT (26),
+// k_2_10_10_10_FLOAT_AS_16_16_16_16 (17) and k_16_16 (2) -- all the same
+// surface, reinterpreted. Keying on the pair would split it across four host
+// images that cannot see each other's output, which is the same defect one
+// level down from the one this cache exists to fix. Instead each base gets ONE
+// host image in a format wide enough for every format the frame uses there
+// (HostFormatFor below), so a reinterpretation accumulates the way EDRAM does.
+//
+// The console also renders each surface in PREDICATED TILES, re-binding the
+// same base once per tile. Tiles therefore ACCUMULATE into that one target: a
+// surface is CLEARED the first time a frame touches it and LOADED every time
+// after, which is what `begunThisFrame` tracks.
+struct SurfaceTarget
+{
+    VkFormat hostFormat = VK_FORMAT_UNDEFINED;
+    VkImage color = VK_NULL_HANDLE;
+    VkDeviceMemory colorMem = VK_NULL_HANDLE;
+    VkImageView colorView = VK_NULL_HANDLE;
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    bool begunThisFrame = false;
+    uint32_t drawsThisFrame = 0;
+};
+
+// A resolve destination: the main-memory address the guest copies an EDRAM
+// surface out to (RB_COPY_DEST_BASE), given a host image of its own. A later
+// draw whose texture fetch constant names that address is sampling this frame's
+// render target, and this is what it reads -- the real chain the tonemap pass
+// needs, replacing the single global snapshot the RT link used to bind for
+// every resolve destination at once.
+struct ResolveTarget
+{
+    VkFormat hostFormat = VK_FORMAT_UNDEFINED;
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    uint32_t sourceBase = 0; // the EDRAM base it is a copy of
+    uint32_t copies = 0;     // resolves into it this frame
+};
+
+// The host format one EDRAM base is given, from every RB_COLOR_INFO.color_format
+// the frame renders it with. A base used with a single format keeps that
+// format's own host equivalent; a base the frame reinterprets needs a container
+// that holds all of them, and R16G16B16A16_SFLOAT holds every 8/10/16-bit
+// colour format the Xenos can render (a k_8_8_8_8 value lands in [0,1] exactly,
+// a 7e3 HDR value up to 32 and a k_16_16 fixed-point value up to 32 are all far
+// inside float16's range).
+VkFormat HostFormatFor(const std::set<uint32_t>& formats, bool& mixedOut)
+{
+    mixedOut = false;
+    if (formats.empty())
+        return VK_FORMAT_UNDEFINED;
+    if (formats.size() == 1)
+        return HostColorFormat(*formats.begin());
+    mixedOut = true;
+    // A 32-bit float surface has no common container with a 4-channel one; the
+    // caller reports that rather than this pretending otherwise.
+    for (uint32_t f : formats)
+        if (f == 14 || f == 15)
+            return VK_FORMAT_R32G32_SFLOAT;
+    return VK_FORMAT_R16G16B16A16_SFLOAT;
+}
+
 // Everything a frame render needs that does not change between frames.
 //
 // RenderFrameImpl used to build all of this per call and tear it down again,
@@ -442,8 +573,10 @@ struct RendererPersistent
 
     std::map<std::string, VkDescriptorSetLayout> texLayouts;
     std::map<std::pair<std::string, std::string>, VkPipelineLayout> pipeLayouts;
+    // The render pass is part of the key: a pipeline is only valid against a
+    // render pass it is compatible with, and each colour format now has its own.
     std::map<std::tuple<VkShaderModule, VkShaderModule, VkShaderModule, uint32_t,
-                        OutputMergerState>, VkPipeline> pipelines;
+                        OutputMergerState, VkRenderPass>, VkPipeline> pipelines;
     VkDescriptorSetLayout set0 = VK_NULL_HANDLE, set1 = VK_NULL_HANDLE;
 
     // Guest textures, their views by fetch key, and their samplers.
@@ -453,15 +586,23 @@ struct RendererPersistent
     StubTex stub2D{}, stub3D{}, stubCube{};
     VkSampler stubSampler = VK_NULL_HANDLE;
 
-    // The render target, its passes and its framebuffer.
-    VkImage color = VK_NULL_HANDLE; VkDeviceMemory colorMem = VK_NULL_HANDLE;
-    VkImageView colorView = VK_NULL_HANDLE;
+    // The render-target cache: one host target per EDRAM colour surface, one
+    // host image per resolve destination, and a pair of render passes (clear
+    // and load) per host colour format.
+    std::map<uint32_t, SurfaceTarget> surfaceTargets; // EDRAM color_base -> target
+    std::map<uint32_t, ResolveTarget> resolveTargets; // RB_COPY_DEST_BASE -> image
+    std::map<VkFormat, std::pair<VkRenderPass, VkRenderPass>> passes; // clear, load
+
+    // Depth is shared by every surface for now; the frame's distinct
+    // RB_DEPTH_INFO bases are counted per frame so the moment that stops being
+    // faithful is visible rather than assumed.
     VkImage depth = VK_NULL_HANDLE; VkDeviceMemory depthMem = VK_NULL_HANDLE;
     VkImageView depthView = VK_NULL_HANDLE;
-    VkImage rtSample = VK_NULL_HANDLE; VkDeviceMemory rtSampleMem = VK_NULL_HANDLE;
-    VkImageView rtSampleView = VK_NULL_HANDLE;
-    VkRenderPass renderPass = VK_NULL_HANDLE, renderPassLoad = VK_NULL_HANDLE;
-    VkFramebuffer fb = VK_NULL_HANDLE;
+
+    // An 8888 staging image for readback, used only when the presented surface
+    // is in some other host format.
+    VkImage presentStage = VK_NULL_HANDLE;
+    VkDeviceMemory presentStageMem = VK_NULL_HANDLE;
 
     // The guest-memory mirror the translated shaders fetch through. The buffer
     // is persistent; its CONTENTS are refreshed every frame, because guest
@@ -523,15 +664,28 @@ void Renderer::ReleasePersistent()
         vkFreeMemory(device, t->mem, nullptr);
     }
     vkDestroySampler(device, P.stubSampler, nullptr);
-    vkDestroyFramebuffer(device, P.fb, nullptr);
-    vkDestroyRenderPass(device, P.renderPass, nullptr);
-    vkDestroyRenderPass(device, P.renderPassLoad, nullptr);
-    vkDestroyImageView(device, P.rtSampleView, nullptr);
-    vkDestroyImage(device, P.rtSample, nullptr); vkFreeMemory(device, P.rtSampleMem, nullptr);
+    for (auto& [k, s] : P.surfaceTargets)
+    {
+        vkDestroyFramebuffer(device, s.fb, nullptr);
+        vkDestroyImageView(device, s.colorView, nullptr);
+        vkDestroyImage(device, s.color, nullptr);
+        vkFreeMemory(device, s.colorMem, nullptr);
+    }
+    for (auto& [k, r] : P.resolveTargets)
+    {
+        vkDestroyImageView(device, r.view, nullptr);
+        vkDestroyImage(device, r.image, nullptr);
+        vkFreeMemory(device, r.mem, nullptr);
+    }
+    for (auto& [k, rp] : P.passes)
+    {
+        vkDestroyRenderPass(device, rp.first, nullptr);
+        vkDestroyRenderPass(device, rp.second, nullptr);
+    }
     vkDestroyImageView(device, P.depthView, nullptr);
     vkDestroyImage(device, P.depth, nullptr); vkFreeMemory(device, P.depthMem, nullptr);
-    vkDestroyImageView(device, P.colorView, nullptr);
-    vkDestroyImage(device, P.color, nullptr); vkFreeMemory(device, P.colorMem, nullptr);
+    vkDestroyImage(device, P.presentStage, nullptr);
+    vkFreeMemory(device, P.presentStageMem, nullptr);
     if (P.ssboMapped)
         vkUnmapMemory(device, P.ssboMem);
     vkDestroyBuffer(device, P.ssbo, nullptr); vkFreeMemory(device, P.ssboMem, nullptr);
@@ -1616,73 +1770,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         return s;
     };
 
-    // --- persistent colour + depth target --------------------------------
-    VkImage& color = P.color; VkDeviceMemory& colorMem = P.colorMem;
-    VkImageView& colorView = P.colorView;
-    if (firstFrame)
-    {
-        VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        ci.imageType = VK_IMAGE_TYPE_2D;
-        ci.format = VK_FORMAT_R8G8B8A8_UNORM;
-        ci.extent = {W, H, 1};
-        ci.mipLevels = 1;
-        ci.arrayLayers = 1;
-        ci.samples = VK_SAMPLE_COUNT_1_BIT;
-        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-        ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        VK_CHECK(vkCreateImage(device, &ci, nullptr, &color));
-        VkMemoryRequirements req{};
-        vkGetImageMemoryRequirements(device, color, &req);
-        uint32_t type = 0;
-        if (!FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
-            FindMemory(req.memoryTypeBits, 0, type);
-        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        ai.allocationSize = req.size;
-        ai.memoryTypeIndex = type;
-        VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &colorMem));
-        VK_CHECK(vkBindImageMemory(device, color, colorMem, 0));
-        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        vi.image = color;
-        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format = VK_FORMAT_R8G8B8A8_UNORM;
-        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &colorView));
-    }
-    // Snapshot of the colour target that sampling draws read (the RT link). It
-    // is a separate image because Vulkan forbids sampling the image that is
-    // currently a colour attachment; the render pass is split at each sampling
-    // draw and the colour target copied here first.
-    VkImage& rtSample = P.rtSample; VkDeviceMemory& rtSampleMem = P.rtSampleMem;
-    VkImageView& rtSampleViewStorage = P.rtSampleView;
-    if (firstFrame)
-    {
-        VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        ci.imageType = VK_IMAGE_TYPE_2D;
-        ci.format = VK_FORMAT_R8G8B8A8_UNORM;
-        ci.extent = {W, H, 1};
-        ci.mipLevels = 1;
-        ci.arrayLayers = 1;
-        ci.samples = VK_SAMPLE_COUNT_1_BIT;
-        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-        ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        VK_CHECK(vkCreateImage(device, &ci, nullptr, &rtSample));
-        VkMemoryRequirements req{};
-        vkGetImageMemoryRequirements(device, rtSample, &req);
-        uint32_t type = 0;
-        if (!FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
-            FindMemory(req.memoryTypeBits, 0, type);
-        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        ai.allocationSize = req.size;
-        ai.memoryTypeIndex = type;
-        VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &rtSampleMem));
-        VK_CHECK(vkBindImageMemory(device, rtSample, rtSampleMem, 0));
-        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        vi.image = rtSample;
-        vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
-        vi.format = VK_FORMAT_R8G8B8A8_UNORM;
-        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &rtSampleViewStorage));
-    }
+    // --- shared depth ------------------------------------------------------
     VkImage& depth = P.depth; VkDeviceMemory& depthMem = P.depthMem;
     VkImageView& depthView = P.depthView;
     const VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
@@ -1714,20 +1802,39 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vi.format = depthFormat;
         vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(device, &vi, nullptr, &depthView));
+
+        VkImageCreateInfo si{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        si.imageType = VK_IMAGE_TYPE_2D;
+        si.format = VK_FORMAT_R8G8B8A8_UNORM;
+        si.extent = {W, H, 1};
+        si.mipLevels = 1;
+        si.arrayLayers = 1;
+        si.samples = VK_SAMPLE_COUNT_1_BIT;
+        si.tiling = VK_IMAGE_TILING_OPTIMAL;
+        si.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        VK_CHECK(vkCreateImage(device, &si, nullptr, &P.presentStage));
+        VkMemoryRequirements sreq{};
+        vkGetImageMemoryRequirements(device, P.presentStage, &sreq);
+        uint32_t stype = 0;
+        if (!FindMemory(sreq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, stype))
+            FindMemory(sreq.memoryTypeBits, 0, stype);
+        VkMemoryAllocateInfo sai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        sai.allocationSize = sreq.size;
+        sai.memoryTypeIndex = stype;
+        VK_CHECK(vkAllocateMemory(device, &sai, nullptr, &P.presentStageMem));
+        VK_CHECK(vkBindImageMemory(device, P.presentStage, P.presentStageMem, 0));
     }
+    VkImage presentStage = P.presentStage;
 
     // --- render pass (colour + depth) ------------------------------------
-    // Two variants of the same pass. The frame is one logical pass, but it has
-    // to be SPLIT wherever a draw samples the colour target we are rendering
-    // into (Vulkan forbids reading the bound attachment): at that point the pass
-    // ends, colour is copied into rtSample, and the pass resumes with LOAD so
-    // everything drawn so far is preserved. Without a sampling draw there is one
-    // segment and the behaviour is identical to before.
-    VkRenderPass& renderPass = P.renderPass;
-    VkRenderPass& renderPassLoad = P.renderPassLoad;
-    auto makeRenderPass = [&](bool load, VkRenderPass& out) {
+    // Two variants of the same pass per host colour format: one that CLEARS the
+    // surface (its first use in a frame) and one that LOADS it (every use
+    // after, so the console's predicated tiles accumulate). The frame is also
+    // split at every surface change and at every resolve, because a surface can
+    // only be blitted out while no pass is open on it.
+    auto makeRenderPass = [&](VkFormat colorFormat, bool load, VkRenderPass& out) {
         VkAttachmentDescription att[2]{};
-        att[0].format = VK_FORMAT_R8G8B8A8_UNORM;
+        att[0].format = colorFormat;
         att[0].samples = VK_SAMPLE_COUNT_1_BIT;
         att[0].loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
         att[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
@@ -1775,22 +1882,153 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VK_CHECK(vkCreateRenderPass(device, &rp, nullptr, &out));
         return true;
     };
-    if (firstFrame &&
-        (!makeRenderPass(false, renderPass) || !makeRenderPass(true, renderPassLoad)))
-        return false;
-    VkFramebuffer& fb = P.fb;
-    if (firstFrame)
-    {
-        VkImageView atts[2] = {colorView, depthView};
+    // One (clear, load) pair per host colour format, created on first use.
+    auto getPasses = [&](VkFormat colorFormat,
+                         std::pair<VkRenderPass, VkRenderPass>*& out) -> bool {
+        auto it = P.passes.find(colorFormat);
+        if (it == P.passes.end())
+        {
+            std::pair<VkRenderPass, VkRenderPass> rp{VK_NULL_HANDLE, VK_NULL_HANDLE};
+            if (!makeRenderPass(colorFormat, false, rp.first) ||
+                !makeRenderPass(colorFormat, true, rp.second))
+                return false;
+            it = P.passes.emplace(colorFormat, rp).first;
+        }
+        out = &it->second;
+        return true;
+    };
+
+    // Every RB_COLOR_INFO.color_format the frame renders each EDRAM base with,
+    // filled by the pre-pass further down and read by getSurfaceTarget, which
+    // sizes one host image per base wide enough to hold all of them.
+    std::map<uint32_t, std::set<uint32_t>> formatsPerBase;
+
+    // The render-target cache proper: a host colour target per EDRAM surface,
+    // created the first time a frame renders into that (base, format) and kept
+    // for the life of the run like every other persistent object here.
+    auto getSurfaceTarget = [&](uint32_t base, SurfaceTarget*& out) -> bool {
+        auto it = P.surfaceTargets.find(base);
+        if (it != P.surfaceTargets.end()) { out = &it->second; return true; }
+        auto fmts = formatsPerBase.find(base);
+        if (fmts == formatsPerBase.end())
+            return false;
+        bool mixed = false;
+        const VkFormat hostFormat = HostFormatFor(fmts->second, mixed);
+        if (hostFormat == VK_FORMAT_UNDEFINED)
+            return false;
+        std::pair<VkRenderPass, VkRenderPass>* rp = nullptr;
+        if (!getPasses(hostFormat, rp))
+            return false;
+        SurfaceTarget s;
+        s.hostFormat = hostFormat;
+        VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ci.imageType = VK_IMAGE_TYPE_2D;
+        ci.format = hostFormat;
+        ci.extent = {W, H, 1};
+        ci.mipLevels = 1;
+        ci.arrayLayers = 1;
+        ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+        // TRANSFER_SRC so a resolve can copy it out and the presented surface
+        // can be read back.
+        ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        if (vkCreateImage(device, &ci, nullptr, &s.color) != VK_SUCCESS)
+            return false;
+        VkMemoryRequirements req{};
+        vkGetImageMemoryRequirements(device, s.color, &req);
+        uint32_t type = 0;
+        if (!FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
+            FindMemory(req.memoryTypeBits, 0, type);
+        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = type;
+        if (vkAllocateMemory(device, &ai, nullptr, &s.colorMem) != VK_SUCCESS ||
+            vkBindImageMemory(device, s.color, s.colorMem, 0) != VK_SUCCESS)
+            return false;
+        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vi.image = s.color;
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        vi.format = hostFormat;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device, &vi, nullptr, &s.colorView) != VK_SUCCESS)
+            return false;
+        VkImageView atts[2] = {s.colorView, depthView};
         VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-        fi.renderPass = renderPass;
+        fi.renderPass = rp->first;
         fi.attachmentCount = 2;
         fi.pAttachments = atts;
         fi.width = W;
         fi.height = H;
         fi.layers = 1;
-        VK_CHECK(vkCreateFramebuffer(device, &fi, nullptr, &fb));
-    }
+        if (vkCreateFramebuffer(device, &fi, nullptr, &s.fb) != VK_SUCCESS)
+            return false;
+        {
+            lucent::Line nl;
+            nl.add("render-target cache: new surface {:#x} ->", base);
+            for (uint32_t f : fmts->second)
+                nl.add(" {}", ColorFormatName(f));
+            nl.add(" in one host target {}x{}{}", W, H,
+                   mixed ? " (reinterpreted mid-frame; widened host format)" : "");
+            nl.flush(lucent::Level::Info, "draw");
+        }
+        out = &P.surfaceTargets.emplace(base, s).first->second;
+        return true;
+    };
+
+    // The host image a resolve destination owns.
+    //
+    // It is always R16G16B16A16_SFLOAT, whatever its source surface's format
+    // is, and the resolve is a BLIT rather than a copy. That is not laziness:
+    // measured on an Act 1 frame, destination 0xbde0000 receives resolves from
+    // BOTH the 8888 tonemap surface at 0x2d0 and the 7e3 HDR surface at 0x400,
+    // so no single source format describes it. A wide float destination holds
+    // an 8888 UNORM value (0..1) exactly and a 7e3 HDR value (0..32) without
+    // clamping, and vkCmdBlitImage does the conversion; an 8888 destination
+    // would clamp every HDR highlight the tonemap pass exists to read.
+    auto getResolveTarget = [&](uint32_t destBase, uint32_t sourceBase,
+                                ResolveTarget*& out) -> bool {
+        auto it = P.resolveTargets.find(destBase);
+        if (it != P.resolveTargets.end()) { out = &it->second; return true; }
+        const VkFormat hostFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ResolveTarget r;
+        r.hostFormat = hostFormat;
+        r.sourceBase = sourceBase;
+        VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ci.imageType = VK_IMAGE_TYPE_2D;
+        ci.format = hostFormat;
+        ci.extent = {W, H, 1};
+        ci.mipLevels = 1;
+        ci.arrayLayers = 1;
+        ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        if (vkCreateImage(device, &ci, nullptr, &r.image) != VK_SUCCESS)
+            return false;
+        VkMemoryRequirements req{};
+        vkGetImageMemoryRequirements(device, r.image, &req);
+        uint32_t type = 0;
+        if (!FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
+            FindMemory(req.memoryTypeBits, 0, type);
+        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        ai.allocationSize = req.size;
+        ai.memoryTypeIndex = type;
+        if (vkAllocateMemory(device, &ai, nullptr, &r.mem) != VK_SUCCESS ||
+            vkBindImageMemory(device, r.image, r.mem, 0) != VK_SUCCESS)
+            return false;
+        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        vi.image = r.image;
+        // 2D_ARRAY because the translated shaders declare their 2D textures as
+        // arrays, exactly as the stub and guest texture views do.
+        vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+        vi.format = hostFormat;
+        vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        if (vkCreateImageView(device, &vi, nullptr, &r.view) != VK_SUCCESS)
+            return false;
+        lucent::info("draw", "render-target cache: resolve destination {:#x} <- surface"
+            " {:#x}", destBase, sourceBase);
+        out = &P.resolveTargets.emplace(destBase, r).first->second;
+        return true;
+    };
 
     // --- descriptor set layouts (same as the hot-draw path) --------------
     auto makeSetLayout = [&](const std::vector<VkDescriptorSetLayoutBinding>& b,
@@ -1925,13 +2163,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Keyed on the MODULE HANDLES, not the microcode hashes: one microcode now
     // translates to several distinct shaders (one per modification), so a hash
     // does not identify a stage.
-    std::map<std::tuple<VkShaderModule, VkShaderModule, VkShaderModule, uint32_t,
-                        OutputMergerState>, VkPipeline>& pipelines = P.pipelines;
+    auto& pipelines = P.pipelines;
     auto getPipeline = [&](VkShaderModule vsMod, VkShaderModule psMod,
                            VkShaderModule gsMod, uint32_t primType,
-                           const OutputMergerState& om,
+                           const OutputMergerState& om, VkRenderPass renderPass,
                            VkPipelineLayout pipeLayout, VkPipeline& out) -> bool {
-        auto key = std::make_tuple(vsMod, psMod, gsMod, primType, om);
+        auto key = std::make_tuple(vsMod, psMod, gsMod, primType, om, renderPass);
         auto it = pipelines.find(key);
         if (it != pipelines.end()) { out = it->second; return true; }
         VkPipelineShaderStageCreateInfo stages[3]{};
@@ -2185,9 +2422,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkDeviceSize ibufOffset; // where in the arena this draw's indices live
         uint32_t count;      // index count, or vertex count when !indexed
         bool indexed;
-        bool samplesRt;      // reads the rendered colour target (RT link)
         VkViewport viewport; // the guest's own, per draw
         VkRect2D scissor;
+        // Which EDRAM surface this draw renders into. The recording pass below
+        // walks these in submission order and re-binds the render pass whenever
+        // the surface changes.
+        uint32_t surfaceBase = 0;
+        // A resolve (RB_MODECONTROL.edram_mode == kCopy) is not geometry: it
+        // copies `surface`'s host target out to `resolveDest`'s host image, and
+        // issues no draw at all.
+        bool isResolve = false;
+        uint32_t resolveDest = 0;
     };
     std::vector<PreparedDraw> prepared;
     uint32_t issued = 0, skipped = 0;
@@ -2202,6 +2447,32 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // is the ground truth for the render-target cache (re-frontier gameplay-scene).
     struct SurfaceStat { uint32_t draws = 0; uint32_t format = 0; uint32_t mode = 0; };
     std::map<uint32_t, SurfaceStat> surfaces; // RB_COLOR_INFO color_base -> stat
+    // RB_MODECONTROL.edram_mode (0x2208, bits 0..2) per draw. This is NOT a
+    // detail: on Xenos a draw with edram_mode == kCopy (6) is not geometry at
+    // all, it is a RESOLVE -- the primitive selects the region of the EDRAM
+    // surface to copy out to main memory (Xenia: VulkanCommandProcessor::
+    // IssueDraw dispatches straight to IssueCopy on that mode). Rendering one
+    // as if it were geometry paints the resolve rectangle's shader output into
+    // the colour target. Counted here before anything acts on it.
+    //   0 kNoOperation  4 kColorDepth  5 kDepthOnly  6 kCopy
+    std::map<uint32_t, uint32_t> edramModes;
+    // Every resolve of the frame, decoded per the Xenia contract: which colour
+    // surface it reads (RB_COPY_CONTROL.copy_src_select indexes RB_COLOR_INFO
+    // 0x2001/0x2003/0x2004/0x2005; >= 4 means depth) and where it writes
+    // (RB_COPY_DEST_BASE 0x2319). This is the missing edge between "the draws
+    // that wrote a surface" and "the later draws that sample it".
+    struct ResolveEvent
+    {
+        uint32_t drawIndex = 0;   // position in the frame's draw list
+        uint32_t srcSelect = 0;   // RB_COPY_CONTROL.copy_src_select
+        bool srcIsDepth = false;
+        uint32_t srcBase = 0;     // EDRAM tile base of the source surface
+        uint32_t srcFormat = 0;   // its ColorRenderTargetFormat (colour only)
+        uint32_t destBase = 0;    // RB_COPY_DEST_BASE, main memory
+    };
+    std::vector<ResolveEvent> resolves;
+    std::set<uint32_t> depthBases;              // distinct RB_DEPTH_INFO.depth_base
+    uint32_t issuedResolves = 0, skippedResolves = 0;
     std::map<uint64_t, uint64_t> skipReasons; // reason code -> count (for a summary)
     uint64_t texBindsStub = 0;   // texture bindings served by a stub image
     uint64_t texBindsRt = 0;     // texture bindings served by the rendered RT
@@ -2227,18 +2498,64 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // texture whose fetch-constant base address equals one of those resolve
     // destinations is sampling this frame's render target, and that is the link
     // between "the draws that wrote the scene" and "the passes that read it".
-    std::set<uint32_t> resolveDests;
+    // The scan is restricted to draws whose RB_MODECONTROL.edram_mode is kCopy,
+    // because those are the frame's actual resolves. RB_COPY_DEST_BASE is a
+    // sticky register: reading it on EVERY draw (which is what this did before)
+    // reports every address any resolve ever set, long after that resolve, so
+    // the destination set was both too large and unattributed to a source.
+    // Pass one: which (base, format) surfaces the frame actually RENDERS into.
+    // A resolve reprograms RB_COLOR_INFO to describe the source in whatever
+    // format the copy reads it as -- measured on an Act 1 frame, EDRAM base
+    // 0x2d0 is rendered as k_8_8_8_8 but resolved variously as
+    // k_2_10_10_10_AS_10_10_10_10, k_2_10_10_10_FLOAT_AS_16_16_16_16, k_16_16
+    // and k_2_10_10_10_FLOAT. That resolve-time format is a REINTERPRETATION of
+    // the same EDRAM bytes, not a different surface, so a resolve's source is
+    // looked up by BASE against the surfaces the frame renders, not by the
+    // (base, format) pair its own registers happen to carry.
     for (const FrameDrawItem& d : in.draws)
     {
         if (d.registerFile.size() < 0x8000)
             continue;
-        const uint32_t base = d.registerFile[0x2319] & ~0xFFFu;
-        if (base)
-            resolveDests.insert(base);
+        const uint32_t* R = d.registerFile.data();
+        const uint32_t mode = R[0x2208] & 0x7;
+        if (mode != 4 /*kColorDepth*/ && mode != 5 /*kDepthOnly*/)
+            continue;
+        formatsPerBase[R[0x2001] & 0xFFF].insert((R[0x2001] >> 16) & 0xF);
     }
+
+    // Pass two: the frame's resolves, each given its destination's host image.
+    std::set<uint32_t> resolveDests;
+    uint32_t resolvesUnmatched = 0, resolvesDepth = 0;
+    for (const FrameDrawItem& d : in.draws)
+    {
+        if (d.registerFile.size() < 0x8000)
+            continue;
+        const uint32_t* R = d.registerFile.data();
+        if ((R[0x2208] & 0x7) != 6 /*kCopy*/)
+            continue;
+        const uint32_t srcSelect = R[0x2318] & 0x7;
+        if (srcSelect >= 4) // depth resolve; no host depth texture chain yet
+        { ++resolvesDepth; continue; }
+        const uint32_t destBase = R[0x2319] & ~0xFFFu;
+        if (!destBase)
+            continue;
+        static const uint32_t kColorInfo[4] = {0x2001, 0x2003, 0x2004, 0x2005};
+        const uint32_t info = R[kColorInfo[srcSelect & 3]];
+        const uint32_t srcBase = info & 0xFFF;
+        if (!formatsPerBase.count(srcBase))
+        { ++resolvesUnmatched; continue; }
+        ResolveTarget* rt = nullptr;
+        if (!getResolveTarget(destBase, srcBase, rt))
+            continue;
+        resolveDests.insert(destBase);
+    }
+    if (resolvesDepth || resolvesUnmatched)
+        lucent::info("draw", "frame resolves not served: {} from depth (no host depth"
+            " texture chain yet), {} from an EDRAM base this frame never rendered",
+            resolvesDepth, resolvesUnmatched);
     {
         lucent::Line rd;
-        rd.add("frame: {} distinct RB_COPY_DEST_BASE resolve destinations:",
+        rd.add("frame: {} resolve destinations (from kCopy draws):",
                resolveDests.size());
         for (uint32_t b : resolveDests)
             rd.add(" {:#x}", b);
@@ -2250,12 +2567,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // constant points at a resolve destination of THIS frame is served by the
     // rendered colour target instead (rtView, null until the segmented pass
     // below has something to give it).
-    const bool rtLinkEnabled = std::getenv("GEARS_DRAW_RT") != nullptr;
+    // GEARS_DRAW_NORT=1 is the control arm that restores the old behaviour of
+    // decoding a resolve destination out of stale guest memory, for an A/B.
+    const bool rtLinkEnabled = std::getenv("GEARS_DRAW_NORT") == nullptr;
     const bool listDraws = lucent::config::flag("DRAW_FRAME_LIST");
-    const VkImageView rtSampleView = rtLinkEnabled ? rtSampleViewStorage : VK_NULL_HANDLE;
     std::map<uint32_t, uint64_t> texBaseCount;    // fetch base address -> bindings
     std::map<uint32_t, uint64_t> texBaseRtCount;  // ... restricted to resolve destinations
-    bool drawSamplesRt = false;                   // set per draw by selectTexView
     auto selectTexView = [&](const uint32_t* R, const draw::ShaderTextureBinding& tb)
         -> VkImageView {
         const uint32_t fc = tb.fetchConstant & 31;
@@ -2265,11 +2582,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ++texBaseCount[base];
         if (isRt)
             ++texBaseRtCount[base];
-        if (isRt && rtLinkEnabled && rtSampleView != VK_NULL_HANDLE && tb.dimension <= 1)
+        // A binding that names a resolve destination of THIS frame reads that
+        // destination's own host image -- the surface it was resolved from, in
+        // that surface's format. Each destination has its own image, so two
+        // passes sampling two different resolves no longer collide.
+        if (isRt && rtLinkEnabled && tb.dimension <= 1)
         {
-            ++texBindsRt;
-            drawSamplesRt = true;
-            return rtSampleView;
+            auto rt = P.resolveTargets.find(base);
+            if (rt != P.resolveTargets.end())
+            {
+                ++texBindsRt;
+                return rt->second.view;
+            }
         }
         // The guest's own texture, decoded from this fetch constant. The stub
         // below is only reached when the decode reports a reason it cannot.
@@ -2295,9 +2619,70 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
     for (const FrameDrawItem& d : in.draws)
     {
-        if (d.registerFile.size() < 0x8000 || !d.vsUcode || !d.psUcode)
+        if (d.registerFile.size() < 0x8000)
         { ++skipped; ++skipReasons[1]; continue; }
         const uint32_t* R = d.registerFile.data();
+
+        // Which EDRAM surface this draw targets (RB_COLOR_INFO: color_base is
+        // the low 12 bits in tiles, color_format bits 16..19), and what the
+        // draw is for (RB_MODECONTROL.edram_mode). Both are read before any
+        // early exit so the census covers every draw, resolves included.
+        const uint32_t surfaceBase = R[0x2001] & 0xFFF;
+        const uint32_t edramMode = R[0x2208] & 0x7;
+        {
+            SurfaceStat& st = surfaces[surfaceBase];
+            ++st.draws;
+            st.format = (R[0x2001] >> 16) & 0xF;
+            st.mode = edramMode;
+        }
+        ++edramModes[edramMode];
+        if (edramMode == 6 /*kCopy*/)
+        {
+            ResolveEvent re;
+            re.drawIndex = uint32_t(&d - in.draws.data());
+            re.srcSelect = R[0x2318] & 0x7;
+            re.srcIsDepth = re.srcSelect >= 4; // kMaxColorRenderTargets
+            static const uint32_t kColorInfo[4] = {0x2001, 0x2003, 0x2004, 0x2005};
+            const uint32_t info = re.srcIsDepth ? R[0x2002]
+                                                : R[kColorInfo[re.srcSelect & 3]];
+            re.srcBase = info & 0xFFF;
+            re.srcFormat = (info >> 16) & 0xF;
+            re.destBase = R[0x2319] & ~0xFFFu;
+            resolves.push_back(re);
+        }
+        // How many distinct depth surfaces the frame uses. One host depth image
+        // is shared by every colour target; this is the number that says when
+        // that stops being faithful.
+        depthBases.insert(R[0x2002] & 0xFFF);
+
+        // A resolve is not geometry. It copies an EDRAM surface out to main
+        // memory, and the primitive only selects the region; issuing it as a
+        // draw paints the resolve rectangle's shader output over the surface.
+        // Handled before anything else because it needs no shaders at all.
+        if ((R[0x2208] & 0x7) == 6 /*kCopy*/)
+        {
+            const uint32_t srcSelect = R[0x2318] & 0x7;
+            const uint32_t destBase = R[0x2319] & ~0xFFFu;
+            static const uint32_t kColorInfo[4] = {0x2001, 0x2003, 0x2004, 0x2005};
+            const uint32_t srcBase = srcSelect < 4
+                ? (R[kColorInfo[srcSelect & 3]] & 0xFFF) : 0xFFFFFFFFu;
+            if (formatsPerBase.count(srcBase) && P.resolveTargets.count(destBase))
+            {
+                PreparedDraw pd{};
+                pd.isResolve = true;
+                pd.surfaceBase = srcBase;
+                pd.resolveDest = destBase;
+                prepared.push_back(pd);
+                ++issuedResolves;
+            }
+            else
+            {
+                ++skippedResolves;
+            }
+            continue;
+        }
+        if (!d.vsUcode || !d.psUcode)
+        { ++skipped; ++skipReasons[1]; continue; }
 
         draw::ShaderXlate *vsX = nullptr, *psX = nullptr;
         VkShaderModule vsMod = VK_NULL_HANDLE, psMod = VK_NULL_HANDLE;
@@ -2316,22 +2701,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkPipelineLayout pipeLayout = 0;
         if (!getPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
         { ++skipped; ++skipReasons[3]; continue; }
-        // Which EDRAM surface this draw targets (RB_COLOR_INFO: color_base is
-        // the low 12 bits in tiles, color_format bits 16..19).
-        const uint32_t colorBase = R[0x2001] & 0xFFF;
-        {
-            SurfaceStat& st = surfaces[colorBase];
-            ++st.draws;
-            st.format = (R[0x2001] >> 16) & 0xF;
-            st.mode = R[0x2208] & 0x7; // RB_MODECONTROL.edram_mode
-        }
         // GEARS_DRAW_ONLY_BASE=<hex>: render only draws targeting one EDRAM
-        // surface. A DIAGNOSTIC control arm for the render-target cache -- it
-        // proves which surface holds the world before any cache is built -- not
-        // a fix; the real backend must route every surface to its own target.
+        // surface. A DIAGNOSTIC control arm -- it isolates one surface's
+        // contribution -- never a fix.
         static const long onlyBase = lucent::config::number("DRAW_ONLY_BASE", -1);
-        if (onlyBase >= 0 && colorBase != uint32_t(onlyBase))
+        if (onlyBase >= 0 && surfaceBase != uint32_t(onlyBase))
         { ++skipped; ++skipReasons[0]; continue; }
+        // This draw's own host render target, and the render pass its pipeline
+        // must be built against.
+        SurfaceTarget* target = nullptr;
+        if (!getSurfaceTarget(surfaceBase, target))
+        { ++skipped; ++skipReasons[8]; continue; }
+        std::pair<VkRenderPass, VkRenderPass>* rp = nullptr;
+        if (!getPasses(target->hostFormat, rp))
+        { ++skipped; ++skipReasons[8]; continue; }
         OutputMergerState om;
         om.colorMask = R[0x2104];
         om.blend0 = R[0x2201];
@@ -2346,7 +2729,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 ++rectDrawsExpanded;
         }
         VkPipeline pipe = VK_NULL_HANDLE;
-        if (!getPipeline(vsMod, psMod, gsMod, d.primType, om, pipeLayout, pipe))
+        if (!getPipeline(vsMod, psMod, gsMod, d.primType, om, rp->first, pipeLayout, pipe))
         { ++skipped; ++skipReasons[3]; continue; }
 
         // Per-draw constant UBOs from this draw's own register snapshot.
@@ -2530,7 +2913,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 w.push_back(ws);
             }
         };
-        drawSamplesRt = false;
         writeTextures(*vsX, sets[2]);
         writeTextures(*psX, sets[3]);
         if (!w.empty())
@@ -2544,7 +2926,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pd.ibufOffset = ibufOffset;
         pd.count = drawCount;
         pd.indexed = drawIndexed;
-        pd.samplesRt = drawSamplesRt;
+        pd.surfaceBase = surfaceBase;
         // Viewport/scissor from this draw's own registers, clamped to the host
         // target. A zero extent is a legitimately empty viewport on Xenos.
         {
@@ -2713,13 +3095,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     VK_CHECK(vkBeginCommandBuffer(cmd, &cbi));
 
     // Every stub image -> white -> shader-read, one per declared dimension.
-    // rtSample joins them but is cleared BLACK, not white: before the first
-    // segment boundary nothing has been rendered into it, and black says that
-    // honestly. It is overwritten with real colour at each boundary.
-    for (const auto& [img, layers, isRt] :
-         std::initializer_list<std::tuple<VkImage, uint32_t, bool>>{
-             {stub2D.image, 1u, false}, {stub3D.image, 1u, false},
-             {stubCube.image, 6u, false}, {rtSample, 1u, true}})
+    // Every resolve destination joins them but is cleared BLACK, not white:
+    // until the frame's first resolve into it nothing has been rendered there,
+    // and black says that honestly rather than washing the sampling pass white.
+    std::vector<std::tuple<VkImage, uint32_t, bool>> initialClears{
+        {stub2D.image, 1u, false}, {stub3D.image, 1u, false},
+        {stubCube.image, 6u, false}};
+    for (const auto& [destBase, rt] : P.resolveTargets)
+        initialClears.emplace_back(rt.image, 1u, true);
+    for (const auto& [img, layers, isRt] : initialClears)
     {
         VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
         VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -2790,12 +3174,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         const char* dc = std::getenv("GEARS_DRAW_DEPTH_CLEAR");
         clears[1].depthStencil = {dc ? float(std::atof(dc)) : 1.0f, 0};
     }
-    VkRenderPassBeginInfo rpb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-    rpb.renderPass = renderPass;
-    rpb.framebuffer = fb;
-    rpb.renderArea = {{0, 0}, {W, H}};
-    rpb.clearValueCount = 2;
-    rpb.pClearValues = clears;
     // Checkpoint dumps (GEARS_DRAW_FRAME_STEP=N): after every N draws the colour
     // target is copied to its own readback buffer and written out, so the frame
     // can be attributed to individual draws instead of guessed at.
@@ -2803,10 +3181,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     std::vector<std::pair<uint32_t, VkBuffer>> checkpoints; // draws-so-far -> buffer
     std::vector<VkDeviceMemory> checkpointMem;
 
-    // The colour target leaves a render pass in TRANSFER_SRC_OPTIMAL, so a
-    // segment boundary is: end pass -> copy colour where it is needed ->
-    // begin the LOAD pass again.
-    auto copyColorToImage = [&](VkImage dst) {
+    // A surface's colour image leaves a render pass in TRANSFER_SRC_OPTIMAL, so
+    // a resolve is: end the pass -> blit the source surface into the
+    // destination's own host image -> begin the next pass with LOAD.
+    //
+    // The blit covers the WHOLE surface rather than the resolve rectangle. That
+    // is consistent with how tiles are handled here: the console resolves once
+    // per predicated tile, but our surface target already holds every tile
+    // accumulated into one full-size image, so each tile's resolve carries the
+    // whole (correct) surface and the last one leaves the destination right.
+    // It follows the tile model rather than approximating around it.
+    auto resolveSurfaceTo = [&](VkImage src, ResolveTarget& dst) {
         VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -2814,30 +3199,39 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image = dst; b.subresourceRange = range;
+        b.image = dst.image; b.subresourceRange = range;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-        VkImageCopy c{};
-        c.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        c.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        c.extent = {W, H, 1};
-        vkCmdCopyImage(cmd, color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &c);
+        // Blit, not copy: source surfaces differ in format from the wide float
+        // destination (see getResolveTarget), and only a blit converts.
+        VkImageBlit bl{};
+        bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        bl.srcOffsets[1] = {int32_t(W), int32_t(H), 1};
+        bl.dstOffsets[1] = {int32_t(W), int32_t(H), 1};
+        vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl,
+            VK_FILTER_NEAREST);
         VkImageMemoryBarrier r{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         r.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         r.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         r.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         r.srcQueueFamilyIndex = r.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        r.image = dst; r.subresourceRange = range;
+        r.image = dst.image; r.subresourceRange = range;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &r);
+        ++dst.copies;
     };
     // Each checkpoint costs a full-frame readback buffer, so STEP=1 on a
     // 170-draw frame is capped rather than allocating 170 of them.
     const size_t kMaxCheckpoints = 48;
-    auto checkpointHere = [&](uint32_t drawsSoFar) {
-        if (checkpoints.size() >= kMaxCheckpoints)
+    // A checkpoint dumps the surface that was being rendered into at that
+    // point, and only when that surface is 8888 -- the readback path is 8-bit
+    // RGBA, and an HDR surface's bytes are not pixels.
+    auto checkpointHere = [&](uint32_t drawsSoFar, const SurfaceTarget* t) {
+        if (checkpoints.size() >= kMaxCheckpoints || !t ||
+            t->hostFormat != VK_FORMAT_R8G8B8A8_UNORM || !t->begunThisFrame)
             return;
         VkBuffer b = 0; VkDeviceMemory m = 0;
         if (!MakeBuffer(rbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m))
@@ -2845,7 +3239,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkBufferImageCopy rg{};
         rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         rg.imageExtent = {W, H, 1};
-        vkCmdCopyImageToBuffer(cmd, color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b, 1, &rg);
+        vkCmdCopyImageToBuffer(cmd, t->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            b, 1, &rg);
         checkpoints.emplace_back(drawsSoFar, b);
         checkpointMem.push_back(m);
     };
@@ -2880,39 +3275,89 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             vkCmdResetQueryPool(cmd, statPool, 0, uint32_t(prepared.size()));
     }
 
-    uint32_t segments = 1, rtSnapshots = 0;
-    vkCmdBeginRenderPass(cmd, &rpb, VK_SUBPASS_CONTENTS_INLINE);
-    VkRenderPassBeginInfo rpbLoad = rpb;
-    rpbLoad.renderPass = renderPassLoad;
-    rpbLoad.clearValueCount = 0;
-    rpbLoad.pClearValues = nullptr;
+    // Every surface starts the frame un-begun, so the first draw into each one
+    // CLEARS it and every draw after LOADS -- which is how the console's
+    // predicated tiles accumulate into one host image per surface.
+    for (auto& [k, s] : P.surfaceTargets)
+    { s.begunThisFrame = false; s.drawsThisFrame = 0; }
+    for (auto& [k, r] : P.resolveTargets)
+        r.copies = 0;
+
     // GEARS_DRAW_ONLY=<index>: emit only that one draw, over the clear colour.
     // A DIAGNOSTIC control arm: it shows what a single draw's shader produces
     // without anything before it having painted the target, which is the only
     // way to tell "this draw contributes nothing" from "something later
     // overwrote it".
     const long onlyDraw = lucent::config::number("DRAW_ONLY", -1);
-    uint32_t drawn = 0, drawnSinceSnapshot = 0;
+    uint32_t drawn = 0, segments = 0, surfaceSwitches = 0, resolvesDone = 0;
+    // The surface a render pass is currently open on, if any.
+    bool inPass = false;
+    uint32_t openSurface = 0;
+    SurfaceTarget* openTarget = nullptr;
+
+    auto endPass = [&]() {
+        if (!inPass)
+            return;
+        vkCmdEndRenderPass(cmd);
+        inPass = false;
+        openTarget = nullptr;
+    };
+    // Opens a pass on `key`'s target, clearing it if this frame has not touched
+    // it yet and loading it otherwise.
+    auto beginPassOn = [&](uint32_t base) -> bool {
+        SurfaceTarget* t = nullptr;
+        if (!getSurfaceTarget(base, t))
+            return false;
+        std::pair<VkRenderPass, VkRenderPass>* rp = nullptr;
+        if (!getPasses(t->hostFormat, rp))
+            return false;
+        VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+        bi.renderPass = t->begunThisFrame ? rp->second : rp->first;
+        bi.framebuffer = t->fb;
+        bi.renderArea = {{0, 0}, {W, H}};
+        bi.clearValueCount = t->begunThisFrame ? 0u : 2u;
+        bi.pClearValues = t->begunThisFrame ? nullptr : clears;
+        vkCmdBeginRenderPass(cmd, &bi, VK_SUBPASS_CONTENTS_INLINE);
+        t->begunThisFrame = true;
+        inPass = true;
+        openSurface = base;
+        openTarget = t;
+        ++segments;
+        return true;
+    };
+
     for (const PreparedDraw& pd : prepared)
     {
+        if (pd.isResolve)
+        {
+            // The source surface must be outside a render pass to be blitted,
+            // and it is left in TRANSFER_SRC_OPTIMAL by whichever pass wrote it.
+            auto src = P.surfaceTargets.find(pd.surfaceBase);
+            auto dst = P.resolveTargets.find(pd.resolveDest);
+            if (src == P.surfaceTargets.end() || dst == P.resolveTargets.end() ||
+                !src->second.begunThisFrame)
+                continue; // nothing has been rendered into it yet this frame
+            endPass();
+            resolveSurfaceTo(src->second.color, dst->second);
+            ++resolvesDone;
+            continue;
+        }
         if (onlyDraw >= 0 && long(drawn) != onlyDraw)
         { ++drawn; continue; }
-        const bool needRtSnapshot = pd.samplesRt && drawnSinceSnapshot > 0;
         const bool needCheckpoint = stepEvery > 0 && drawn > 0 &&
                                     (drawn % uint32_t(stepEvery)) == 0;
-        if (needRtSnapshot || needCheckpoint)
+        if (needCheckpoint)
         {
-            vkCmdEndRenderPass(cmd);
-            if (needCheckpoint)
-                checkpointHere(drawn);
-            if (needRtSnapshot)
-            {
-                copyColorToImage(rtSample);
-                drawnSinceSnapshot = 0;
-                ++rtSnapshots;
-            }
-            vkCmdBeginRenderPass(cmd, &rpbLoad, VK_SUBPASS_CONTENTS_INLINE);
-            ++segments;
+            endPass();
+            checkpointHere(drawn, openTarget);
+        }
+        // Open a pass if there is none, or re-open on a different surface.
+        if (!inPass || openSurface != pd.surfaceBase)
+        {
+            if (inPass)
+            { endPass(); ++surfaceSwitches; }
+            if (!beginPassOn(pd.surfaceBase))
+                continue;
         }
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pd.pipeline);
         vkCmdSetViewport(cmd, 0, 1, &pd.viewport);
@@ -2932,15 +3377,75 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
         if (statPool != VK_NULL_HANDLE)
             vkCmdEndQuery(cmd, statPool, drawn);
+        if (openTarget)
+            ++openTarget->drawsThisFrame;
         ++drawn;
-        ++drawnSinceSnapshot;
     }
-    vkCmdEndRenderPass(cmd);
-    VkBufferImageCopy region{};
-    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-    region.imageExtent = {W, H, 1};
-    vkCmdCopyImageToBuffer(cmd, color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-        readback, 1, &region);
+    endPass();
+
+    // --- which surface is presented ---------------------------------------
+    // The frame's final composite is whatever surface the LAST geometry draw
+    // wrote: on this title's UE3 pipeline that is the 8888 tonemap/UI buffer at
+    // EDRAM 0x2d0, reached by rule rather than by naming the address.
+    uint32_t presentBase = 0;
+    bool havePresent = false;
+    for (auto it = prepared.rbegin(); it != prepared.rend(); ++it)
+    {
+        if (it->isResolve)
+            continue;
+        presentBase = it->surfaceBase;
+        havePresent = true;
+        break;
+    }
+    SurfaceTarget* presentTarget = nullptr;
+    if (havePresent)
+    {
+        auto it = P.surfaceTargets.find(presentBase);
+        if (it != P.surfaceTargets.end() && it->second.begunThisFrame)
+            presentTarget = &it->second;
+    }
+    if (presentTarget)
+    {
+        // Readback is 8-bit RGBA. A presented surface in any other host format
+        // (an HDR one, if a frame ever ends on it) goes through a blit into an
+        // 8888 staging image rather than being reinterpreted, which would read
+        // the float bits as bytes.
+        VkImage source = presentTarget->color;
+        if (presentTarget->hostFormat != VK_FORMAT_R8G8B8A8_UNORM &&
+            presentStage != VK_NULL_HANDLE)
+        {
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            b.srcAccessMask = 0; b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = presentStage; b.subresourceRange = range;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+            VkImageBlit bl{};
+            bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            bl.srcOffsets[1] = {int32_t(W), int32_t(H), 1};
+            bl.dstOffsets[1] = {int32_t(W), int32_t(H), 1};
+            vkCmdBlitImage(cmd, presentTarget->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                presentStage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl,
+                VK_FILTER_NEAREST);
+            VkImageMemoryBarrier r = b;
+            r.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            r.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            r.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &r);
+            source = presentStage;
+        }
+        VkBufferImageCopy region{};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.imageExtent = {W, H, 1};
+        vkCmdCopyImageToBuffer(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            readback, 1, &region);
+    }
     VK_CHECK(vkEndCommandBuffer(cmd));
 
     P.arenaHighWater = std::max(P.arenaHighWater, arenaCursor);
@@ -3038,6 +3543,52 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 sl.add(" {}@{:#x}:f{}", st.draws, base, st.format);
             sl.flush(lucent::Level::Info, "draw");
         }
+        {
+            lucent::Line ml;
+            ml.add("frame EDRAM modes (RB_MODECONTROL.edram_mode):");
+            for (const auto& [mode, n] : edramModes)
+            {
+                const char* name =
+                    mode == 0 ? "no_op" : mode == 4 ? "color_depth" :
+                    mode == 5 ? "depth_only" : mode == 6 ? "COPY(resolve)" : "?";
+                ml.add(" {}={}", name, n);
+            }
+            ml.flush(lucent::Level::Info, "draw");
+        }
+        {
+            lucent::Line rl;
+            rl.add("render-target cache: {} host surfaces (surface:format ->"
+                   " host format, draws this frame):", P.surfaceTargets.size());
+            for (const auto& [base, t] : P.surfaceTargets)
+                rl.add(" {:#x}->vk{}x{}", base, uint32_t(t.hostFormat),
+                       t.drawsThisFrame);
+            rl.flush(lucent::Level::Info, "draw");
+            lucent::Line dl;
+            dl.add("render-target cache: {} resolve destinations (dest<-copies):",
+                   P.resolveTargets.size());
+            for (const auto& [base, r] : P.resolveTargets)
+                dl.add(" {:#x}<-{}", base, r.copies);
+            dl.flush(lucent::Level::Info, "draw");
+            lucent::info("draw", "render-target cache: presented surface {:#x};"
+                " resolves issued {}, skipped {}; {} distinct"
+                " RB_DEPTH_INFO depth bases (one shared host depth image)",
+                presentBase, issuedResolves, skippedResolves, depthBases.size());
+        }
+        {
+            // One line per distinct (source surface -> destination) pair; a
+            // frame resolves the same surface once per predicated tile, so the
+            // raw event list is long and the pairing is what matters.
+            std::map<std::string, uint32_t> pairs;
+            for (const ResolveEvent& re : resolves)
+                ++pairs[re.srcIsDepth
+                    ? std::format("depth@{:#x} -> {:#x}", re.srcBase, re.destBase)
+                    : std::format("color{}@{:#x}:f{} -> {:#x}", re.srcSelect,
+                                  re.srcBase, re.srcFormat, re.destBase)];
+            lucent::info("draw", "frame resolves: {} copy draws, {} distinct"
+                " source->destination pairs", resolves.size(), pairs.size());
+            for (const auto& [what, n] : pairs)
+                lucent::info("draw", "  resolve {} x{}", what, n);
+        }
         lucent::info("draw", "frame geometry reach: {} draws fetch vertices inside the"
             " {:#x}-byte SSBO mirror, {} draws fetch PAST it (those read zero and"
             " collapse); highest vertex-buffer end seen {:#x}",
@@ -3074,7 +3625,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     code == 4 ? "UBO alloc failed" :
                     code == 5 ? "index buffer failed" :
                     code == 6 ? "descriptor alloc failed" :
-                    code == 7 ? "quad list with fewer than 4 vertices" : "unknown";
+                    code == 7 ? "quad list with fewer than 4 vertices" :
+                    code == 8 ? "no host target for the draw's EDRAM surface format"
+                              : "unknown";
                 lucent::warn("draw", "  skipped {}x: {}", n, why);
             }
         }
@@ -3086,8 +3639,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 tb.add(" {:#x}x{}{}", base, n, texBaseRtCount.count(base) ? "(RT)" : "");
             tb.flush(lucent::Level::Info, "draw");
         }
-        lucent::info("draw", "frame render pass: {} segments, {} RT snapshots"
-            " (RT link {})", segments, rtSnapshots, rtLinkEnabled ? "on" : "off");
+        lucent::info("draw", "frame render pass: {} segments across {} surface"
+            " switches, {} resolves executed (RT link {})", segments,
+            surfaceSwitches, resolvesDone, rtLinkEnabled ? "on" : "off");
 
         const char* dir = std::getenv("GEARS_DRAW_DIR");
         const std::filesystem::path reportDir =
