@@ -98,11 +98,23 @@ suppressed; adding an implementation means adding its name there.
 
 ## Current state
 
-Boots, loads its own packages, plays the startup movies, and reaches scene
-rendering at **~30 fps sustained**. The normal path still draws nothing (the
-command processor executes the stream but performs no draws); the one-shot
-whole-frame guest-draw backend (`GEARS_DRAW_FRAME=1`) now renders a captured
-frame into a **recognisable game image** — see the guest-draw backend row.
+Boots, loads its own packages, plays the startup movies, walks its own menus
+into **Act 1 gameplay**, and reaches scene rendering at **~30 fps sustained**.
+The normal path still draws nothing (the command processor executes the stream
+but performs no draws); the whole-frame guest-draw backend
+(`GEARS_DRAW_FRAME=1`) renders a captured frame into a **recognisable game
+image** — see the guest-draw backend row.
+
+A **render-target cache** now gives each EDRAM colour surface its own host
+target (keyed by `RB_COLOR_INFO.color_base`), routes every draw to its surface,
+executes `edram_mode == kCopy` draws as **resolves** rather than geometry, and
+gives each resolve destination a host image that later sampling draws read.
+Measured on an Act 1 gameplay frame: **0/921600 px non-black → 920985/921600**,
+and the real in-game HUD ("MOVE: To follow Dominic, use …") composites
+correctly. The **world is still missing** — the HUD sits over a flat grey field
+because the tonemap pass does not yet bring surface `0x400` (the 7e3 HDR scene)
+through. Reproduce with `tools/capture_gameplay_frame.sh`, which holds the
+scripted controller walk from the title screen into Act 1.
 
 The heap leak that capped the run at roughly 160 seconds of gameplay (frame
 ~4800) is FIXED -- see issue #17. `GuestHeap` now recycles freed address space
