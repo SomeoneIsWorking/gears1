@@ -270,3 +270,45 @@ estimated from nine runs.
 STILL UNKNOWN: what sub_828D9FD8 is and what makes it choose the fatal path. It
 is reached from somewhere in ppc_recomp.133, near the code that formats. That is
 the next thing to read.
+
+### Note (2026-07-29)
+THE WHOLE CHAIN IS NOW MAPPED, AND IT LOOKS LIKE AN EXIT PATH, NOT A CRASH PATH.
+
+Read statically, so none of this depended on catching the intermittent panic:
+
+  sub_828D0790          runs a registered handler through a pointer if one is
+                        set, then sub_828DA0A8(25), then sub_828DA088(0,1),
+                        then falls into ->
+  sub_828D9FD8          if a global flag bit is set, memsets a 2624-byte buffer
+                        at r1+176, builds a descriptor at r1+96 and calls two
+                        formatting routines; then UNCONDITIONALLY does
+                        `li r3,3; bl sub_828D3118` ->
+  the fatal handler     does its work and panics because a field in its own
+                        frame is zero.
+
+The important structural fact: the fatal exit at loc_828DA080 is reached
+whether or not the message is formatted. sub_828D9FD8 has no path that returns.
+It is not deciding anything -- it is the death itself, with an optional report.
+
+WHERE THE DECISION IS: above sub_828D0790, which has NO direct callers anywhere
+in the image and is reached only through the function-mapping table. It is now
+traced the same way the handler is.
+
+A HYPOTHESIS WORTH TESTING BEFORE ASSUMING A GUEST BUG: this shape -- run a
+registered handler, report, terminate -- is what a C runtime's exit path looks
+like, not what a crash looks like. If the title is deliberately ENDING (quitting
+to dashboard, failing an init check and shutting down cleanly), then the
+KeBugCheck is not the title crashing but the title's shutdown running into
+state the runtime never set up: the handler panics because a field is zero, and
+a field being zero is exactly what an unimplemented setup path leaves behind.
+That would make this OUR defect rather than the guest misbehaving, and it would
+explain why the failure is intermittent and leaves no trace before it.
+
+Stated as a hypothesis. What settles it is the link register on
+sub_828D0790, which names the decision-maker; the trace for that is now in
+place and unexercised.
+
+RATE: four more clean runs after adding the trace, on top of five before. The
+"one in three" figure earlier in this entry came from nine runs classified by a
+proxy that turned out to be wrong, and the honest current estimate is closer to
+one in eight. Do not size an investigation off it.
