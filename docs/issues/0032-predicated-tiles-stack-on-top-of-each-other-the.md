@@ -51,3 +51,47 @@ buffer -- the survivors differ only in which index subset they draw. A large
 clipped fraction is EXPECTED. It should not be chased as a defect until the tile
 assembly is correct, because the tile model changes what "should have been
 visible" even means.
+
+### Note (2026-07-28)
+THE DESTINATION SIDE IS NOW EXACT, measured with a new resolve census (every
+resolve's rectangle from vf0, its window offset, and its RB_COPY_DEST_PITCH /
+RB_COPY_DEST_INFO shape) over the captured Act 1 frame:
+
+    draw 407: color@0x400 -> 0xbde0000  rect y -0.5..511.5  window (0,0)
+              destination pitch 1280 height 720 format 32
+    draw 604: color@0x400 -> 0xc2e0000  rect y 511.5..719.5 window (0,-512)
+              destination pitch 1280 height 208 format 32
+
+ColorFormat 32 is k_16_16_16_16_FLOAT: 8 bytes per pixel. So
+
+    1280 * 512 * 8 = 5242880 = 0x500000 = 0xc2e0000 - 0xbde0000
+
+exactly. The two tiles are not two textures. They are ONE 1280x720 half-float
+HDR texture based at 0xbde0000 -- tile 1 declares the destination height as 720,
+the FULL frame, while writing only its first 512 rows -- and the guest folds
+tile 2's row offset directly into RB_COPY_DEST_BASE, which is why the second
+base is exactly 512 rows further in.
+
+That is the whole defect, and it is now two precise statements rather than one
+vague one:
+
+  1. Resolve targets are keyed by RB_COPY_DEST_BASE, so this one texture becomes
+     two unrelated host images. Any later pass whose fetch constant names
+     0xbde0000 -- the texture base -- samples an image holding only rows 0..511.
+     The bottom 208 rows of the scene are in the OTHER image, unreachable.
+  2. The resolve blit ignores the rectangle and the destination offset: it copies
+     the whole source surface to the start of the destination. Even with one
+     image, tile 2 would land at row 0.
+
+THE FIX, scoped: a resolve destination is a REGION OF A TEXTURE, not a texture.
+Key resolve targets by the containing texture (base, pitch, height, format --
+all four are in the registers above, no guessing needed), and blit the source
+rectangle to its offset within it, deriving that offset from
+(RB_COPY_DEST_BASE - texture base) / (pitch * bytes-per-pixel). A resolve whose
+base falls inside an existing target's extent belongs to that target.
+
+Note this also explains why the EDRAM surface stacking is NOT itself wrong: both
+tiles correctly share one EDRAM host image (same base 0x400), and tile 1 is
+resolved OUT (draw 407) before tile 2's draws begin (draw 604+). Our renderer
+already executes the resolves in submission order. Only the destination side is
+wrong.
