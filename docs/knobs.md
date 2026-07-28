@@ -18,6 +18,12 @@ Two rules that are not negotiable:
 Add a knob here in the same commit that adds it to the code; delete it here in
 the same commit that removes it.
 
+## Build
+
+| Knob | Meaning |
+|---|---|
+| `-DGEARS_PPC_OPT=-O0` | Optimisation level for the 49k translated guest functions (CMake cache, default `-O2`). `-O0` builds in about the same time and makes the title's own code ~2.5x slower; it exists for bisecting a miscompile, not for speed |
+
 ## Selecting what runs
 
 | Knob | Meaning |
