@@ -32,6 +32,10 @@ struct ScriptStep
 {
     uint64_t atMs = 0;
     uint16_t buttons = 0;
+    // Analogue stick deflections. Buttons alone cannot drive this title: Gears
+    // moves and aims on the STICKS, so a script limited to buttons can walk the
+    // menus but can never test whether the game responds to a player at all.
+    int16_t thumbLX = 0, thumbLY = 0, thumbRX = 0, thumbRY = 0;
 };
 std::vector<ScriptStep> g_script;
 size_t g_scriptCursor = 0;
@@ -46,6 +50,26 @@ void Publish(const PadState& next)
     // The console's contract: the packet number changes only when the state
     // does, so a title that compares packet numbers sees real edges.
     ++g_packet;
+}
+
+// A stick deflection named in a script step, e.g. "LY+" or "RX-". Returns false
+// if the name is not a stick, so the caller can try it as a button.
+bool StickByName(std::string_view name, ScriptStep& into)
+{
+    if (name.size() < 3)
+        return false;
+    const bool negative = name.back() == '-';
+    if (!negative && name.back() != '+')
+        return false;
+    const std::string_view axis = name.substr(0, name.size() - 1);
+    // Full deflection: a script is for reproducible tests, so it presses all the
+    // way rather than guessing at a partial value.
+    const int16_t v = negative ? int16_t(-32767) : int16_t(32767);
+    if (axis == "LX") { into.thumbLX = v; return true; }
+    if (axis == "LY") { into.thumbLY = v; return true; }
+    if (axis == "RX") { into.thumbRX = v; return true; }
+    if (axis == "RY") { into.thumbRY = v; return true; }
+    return false;
 }
 
 uint16_t ButtonByName(std::string_view name)
@@ -70,6 +94,13 @@ uint16_t ButtonByName(std::string_view name)
 
 // "3000:START,3200:,5000:A" -- at 3000 ms hold START, at 3200 ms release
 // everything, at 5000 ms hold A. Times are milliseconds since start-up.
+//
+// A step may also name STICK deflections: LX/LY/RX/RY suffixed with '+' or '-',
+// e.g. "9000:LY+" walks forward. Y follows the console's convention, positive up.
+//
+// Names within a step are combined with '&', not '+': '+' is a stick SIGN, and
+// using it for both roles is ambiguous ("LY++A" could split either way). '&'
+// separates, so "9000:LY+&A" walks forward while holding A.
 void ParseScript(std::string_view text)
 {
     while (!text.empty())
@@ -96,11 +127,13 @@ void ParseScript(std::string_view text)
         std::string_view buttons = step.substr(colon + 1);
         while (!buttons.empty())
         {
-            const size_t plus = buttons.find('+');
-            entry.buttons |= ButtonByName(buttons.substr(0, plus));
-            if (plus == std::string_view::npos)
+            const size_t sep = buttons.find('&');
+            const std::string_view name = buttons.substr(0, sep);
+            if (!StickByName(name, entry))
+                entry.buttons |= ButtonByName(name);
+            if (sep == std::string_view::npos)
                 break;
-            buttons = buttons.substr(plus + 1);
+            buttons = buttons.substr(sep + 1);
         }
         g_script.push_back(entry);
     }
@@ -208,11 +241,11 @@ void UpdateScriptedInput()
     const uint64_t elapsed = uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - g_start).count());
 
-    uint16_t buttons = 0;
+    ScriptStep current;
     bool fired = false;
     while (g_scriptCursor < g_script.size() && g_script[g_scriptCursor].atMs <= elapsed)
     {
-        buttons = g_script[g_scriptCursor].buttons;
+        current = g_script[g_scriptCursor];
         ++g_scriptCursor;
         fired = true;
     }
@@ -221,9 +254,15 @@ void UpdateScriptedInput()
     guard.unlock();
 
     PadState next;
-    next.buttons = buttons;
+    next.buttons = current.buttons;
+    next.thumbLX = current.thumbLX;
+    next.thumbLY = current.thumbLY;
+    next.thumbRX = current.thumbRX;
+    next.thumbRY = current.thumbRY;
     Publish(next);
-    lucent::info("input", "scripted pad at {} ms: buttons {:#06x}", elapsed, buttons);
+    lucent::info("input", "scripted pad at {} ms: buttons {:#06x} stick L({},{})"
+        " R({},{})", elapsed, current.buttons, current.thumbLX, current.thumbLY,
+        current.thumbRX, current.thumbRY);
 }
 
 #ifdef GEARS_HAVE_PRESENTER
