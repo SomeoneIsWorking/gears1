@@ -3126,9 +3126,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // the mirror, as the vertex shader's own fetch describes them (stride
         // from the shader's vertex binding, big-endian floats). Says whether a
         // draw that rasterises but shades black is fed real vertex data.
+        //
+        // The index is the one the per-draw diagnostic table's `draw` column
+        // reports (position in the frame's submission order), NOT a count of
+        // draws issued so far -- those diverge wherever a draw is a resolve or
+        // is skipped, and reading an index off the table only to dump a
+        // different draw is a trap worth not having.
         {
             static const long vdump = lucent::config::number("DRAW_VDUMP", -1);
-            if (vdump >= 0 && long(issued) == vdump)
+            if (vdump >= 0 && long(pd.diagIndex) == vdump)
             {
                 for (const auto& vb : vsX->vertexBindings)
                 {
