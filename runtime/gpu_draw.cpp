@@ -2709,6 +2709,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // destination is an address with no shape, and two tiles of one texture
         // cannot be told from two unrelated textures.
         uint32_t destPitch = 0, destHeight = 0, destFormat = 0;
+        // RB_COPY_DEST_INFO's copy_dest_exp_bias: a SIGNED 6-bit exponent bias
+        // the resolve applies to the colour on its way out. We ignore it, and
+        // ignoring a negative bias makes everything 2^|bias| too bright -- which
+        // is the shape of the frame's overexposure, so it is measured first.
+        int32_t destExpBias = 0;
+        uint32_t destEndian = 0, destSwap = 0, destNumber = 0;
     };
     std::vector<ResolveEvent> resolves;
     std::set<uint32_t> depthBases;              // distinct RB_DEPTH_INFO.depth_base
@@ -2940,6 +2946,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             re.destPitch = R[0x231A] & 0x3FFF;
             re.destHeight = (R[0x231A] >> 16) & 0x3FFF;
             re.destFormat = (R[0x231B] >> 7) & 0x3F;
+            re.destNumber = (R[0x231B] >> 13) & 0x7;
+            {
+                const uint32_t raw = (R[0x231B] >> 16) & 0x3F;
+                re.destExpBias = int32_t(raw) - int32_t((raw & 0x20) << 1);
+            }
+            re.destEndian = R[0x231B] & 0x7;
+            re.destSwap = (R[0x231B] >> 24) & 1;
             resolves.push_back(re);
         }
         // How many distinct depth surfaces the frame uses. One host depth image
@@ -4238,8 +4251,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     re.haveRect ? "" : " (NO RECT: vf0 is not 3x2 floats)");
             for (const ResolveEvent& re : resolves)
                 lucent::info("draw", "  resolve draw {} destination: {:#x}"
-                    " pitch {} height {} format {}", re.drawIndex, re.destBase,
-                    re.destPitch, re.destHeight, re.destFormat);
+                    " pitch {} height {} format {} number {} exp_bias {}"
+                    " endian {} swap {}", re.drawIndex, re.destBase,
+                    re.destPitch, re.destHeight, re.destFormat, re.destNumber,
+                    re.destExpBias, re.destEndian, re.destSwap);
             lucent::Line cl;
             cl.add("frame clears programmed by resolves: {} of {} copy draws"
                    " carry a clear;", clears.size(), resolves.size());
