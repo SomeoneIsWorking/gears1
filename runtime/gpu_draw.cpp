@@ -555,6 +555,12 @@ struct ResolveTarget
     uint32_t bpp = 0;        // bytes per pixel of the guest destination format
     uint32_t width = 0, imageHeight = 0; // what the host image was created with
     bool everWritten = false; // whether a resolve has landed in it yet
+    // A DEPTH destination. It is not a copy of a colour surface: the guest reads
+    // it back as k_24_8_FLOAT and its shaders take .x, so the host image holds
+    // the depth as a float. R16G16B16A16_SFLOAT would be wrong here -- half
+    // float carries about 11 mantissa bits near 1.0 against the guest's 20, so
+    // depth would band where it matters most.
+    bool isDepth = false;
 };
 
 // Bytes per pixel of a resolve DESTINATION format (RB_COPY_DEST_INFO's
@@ -670,6 +676,13 @@ struct RendererPersistent
     VkPipeline resolvePipeline = VK_NULL_HANDLE;
     VkDescriptorPool resolveDescPool = VK_NULL_HANDLE;
     uint32_t resolveDescCapacity = 0;
+    // The DEPTH resolve: its own pipeline, because its source is a sampled
+    // image (a depth image cannot be a storage image) rather than a storage one.
+    VkShaderModule resolveDepthModule = VK_NULL_HANDLE;
+    VkDescriptorSetLayout resolveDepthSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout resolveDepthLayout = VK_NULL_HANDLE;
+    VkPipeline resolveDepthPipeline = VK_NULL_HANDLE;
+    VkImageView depthSampledView = VK_NULL_HANDLE;
 
     // Depth is shared by every surface for now; the frame's distinct
     // RB_DEPTH_INFO bases are counted per frame so the moment that stops being
@@ -762,6 +775,11 @@ void Renderer::ReleasePersistent()
         vkDestroyRenderPass(device, rp.first, nullptr);
         vkDestroyRenderPass(device, rp.second, nullptr);
     }
+    vkDestroyPipeline(device, P.resolveDepthPipeline, nullptr);
+    vkDestroyPipelineLayout(device, P.resolveDepthLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, P.resolveDepthSetLayout, nullptr);
+    vkDestroyShaderModule(device, P.resolveDepthModule, nullptr);
+    vkDestroyImageView(device, P.depthSampledView, nullptr);
     vkDestroyPipeline(device, P.resolvePipeline, nullptr);
     vkDestroyPipelineLayout(device, P.resolveLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, P.resolveSetLayout, nullptr);
@@ -1994,7 +2012,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ci.arrayLayers = 1;
         ci.samples = VK_SAMPLE_COUNT_1_BIT;
         ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-        ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+        // SAMPLED as well: the depth resolve reads this image in a compute
+        // pass, and a depth image cannot be a storage image.
+        ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                   VK_IMAGE_USAGE_SAMPLED_BIT;
         VK_CHECK(vkCreateImage(device, &ci, nullptr, &depth));
         VkMemoryRequirements req{};
         vkGetImageMemoryRequirements(device, depth, &req);
@@ -2012,6 +2033,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vi.format = depthFormat;
         vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(device, &vi, nullptr, &depthView));
+        // A second view of the same image for the depth resolve to SAMPLE
+        // through. Identical here, but kept separate so the attachment view and
+        // the shader-read view can never be confused.
+        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &P.depthSampledView));
 
         VkImageCreateInfo si{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         si.imageType = VK_IMAGE_TYPE_2D;
@@ -2210,6 +2235,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // would clamp every HDR highlight the tonemap pass exists to read.
     std::vector<VkDescriptorSet> resolveSets;
     uint32_t resolveSetsUsed = 0;
+    // The depth resolve's sets must be allocated with the DEPTH layout: its
+    // binding 0 is a SAMPLED image where the colour layout has a STORAGE one.
+    // Borrowing a colour set and binding it to the depth pipeline writes a
+    // descriptor of the wrong type into it -- which does not fail, it just
+    // reads nothing.
+    std::vector<VkDescriptorSet> resolveDepthSets;
+    uint32_t resolveDepthSetsUsed = 0;
     uint32_t resolvesUnstorable = 0;
     uint32_t resolvesOutOfSets = 0;
     uint32_t midFrameDepthClears = 0;
@@ -2258,6 +2290,57 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 }
             }
         }
+        // The DEPTH resolve pipeline: one sampled image in, one storage image
+        // out. A depth image cannot be a storage image, so its descriptor type
+        // differs from the colour resolve's and it needs its own layout.
+        if (P.resolveDepthPipeline == VK_NULL_HANDLE)
+        {
+            std::vector<uint32_t> dspirv;
+            if (draw::BuildDepthResolveComputeShader(dspirv))
+            {
+                VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+                smi.codeSize = dspirv.size() * sizeof(uint32_t);
+                smi.pCode = dspirv.data();
+                const VkDescriptorSetLayoutBinding dbinds[2] = {
+                    {0, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                    {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+                VkDescriptorSetLayoutCreateInfo dsli{
+                    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+                dsli.bindingCount = 2;
+                dsli.pBindings = dbinds;
+                VkPushConstantRange dpcr{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                         sizeof(draw::ResolvePushConstants)};
+                if (vkCreateShaderModule(device, &smi, nullptr, &P.resolveDepthModule) == VK_SUCCESS &&
+                    vkCreateDescriptorSetLayout(device, &dsli, nullptr, &P.resolveDepthSetLayout) == VK_SUCCESS)
+                {
+                    VkPipelineLayoutCreateInfo dpli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+                    dpli.setLayoutCount = 1;
+                    dpli.pSetLayouts = &P.resolveDepthSetLayout;
+                    dpli.pushConstantRangeCount = 1;
+                    dpli.pPushConstantRanges = &dpcr;
+                    if (vkCreatePipelineLayout(device, &dpli, nullptr, &P.resolveDepthLayout) == VK_SUCCESS)
+                    {
+                        VkComputePipelineCreateInfo dcpi{
+                            VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+                        dcpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+                        dcpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+                        dcpi.stage.module = P.resolveDepthModule;
+                        dcpi.stage.pName = "main";
+                        dcpi.layout = P.resolveDepthLayout;
+                        if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &dcpi,
+                                nullptr, &P.resolveDepthPipeline) != VK_SUCCESS)
+                            P.resolveDepthPipeline = VK_NULL_HANDLE;
+                    }
+                }
+            }
+            if (P.resolveDepthPipeline != VK_NULL_HANDLE)
+                lucent::info("draw", "depth resolve compute pipeline built");
+            else
+                lucent::error("draw", "depth resolve compute pipeline unavailable --"
+                    " passes that sample resolved depth will keep reading stale"
+                    " guest memory");
+        }
+
         if (P.resolvePipeline == VK_NULL_HANDLE)
             lucent::error("draw", "resolve compute pipeline unavailable -- resolves"
                 " will copy without the guest's exponent bias or red/blue swap");
@@ -2272,8 +2355,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     uint32_t resolveNoRect = 0;
     auto getResolveTarget = [&](uint32_t destBase, uint32_t sourceBase,
                                 uint32_t destPitch, uint32_t destHeight,
-                                uint32_t destFormat, ResolveTarget*& out,
-                                uint32_t& rowOffsetOut) -> bool {
+                                uint32_t destFormat, bool isDepth,
+                                ResolveTarget*& out, uint32_t& rowOffsetOut) -> bool {
         rowOffsetOut = 0;
         auto it = P.resolveTargets.find(destBase);
         if (it != P.resolveTargets.end()) { out = &it->second; return true; }
@@ -2307,8 +2390,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
         if (bpp == 0)
             ++resolveNoFormat;
-        const VkFormat hostFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
+        // A depth destination holds a float depth in .x, so it gets full
+        // 32-bit precision; a colour one gets the wide float container.
+        const VkFormat hostFormat = isDepth ? VK_FORMAT_R32_SFLOAT
+                                            : VK_FORMAT_R16G16B16A16_SFLOAT;
         ResolveTarget r;
+        r.isDepth = isDepth;
         r.hostFormat = hostFormat;
         r.sourceBase = sourceBase;
         r.base = destBase;
@@ -2796,6 +2883,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         bool clearsDepth = false;
         float depthClearValue = 0.0f;
         bool copyIsServed = true;   // false: this entry only clears
+        bool resolveIsDepth = false; // a depth resolve, not a colour copy
         // --- diagnostic only (GEARS_DRAW_DIAG), never read by the renderer ---
         // Everything that can make a draw contribute nothing, recorded next to
         // the draw that did nothing. A summary cannot answer "which stage did
@@ -2974,12 +3062,22 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if ((R[0x2208] & 0x7) != 6 /*kCopy*/)
             continue;
         const uint32_t srcSelect = R[0x2318] & 0x7;
-        if (srcSelect >= 4) // depth resolve; no host depth texture chain yet
+        if (srcSelect >= 4) // a DEPTH resolve
         {
             ++resolvesDepth;
             const uint32_t dd = R[0x2319] & ~0xFFFu;
-            if (dd)
-                depthResolveDests.insert(dd);
+            if (!dd)
+                continue;
+            depthResolveDests.insert(dd);
+            ResolveTarget* drt = nullptr;
+            uint32_t drow = 0;
+            if (!getResolveTarget(dd, 0xFFFFFFFFu, R[0x231A] & 0x3FFF,
+                    (R[0x231A] >> 16) & 0x3FFF, (R[0x231B] >> 7) & 0x3F,
+                    /*isDepth=*/true, drt, drow))
+                continue;
+            resolveRouting[dd] = {drt->base, drow};
+            resolveDests.insert(drt->base);
+            ++resolveDrawCount;
             continue;
         }
         const uint32_t destBase = R[0x2319] & ~0xFFFu;
@@ -2993,7 +3091,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ResolveTarget* rt = nullptr;
         uint32_t rowOffset = 0;
         if (!getResolveTarget(destBase, srcBase, R[0x231A] & 0x3FFF,
-                (R[0x231A] >> 16) & 0x3FFF, (R[0x231B] >> 7) & 0x3F, rt, rowOffset))
+                (R[0x231A] >> 16) & 0x3FFF, (R[0x231B] >> 7) & 0x3F,
+                /*isDepth=*/false, rt, rowOffset))
             continue;
         // Where this destination base writes: which texture, and how many rows
         // into it. A tile's base is the texture's base plus whole rows.
@@ -3011,11 +3110,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         {
             vkDestroyDescriptorPool(device, P.resolveDescPool, nullptr);
             P.resolveDescPool = VK_NULL_HANDLE;
-            VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, want * 2};
+            const VkDescriptorPoolSize ps[2] = {
+                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, want * 3}, // colour sets use 2 each, depth sets 1
+                {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, want}};
             VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-            pi.maxSets = want;
-            pi.poolSizeCount = 1;
-            pi.pPoolSizes = &ps;
+            pi.maxSets = want * 2; // colour sets and depth sets
+            pi.poolSizeCount = 2;
+            pi.pPoolSizes = ps;
             if (vkCreateDescriptorPool(device, &pi, nullptr, &P.resolveDescPool) == VK_SUCCESS)
                 P.resolveDescCapacity = want;
         }
@@ -3031,6 +3132,19 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             ai.pSetLayouts = layouts.data();
             if (vkAllocateDescriptorSets(device, &ai, resolveSets.data()) != VK_SUCCESS)
                 resolveSets.clear();
+            if (P.resolveDepthSetLayout != VK_NULL_HANDLE)
+            {
+                std::vector<VkDescriptorSetLayout> dlayouts(P.resolveDescCapacity,
+                                                            P.resolveDepthSetLayout);
+                resolveDepthSets.resize(P.resolveDescCapacity);
+                VkDescriptorSetAllocateInfo dai{
+                    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+                dai.descriptorPool = P.resolveDescPool;
+                dai.descriptorSetCount = P.resolveDescCapacity;
+                dai.pSetLayouts = dlayouts.data();
+                if (vkAllocateDescriptorSets(device, &dai, resolveDepthSets.data()) != VK_SUCCESS)
+                    resolveDepthSets.clear();
+            }
         }
     }
 
@@ -3105,6 +3219,81 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             case 2: return stub3D.view;
             case 3: return stubCube.view;
             default: return stub2D.view;
+        }
+    };
+
+    // The guest's resolve rectangle, per Xenia's GetResolveInfo. Shared by the
+    // colour and depth paths -- a depth resolve carries the same rectangle and
+    // the same window offset as the colour resolve of its tile.
+    auto deriveResolveRect = [&](const uint32_t* R, int32_t& x0, int32_t& y0,
+                                 int32_t& x1, int32_t& y1) {
+        x0 = 0; y0 = 0; x1 = int32_t(W); y1 = int32_t(H);
+                const uint32_t vf0 = R[0x4800], vf1 = R[0x4801];
+        if ((vf0 & 3) == 3 && ((vf1 >> 2) & 0xFFFFFF) == 6)
+        {
+            const uint64_t addr = uint64_t((vf0 >> 2) << 2);
+            if (addr + 6 * 4 <= in.guestWindowBytes)
+            {
+                // Most vertices carry a negative half-pixel offset,
+                // which PA_SU_VTX_CNTL.pix_center says to reverse.
+                const float halfPixel =
+                    (R[0x2302] & 1) == 0 /*kD3DZero*/ ? 0.5f : 0.0f;
+                int32_t fx[3], fy[3];
+                for (int k = 0; k < 3; ++k)
+                {
+                    uint32_t rx, ry;
+                    std::memcpy(&rx, in.guestBase + addr + k * 8, 4);
+                    std::memcpy(&ry, in.guestBase + addr + k * 8 + 4, 4);
+                    rx = __builtin_bswap32(rx);
+                    ry = __builtin_bswap32(ry);
+                    float vx, vy;
+                    std::memcpy(&vx, &rx, 4);
+                    std::memcpy(&vy, &ry, 4);
+                    fx[k] = FloatToFixed16p8(vx + halfPixel);
+                    fy[k] = FloatToFixed16p8(vy + halfPixel);
+                }
+                // Top-left rule: include .5 on the near edge, exclude it
+                // on the far one -- both are (v + 127) >> 8.
+                x0 = (std::min({fx[0], fx[1], fx[2]}) + 127) >> 8;
+                y0 = (std::min({fy[0], fy[1], fy[2]}) + 127) >> 8;
+                x1 = (std::max({fx[0], fx[1], fx[2]}) + 127) >> 8;
+                y1 = (std::max({fy[0], fy[1], fy[2]}) + 127) >> 8;
+                // The window offset moves the rectangle exactly as it
+                // moves geometry, which is what puts a predicated tile's
+                // rectangle in its own part of the surface.
+                if ((R[0x2205] >> 16) & 1 /*vtx_window_offset_enable*/)
+                {
+                    const uint32_t wo = R[0x2080];
+                    auto sign15 = [](uint32_t v) {
+                        v &= 0x7FFF;
+                        return int32_t(v) - int32_t((v & 0x4000) << 1);
+                    };
+                    const int32_t wx = sign15(wo), wy = sign15(wo >> 16);
+                    x0 += wx; x1 += wx; y0 += wy; y1 += wy;
+                }
+                draw::GuestViewport gv;
+                if (draw::DeriveViewport(R, gv))
+                {
+                    const int32_t sr = int32_t(gv.scissorX + gv.scissorW);
+                    const int32_t sb = int32_t(gv.scissorY + gv.scissorH);
+                    x0 = std::clamp(x0, int32_t(gv.scissorX), sr);
+                    x1 = std::clamp(x1, int32_t(gv.scissorX), sr);
+                    y0 = std::clamp(y0, int32_t(gv.scissorY), sb);
+                    y1 = std::clamp(y1, int32_t(gv.scissorY), sb);
+                }
+                // D3D9's Resolve aligns the rectangle to 8.
+                x0 &= ~int32_t(7); y0 &= ~int32_t(7);
+                x1 = (x1 + 7) & ~int32_t(7);
+                y1 = (y1 + 7) & ~int32_t(7);
+            }
+            else
+            {
+                ++resolveNoRect;
+            }
+        }
+        else
+        {
+            ++resolveNoRect;
         }
     };
 
@@ -3238,73 +3427,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // the top-left rule, shifted by the window offset and clamped to
                 // the scissor.
                 int32_t x0 = 0, y0 = 0, x1 = int32_t(W), y1 = int32_t(H);
-                const uint32_t vf0 = R[0x4800], vf1 = R[0x4801];
-                if ((vf0 & 3) == 3 && ((vf1 >> 2) & 0xFFFFFF) == 6)
-                {
-                    const uint64_t addr = uint64_t((vf0 >> 2) << 2);
-                    if (addr + 6 * 4 <= in.guestWindowBytes)
-                    {
-                        // Most vertices carry a negative half-pixel offset,
-                        // which PA_SU_VTX_CNTL.pix_center says to reverse.
-                        const float halfPixel =
-                            (R[0x2302] & 1) == 0 /*kD3DZero*/ ? 0.5f : 0.0f;
-                        int32_t fx[3], fy[3];
-                        for (int k = 0; k < 3; ++k)
-                        {
-                            uint32_t rx, ry;
-                            std::memcpy(&rx, in.guestBase + addr + k * 8, 4);
-                            std::memcpy(&ry, in.guestBase + addr + k * 8 + 4, 4);
-                            rx = __builtin_bswap32(rx);
-                            ry = __builtin_bswap32(ry);
-                            float vx, vy;
-                            std::memcpy(&vx, &rx, 4);
-                            std::memcpy(&vy, &ry, 4);
-                            fx[k] = FloatToFixed16p8(vx + halfPixel);
-                            fy[k] = FloatToFixed16p8(vy + halfPixel);
-                        }
-                        // Top-left rule: include .5 on the near edge, exclude it
-                        // on the far one -- both are (v + 127) >> 8.
-                        x0 = (std::min({fx[0], fx[1], fx[2]}) + 127) >> 8;
-                        y0 = (std::min({fy[0], fy[1], fy[2]}) + 127) >> 8;
-                        x1 = (std::max({fx[0], fx[1], fx[2]}) + 127) >> 8;
-                        y1 = (std::max({fy[0], fy[1], fy[2]}) + 127) >> 8;
-                        // The window offset moves the rectangle exactly as it
-                        // moves geometry, which is what puts a predicated tile's
-                        // rectangle in its own part of the surface.
-                        if ((R[0x2205] >> 16) & 1 /*vtx_window_offset_enable*/)
-                        {
-                            const uint32_t wo = R[0x2080];
-                            auto sign15 = [](uint32_t v) {
-                                v &= 0x7FFF;
-                                return int32_t(v) - int32_t((v & 0x4000) << 1);
-                            };
-                            const int32_t wx = sign15(wo), wy = sign15(wo >> 16);
-                            x0 += wx; x1 += wx; y0 += wy; y1 += wy;
-                        }
-                        draw::GuestViewport gv;
-                        if (draw::DeriveViewport(R, gv))
-                        {
-                            const int32_t sr = int32_t(gv.scissorX + gv.scissorW);
-                            const int32_t sb = int32_t(gv.scissorY + gv.scissorH);
-                            x0 = std::clamp(x0, int32_t(gv.scissorX), sr);
-                            x1 = std::clamp(x1, int32_t(gv.scissorX), sr);
-                            y0 = std::clamp(y0, int32_t(gv.scissorY), sb);
-                            y1 = std::clamp(y1, int32_t(gv.scissorY), sb);
-                        }
-                        // D3D9's Resolve aligns the rectangle to 8.
-                        x0 &= ~int32_t(7); y0 &= ~int32_t(7);
-                        x1 = (x1 + 7) & ~int32_t(7);
-                        y1 = (y1 + 7) & ~int32_t(7);
-                    }
-                    else
-                    {
-                        ++resolveNoRect;
-                    }
-                }
-                else
-                {
-                    ++resolveNoRect;
-                }
+                deriveResolveRect(R, x0, y0, x1, y1);
                 pd.resolveSrcRect.offset = {x0, y0};
                 pd.resolveSrcRect.extent = {uint32_t(std::max(0, x1 - x0)),
                                             uint32_t(std::max(0, y1 - y0))};
@@ -3344,15 +3467,34 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // The copy cannot be served -- a depth resolve, with no host
                 // depth texture chain yet -- but its CLEAR still has to happen,
                 // at this point in the stream and with the guest's value.
-                if (clearsDepthHere)
+                // A DEPTH resolve now has a destination of its own, so it is
+                // emitted rather than dropped -- with its clear, if it carries
+                // one, still happening after it.
+                auto droute = resolveRouting.find(destBase);
+                const bool isDepthResolve = srcSelect >= 4 &&
+                                            droute != resolveRouting.end();
+                if (isDepthResolve || clearsDepthHere)
                 {
                     PreparedDraw pd{};
                     pd.isResolve = true;
                     pd.copyIsServed = false;
-                    pd.clearsDepth = true;
+                    pd.clearsDepth = clearsDepthHere;
                     pd.depthClearValue = depthClearHere;
+                    if (isDepthResolve)
+                    {
+                        pd.resolveIsDepth = true;
+                        pd.resolveDest = droute->second.first;
+                        int32_t x0 = 0, y0 = 0, x1 = int32_t(W), y1 = int32_t(H);
+                        deriveResolveRect(R, x0, y0, x1, y1);
+                        pd.resolveSrcRect.offset = {x0, y0};
+                        pd.resolveSrcRect.extent = {uint32_t(std::max(0, x1 - x0)),
+                                                    uint32_t(std::max(0, y1 - y0))};
+                        pd.resolveDstX = x0;
+                        pd.resolveDstY = y0 + int32_t(droute->second.second);
+                    }
+                    if (clearsDepthHere)
+                        ++midFrameDepthClears;
                     prepared.push_back(pd);
-                    ++midFrameDepthClears;
                 }
             }
             continue;
@@ -4010,6 +4152,94 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // accumulated into one full-size image, so each tile's resolve carries the
     // whole (correct) surface and the last one leaves the destination right.
     // It follows the tile model rather than approximating around it.
+    // The depth resolve dispatch. Reads the host depth image through a sampled
+    // view and writes the depth the guest's k_24_8_FLOAT fetch would produce.
+    auto resolveDepthTo = [&](ResolveTarget& dst, const VkRect2D& srcRect,
+                              int32_t dstX, int32_t dstY) {
+        const int32_t sx0 = std::clamp<int32_t>(srcRect.offset.x, 0, int32_t(W));
+        const int32_t sy0 = std::clamp<int32_t>(srcRect.offset.y, 0, int32_t(H));
+        int32_t sx1 = std::clamp<int32_t>(srcRect.offset.x + int32_t(srcRect.extent.width),
+                                          sx0, int32_t(W));
+        int32_t sy1 = std::clamp<int32_t>(srcRect.offset.y + int32_t(srcRect.extent.height),
+                                          sy0, int32_t(H));
+        const int32_t dw = int32_t(dst.width), dh = int32_t(dst.imageHeight);
+        if (dstX >= dw || dstY >= dh)
+            return;
+        sx1 = std::min<int32_t>(sx1, sx0 + std::max<int32_t>(0, dw - dstX));
+        sy1 = std::min<int32_t>(sy1, sy0 + std::max<int32_t>(0, dh - dstY));
+        if (sx1 <= sx0 || sy1 <= sy0)
+            return;
+
+        VkImageMemoryBarrier pre[2]{};
+        pre[0] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        pre[0].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        pre[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        pre[0].oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        pre[0].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        pre[0].srcQueueFamilyIndex = pre[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        pre[0].image = P.depth;
+        pre[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        pre[1] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        pre[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        pre[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        pre[1].oldLayout = dst.everWritten ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                           : VK_IMAGE_LAYOUT_UNDEFINED;
+        pre[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        pre[1].srcQueueFamilyIndex = pre[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        pre[1].image = dst.image;
+        pre[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
+
+        VkDescriptorSet set = resolveDepthSets[resolveDepthSetsUsed++];
+        VkDescriptorImageInfo srcInfo{VK_NULL_HANDLE, P.depthSampledView,
+                                      VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+        VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, dst.storageView,
+                                      VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[2]{};
+        w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[0].dstSet = set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
+        w[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        w[0].pImageInfo = &srcInfo;
+        w[1] = w[0];
+        w[1].dstBinding = 1;
+        w[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w[1].pImageInfo = &dstInfo;
+        vkUpdateDescriptorSets(device, 2, w, 0, nullptr);
+
+        draw::ResolvePushConstants pc{};
+        pc.srcOffset[0] = sx0; pc.srcOffset[1] = sy0;
+        pc.dstOffset[0] = dstX; pc.dstOffset[1] = dstY;
+        pc.extent[0] = sx1 - sx0; pc.extent[1] = sy1 - sy0;
+        pc.scale = 1.0f;
+        pc.swapRB = 1; // reused: 1 = the depth format is float24 (kD24FS8)
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, P.resolveDepthPipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+            P.resolveDepthLayout, 0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, P.resolveDepthLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+            sizeof(pc), &pc);
+        vkCmdDispatch(cmd, (uint32_t(pc.extent[0]) + 7) / 8,
+                           (uint32_t(pc.extent[1]) + 7) / 8, 1);
+
+        VkImageMemoryBarrier post[2]{};
+        post[0] = pre[0];
+        post[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        post[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+        post[0].oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+        post[0].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+        post[1] = pre[1];
+        post[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        post[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        post[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        post[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 2, post);
+        ++dst.copies;
+        dst.everWritten = true;
+    };
+
     auto resolveSurfaceTo = [&](const SurfaceTarget& srcTarget, ResolveTarget& dst,
                                 const VkRect2D& srcRect, int32_t dstX, int32_t dstY,
                                 float scale, bool swapRB) {
@@ -4246,6 +4476,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     const long onlyDraw = lucent::config::number("DRAW_ONLY", -1);
     uint32_t drawn = 0, segments = 0, surfaceSwitches = 0, resolvesDone = 0;
     uint32_t depthClearsDone = 0;
+    uint32_t depthResolvesDone = 0, depthResolvesSkipped = 0;
     // The surface a render pass is currently open on, if any.
     bool inPass = false;
     uint32_t openSurface = 0;
@@ -4319,6 +4550,28 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     0, nullptr, 1, &r);
                 ++depthClearsDone;
             };
+            // A DEPTH resolve: sample the host depth image and write the depth
+            // the guest's k_24_8_FLOAT fetch would have produced.
+            if (pd.resolveIsDepth)
+            {
+                endPass();
+                auto dst = P.resolveTargets.find(pd.resolveDest);
+                if (dst != P.resolveTargets.end() &&
+                    P.resolveDepthPipeline != VK_NULL_HANDLE &&
+                    dst->second.storageView != VK_NULL_HANDLE &&
+                    resolveDepthSetsUsed < resolveDepthSets.size())
+                {
+                    resolveDepthTo(dst->second, pd.resolveSrcRect,
+                                   pd.resolveDstX, pd.resolveDstY);
+                    ++depthResolvesDone;
+                }
+                else
+                {
+                    ++depthResolvesSkipped;
+                }
+                doDepthClear();
+                continue;
+            }
             if (!pd.copyIsServed)
             {
                 // Clear-only: no copy to perform, but the pass still has to end
@@ -4452,7 +4705,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // the scene in the resolved texture, and does it look right there?" is the
     // one that splits a resolve defect from a shading defect -- and it cannot be
     // answered from the presented frame alone.
-    struct ResolveDump { uint32_t base, w, h; VkBuffer buf; VkDeviceMemory mem; };
+    // isDepth decides how the bytes are READ back. Getting this wrong does not
+    // fail -- it silently reports 0.000 for every depth target, which is
+    // indistinguishable from "the resolve wrote nothing".
+    struct ResolveDump { uint32_t base, w, h; bool isDepth; VkBuffer buf; VkDeviceMemory mem; };
     std::vector<ResolveDump> resolveDumps;
     if (std::getenv("GEARS_DRAW_RESOLVE_DUMP"))
     {
@@ -4460,7 +4716,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         {
             if (!r.everWritten || r.width == 0 || r.imageHeight == 0)
                 continue;
-            const VkDeviceSize bytes = VkDeviceSize(r.width) * r.imageHeight * 8;
+            const uint32_t bpp = r.isDepth ? 4u : 8u;
+            const VkDeviceSize bytes = VkDeviceSize(r.width) * r.imageHeight * bpp;
             VkBuffer b = VK_NULL_HANDLE; VkDeviceMemory m = VK_NULL_HANDLE;
             if (!MakeBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m, true))
                 continue;
@@ -4486,7 +4743,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             rb2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb2);
-            resolveDumps.push_back({r.base, r.width, r.imageHeight, b, m});
+            resolveDumps.push_back({r.base, r.width, r.imageHeight, r.isDepth, b, m});
         }
     }
 
@@ -4515,21 +4772,39 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     for (const ResolveDump& rd : resolveDumps)
     {
         void* mapped = nullptr;
-        const VkDeviceSize bytes = VkDeviceSize(rd.w) * rd.h * 8;
+        const VkDeviceSize bytes = VkDeviceSize(rd.w) * rd.h * (rd.isDepth ? 4 : 8);
         if (vkMapMemory(device, rd.mem, 0, bytes, 0, &mapped) == VK_SUCCESS)
         {
             // R16G16B16A16_SFLOAT -> 8-bit, clamped. An HDR target holds values
             // well above 1, so the clamp is honest saturation, not a tonemap.
-            const uint16_t* src = static_cast<const uint16_t*>(mapped);
             std::vector<uint8_t> rgba(size_t(rd.w) * rd.h * 4);
             double maxSeen = 0.0;
-            for (size_t i = 0; i < size_t(rd.w) * rd.h; ++i)
-                for (int c = 0; c < 4; ++c)
+            if (rd.isDepth)
+            {
+                // R32_SFLOAT depth, written as greyscale. Reverse-Z puts the
+                // near plane at 1.0, so a correct depth buffer reads BRIGHT
+                // where geometry is close.
+                const float* src = static_cast<const float*>(mapped);
+                for (size_t i = 0; i < size_t(rd.w) * rd.h; ++i)
                 {
-                    const float v = HalfToFloat(src[i * 4 + c]);
-                    if (c < 3) maxSeen = std::max(maxSeen, double(v));
-                    rgba[i * 4 + c] = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+                    const float v = src[i];
+                    maxSeen = std::max(maxSeen, double(v));
+                    const uint8_t g = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+                    rgba[i * 4 + 0] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = g;
+                    rgba[i * 4 + 3] = 255;
                 }
+            }
+            else
+            {
+                const uint16_t* src = static_cast<const uint16_t*>(mapped);
+                for (size_t i = 0; i < size_t(rd.w) * rd.h; ++i)
+                    for (int c = 0; c < 4; ++c)
+                    {
+                        const float v = HalfToFloat(src[i * 4 + c]);
+                        if (c < 3) maxSeen = std::max(maxSeen, double(v));
+                        rgba[i * 4 + c] = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+                    }
+            }
             const char* dir = std::getenv("GEARS_DRAW_DIR");
             const std::filesystem::path out =
                 (dir ? std::filesystem::path(dir)
@@ -4837,7 +5112,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             {
                 lucent::Line dl;
                 dl.add("frame shaders sampling a DEPTH resolve destination"
-                       " (unserved -- these read stale guest memory):");
+                       " (served by the depth resolve):");
                 for (const auto& [k, n] : depthDestSamplers)
                     dl.add(" {:#x}<-ps{:016x}x{}", k.first, k.second, n);
                 dl.flush(lucent::Level::Info, "draw");
@@ -4879,6 +5154,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 " rectangle (whole surface copied), {} with a destination format"
                 " of unknown size (cannot be placed in a texture)",
                 resolveNoRect, resolveNoFormat);
+        lucent::info("draw", "frame depth resolves: {} executed, {} skipped"
+            " (destinations sampled as k_24_8_FLOAT by the deferred passes)",
+            depthResolvesDone, depthResolvesSkipped);
         lucent::info("draw", "frame mid-stream depth clears: {} executed of {}"
             " carried by the frame's copy draws (the guest clears depth once per"
             " predicated tile)", depthClearsDone, midFrameDepthClears);

@@ -1,7 +1,7 @@
 ---
 id: 35
 title: Deferred passes sample resolved DEPTH and get stale guest memory
-status: open
+status: resolved
 symptom: 30 texture bindings in an Act 1 frame name a depth resolve destination; we do not serve depth resolves, so those bindings decode whatever the guest left in memory
 tags: gpu,draw,draw-backend,resolve,depth,deferred,gameplay
 created: 2026-07-28
@@ -139,3 +139,6 @@ NOT applied, and named: the guest's float24 quantisation. Its depth carries 20
 mantissa bits against our 32, so a sampled depth is up to one 20-bit ULP finer
 than the console's. Depth32To20e4 stays in the tree, verified as the exact
 inverse of the decode, for if that ever needs to be exact.
+
+### Resolution (2026-07-28)
+FIXED and VERIFIED. Depth resolves are now served: a compute dispatch samples the host depth image and writes what the guest's k_24_8_FLOAT fetch would produce (depth in .x), into an R32_SFLOAT destination -- not R16G16B16A16_SFLOAT, because half float carries about 11 mantissa bits near 1.0 against the guest's 20 and depth would band exactly where it matters. Depth destinations are routed like colour ones, so 0xbcc0000 correctly resolves as row 512 of the texture at 0xba40000, the same predicated-tile assembly the colour path uses. MEASURED on the captured Act 1 frame: 3 depth resolves executed, 0 skipped; texture bindings served by a resolve target go from 24 to 54 and STUB bindings from 30 to 0 -- the 30 depth bindings are exactly the difference; the resolved depth target reads max 0.110 where it read 0.000, and dumped as greyscale it is unmistakably the scene's depth buffer (near walls bright, far corridor dark, the room's perspective structure and doorway visible; reverse-Z, so bright is near). The presented frame changes on 322983 of 2764816 bytes and gains depth-dependent light shafts that were absent. Vulkan validation clean. THREE BUGS were found on the way, none of which failed loudly: (1) OpImageFetch without its required Lod operand -- returns zero rather than failing, indistinguishable from an empty depth buffer; (2) the depth dispatch borrowed descriptor sets allocated with the COLOUR layout, whose binding 0 is a storage image where the depth layout needs a sampled one -- writing the wrong descriptor type into a set does not fail, it just reads nothing; (3) the descriptor pool was sized for the colour sets alone, so the depth sets failed to allocate and every depth resolve was silently skipped. Each was caught by the resolve-target dump reading exactly 0.000, and the dump ITSELF had to be fixed first: it read every target as half-float, so it reported 0.000 for an R32_SFLOAT depth target regardless of content.
