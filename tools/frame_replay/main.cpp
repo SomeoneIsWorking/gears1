@@ -22,7 +22,10 @@
 #include <lucent/log.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
+#include <filesystem>
+#include <set>
 #include <string>
 
 #include "frame_capture.h"
@@ -59,6 +62,43 @@ int main(int argc, char** argv)
             uint32_t(std::min<uint64_t>(want, cap.inputs.guestWindowBytes));
         lucent::info("replay", "guest memory mirror overridden to {} MiB",
                      cap.inputs.guestPhysicalMirrorBytes >> 20);
+    }
+
+    // GEARS_REPLAY_DUMP_SHADERS=<dir> writes every distinct microcode blob in the
+    // capture, named by its hash, so a specific shader can be disassembled with
+    // tools/xenos_translate --raw. Reading what a shader DOES is often the only
+    // way to settle a question the registers do not answer -- e.g. how a pass
+    // that samples resolved depth recombines the destination's four components.
+    if (const char* dumpDir = std::getenv("GEARS_REPLAY_DUMP_SHADERS"))
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(dumpDir, ec);
+        std::set<uint64_t> written;
+        uint32_t n = 0;
+        for (const gears::FrameDrawItem& d : cap.inputs.draws)
+        {
+            const std::pair<const uint8_t*, size_t> blobs[2] = {
+                {d.vsUcode, d.vsUcodeSize}, {d.psUcode, d.psUcodeSize}};
+            const uint64_t hashes[2] = {d.vsHash, d.psHash};
+            const char* kind[2] = {"vs", "ps"};
+            for (int i = 0; i < 2; ++i)
+            {
+                if (!blobs[i].first || !blobs[i].second || !written.insert(hashes[i]).second)
+                    continue;
+                char name[64];
+                std::snprintf(name, sizeof(name), "%s%016lx.bin", kind[i],
+                              (unsigned long)hashes[i]);
+                const std::filesystem::path out =
+                    std::filesystem::path(dumpDir) / name;
+                if (std::FILE* f = std::fopen(out.string().c_str(), "wb"))
+                {
+                    std::fwrite(blobs[i].first, 1, blobs[i].second, f);
+                    std::fclose(f);
+                    ++n;
+                }
+            }
+        }
+        lucent::info("replay", "dumped {} distinct shader blobs to {}", n, dumpDir);
     }
 
     bool ok = false;

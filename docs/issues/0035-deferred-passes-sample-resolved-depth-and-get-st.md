@@ -91,3 +91,51 @@ can also falsify it.
 
 STENCIL is written as zero. We carry no stencil buffer; recorded rather than
 hidden, because a title that tests resolved stencil would need it.
+
+### Note (2026-07-28)
+THE BYTE-ORDER QUESTION IS SETTLED, AND THE ANSWER RETIRES IT. Reading the
+shader, as planned, changed the design rather than confirming it.
+
+Two measurements:
+
+  The frame binds the depth resolve destination as a DEPTH texture, not a colour
+  one --
+
+      texture 0xba40000 k_24_8_FLOAT 1280x720x1 dim1 tiled endian2 mips0-0 x2
+
+  and it is one of the three fetches reported as "no host format mapping". The
+  frame has exactly two k_24_8_FLOAT fetches and exactly two depth resolve
+  destinations.
+
+  The shaders that sample it take only .x. ps_db24986d2cc37fb0 does
+  `tfetch2D r4.x___, r4.wx, tf3` and `tfetch2D r5.x___, r5.xy, tf3` -- one
+  component, twice.
+
+So the guest WRITES the resolve as k_8_8_8_8 bytes and READS the same bytes as
+k_24_8_FLOAT: the texture unit decodes the packed depth and hands the shader a
+float. Nothing ever observes those bytes as colour.
+
+Since we bypass guest memory entirely, packing the bytes only to have them
+unpacked again is a round trip through a representation nobody observes. The
+depth resolve shader now writes what the FETCH would have produced -- depth in
+.x, stencil in .y -- and the byte-order assumption I flagged last iteration is
+gone rather than resolved: there are no bytes.
+
+A CENSUS BUG had to be fixed to get here, and it is worth recording because it
+nearly sent the investigation somewhere useless. The census recorded the pixel
+shader hash for each texture binding, but set it AFTER selectTexView had already
+run for that draw -- selectTexView is called while the descriptor sets are built,
+which is earlier than the PreparedDraw is filled. Every binding was attributed to
+the PREVIOUS draw's shader. The first shader it named, ps3f8dacf87fb8da17, is 15
+dwords with no texture fetch in it at all, which is the only reason the
+misattribution was caught rather than acted on.
+
+STILL TO DO: the pipeline (a sampled-image descriptor layout, unlike the colour
+resolve's two storage images), a sampled view of the host depth image, resolve
+targets for depth destinations (currently dropped in the pre-pass), and the
+dispatch.
+
+NOT applied, and named: the guest's float24 quantisation. Its depth carries 20
+mantissa bits against our 32, so a sampled depth is up to one 20-bit ULP finer
+than the console's. Depth32To20e4 stays in the tree, verified as the exact
+inverse of the decode, for if that ever needs to be exact.
