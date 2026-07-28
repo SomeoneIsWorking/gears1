@@ -148,6 +148,13 @@ struct ResolvePushConstants
 };
 bool BuildResolveComputeShader(std::vector<uint32_t>& spirv);
 
+// The DEPTH resolve. The guest resolves depth to a k_8_8_8_8 destination -- the
+// Xenos depth-as-colour resolve -- so this encodes our float32 depth back into
+// the guest's 24-bit format (float24 20e4 for kD24FS8, unorm24 for kD24S8),
+// packs it with stencil into a dword and writes the bytes as normalised
+// components. `swapRB` in the push constants selects the format: 1 = float24.
+bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv);
+
 // Translates a single stage (vertex or pixel) under the given modification --
 // the value DeriveShaderModifications produced for the draw's pair. Lets the
 // whole-frame backend translate and cache each distinct (shader, modification)
