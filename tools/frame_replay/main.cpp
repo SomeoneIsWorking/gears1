@@ -55,9 +55,9 @@ int main(int argc, char** argv)
     // answer "would this frame's geometry resolve with a bigger mirror?" without
     // a rebuild -- which is how the 64 MiB mirror was identified as the reason
     // this frame's world geometry read zero.
-    if (const char* mb = std::getenv("GEARS_REPLAY_MIRROR_MB"))
+    if (const long mb = lucent::config::number("REPLAY_MIRROR_MB", 0); mb > 0)
     {
-        const uint64_t want = uint64_t(std::strtoul(mb, nullptr, 10)) << 20;
+        const uint64_t want = uint64_t(mb) << 20;
         cap.inputs.guestPhysicalMirrorBytes =
             uint32_t(std::min<uint64_t>(want, cap.inputs.guestWindowBytes));
         lucent::info("replay", "guest memory mirror overridden to {} MiB",
@@ -69,8 +69,10 @@ int main(int argc, char** argv)
     // tools/xenos_translate --raw. Reading what a shader DOES is often the only
     // way to settle a question the registers do not answer -- e.g. how a pass
     // that samples resolved depth recombines the destination's four components.
-    if (const char* dumpDir = std::getenv("GEARS_REPLAY_DUMP_SHADERS"))
+    if (const std::string& dumpDirStr = lucent::config::text("REPLAY_DUMP_SHADERS");
+        !dumpDirStr.empty())
     {
+        const char* dumpDir = dumpDirStr.c_str();
         std::error_code ec;
         std::filesystem::create_directories(dumpDir, ec);
         std::set<uint64_t> written;
