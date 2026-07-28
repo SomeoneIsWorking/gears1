@@ -4149,11 +4149,51 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             haveGuestDepthClear ? "the guest's own, from RB_DEPTH_CLEAR"
                                 : "HOST DEFAULT -- this frame programs no depth clear");
 
+    // The colour clear. Like the depth clear, the guest's rides on a copy draw:
+    // RB_COPY_CONTROL bit 8 is color_clear_enable and the value is in
+    // RB_COLOR_CLEAR / RB_COLOR_CLEAR_LO.
+    //
+    // Only the ZERO case is honoured, deliberately. Every colour clear observed
+    // across every captured run of this title is 0x00000000 -- 478 of them, not
+    // one non-zero -- so a per-format unpack of that register would produce
+    // identical output whether it were right or wrong, and shipping it would be
+    // shipping something this data cannot test. A non-zero value is reported and
+    // falls back rather than being decoded on a guess.
+    //
+    // The dark slate it replaces was a DIAGNOSTIC ("any lit pixel is guest
+    // geometry"), not the guest's colour, and it is not black: it lifted every
+    // surface -- including the HDR one the tonemap samples -- off zero.
+    // GEARS_DRAW_SLATE_CLEAR=1 brings it back as a control arm.
+    float guestColorClear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+    bool haveGuestColorClear = false;
+    uint32_t unverifiableColorClears = 0;
+    for (const ResolveEvent& re : resolves)
+    {
+        if (!re.colorClear)
+            continue;
+        if (re.colorClearValue != 0)
+        { ++unverifiableColorClears; continue; }
+        haveGuestColorClear = true;
+    }
+    if (unverifiableColorClears)
+        lucent::warn("draw", "frame programs {} NON-ZERO colour clears; this build"
+            " only honours a zero clear, because no captured frame of this title"
+            " has ever programmed another value and the per-format unpack of"
+            " RB_COLOR_CLEAR is therefore untestable. Falling back.",
+            unverifiableColorClears);
+    static const bool slateClear = std::getenv("GEARS_DRAW_SLATE_CLEAR") != nullptr;
+    const bool useGuestColorClear = haveGuestColorClear &&
+                                    !unverifiableColorClears && !slateClear;
+    if (in.report)
+        lucent::info("draw", "frame colour clear: {}", useGuestColorClear
+            ? "the guest's own (0x00000000)"
+            : "HOST DIAGNOSTIC SLATE -- not the guest's colour");
+
     VkClearValue clears[2]{};
-    clears[0].color.float32[0] = 0.05f; // dark slate: any lit pixel is guest geometry
-    clears[0].color.float32[1] = 0.05f;
-    clears[0].color.float32[2] = 0.08f;
-    clears[0].color.float32[3] = 1.0f;
+    clears[0].color.float32[0] = useGuestColorClear ? 0.0f : 0.05f;
+    clears[0].color.float32[1] = useGuestColorClear ? 0.0f : 0.05f;
+    clears[0].color.float32[2] = useGuestColorClear ? 0.0f : 0.08f;
+    clears[0].color.float32[3] = useGuestColorClear ? guestColorClear[3] : 1.0f;
     // The depth clear is the GUEST'S OWN. On Xenos a clear is not a packet of
     // its own: it rides on a resolve (a kCopy draw) whose RB_COPY_CONTROL sets
     // depth_clear_enable, with the value in RB_DEPTH_CLEAR -- so the frame's own
