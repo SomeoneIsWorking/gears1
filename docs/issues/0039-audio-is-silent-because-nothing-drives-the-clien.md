@@ -240,3 +240,53 @@ ALSO FIXED, same lesson as the WAV header: the kick total was originally
 reported from atexit, which never runs because these runs end by SIGKILL. It is
 reported as it accumulates instead. An exit summary in a process that is always
 killed is a summary nobody reads.
+
+### Note (2026-07-28)
+THE PREMISE IS CONFIRMED: THE QUEUED BITSTREAM IS REAL XMA2, AND IT DECODES.
+
+This was done OFFLINE, deliberately, before writing any decoder in the runtime.
+An in-runtime decoder that produced silence could be failing at the bitstream,
+at the context bookkeeping, at the output ring, or at the premise that this is
+XMA at all -- and from the audio pump those are indistinguishable. Decoding the
+dump with a known-good tool separates the premise from the plumbing.
+
+GEARS_XMA_DUMP=<dir> writes, on the first kick of each context, its 64 bytes and
+the raw packets its input buffer points at. tools/xma_wrap.py wraps those
+packets in a WAVEFORMATEX of tag 0x0166 carrying a 34-byte XMA2WAVEFORMATEX.
+
+RESULT, on the title's own streams:
+
+    ctx1: 1780 packets -> 2 min 21.8 s, 44100 Hz stereo, mean -22.2 dB, peak -2.9 dB
+    ctx0:   55 packets -> 1.17 s,       24000 Hz stereo, mean -15.4 dB, peak -1.1 dB
+
+No decoder errors on either. This is the music the title has been queueing since
+boot and never getting back.
+
+ONE THING I HAD WRONG, and it would have cost days: the plan was to "convert the
+XMA bitstream into something libavcodec's WMA Pro decoder accepts". No shipping
+implementation does that. XMA framing (15-bit length-prefixed frame chains in
+2048-byte packets) is not WMA Pro framing (superframes, ASF extradata). What
+exists is upstream ffmpeg's packet-level xma1/xma2 decoders -- which is what
+this milestone uses -- and Xenia's own patched fork, which adds a per-FRAME
+codec (AV_CODEC_ID_XMAFRAMES) that upstream does not have. Confirmed: the system
+libavcodec 62 headers contain no XMAFRAMES, and `ffmpeg -decoders` lists xma1,
+xma2 and wmapro only.
+
+THAT DISTINCTION DECIDES THE RUNTIME ARCHITECTURE, so it is recorded here rather
+than left as trivia. Upstream's xma2 decoder consumes whole 2048-byte packets
+and withholds up to 4096 samples until EOF, which is fine for decoding a file
+and hostile to emulating a hardware context, where the title paces consumption
+per 128-sample subframe, polls input_buffer_read_offset in BITS, and can
+loop-jump mid-stream. Matching those would mean inventing a latency/trim
+compensation layer that exists in no implementation, exactly where verification
+is hardest. The per-frame codec has no FIFO, no priming trim, and is
+re-seedable at any frame boundary.
+
+A HEADER DETAIL WORTH KEEPING: the decoder takes its channel count from
+XMA2WAVEFORMATEX's ChannelMask, NOT from the WAVEFORMATEX. Filling in only the
+latter gives "0 channels" and a refusal to open -- which is how the layout got
+pinned down rather than guessed.
+
+This also produces the GOLDEN REFERENCE the runtime decoder must later match:
+the runtime's PCM for the same context and stream offset has to agree with these
+files, modulo the priming samples ffmpeg trims and a hardware context does not.

@@ -2,9 +2,16 @@
 
 #include <atomic>
 #include <bitset>
+#include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
+#include <set>
+#include <string>
 
+#include <byteswap.h>
+
+#include <lucent/config.h>
 #include <lucent/log.h>
 
 #include "guest_heap.h"
@@ -31,8 +38,10 @@ constexpr uint32_t kContextGroupCount = 10; // 10 registers of 32 bits each
 // range of indices the title's bitmaps can address.
 constexpr uint32_t kContextCount = 320;
 constexpr uint32_t kContextSize = 64;
+constexpr uint32_t kPacketSize = 2048;
 
 uint32_t g_contextArray = 0;
+GuestMemory* g_memory = nullptr;
 
 std::mutex g_contextMutex;
 std::bitset<kContextCount> g_contextInUse;
@@ -53,6 +62,82 @@ uint32_t* Register(GuestMemory& memory, uint32_t index)
 // honestly. Without it, a title that asks for decode and a title that never
 // asks look identical -- the same ambiguity that hid the audio blocker.
 std::atomic<uint64_t> g_kicks{0};
+
+// GEARS_XMA_DUMP=<dir> writes a kicked context and the XMA data behind it, once
+// per context, so the bitstream can be decoded OFFLINE before any decoder
+// exists in the runtime.
+//
+// That order is deliberate. An in-runtime decoder that produces silence could
+// be failing at the bitstream, at the context bookkeeping, at the output ring,
+// or at the premise that this is even XMA -- and those look identical from the
+// pump. Decoding the dump with a known-good tool separates the premise from the
+// plumbing, and gives a reference the runtime's own output must later match.
+constexpr uint32_t kIdToSampleRate[4] = {24000, 32000, 44100, 48000};
+
+struct ContextFields
+{
+    uint32_t packetCount;
+    bool inputValid;
+    bool isStereo;
+    uint32_t sampleRate;
+    uint32_t inputBuffer;
+};
+
+ContextFields ReadContext(GuestMemory& memory, uint32_t pointer)
+{
+    const uint32_t* words = memory.Translate<uint32_t>(pointer);
+    auto dword = [words](uint32_t i) { return ByteSwap(words[i]); };
+
+    ContextFields out{};
+    out.packetCount = dword(0) & 0xFFF;
+    out.inputValid = ((dword(0) >> 20) & 1) != 0;
+    out.isStereo = ((dword(1) >> 29) & 1) != 0;
+    out.sampleRate = kIdToSampleRate[(dword(1) >> 27) & 3];
+    out.inputBuffer = dword(5);
+    return out;
+}
+
+void DumpContext(GuestMemory& memory, uint32_t index, uint32_t pointer)
+{
+    const std::string& dir = lucent::config::text("XMA_DUMP");
+    if (dir.empty())
+        return;
+
+    static std::mutex dumpMutex;
+    static std::set<uint32_t> dumped;
+    std::lock_guard<std::mutex> guard(dumpMutex);
+    if (!dumped.insert(index).second)
+        return;
+
+    const ContextFields fields = ReadContext(memory, pointer);
+    if (!fields.inputValid || fields.inputBuffer == 0 || fields.packetCount == 0)
+    {
+        lucent::warn("xma", "context {} kicked with no input buffer to dump", index);
+        return;
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const uint32_t bytes = fields.packetCount * kPacketSize;
+
+    // The context itself as well as the data: the header fields are what a
+    // reader needs to interpret the stream, and reconstructing them by hand
+    // from a log line is how transcription errors get in.
+    const std::string stem = dir + "/ctx" + std::to_string(index);
+    if (std::FILE* f = std::fopen((stem + ".ctx").c_str(), "wb"))
+    {
+        std::fwrite(memory.Translate<uint8_t>(pointer), 1, kContextSize, f);
+        std::fclose(f);
+    }
+    if (std::FILE* f = std::fopen((stem + ".packets").c_str(), "wb"))
+    {
+        std::fwrite(memory.Translate<uint8_t>(fields.inputBuffer), 1, bytes, f);
+        std::fclose(f);
+    }
+    lucent::info("xma", "context {} dumped to {}.packets: {} packets ({} bytes),"
+        " {} at {} Hz, input buffer {:#x}", index, stem, fields.packetCount, bytes,
+        fields.isStereo ? "stereo" : "mono", fields.sampleRate, fields.inputBuffer);
+}
 
 void ReportContextBits(const char* what, uint32_t group, uint32_t bits)
 {
@@ -78,6 +163,7 @@ bool SetupXmaRegisters(GuestMemory& memory)
     // same view in this runtime (MmGetPhysicalAddress is the identity), so the
     // address the title reads from the register is the same one it will see
     // back from XMACreateContext -- which is what its index arithmetic needs.
+    g_memory = &memory;
     uint32_t size = kContextCount * kContextSize;
     g_contextArray = PhysicalHeap().Allocate(0, size, kMemCommit);
     if (g_contextArray == 0)
@@ -158,6 +244,11 @@ bool OnXmaRegisterStore(uint32_t address, uint32_t value)
         const uint64_t kicks =
             g_kicks.fetch_add(uint32_t(__builtin_popcount(reg))) + __builtin_popcount(reg);
         ReportContextBits("kicked", group, reg);
+        for (uint32_t bits = reg; bits; bits &= bits - 1)
+        {
+            const uint32_t index = group * 32 + uint32_t(__builtin_ctz(bits));
+            DumpContext(*g_memory, index, g_contextArray + index * kContextSize);
+        }
         // Reported as it goes rather than at exit. These runs end by being
         // killed -- the capture script sends SIGKILL and atexit never sees it --
         // so an exit summary is a summary nobody ever reads.
