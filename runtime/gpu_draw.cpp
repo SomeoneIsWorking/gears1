@@ -2986,6 +2986,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
     std::vector<ResolveEvent> resolves;
     std::set<uint32_t> depthBases;              // distinct RB_DEPTH_INFO.depth_base
+    std::map<std::pair<uint32_t, uint32_t>, uint64_t> surfaceDepthPairs;
     uint32_t issuedResolves = 0, skippedResolves = 0;
     std::map<uint64_t, uint64_t> skipReasons; // reason code -> count (for a summary)
     uint64_t texBindsStub = 0;   // texture bindings served by a stub image
@@ -3386,6 +3387,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // is shared by every colour target; this is the number that says when
         // that stops being faithful.
         depthBases.insert(R[0x2002] & 0xFFF);
+        // Which (colour surface, depth base) pairs the frame actually uses, and
+        // how many draws each. One shared host depth image is only wrong if a
+        // surface's draws span more than one depth base, or two surfaces share
+        // one -- this says which, instead of assuming.
+        ++surfaceDepthPairs[{R[0x2001] & 0xFFF, R[0x2002] & 0xFFF}];
 
         // A resolve is not geometry. It copies an EDRAM surface out to main
         // memory, and the primitive only selects the region; issuing it as a
@@ -5011,6 +5017,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 " resolves issued {}, skipped {}; {} distinct"
                 " RB_DEPTH_INFO depth bases (one shared host depth image)",
                 presentBase, issuedResolves, skippedResolves, depthBases.size());
+            {
+                lucent::Line sd;
+                sd.add("frame (colour surface, depth base) pairs:");
+                for (const auto& [k, n] : surfaceDepthPairs)
+                    sd.add(" {:#x}/{:#x}x{}", k.first, k.second, n);
+                sd.flush(lucent::Level::Info, "draw");
+            }
         }
         {
             // One line per distinct (source surface -> destination) pair; a
