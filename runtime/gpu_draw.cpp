@@ -4812,7 +4812,26 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             lucent::Line tb;
             tb.add("frame texture bases ({} distinct):", texBaseCount.size());
             for (const auto& [base, n] : texBaseCount)
-                tb.add(" {:#x}x{}{}", base, n, texBaseRtCount.count(base) ? "(RT)" : "");
+            {
+                // Three cases, and only the third is a routing miss: the base IS
+                // a resolve target; the base falls INSIDE one (so the guest is
+                // sampling a sub-rectangle of something we resolved, and we hand
+                // it stale guest memory); or it is an ordinary guest asset.
+                const char* tag = "";
+                if (texBaseRtCount.count(base))
+                    tag = "(RT)";
+                else
+                    for (const auto& [k, r] : P.resolveTargets)
+                    {
+                        if (r.bpp == 0 || r.pitch == 0)
+                            continue;
+                        const uint64_t extent =
+                            uint64_t(r.pitch) * r.height * r.bpp;
+                        if (base > r.base && base < r.base + extent)
+                        { tag = "(INSIDE-RT)"; break; }
+                    }
+                tb.add(" {:#x}x{}{}", base, n, tag);
+            }
             tb.flush(lucent::Level::Info, "draw");
         }
         if (resolvesOutOfSets)
