@@ -2961,6 +2961,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // dispatches, so four of them silently reused a set that a later dispatch
     // then overwrote, and the resolves those sets belonged to wrote nothing.
     uint32_t resolveDrawCount = 0;
+    // Depth resolve destinations. We do not serve them yet, so a binding that
+    // names one reads stale guest memory -- and which SHADER does that is the
+    // evidence needed to settle how the packed depth is laid out across the
+    // destination's four components (catalog #35).
+    std::set<uint32_t> depthResolveDests;
     for (const FrameDrawItem& d : in.draws)
     {
         if (d.registerFile.size() < 0x8000)
@@ -2970,7 +2975,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             continue;
         const uint32_t srcSelect = R[0x2318] & 0x7;
         if (srcSelect >= 4) // depth resolve; no host depth texture chain yet
-        { ++resolvesDepth; continue; }
+        {
+            ++resolvesDepth;
+            const uint32_t dd = R[0x2319] & ~0xFFFu;
+            if (dd)
+                depthResolveDests.insert(dd);
+            continue;
+        }
         const uint32_t destBase = R[0x2319] & ~0xFFFu;
         if (!destBase)
             continue;
@@ -3045,6 +3056,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // decoding a resolve destination out of stale guest memory, for an A/B.
     const bool rtLinkEnabled = std::getenv("GEARS_DRAW_NORT") == nullptr;
     const bool listDraws = lucent::config::flag("DRAW_FRAME_LIST");
+    // (depth resolve destination, pixel shader hash) -> bindings. Names the
+    // shaders that decode resolved depth, so their microcode can be read.
+    std::map<std::pair<uint32_t, uint64_t>, uint64_t> depthDestSamplers;
+    uint64_t currentPsHash = 0;
     std::map<uint32_t, uint64_t> texBaseCount;    // fetch base address -> bindings
     std::map<uint32_t, uint64_t> texBaseRtCount;  // ... restricted to resolve destinations
     auto selectTexView = [&](const uint32_t* R, const draw::ShaderTextureBinding& tb)
@@ -3053,6 +3068,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         const uint32_t dword1 = R[0x4800 + fc * 6 + 1];
         const uint32_t base = (dword1 >> 12) << 12;
         const bool isRt = base != 0 && resolveDests.count(base) != 0;
+        if (base != 0 && depthResolveDests.count(base))
+            ++depthDestSamplers[{base, currentPsHash}];
         ++texBaseCount[base];
         if (isRt)
             ++texBaseRtCount[base];
@@ -3352,6 +3369,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (!draw::DeriveShaderModifications(R, d.vsUcode, d.vsUcodeSize, d.vsHash,
                 d.psUcode, d.psUcodeSize, d.psHash, vsModification, psModification))
         { ++skipped; ++skipReasons[2]; continue; }
+        // Set before ANY texture binding of this draw is resolved: selectTexView
+        // runs while the descriptor sets are built, which is earlier than the
+        // PreparedDraw is filled in. Recording it later attributed every binding
+        // to the PREVIOUS draw's shader -- and sent me disassembling a shader
+        // with no texture fetch in it at all.
+        currentPsHash = d.psHash;
         if (!getShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification, vsX, vsMod) ||
             !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification, psX, psMod))
         { ++skipped; ++skipReasons[2]; continue; }
@@ -4810,6 +4833,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
         {
             lucent::Line tb;
+            if (!depthDestSamplers.empty())
+            {
+                lucent::Line dl;
+                dl.add("frame shaders sampling a DEPTH resolve destination"
+                       " (unserved -- these read stale guest memory):");
+                for (const auto& [k, n] : depthDestSamplers)
+                    dl.add(" {:#x}<-ps{:016x}x{}", k.first, k.second, n);
+                dl.flush(lucent::Level::Info, "draw");
+            }
             tb.add("frame texture bases ({} distinct):", texBaseCount.size());
             for (const auto& [base, n] : texBaseCount)
             {

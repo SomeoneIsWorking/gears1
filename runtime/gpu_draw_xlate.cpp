@@ -1000,26 +1000,27 @@ bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv)
     const spv::Id depth24 = builder.createTriOp(spv::OpSelect, typeUint,
         isFloat24, float24, unorm24);
 
-    // Pack depth into bits 8..31 with the stencil in 0..7, exactly as
-    // RB_DEPTH_CLEAR is laid out. We carry no stencil, so it is zero -- recorded
-    // rather than hidden, because a title that tests resolved stencil would need
-    // it.
-    const spv::Id packed = builder.createBinOp(spv::OpShiftLeftLogical, typeUint,
-        depth24, builder.makeUintConstant(8));
-
-    // The four bytes as normalised components, most significant first. This
-    // byte ORDER is the one assumption here that is not derived from a register.
-    const spv::Id inv255 = builder.makeFloatConstant(1.0f / 255.0f);
-    auto byteAt = [&](uint32_t shift) {
-        const spv::Id b = builder.createBinOp(spv::OpBitwiseAnd, typeUint,
-            builder.createBinOp(spv::OpShiftRightLogical, typeUint, packed,
-                builder.makeUintConstant(shift)),
-            builder.makeUintConstant(0xFF));
-        return builder.createBinOp(spv::OpFMul, typeFloat,
-            builder.createUnaryOp(spv::OpConvertUToF, typeFloat, b), inv255);
-    };
+    // What the guest's shaders actually RECEIVE.
+    //
+    // The resolve writes a k_8_8_8_8 destination, but nothing ever reads those
+    // bytes as colour: measured, the frame binds 0xba40000 as a k_24_8_FLOAT
+    // texture (1280x720, the resolve's own size) and the sampling shaders take
+    // only .x -- e.g. ps_db24986d2cc37fb0 does `tfetch2D r4.x___, r4.wx, tf3`.
+    // So the texture unit decodes the packed depth and hands the shader a float.
+    //
+    // We bypass guest memory entirely, so packing the bytes only to have them
+    // unpacked again would be a round trip through a representation nobody
+    // observes. The host image holds what the fetch would have produced: depth
+    // in .x, stencil in .y.
+    //
+    // NOT applied, and small: the guest's float24 quantisation. Its depth has 20
+    // mantissa bits against our 32, so a sampled depth here is up to one 20-bit
+    // ULP finer than the console's. Depth32To20e4 is ported and verified as the
+    // exact inverse of the decode if this ever needs to be exact.
+    (void)depth24;
     const spv::Id texel = builder.createCompositeConstruct(typeFloat4,
-        {byteAt(24), byteAt(16), byteAt(8), byteAt(0)});
+        {d, builder.makeFloatConstant(0.0f), builder.makeFloatConstant(0.0f),
+         builder.makeFloatConstant(1.0f)});
 
     builder.createNoResultOp(spv::OpImageWrite,
         {builder.createLoad(imageDst, spv::NoPrecision), dstCoord, texel});
