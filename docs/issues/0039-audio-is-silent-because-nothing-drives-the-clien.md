@@ -51,3 +51,23 @@ STAGED SO EACH STEP IS VERIFIABLE:
 
 Do not skip to (c). A silent output device and a working one are
 indistinguishable until (b) says there is signal to play.
+
+### Note (2026-07-28)
+STEP (a) IS DONE: the title now submits audio frames.
+
+The chain that had to be built for it, in order: drive the registered callback
+(the pump), implement KeWaitForMultipleObjects, and take the guest thread's
+PROCESSOR NUMBER from the title instead of inventing one -- the last of these
+was the actual blocker and is written up in catalog #40.
+
+Measured over 60 s: 11250 callback invocations, 11250 frames submitted by the
+title, samples at 0x40165380, none submitted without a buffer. Rendering is
+unaffected at 29.96 fps.
+
+STEP (b) IS NOW THE OPEN QUESTION AND IT IS NOT A FORMALITY. The submitted
+buffers have not been looked at. XMACreateContext still hands out contexts with
+no decoder behind them, so the plausible outcome is 11250 buffers of silence
+that look exactly like 11250 buffers of music from the driver's side. Dump the
+PCM to scratch/wav/ and look at it before wiring any output device: an output
+device fed silence and an output device fed nothing sound identical, and only
+one of them is a bug you can find afterwards.

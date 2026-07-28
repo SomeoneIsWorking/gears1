@@ -48,19 +48,27 @@ constexpr uint32_t kPcrCurrentCpu = 0x10C;
 // startup hung, with one thread burning a core while the rest waited on work it
 // would have produced.
 //
-// kThreadProcessorNumber is read by sub_827A7B08 so the same lock can tell
-// whether it is spinning on the core that holds the lock, where spinning cannot
-// possibly help.
+// kThreadId is read by sub_827A7B08 so the same lock can tell whether it is
+// spinning on the thread that holds the lock, where spinning cannot help.
 constexpr uint32_t kThreadTickCount = 0x058;
-constexpr uint32_t kThreadProcessorNumber = 0x14C;
+constexpr uint32_t kThreadCurrentCpu = 0x0BF;
+constexpr uint32_t kThreadId = 0x14C;
 
-// The console has six hardware threads and the title asks for specific ones via
-// KeSetAffinityThread. The runtime does not honour affinity -- the host
-// scheduler places threads -- but the number reported here must still be
-// distinct per thread, or the lock concludes every waiter is on the holder's
-// core and stops spinning immediately.
+// The console has six hardware threads. Which one a thread runs on is chosen by
+// the title -- through ExCreateThread's flags or KeSetAffinityThread -- and the
+// runtime records that choice rather than inventing one, because guest code
+// indexes per-CPU state with it. Threads the title expresses no preference for
+// inherit their creator's, which is the console's own rule.
 constexpr uint32_t kHardwareThreadCount = 6;
 std::atomic<uint32_t> g_nextProcessorNumber{0};
+
+// The KTHREAD's own id field. Distinct per thread is all the title's
+// adaptive lock needs of it, and distinct is what a counter gives.
+std::atomic<uint32_t> g_nextThreadIdField{1};
+
+// The processor of the thread currently running guest code, for that
+// inheritance rule.
+thread_local uint8_t t_currentProcessor = 0;
 
 constexpr uint32_t kPcrSize = 0x1000;
 constexpr uint32_t kThreadSize = 0x1000;
@@ -122,6 +130,41 @@ const char* GuestThreadName()
     return t_guestThreadName.c_str();
 }
 
+uint8_t ProcessorNumberFromMask(uint8_t mask)
+{
+    if (mask == 0)
+        return 0xFF; // "inherit", resolved by the caller
+
+    // Exactly one bit is expected. More than one is a mask this cannot honour
+    // faithfully, so it is reported rather than silently reduced to the first.
+    const uint8_t cpu = uint8_t(__builtin_ctz(mask));
+    if ((mask & uint8_t(mask - 1)) != 0 || cpu >= kHardwareThreadCount)
+    {
+        lucent::warn("thread", "processor mask {:#x} names {} hardware threads,"
+            " using {}", mask, __builtin_popcount(mask), cpu % kHardwareThreadCount);
+        return uint8_t(cpu % kHardwareThreadCount);
+    }
+    return cpu;
+}
+
+uint8_t CurrentGuestProcessor()
+{
+    return t_currentProcessor;
+}
+
+void SetCurrentGuestProcessor(uint8_t cpu)
+{
+    t_currentProcessor = cpu;
+}
+
+void SetGuestThreadProcessor(GuestMemory& memory, uint32_t pcrAddress,
+                             uint32_t threadObject, uint8_t cpu)
+{
+    Store8(memory, pcrAddress + kPcrCurrentCpu, cpu);
+    if (threadObject != 0)
+        Store8(memory, threadObject + kThreadCurrentCpu, cpu);
+}
+
 bool CreateGuestThreadBlock(GuestMemory& memory, uint32_t stackSize, GuestThreadBlock& out)
 {
     uint32_t pcrSize = kPcrSize;
@@ -149,11 +192,14 @@ bool CreateGuestThreadBlock(GuestMemory& memory, uint32_t stackSize, GuestThread
     Store32(memory, pcr + kPcrStackLimit, out.stackLimit);
     Store32(memory, pcr + kPcrCurrentThread, thread);
 
-    const uint32_t processorNumber =
-        g_nextProcessorNumber.fetch_add(1) % kHardwareThreadCount;
-    Store32(memory, thread + kThreadProcessorNumber, processorNumber);
     Store32(memory, thread + kThreadTickCount, 0);
-    Store8(memory, pcr + kPcrCurrentCpu, uint8_t(processorNumber));
+    Store32(memory, thread + kThreadId, g_nextThreadIdField.fetch_add(1));
+
+    // A placeholder until the creator says otherwise. ExCreateThread overwrites
+    // it from the title's own request; the host threads the runtime drives into
+    // guest code keep this, and only need it to be a legal processor.
+    SetGuestThreadProcessor(memory, pcr, thread,
+        uint8_t(g_nextProcessorNumber.fetch_add(1) % kHardwareThreadCount));
 
     {
         std::lock_guard<std::mutex> guard(g_threadBlockMutex);

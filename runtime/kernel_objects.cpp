@@ -297,6 +297,17 @@ uint32_t GuestAddressForHandle(uint32_t handle)
     return address;
 }
 
+uint32_t HandleForGuestAddress(uint32_t address)
+{
+    std::lock_guard<std::mutex> guard(g_guestObjectMutex);
+    for (const auto& [handle, guestAddress] : g_handleToGuestAddress)
+    {
+        if (guestAddress == address)
+            return handle;
+    }
+    return 0;
+}
+
 std::shared_ptr<KernelObject> LookupByGuestAddress(uint32_t address)
 {
     std::lock_guard<std::mutex> guard(g_guestObjectMutex);
