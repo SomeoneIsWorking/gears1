@@ -9,6 +9,7 @@
 #include <byteswap.h>
 #include <lucent/log.h>
 
+#include "guest_thread.h"
 #include "kernel_objects.h"
 
 namespace
@@ -66,7 +67,7 @@ void __imp__KeReleaseSemaphore(PPCContext& __restrict ctx, uint8_t* base)
 // LONG KeSetEvent(PRKEVENT Event, LONG Increment, BOOLEAN Wait)
 void __imp__KeSetEvent(PPCContext& __restrict ctx, uint8_t* base)
 {
-    lucent::debug("wait", "KeSetEvent(object {:#x})", ctx.r3.u32);
+    lucent::debug("wait", "[{}] KeSetEvent(object {:#x})", gears::GuestThreadName(), ctx.r3.u32);
     auto object = Bind(ctx.r3.u32, "KeSetEvent");
     if (object)
     {
