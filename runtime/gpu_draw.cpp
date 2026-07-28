@@ -2589,6 +2589,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         uint32_t copyCommand = 0;
         uint32_t colorClearValue = 0, depthClearValue = 0;
         uint32_t depthBase = 0, depthFormat = 0;
+        // The resolve RECTANGLE, as the guest wrote it. Xenia's GetResolveInfo:
+        // "D3D9 HACK: Vertices to use are always in vf0, and are written by the
+        // CPU" -- 3 vertices of 2 floats, big-endian, from vertex fetch
+        // constant 0. Reported raw, with the window offset alongside rather
+        // than folded in, so the measurement does not depend on getting the
+        // top-left fixed-point rounding right.
+        bool haveRect = false;
+        float rect[6] = {0, 0, 0, 0, 0, 0};
+        int32_t windowX = 0, windowY = 0;
+        // Where the copy LANDS: RB_COPY_DEST_PITCH (pitch and height, 14 bits
+        // each) and RB_COPY_DEST_INFO's copy_dest_format. Without these the
+        // destination is an address with no shape, and two tiles of one texture
+        // cannot be told from two unrelated textures.
+        uint32_t destPitch = 0, destHeight = 0, destFormat = 0;
     };
     std::vector<ResolveEvent> resolves;
     std::set<uint32_t> depthBases;              // distinct RB_DEPTH_INFO.depth_base
@@ -2779,6 +2793,40 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             re.depthClearValue = R[0x231D];
             re.depthBase = R[0x2002] & 0xFFF;
             re.depthFormat = (R[0x2002] >> 16) & 1;
+            // PA_SC_WINDOW_OFFSET, two signed 15-bit fields. The resolve rect
+            // is shifted by it exactly as geometry is, which is what makes a
+            // predicated tile resolve to its own part of the destination.
+            const uint32_t wo = R[0x2080];
+            auto sign15 = [](uint32_t v) {
+                v &= 0x7FFF;
+                return int32_t(v) - int32_t((v & 0x4000) << 1);
+            };
+            if ((R[0x2205] >> 16) & 1 /*vtx_window_offset_enable*/)
+            {
+                re.windowX = sign15(wo);
+                re.windowY = sign15(wo >> 16);
+            }
+            // vf0: type must be kVertex and size exactly 3 vertices x 2 floats.
+            const uint32_t vf0 = R[0x4800];
+            const uint32_t vf1 = R[0x4801];
+            if ((vf0 & 3) == 3 && ((vf1 >> 2) & 0xFFFFFF) == 6)
+            {
+                const uint64_t addr = uint64_t((vf0 >> 2) << 2);
+                if (addr + 6 * 4 <= in.guestWindowBytes)
+                {
+                    for (int k = 0; k < 6; ++k)
+                    {
+                        uint32_t raw;
+                        std::memcpy(&raw, in.guestBase + addr + k * 4, 4);
+                        raw = __builtin_bswap32(raw);
+                        std::memcpy(&re.rect[k], &raw, 4);
+                    }
+                    re.haveRect = true;
+                }
+            }
+            re.destPitch = R[0x231A] & 0x3FFF;
+            re.destHeight = (R[0x231A] >> 16) & 0x3FFF;
+            re.destFormat = (R[0x231B] >> 7) & 0x3F;
             resolves.push_back(re);
         }
         // How many distinct depth surfaces the frame uses. One host depth image
@@ -3958,6 +4006,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     re.depthClear ? "" : "(off)", re.depthClearValue,
                     re.depthBase, re.depthFormat)];
             }
+            // Every resolve's rectangle and destination, which is how the
+            // frame's predicated tiles are assembled -- or, while the resolve
+            // blit ignores the rectangle, are not (catalog #32).
+            for (const ResolveEvent& re : resolves)
+                lucent::info("draw", "  resolve draw {}: {}@{:#x} -> {:#x}"
+                    " rect [{} {}] [{} {}] [{} {}] window ({},{}){}",
+                    re.drawIndex, re.srcIsDepth ? "depth" : "color", re.srcBase,
+                    re.destBase, re.rect[0], re.rect[1], re.rect[2], re.rect[3],
+                    re.rect[4], re.rect[5], re.windowX, re.windowY,
+                    re.haveRect ? "" : " (NO RECT: vf0 is not 3x2 floats)");
+            for (const ResolveEvent& re : resolves)
+                lucent::info("draw", "  resolve draw {} destination: {:#x}"
+                    " pitch {} height {} format {}", re.drawIndex, re.destBase,
+                    re.destPitch, re.destHeight, re.destFormat);
             lucent::Line cl;
             cl.add("frame clears programmed by resolves: {} of {} copy draws"
                    " carry a clear;", clears.size(), resolves.size());
