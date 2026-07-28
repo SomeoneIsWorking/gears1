@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <chrono>
 #include <cstring>
 #include <deque>
@@ -524,7 +525,57 @@ struct ResolveTarget
     VkImageView view = VK_NULL_HANDLE;
     uint32_t sourceBase = 0; // the EDRAM base it is a copy of
     uint32_t copies = 0;     // resolves into it this frame
+    // A resolve destination is a REGION OF A TEXTURE, not a texture. This one
+    // is the whole texture: the guest's RB_COPY_DEST_BASE/_PITCH describe it,
+    // and a resolve whose base lands inside it writes at an offset rather than
+    // minting an image of its own. That distinction is what assembles a frame
+    // rendered in predicated tiles -- see catalog #32, where one 1280x720
+    // half-float target was being split into two unrelated images because the
+    // guest folds the second tile's row offset into RB_COPY_DEST_BASE.
+    uint32_t base = 0;       // RB_COPY_DEST_BASE of the texture's first row
+    uint32_t pitch = 0, height = 0; // in pixels, from RB_COPY_DEST_PITCH
+    uint32_t bpp = 0;        // bytes per pixel of the guest destination format
+    uint32_t width = 0, imageHeight = 0; // what the host image was created with
+    bool everWritten = false; // whether a resolve has landed in it yet
 };
+
+// Bytes per pixel of a resolve DESTINATION format (RB_COPY_DEST_INFO's
+// copy_dest_format, a xenos::ColorFormat). Needed to turn the byte distance
+// between two RB_COPY_DEST_BASE values into a row offset. Returns 0 for a
+// format this does not know, so the caller can report it rather than compute a
+// nonsense offset from a guessed size.
+uint32_t ColorFormatBytesPerPixel(uint32_t colorFormat)
+{
+    switch (colorFormat)
+    {
+    case 2: case 8: case 9:                       return 1; // k_8, k_8_A, k_8_B
+    case 3: case 4: case 5: case 10: case 15:
+    case 24: case 30:                             return 2; // 16-bit
+    case 6: case 7: case 14: case 16: case 17:
+    case 25: case 31: case 36:                    return 4; // 32-bit
+    case 26: case 32: case 37: case 50: case 54:
+    case 55: case 56:                             return 8; // 64-bit
+    case 38:                                      return 16;
+    default:                                      return 0;
+    }
+}
+
+// Xenia's ui::FloatToD3D11Fixed16p8, for the resolve rectangle's vertices.
+//
+// The tie-breaking differs from the D3D11 spec's round-to-nearest-even, and
+// deliberately does not matter here: a resolve rectangle is written by the CPU
+// with at most one fractional bit (the frame's are all x.5), so multiplying by
+// 256 is exact and no rounding occurs at all. The early-exit clamps are Xenia's.
+int32_t FloatToFixed16p8(float f)
+{
+    if (!(std::fabs(f) >= 1.0f / 512.0f))
+        return 0;
+    if (f >= 32768.0f - 1.0f / 256.0f)
+        return (1 << 23) - 1;
+    if (f <= -32768.0f)
+        return -32768 * 256;
+    return int32_t(std::lround(double(f) * 256.0));
+}
 
 // The host format one EDRAM base is given, from every RB_COLOR_INFO.color_format
 // the frame renders it with. A base used with a single format keeps that
@@ -2058,18 +2109,66 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // an 8888 UNORM value (0..1) exactly and a 7e3 HDR value (0..32) without
     // clamping, and vkCmdBlitImage does the conversion; an 8888 destination
     // would clamp every HDR highlight the tonemap pass exists to read.
+    // Resolves that could not be attributed to a destination texture, counted
+    // rather than silently dropped.
+    uint32_t resolveNoFormat = 0;
+    // Resolves whose rectangle could not be read from vf0.
+    uint32_t resolveNoRect = 0;
     auto getResolveTarget = [&](uint32_t destBase, uint32_t sourceBase,
-                                ResolveTarget*& out) -> bool {
+                                uint32_t destPitch, uint32_t destHeight,
+                                uint32_t destFormat, ResolveTarget*& out,
+                                uint32_t& rowOffsetOut) -> bool {
+        rowOffsetOut = 0;
         auto it = P.resolveTargets.find(destBase);
         if (it != P.resolveTargets.end()) { out = &it->second; return true; }
+        // Does this base fall INSIDE a texture we already have? That is the
+        // predicated-tile case: the guest folds the tile's row offset into
+        // RB_COPY_DEST_BASE, so the second tile's base is the first tile's base
+        // plus whole rows. Matching on containment (same pitch, same format, a
+        // whole number of rows in) assembles them into the one texture they are.
+        const uint32_t bpp = ColorFormatBytesPerPixel(destFormat);
+        if (bpp != 0 && destPitch != 0)
+        {
+            for (auto& [k, r] : P.resolveTargets)
+            {
+                if (r.pitch != destPitch || r.bpp != bpp || destBase <= r.base)
+                    continue;
+                const uint64_t rowBytes = uint64_t(r.pitch) * r.bpp;
+                const uint64_t delta = uint64_t(destBase) - r.base;
+                if (delta % rowBytes != 0)
+                    continue;
+                const uint64_t row = delta / rowBytes;
+                if (row >= r.height)
+                    continue;
+                rowOffsetOut = uint32_t(row);
+                out = &r;
+                lucent::info("draw", "render-target cache: resolve destination"
+                    " {:#x} is row {} of the texture at {:#x} ({}x{}), not a"
+                    " target of its own", destBase, rowOffsetOut, r.base,
+                    r.pitch, r.height);
+                return true;
+            }
+        }
+        if (bpp == 0)
+            ++resolveNoFormat;
         const VkFormat hostFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
         ResolveTarget r;
         r.hostFormat = hostFormat;
         r.sourceBase = sourceBase;
+        r.base = destBase;
+        r.pitch = destPitch;
+        r.height = destHeight;
+        r.bpp = bpp;
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ci.imageType = VK_IMAGE_TYPE_2D;
         ci.format = hostFormat;
-        ci.extent = {W, H, 1};
+        // The texture's OWN size, as the guest declared it -- not the frame's.
+        // A tile resolve declares the full destination height (720) even though
+        // it writes only its own rows, which is exactly what makes the whole
+        // texture addressable for the tile that follows.
+        r.width = destPitch ? std::min<uint32_t>(destPitch, 8192) : W;
+        r.imageHeight = destHeight ? std::min<uint32_t>(destHeight, 8192) : H;
+        ci.extent = {r.width, r.imageHeight, 1};
         ci.mipLevels = 1;
         ci.arrayLayers = 1;
         ci.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -2098,7 +2197,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (vkCreateImageView(device, &vi, nullptr, &r.view) != VK_SUCCESS)
             return false;
         lucent::info("draw", "render-target cache: resolve destination {:#x} <- surface"
-            " {:#x}", destBase, sourceBase);
+            " {:#x} ({}x{} px, {} bytes/px, host image {}x{})", destBase, sourceBase,
+            destPitch, destHeight, bpp, r.width, r.imageHeight);
         out = &P.resolveTargets.emplace(destBase, r).first->second;
         return true;
     };
@@ -2510,6 +2610,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // issues no draw at all.
         bool isResolve = false;
         uint32_t resolveDest = 0;
+        // The guest's resolve rectangle, in EDRAM/surface pixels, and where it
+        // lands in the destination texture. Without these a resolve copies the
+        // whole surface to the origin, which is why the frame's two predicated
+        // tiles overwrote each other instead of assembling (catalog #32).
+        VkRect2D resolveSrcRect{};
+        int32_t resolveDstX = 0, resolveDstY = 0;
         // --- diagnostic only (GEARS_DRAW_DIAG), never read by the renderer ---
         // Everything that can make a draw contribute nothing, recorded next to
         // the draw that did nothing. A summary cannot answer "which stage did
@@ -2660,6 +2766,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Pass two: the frame's resolves, each given its destination's host image.
     std::set<uint32_t> resolveDests;
     uint32_t resolvesUnmatched = 0, resolvesDepth = 0;
+    // RB_COPY_DEST_BASE -> (destination texture base, row offset within it).
+    std::map<uint32_t, std::pair<uint32_t, uint32_t>> resolveRouting;
     for (const FrameDrawItem& d : in.draws)
     {
         if (d.registerFile.size() < 0x8000)
@@ -2679,9 +2787,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (!formatsPerBase.count(srcBase))
         { ++resolvesUnmatched; continue; }
         ResolveTarget* rt = nullptr;
-        if (!getResolveTarget(destBase, srcBase, rt))
+        uint32_t rowOffset = 0;
+        if (!getResolveTarget(destBase, srcBase, R[0x231A] & 0x3FFF,
+                (R[0x231A] >> 16) & 0x3FFF, (R[0x231B] >> 7) & 0x3F, rt, rowOffset))
             continue;
-        resolveDests.insert(destBase);
+        // Where this destination base writes: which texture, and how many rows
+        // into it. A tile's base is the texture's base plus whole rows.
+        resolveRouting[destBase] = {rt->base, rowOffset};
+        resolveDests.insert(rt->base);
     }
     if (resolvesDepth || resolvesUnmatched)
         lucent::info("draw", "frame resolves not served: {} from depth (no host depth"
@@ -2845,12 +2958,94 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             static const uint32_t kColorInfo[4] = {0x2001, 0x2003, 0x2004, 0x2005};
             const uint32_t srcBase = srcSelect < 4
                 ? (R[kColorInfo[srcSelect & 3]] & 0xFFF) : 0xFFFFFFFFu;
-            if (formatsPerBase.count(srcBase) && P.resolveTargets.count(destBase))
+            auto route = resolveRouting.find(destBase);
+            if (formatsPerBase.count(srcBase) && route != resolveRouting.end())
             {
                 PreparedDraw pd{};
                 pd.isResolve = true;
                 pd.surfaceBase = srcBase;
-                pd.resolveDest = destBase;
+                pd.resolveDest = route->second.first;   // the TEXTURE, not the base
+                // The resolve rectangle, per Xenia's GetResolveInfo: three
+                // vertices of two floats in vertex fetch constant 0 ("D3D9 HACK:
+                // Vertices to use are always in vf0, and are written by the
+                // CPU"), converted to 16p8 fixed point, min/max'd, rounded by
+                // the top-left rule, shifted by the window offset and clamped to
+                // the scissor.
+                int32_t x0 = 0, y0 = 0, x1 = int32_t(W), y1 = int32_t(H);
+                const uint32_t vf0 = R[0x4800], vf1 = R[0x4801];
+                if ((vf0 & 3) == 3 && ((vf1 >> 2) & 0xFFFFFF) == 6)
+                {
+                    const uint64_t addr = uint64_t((vf0 >> 2) << 2);
+                    if (addr + 6 * 4 <= in.guestWindowBytes)
+                    {
+                        // Most vertices carry a negative half-pixel offset,
+                        // which PA_SU_VTX_CNTL.pix_center says to reverse.
+                        const float halfPixel =
+                            (R[0x2302] & 1) == 0 /*kD3DZero*/ ? 0.5f : 0.0f;
+                        int32_t fx[3], fy[3];
+                        for (int k = 0; k < 3; ++k)
+                        {
+                            uint32_t rx, ry;
+                            std::memcpy(&rx, in.guestBase + addr + k * 8, 4);
+                            std::memcpy(&ry, in.guestBase + addr + k * 8 + 4, 4);
+                            rx = __builtin_bswap32(rx);
+                            ry = __builtin_bswap32(ry);
+                            float vx, vy;
+                            std::memcpy(&vx, &rx, 4);
+                            std::memcpy(&vy, &ry, 4);
+                            fx[k] = FloatToFixed16p8(vx + halfPixel);
+                            fy[k] = FloatToFixed16p8(vy + halfPixel);
+                        }
+                        // Top-left rule: include .5 on the near edge, exclude it
+                        // on the far one -- both are (v + 127) >> 8.
+                        x0 = (std::min({fx[0], fx[1], fx[2]}) + 127) >> 8;
+                        y0 = (std::min({fy[0], fy[1], fy[2]}) + 127) >> 8;
+                        x1 = (std::max({fx[0], fx[1], fx[2]}) + 127) >> 8;
+                        y1 = (std::max({fy[0], fy[1], fy[2]}) + 127) >> 8;
+                        // The window offset moves the rectangle exactly as it
+                        // moves geometry, which is what puts a predicated tile's
+                        // rectangle in its own part of the surface.
+                        if ((R[0x2205] >> 16) & 1 /*vtx_window_offset_enable*/)
+                        {
+                            const uint32_t wo = R[0x2080];
+                            auto sign15 = [](uint32_t v) {
+                                v &= 0x7FFF;
+                                return int32_t(v) - int32_t((v & 0x4000) << 1);
+                            };
+                            const int32_t wx = sign15(wo), wy = sign15(wo >> 16);
+                            x0 += wx; x1 += wx; y0 += wy; y1 += wy;
+                        }
+                        draw::GuestViewport gv;
+                        if (draw::DeriveViewport(R, gv))
+                        {
+                            const int32_t sr = int32_t(gv.scissorX + gv.scissorW);
+                            const int32_t sb = int32_t(gv.scissorY + gv.scissorH);
+                            x0 = std::clamp(x0, int32_t(gv.scissorX), sr);
+                            x1 = std::clamp(x1, int32_t(gv.scissorX), sr);
+                            y0 = std::clamp(y0, int32_t(gv.scissorY), sb);
+                            y1 = std::clamp(y1, int32_t(gv.scissorY), sb);
+                        }
+                        // D3D9's Resolve aligns the rectangle to 8.
+                        x0 &= ~int32_t(7); y0 &= ~int32_t(7);
+                        x1 = (x1 + 7) & ~int32_t(7);
+                        y1 = (y1 + 7) & ~int32_t(7);
+                    }
+                    else
+                    {
+                        ++resolveNoRect;
+                    }
+                }
+                else
+                {
+                    ++resolveNoRect;
+                }
+                pd.resolveSrcRect.offset = {x0, y0};
+                pd.resolveSrcRect.extent = {uint32_t(std::max(0, x1 - x0)),
+                                            uint32_t(std::max(0, y1 - y0))};
+                // The destination offset is the rectangle's own origin plus the
+                // rows this base sits into the texture.
+                pd.resolveDstX = x0;
+                pd.resolveDstY = y0 + int32_t(route->second.second);
                 prepared.push_back(pd);
                 ++issuedResolves;
             }
@@ -3507,12 +3702,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // accumulated into one full-size image, so each tile's resolve carries the
     // whole (correct) surface and the last one leaves the destination right.
     // It follows the tile model rather than approximating around it.
-    auto resolveSurfaceTo = [&](VkImage src, ResolveTarget& dst) {
+    auto resolveSurfaceTo = [&](VkImage src, ResolveTarget& dst,
+                                const VkRect2D& srcRect, int32_t dstX, int32_t dstY) {
         VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
         b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        // PRESERVE what is already there. This was UNDEFINED, which permits the
+        // driver to discard the destination's contents -- fine while a resolve
+        // wrote the whole image, fatal once a resolve writes one tile's rows and
+        // the other tile's rows have to survive it (catalog #32).
+        b.oldLayout = dst.everWritten ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                      : VK_IMAGE_LAYOUT_UNDEFINED;
         b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         b.image = dst.image; b.subresourceRange = range;
@@ -3520,11 +3721,28 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
         // Blit, not copy: source surfaces differ in format from the wide float
         // destination (see getResolveTarget), and only a blit converts.
+        // The guest's own rectangle, to the guest's own destination offset --
+        // not the whole surface to the origin. Both are clamped to the images
+        // involved so a rectangle larger than either cannot make the blit
+        // invalid; the clamp is counted by the caller.
+        const int32_t sx0 = std::clamp<int32_t>(srcRect.offset.x, 0, int32_t(W));
+        const int32_t sy0 = std::clamp<int32_t>(srcRect.offset.y, 0, int32_t(H));
+        int32_t sx1 = std::clamp<int32_t>(srcRect.offset.x + int32_t(srcRect.extent.width),
+                                          sx0, int32_t(W));
+        int32_t sy1 = std::clamp<int32_t>(srcRect.offset.y + int32_t(srcRect.extent.height),
+                                          sy0, int32_t(H));
+        const int32_t dw = int32_t(dst.width), dh = int32_t(dst.imageHeight);
+        sx1 = std::min<int32_t>(sx1, sx0 + std::max<int32_t>(0, dw - dstX));
+        sy1 = std::min<int32_t>(sy1, sy0 + std::max<int32_t>(0, dh - dstY));
+        if (sx1 <= sx0 || sy1 <= sy0 || dstX >= dw || dstY >= dh)
+            return; // nothing of this rectangle lands in the destination
         VkImageBlit bl{};
         bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        bl.srcOffsets[1] = {int32_t(W), int32_t(H), 1};
-        bl.dstOffsets[1] = {int32_t(W), int32_t(H), 1};
+        bl.srcOffsets[0] = {sx0, sy0, 0};
+        bl.srcOffsets[1] = {sx1, sy1, 1};
+        bl.dstOffsets[0] = {dstX, dstY, 0};
+        bl.dstOffsets[1] = {dstX + (sx1 - sx0), dstY + (sy1 - sy0), 1};
         vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl,
             VK_FILTER_NEAREST);
@@ -3538,6 +3756,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &r);
         ++dst.copies;
+        dst.everWritten = true;
     };
     // Each checkpoint costs a full-frame readback buffer, so STEP=1 on a
     // 170-draw frame is capped rather than allocating 170 of them.
@@ -3658,7 +3877,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 !src->second.begunThisFrame)
                 continue; // nothing has been rendered into it yet this frame
             endPass();
-            resolveSurfaceTo(src->second.color, dst->second);
+            resolveSurfaceTo(src->second.color, dst->second, pd.resolveSrcRect,
+                             pd.resolveDstX, pd.resolveDstY);
             ++resolvesDone;
             continue;
         }
@@ -4079,6 +4299,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 tb.add(" {:#x}x{}{}", base, n, texBaseRtCount.count(base) ? "(RT)" : "");
             tb.flush(lucent::Level::Info, "draw");
         }
+        if (resolveNoRect || resolveNoFormat)
+            lucent::warn("draw", "frame resolves: {} without a readable vf0"
+                " rectangle (whole surface copied), {} with a destination format"
+                " of unknown size (cannot be placed in a texture)",
+                resolveNoRect, resolveNoFormat);
         lucent::info("draw", "frame render pass: {} segments across {} surface"
             " switches, {} resolves executed (RT link {})", segments,
             surfaceSwitches, resolvesDone, rtLinkEnabled ? "on" : "off");
