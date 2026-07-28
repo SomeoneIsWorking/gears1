@@ -62,7 +62,6 @@ add_executable(gears1
     vd_null_gpu.cpp
     gpu_present.cpp
     input.cpp
-    gpu_draw.cpp
     hle_d3d.cpp
     kernel_rtl.cpp
     kernel_config.cpp
@@ -75,6 +74,17 @@ add_executable(gears1
 
 target_include_directories(gears1 PRIVATE .)
 target_link_libraries(gears1 PRIVATE gears_ppc XenonUtils lucent::lucent)
+
+# The guest-draw renderer, in its own static library rather than compiled into
+# gears1 -- because it depends on NOTHING in the runtime (gpu_draw.cpp includes
+# only gpu_draw.h and gpu_draw_xlate.h), which is what makes an offline frame
+# replay possible. tools/frame_replay links this and renders a captured frame in
+# about a second, with no guest, no menu walk and no 200-second boot; see
+# frame_capture.h. gears1 links it exactly as before.
+add_library(gears_draw STATIC gpu_draw.cpp frame_capture.cpp)
+target_include_directories(gears_draw PUBLIC .)
+target_link_libraries(gears_draw PRIVATE lucent::lucent)
+target_link_libraries(gears1 PRIVATE gears_draw)
 
 # The host graphics backend. Vulkan because extern/xenia's SPIR-V shader
 # translator is the intended path for real content later, and SDL3 for the
@@ -115,9 +125,18 @@ if(Vulkan_FOUND AND GEARS_HAVE_XENOS_TRANSLATOR)
     # xenia_gpu island is built with -mavx for the same reason. This TU now
     # includes it, so it needs the same target features.
     target_compile_options(gears_draw_xlate PRIVATE -mavx)
+    target_compile_definitions(gears_draw PRIVATE GEARS_HAVE_GUEST_DRAW)
+    target_link_libraries(gears_draw PUBLIC Vulkan::Vulkan PRIVATE gears_draw_xlate)
     target_compile_definitions(gears1 PRIVATE GEARS_HAVE_GUEST_DRAW)
-    target_link_libraries(gears1 PRIVATE Vulkan::Vulkan gears_draw_xlate)
+    target_link_libraries(gears1 PRIVATE Vulkan::Vulkan)
     message(STATUS "gears1: guest-draw backend enabled (Vulkan + Xenos translator)")
+
+    # Offline frame replay: render a captured frame with no guest running. This
+    # is the instrument the renderer is debugged with -- one capture, then every
+    # arm of a comparison renders byte-identical input in about a second.
+    add_executable(frame_replay ${CMAKE_CURRENT_SOURCE_DIR}/../tools/frame_replay/main.cpp)
+    target_link_libraries(frame_replay PRIVATE gears_draw lucent::lucent)
+    message(STATUS "gears1: frame_replay enabled")
 else()
     message(WARNING
         "gears1: no guest-draw backend -- needs Vulkan and extern/xenia's "
