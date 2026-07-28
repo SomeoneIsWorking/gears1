@@ -168,3 +168,22 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap: 
 - notes: 
 
+
+## audio
+
+### audio-driver — Render-driver frame path: the title produces PCM
+- status: re-verified
+- deps: 
+- evidence: 60 s run with GEARS_AUDIO_PUMP=1: 11250 callback invocations and 11250 frames submitted, one for one (exactly 60 s at the driver's 187.5 Hz); 2763 frames non-silent, peak 0.518, ffmpeg volumedetect mean -27.4 dB / max -5.7 dB on the GEARS_AUDIO_WAV dump
+- where: runtime/xaudio_null.cpp (pump, submit, peak measurement, WAV dump); runtime/kernel_object_api.cpp (KeWaitForMultipleObjects); runtime/guest_thread.cpp + kernel_thread.cpp (processor number from the title)
+- gap: 
+- notes: The blocker was the guest thread's PROCESSOR NUMBER, not the audio API: the title's audio worker checks into a rendezvous barrier at array[KPCR+0x10C] and we invented that number instead of taking it from ExCreateThread's creation flags. Catalog #40.
+
+### xma-decode — XMA hardware decode
+- status: hack
+- deps: audio-driver
+- evidence: Both live XMA contexts are fully armed and completely static: input_buffer_0_valid=1 with 55 and 1780 packets queued, output_buffer_valid=1, error_set=0, and input_buffer_read_offset frozen at 32 bits with output_buffer_write_offset at 0 across 12 s. Decoded against Xenia's XMA_CONTEXT_DATA.
+- where: runtime/xaudio_null.cpp: XMACreateContext hands out a zeroed 0x40-byte context in physical memory and nothing decodes
+- gap: There is no decoder. XMACreateContext returns a context record the title programs correctly and then waits on forever, which is why sound stops around 19 s once the intro's software-mixed voices are exhausted. A real step needs the XMA bitstream parser and a WMA-Pro-class decoder over the packet stream, writing decoded blocks to output_buffer_ptr and advancing the read/write offsets the title polls.
+- notes: Marked hack rather than missing because the context handout LOOKS like support and the title behaves as if decode were coming. Catalog #39.
+
