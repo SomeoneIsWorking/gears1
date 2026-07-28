@@ -148,3 +148,55 @@ output_buffer_ptr and advancing the offsets the title polls.
 DO NOT fake this by writing zeros or noise into the output buffer to make the
 offsets move. It would advance the title past its wait and produce audible
 garbage that looks like progress.
+
+### Note (2026-07-28)
+THE XMA INTERFACE IS NOW REACHABLE. THE DECODER IS STILL ABSENT.
+
+The title imports only XMACreateContext and XMAReleaseContext -- confirmed
+against the whole recompiled image, which declares no other XMA import. So
+everything else is its own statically linked library driving the hardware
+registers at 0x7FEA0000 directly, and the register block is not decoration
+around a decoder: it IS the interface.
+
+The contract that was missing: register 0x600 publishes the address of the
+CONTEXT ARRAY, and the title reads it with lwbrx at sub_825E8FE0 to learn where
+contexts live. Contexts are then named by their INDEX in that array, and the
+kick/lock/clear registers are bitmaps over those indices. The runtime published
+nothing, so the title computed every index against a base of zero, and
+XMACreateContext handed out unrelated heap blocks besides.
+
+The damage was visible in the device window and is the reason this was worth
+chasing: dumping 0x7FC00000..0x80000000 showed the title's register writes
+landing at 0x7FEA3460, 0x7FEA3478, 0x7FEA3560 and similar -- addresses that
+correspond to no register in Xenia's table, because they were computed from
+garbage. Every kick the title made was being written into inert memory nobody
+would ever read.
+
+FIXED (runtime/xma.cpp): a 320 x 64-byte context array is allocated at startup
+and published in register 0x600, NextContextIndex is seeded to 1, and
+XMACreateContext allocates slots from that array instead of arbitrary blocks.
+
+VERIFIED by re-dumping the same window. Every non-zero word is now a named
+register and nothing else is written:
+
+    0x7fea1800  0x600 ContextArrayAddress  0xa0000000
+    0x7fea181c  0x607 NextContextIndex     0x00000001
+    0x7fea1940  0x650 Context0Kick         0x00000002
+    0x7fea1a40  0x690 Context0Lock         0x00000002
+    0x7fea1a80  0x6a0 Context0Clear        0x00000002
+
+and the runtime observes contexts 0 through 7 kicked in order over a run to
+gameplay -- one per context the title creates. Rendering is unaffected at
+29.63 fps and both test suites pass.
+
+AUDIO IS UNCHANGED, exactly as expected: 2763 non-silent frames, same as before.
+Nothing decodes. This commit makes the decoder REACHABLE, which it was not.
+
+ONE HONEST LIMITATION, recorded in the code as well: the kick watcher POLLS, and
+a kick is a register write the title overwrites with a fresh bitmap each time.
+Polling can therefore report which contexts were ever seen set, not every kick.
+That is enough to answer "is the title asking", and not enough to drive a
+decoder. The real mechanism is to trap the write -- the recompiler already
+routes device stores through PPC_MM_STORE_U32, which is #ifndef-guarded
+precisely so a runtime can define it. Decoder work starts there, not with
+ffmpeg.
