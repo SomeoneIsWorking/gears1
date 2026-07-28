@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <mutex>
 #include <set>
+#include <unordered_map>
 #include <string>
 
 #include <byteswap.h>
@@ -15,6 +16,7 @@
 #include <lucent/log.h>
 
 #include "guest_heap.h"
+#include "xma_decode.h"
 
 namespace gears
 {
@@ -139,6 +141,29 @@ void DumpContext(GuestMemory& memory, uint32_t index, uint32_t pointer)
         fields.isStereo ? "stereo" : "mono", fields.sampleRate, fields.inputBuffer);
 }
 
+// Opening the codec for a context is not decoding it, and this does not pretend
+// otherwise. It answers one question the build alone cannot: whether the
+// libavcodec actually linked into this binary has the per-frame XMA decoder.
+// "The wrong libavcodec" and "the bitstream is bad" produce the same silence
+// later, so they are separated now, at the point where the answer is cheap.
+std::unordered_map<uint32_t, XmaFrameDecoder> g_decoders;
+std::mutex g_decoderMutex;
+
+void OpenDecoderOnce(GuestMemory& memory, uint32_t index, uint32_t pointer)
+{
+    std::lock_guard<std::mutex> guard(g_decoderMutex);
+    if (g_decoders.count(index))
+        return;
+
+    const ContextFields fields = ReadContext(memory, pointer);
+    if (!fields.inputValid)
+        return;
+
+    XmaFrameDecoder& decoder = g_decoders[index];
+    if (!decoder.Open(fields.sampleRate, fields.isStereo))
+        lucent::warn("xma", "context {} has no decoder behind it", index);
+}
+
 void ReportContextBits(const char* what, uint32_t group, uint32_t bits)
 {
     static std::atomic<uint64_t> s_reported{0};
@@ -247,7 +272,9 @@ bool OnXmaRegisterStore(uint32_t address, uint32_t value)
         for (uint32_t bits = reg; bits; bits &= bits - 1)
         {
             const uint32_t index = group * 32 + uint32_t(__builtin_ctz(bits));
-            DumpContext(*g_memory, index, g_contextArray + index * kContextSize);
+            const uint32_t pointer = g_contextArray + index * kContextSize;
+            DumpContext(*g_memory, index, pointer);
+            OpenDecoderOnce(*g_memory, index, pointer);
         }
         // Reported as it goes rather than at exit. These runs end by being
         // killed -- the capture script sends SIGKILL and atexit never sees it --
