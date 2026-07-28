@@ -1378,7 +1378,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         return std::chrono::duration<double, std::milli>(Clock::now() - tStart).count();
     };
     double msSetup = 0, msDrawLoop = 0, msSubmit = 0, msReadback = 0;
-    double msTranslate = 0, msPipeline = 0, msTexture = 0;
+    double msTranslate = 0, msPipeline = 0, msTexture = 0, msSsboUpload = 0;
     auto accumulate = [](double& into, Clock::time_point from) {
         into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
     };
@@ -1433,9 +1433,23 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         return true;
     };
 
-    // --- shared SSBO: verbatim mirror of low guest physical memory --------
-    // The buffer is persistent, its CONTENTS are not: guest memory is precisely
-    // what differs between frames, so it is re-uploaded every time.
+    // --- shared SSBO: the guest physical memory the shaders fetch through ---
+    // The buffer SPANS the whole guest physical window, because a vertex fetch
+    // constant may name any address in it -- an Act 1 frame fetches as high as
+    // 0xecf926c (237 MiB), and while this mirror was 64 MiB those fetches read
+    // zero, collapsed every primitive to the origin and were destroyed at
+    // clipping. That was the missing world (catalog #30).
+    //
+    // Spanning it does NOT mean copying it. The contents are uploaded per frame
+    // (guest memory is precisely what changes between frames), and copying
+    // 512 MiB per frame is not a renderer, it is a memcpy benchmark. So the
+    // upload is DEFERRED to after the draw-preparation loop, which is where each
+    // draw's vertex and index ranges become known, and only those ranges are
+    // copied. See "deferred range upload" below.
+    //
+    // Deferring is safe because the SSBO's CONTENTS are only read by the GPU at
+    // submit: the preparation loop reads indices from guestBase directly on the
+    // CPU, and descriptor sets reference the buffer handle, not its bytes.
     if (P.ssbo != VK_NULL_HANDLE && P.ssboBytes != in.guestPhysicalMirrorBytes)
     {
         vkDestroyBuffer(device, P.ssbo, nullptr);
@@ -1453,7 +1467,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     if (!P.ssboMapped)
         VK_CHECK(vkMapMemory(device, P.ssboMem, 0, in.guestPhysicalMirrorBytes, 0,
             &P.ssboMapped));
-    std::memcpy(P.ssboMapped, in.guestBase, in.guestPhysicalMirrorBytes);
+    // The ranges this frame's draws actually fetch, filled in by the preparation
+    // loop and uploaded after it. Byte ranges into the guest window.
+    std::vector<std::pair<uint64_t, uint64_t>> fetchRanges;
 
     // --- stub textures (1x1 white), one per image dimension --------------
     // A translated shader declares its image variables with the dimension the
@@ -3092,14 +3108,34 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 if ((d0 & 3) != 3 /*kVertex*/)
                     continue;
                 anyBinding = true;
-                const uint64_t end = uint64_t((d0 >> 2) << 2) +
-                                     ((d1 >> 2) & 0xFFFFFF) * 4ull;
+                const uint64_t begin = uint64_t((d0 >> 2) << 2);
+                const uint64_t end = begin + ((d1 >> 2) & 0xFFFFFF) * 4ull;
                 vfHighestByte = std::max<uint32_t>(vfHighestByte, uint32_t(std::min<uint64_t>(end, 0xFFFFFFFFull)));
                 if (end > in.guestPhysicalMirrorBytes)
                     anyPast = true;
+                // This is the range the GPU will fetch from, so it is also
+                // exactly the range that has to be uploaded.
+                else if (end > begin)
+                    fetchRanges.emplace_back(begin, end);
             }
             if (anyBinding)
                 (anyPast ? vfDrawsPastMirror : vfDrawsInMirror) += 1;
+            // A pixel shader may carry vertex fetches of its own. They are not
+            // part of the geometry-reach census (which is about whether this
+            // draw's GEOMETRY resolves), but they are still memory the GPU will
+            // read, so they still have to be uploaded.
+            for (const auto& vb : psX->vertexBindings)
+            {
+                const uint32_t fc = vb.fetchConstant & 95;
+                const uint32_t d0 = R[0x4800 + fc * 2];
+                const uint32_t d1 = R[0x4800 + fc * 2 + 1];
+                if ((d0 & 3) != 3 /*kVertex*/)
+                    continue;
+                const uint64_t begin = uint64_t((d0 >> 2) << 2);
+                const uint64_t end = begin + ((d1 >> 2) & 0xFFFFFF) * 4ull;
+                if (end > begin && end <= in.guestPhysicalMirrorBytes)
+                    fetchRanges.emplace_back(begin, end);
+            }
         }
         if (listDraws)
         {
@@ -3147,6 +3183,48 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
         prepared.push_back(pd);
         ++issued;
+    }
+
+    // --- deferred range upload into the shared SSBO ----------------------
+    // Only the memory this frame's draws fetch is copied. The mirror SPANS the
+    // whole guest physical window so any fetch constant resolves, but a frame
+    // touches a few MiB of it, and copying the span instead of the contents cost
+    // more than the entire rest of the frame.
+    //
+    // Ranges are coalesced at page granularity first: a frame's vertex buffers
+    // arrive as hundreds of small adjacent spans, and one memcpy per span is
+    // dominated by per-call overhead rather than by the bytes.
+    {
+        const auto tUpload = Clock::now();
+        constexpr uint64_t kPage = 0x1000;
+        for (auto& r : fetchRanges)
+        {
+            r.first &= ~(kPage - 1);
+            r.second = (r.second + kPage - 1) & ~(kPage - 1);
+            r.second = std::min<uint64_t>(r.second, in.guestPhysicalMirrorBytes);
+        }
+        std::sort(fetchRanges.begin(), fetchRanges.end());
+        uint64_t uploadedBytesSsbo = 0, spans = 0;
+        for (size_t i = 0; i < fetchRanges.size();)
+        {
+            uint64_t begin = fetchRanges[i].first, end = fetchRanges[i].second;
+            size_t j = i + 1;
+            for (; j < fetchRanges.size() && fetchRanges[j].first <= end; ++j)
+                end = std::max(end, fetchRanges[j].second);
+            if (end > begin)
+            {
+                std::memcpy(static_cast<uint8_t*>(P.ssboMapped) + begin,
+                            in.guestBase + begin, size_t(end - begin));
+                uploadedBytesSsbo += end - begin;
+                ++spans;
+            }
+            i = j;
+        }
+        accumulate(msSsboUpload, tUpload);
+        if (in.report)
+            lucent::info("draw", "frame guest-memory upload: {} KiB in {} spans"
+                " (mirror spans {} MiB)", uploadedBytesSsbo / 1024, spans,
+                in.guestPhysicalMirrorBytes >> 20);
     }
 
     // --- readback buffer -------------------------------------------------
@@ -3835,9 +3913,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     msReadback = sinceStartMs() - msSetup - msDrawLoop - msSubmit;
     lucent::info("draw", "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f}"
         " (of which shader translation {:.0f}, pipeline creation {:.0f},"
-        " texture upload {:.0f}), submit+wait {:.0f}, readback+report {:.0f}",
+        " texture upload {:.0f}), guest-memory upload {:.0f}, submit+wait {:.0f},"
+        " readback+report {:.0f}",
         sinceStartMs(), msSetup, msDrawLoop, msTranslate, msPipeline, msTexture,
-        msSubmit, msReadback);
+        msSsboUpload, msSubmit, msReadback);
     // Checkpoint images, each labelled with how many draws had run.
     const char* checkpointDir = std::getenv("GEARS_DRAW_DIR");
     const std::filesystem::path outDir = checkpointDir

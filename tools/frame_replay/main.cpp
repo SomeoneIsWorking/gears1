@@ -21,6 +21,7 @@
 #include <lucent/config.h>
 #include <lucent/log.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <string>
 
@@ -45,6 +46,20 @@ int main(int argc, char** argv)
     gears::FrameCapture cap;
     if (!gears::ReadFrameCapture(path, cap))
         return 1;
+
+    // GEARS_REPLAY_MIRROR_MB overrides how much guest memory the renderer mirrors
+    // into its SSBO. A capture carries the whole guest window, so the replay can
+    // answer "would this frame's geometry resolve with a bigger mirror?" without
+    // a rebuild -- which is how the 64 MiB mirror was identified as the reason
+    // this frame's world geometry read zero.
+    if (const char* mb = std::getenv("GEARS_REPLAY_MIRROR_MB"))
+    {
+        const uint64_t want = uint64_t(std::strtoul(mb, nullptr, 10)) << 20;
+        cap.inputs.guestPhysicalMirrorBytes =
+            uint32_t(std::min<uint64_t>(want, cap.inputs.guestWindowBytes));
+        lucent::info("replay", "guest memory mirror overridden to {} MiB",
+                     cap.inputs.guestPhysicalMirrorBytes >> 20);
+    }
 
     bool ok = false;
     for (long i = 0; i < std::max<long>(1, repeats); ++i)

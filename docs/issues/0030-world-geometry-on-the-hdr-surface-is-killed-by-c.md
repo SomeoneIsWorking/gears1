@@ -1,11 +1,11 @@
 ---
 id: 30
 title: World geometry on the HDR surface is killed by clipping, not by shading or depth
-status: investigating
+status: resolved
 symptom: an Act 1 gameplay frame shows the HUD over a flat grey field; EDRAM surface 0x400 (the 7e3 HDR world, ~390 colour draws) changes 0 of 921600 pixels
 tags: gpu,draw,draw-backend,frame,clip,viewport,gameplay,edram
 created: 2026-07-27
-updated: 2026-07-27
+updated: 2026-07-28
 ---
 
 MEASURED with the new per-draw diagnostic table (GEARS_DRAW_DIAG=<path.tsv>) on a
@@ -59,3 +59,6 @@ State that IS specific to the world draws:
 NOT yet done, and the next step: dump the vertex shader's own transformed clip
 space positions per draw. The table names the stage; only the positions name the
 cause. Every other candidate above has been eliminated from the register state.
+
+### Resolution (2026-07-28)
+ROOT CAUSE FOUND AND FIXED: the guest-memory SSBO mirror was 64 MiB, and this frame's world geometry lives above it. The frame geometry-reach census reported 606 of 722 draws fetching PAST the mirror, highest vertex-buffer end 0xecf926c (237 MiB). A fetch past the mirror reads ZERO, so every vertex collapses to the origin, every primitive becomes degenerate, and the whole draw is destroyed at clipping -- exactly the killed_by_clip_or_cull verdict, and the reason the world surface changed 0 pixels. The menu frame never showed it: its highest vertex-buffer end is 0xc3f780 (12.8 MiB), comfortably inside 64 MiB. FIX: the mirror now spans the whole 512 MiB guest physical window so any fetch constant resolves, and the per-frame upload copies only the ranges the frame's draws actually fetch (coalesced at page granularity) rather than the span -- measured 764 KiB in 25 spans, ~0 ms, against a 64 MiB memcpy before. Verified byte-identical to a full 512 MiB copy of the same captured frame (0 of 2764816 bytes differ), so the range selection is complete. With the mirror fixed, surface 0x400 goes from 389/391 killed at clip to 331 killed / 60 rasterising, and with the depth clear of issue #31 also corrected the frame shows the REAL 3D world -- walls, structural beams, textured surfaces and the ASHES / 14 YEARS AFTER E-DAY caption (scratch/screenshots/both/frame_00600.png). STILL OPEN and tracked on re-frontier gameplay-scene: 331 draws are still killed at clip, and the bottom 208 rows (the second predicated tile, PA_SC_WINDOW_OFFSET window_y_offset = -512) remain empty.
