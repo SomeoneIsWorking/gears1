@@ -672,6 +672,168 @@ bool BuildRectangleGeometryShader(const RectangleGeometryShaderKey& key,
     return !spirv.empty();
 }
 
+// The resolve compute shader. See gpu_draw_xlate.h for why a resolve cannot be
+// a blit.
+//
+// One invocation per destination pixel:
+//     vec4 c = imageLoad(src, srcOffset + id);
+//     c *= scale;                       // 2^copy_dest_exp_bias
+//     if (swapRB) c = c.bgra;           // copy_dest_swap
+//     imageStore(dst, dstOffset + id, c);
+//
+// The bias multiplies all four components, alpha included -- Xenia's resolve
+// shader does `pixel_0 *= exp_bias` on a float4 (shaders/resolve.xesli), and
+// alpha carries meaning through this title's post chain.
+bool BuildResolveComputeShader(std::vector<uint32_t>& spirv)
+{
+    constexpr uint32_t kGroupSize = 8;
+
+    xe::gpu::SpirvBuilder builder(spv::Spv_1_0,
+        (SpirvShaderTranslator::kSpirvMagicToolId << 16) | 1, nullptr);
+    builder.addCapability(spv::CapabilityShader);
+    // The images are declared with an UNKNOWN format, because one pipeline
+    // serves every resolve and the formats vary: a surface may be 8888, 7e3
+    // carried as half-float, or two-channel float, and the destination is
+    // whatever the guest asked for. Declaring rgba16f and binding an 8888 view
+    // is a mismatch that returns garbage rather than failing -- it did, and only
+    // a scale-1.0 control arm against the blit it replaces caught it.
+    builder.addCapability(spv::Capability::StorageImageReadWithoutFormat);
+    builder.addCapability(spv::Capability::StorageImageWriteWithoutFormat);
+    builder.setMemoryModel(spv::AddressingModelLogical, spv::MemoryModelGLSL450);
+    builder.setSource(spv::SourceLanguageUnknown, 0);
+
+    const spv::Id typeVoid = builder.makeVoidType();
+    const spv::Id typeBool = builder.makeBoolType();
+    const spv::Id typeInt = builder.makeIntType(32);
+    const spv::Id typeUint = builder.makeUintType(32);
+    const spv::Id typeFloat = builder.makeFloatType(32);
+    const spv::Id typeInt2 = builder.makeVectorType(typeInt, 2);
+    const spv::Id typeUint3 = builder.makeVectorType(typeUint, 3);
+    const spv::Id typeFloat4 = builder.makeVectorType(typeFloat, 4);
+
+    // Both images are rgba16f storage images: the surface targets and the
+    // resolve targets are all R16G16B16A16_SFLOAT host images.
+    const spv::Id typeImage = builder.makeImageType(typeFloat, spv::Dim2D,
+        /*depth=*/false, /*arrayed=*/false, /*ms=*/false, /*sampled=*/2,
+        spv::ImageFormat::Unknown);
+
+    std::vector<spv::Id> mainInterface;
+
+    const spv::Id imageSrc = builder.createVariable(spv::NoPrecision,
+        spv::StorageClassUniformConstant, typeImage, "xe_resolve_src");
+    builder.addDecoration(imageSrc, spv::DecorationDescriptorSet, 0);
+    builder.addDecoration(imageSrc, spv::DecorationBinding, 0);
+    builder.addDecoration(imageSrc, spv::DecorationNonWritable);
+    const spv::Id imageDst = builder.createVariable(spv::NoPrecision,
+        spv::StorageClassUniformConstant, typeImage, "xe_resolve_dst");
+    builder.addDecoration(imageDst, spv::DecorationDescriptorSet, 0);
+    builder.addDecoration(imageDst, spv::DecorationBinding, 1);
+    builder.addDecoration(imageDst, spv::DecorationNonReadable);
+    mainInterface.push_back(imageSrc);
+    mainInterface.push_back(imageDst);
+
+    // Push constants, laid out to match ResolvePushConstants exactly.
+    std::vector<spv::Id> pushMembers;
+    pushMembers.push_back(typeInt2);   // 0: srcOffset  @0
+    pushMembers.push_back(typeInt2);   // 1: dstOffset  @8
+    pushMembers.push_back(typeInt2);   // 2: extent     @16
+    pushMembers.push_back(typeFloat);  // 3: scale      @24
+    pushMembers.push_back(typeUint);   // 4: swapRB     @28
+    const spv::Id typePush = builder.makeStructType(pushMembers, "XeResolveConstants");
+    builder.addDecoration(typePush, spv::DecorationBlock);
+    static const int kOffsets[5] = {0, 8, 16, 24, 28};
+    for (int i = 0; i < 5; ++i)
+        builder.addMemberDecoration(typePush, unsigned(i), spv::DecorationOffset,
+                                    kOffsets[i]);
+    const spv::Id pushVar = builder.createVariable(spv::NoPrecision,
+        spv::StorageClassPushConstant, typePush, "xe_resolve_constants");
+    mainInterface.push_back(pushVar);
+
+    const spv::Id inGlobalId = builder.createVariable(spv::NoPrecision,
+        spv::StorageClassInput, typeUint3, "gl_GlobalInvocationID");
+    builder.addDecoration(inGlobalId, spv::DecorationBuiltIn,
+                          int(spv::BuiltIn::GlobalInvocationId));
+    mainInterface.push_back(inGlobalId);
+
+    std::vector<spv::Id> mainParamTypes;
+    std::vector<std::vector<spv::Decoration>> mainPrecisions;
+    spv::Block* mainEntry = nullptr;
+    spv::Function* mainFunction = builder.makeFunctionEntry(spv::NoPrecision, typeVoid,
+        "main", mainParamTypes, mainPrecisions, &mainEntry);
+    spv::Instruction* entryPoint =
+        builder.addEntryPoint(spv::ExecutionModelGLCompute, mainFunction, "main");
+    for (spv::Id id : mainInterface)
+        entryPoint->addIdOperand(id);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeLocalSize,
+                             int(kGroupSize), int(kGroupSize), 1);
+
+    auto pushMember = [&](int index, spv::Id type) {
+        std::vector<spv::Id> chain{builder.makeIntConstant(index)};
+        return builder.createLoad(
+            builder.createAccessChain(spv::StorageClassPushConstant, pushVar, chain),
+            spv::NoPrecision);
+    };
+
+    // ivec2 id = ivec2(gl_GlobalInvocationID.xy)
+    const spv::Id globalId = builder.createLoad(inGlobalId, spv::NoPrecision);
+    const spv::Id idU2 = builder.createRvalueSwizzle(spv::NoPrecision,
+        builder.makeVectorType(typeUint, 2), globalId, {0, 1});
+    const spv::Id id2 = builder.createUnaryOp(spv::OpBitcast, typeInt2, idU2);
+
+    const spv::Id extent = pushMember(2, typeInt2);
+    // A group covers 8x8 pixels, so the last group of a rectangle whose size is
+    // not a multiple of 8 runs past its edge. Those invocations must write
+    // nothing -- an imageStore outside the destination is undefined, and an
+    // imageLoad outside the source would drag in a neighbouring tile's pixels.
+    const spv::Id outside = builder.createBinOp(spv::OpLogicalOr, typeBool,
+        builder.createBinOp(spv::OpSGreaterThanEqual, typeBool,
+            builder.createCompositeExtract(id2, typeInt, 0),
+            builder.createCompositeExtract(extent, typeInt, 0)),
+        builder.createBinOp(spv::OpSGreaterThanEqual, typeBool,
+            builder.createCompositeExtract(id2, typeInt, 1),
+            builder.createCompositeExtract(extent, typeInt, 1)));
+    {
+        spv::Block& predecessor = *builder.getBuildPoint();
+        spv::Block& thenBlock = builder.makeNewBlock();
+        spv::Block& mergeBlock = builder.makeNewBlock();
+        builder.createSelectionMerge(&mergeBlock, spv::SelectionControlMaskNone);
+        builder.createConditionalBranch(outside, &thenBlock, &mergeBlock);
+        builder.setBuildPoint(&thenBlock);
+        builder.makeReturn(false);
+        builder.setBuildPoint(&mergeBlock);
+    }
+
+    const spv::Id srcCoord = builder.createBinOp(spv::OpIAdd, typeInt2,
+        pushMember(0, typeInt2), id2);
+    const spv::Id dstCoord = builder.createBinOp(spv::OpIAdd, typeInt2,
+        pushMember(1, typeInt2), id2);
+
+    spv::Id texel = builder.createOp(spv::OpImageRead, typeFloat4,
+        {builder.createLoad(imageSrc, spv::NoPrecision), srcCoord});
+
+    // The exponent bias, applied to all four components (Xenia's resolve shader
+    // does the same on a float4).
+    const spv::Id scale = pushMember(3, typeFloat);
+    texel = builder.createBinOp(spv::OpVectorTimesScalar, typeFloat4, texel, scale);
+
+    // copy_dest_swap exchanges red and blue.
+    const spv::Id swapped = builder.createRvalueSwizzle(spv::NoPrecision, typeFloat4,
+                                                        texel, {2, 1, 0, 3});
+    const spv::Id doSwap = builder.createBinOp(spv::OpINotEqual, typeBool,
+        pushMember(4, typeUint), builder.makeUintConstant(0));
+    texel = builder.createTriOp(spv::OpSelect, typeFloat4, doSwap, swapped, texel);
+
+    builder.createNoResultOp(spv::OpImageWrite,
+        {builder.createLoad(imageDst, spv::NoPrecision), dstCoord, texel});
+
+    builder.leaveFunction();
+
+    std::vector<unsigned int> code;
+    builder.dump(code);
+    spirv.assign(code.begin(), code.end());
+    return !spirv.empty();
+}
+
 std::vector<uint8_t> DeriveSystemConstants(const uint32_t* registerFile)
 {
     RegisterFile regs;
