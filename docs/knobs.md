@@ -31,7 +31,8 @@ the same commit that removes it.
 | `GEARS_INPUT_SCRIPT=<steps>` | Timed pad input, e.g. `25000:START,25300:,150000:LY+`. Buttons and stick deflections (`LX/LY/RX/RY` with `+`/`-`), combined with `&`. Only advances when the guest polls, so a headless run is reproducible |
 | `GEARS_NO_WINDOW=1` | Headless |
 | `GEARS_NO_VBLANK=1` | Disable the 60 Hz vblank |
-| `GEARS_AUDIO_PUMP=1` | Drive the guest's audio callback at 187.5 Hz so it submits frames. Off by default: nothing plays the frames yet, so the only effect on a normal run is cost |
+| `GEARS_AUDIO_PUMP=0` | Stop driving the guest's audio callback. **On by default now** — the whole chain works, so a run without it is silent on purpose. Costs ~4% of frame rate under a CPU-bound guest |
+| `GEARS_AUDIO_OUT=0/1` | Host playback device. On by default in a windowed run, off in a headless one (measurement should not make noise); `=1` forces it on headless, `=0` off |
 | `GEARS_AUDIO_WAV=<path>` | Write every submitted frame verbatim to a WAV (6 channels, 48 kHz, 32-bit float). The header is refreshed once a second so a killed run still leaves a readable file |
 | `GEARS_XMA_DUMP=<dir>` | On the first kick of each XMA context, dump its 64-byte context and the raw 2 KB packets behind it, for offline decode with `tools/xma_wrap.py` |
 | `GEARS_XMA_TAP=<dir>` | Write every byte the XMA decoder commits to a context's output ring (`ctx<N>.pcm`, big-endian int16), for comparison against a golden decode with `tools/xma_compare.py` |

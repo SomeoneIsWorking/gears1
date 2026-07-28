@@ -1,7 +1,7 @@
 ---
 id: 39
 title: Audio is silent because nothing drives the client callback, so the title never submits a frame
-status: open
+status: resolved
 symptom: no sound; xaudio_null reports a client registered but the submitted-frame counter never advances -- zero frames across entire runs
 tags: audio,xaudio,kernel,blocker
 created: 2026-07-28
@@ -398,3 +398,42 @@ not been compared against a golden. interrupt_when_done and stop_when_done are
 not implemented, as in every Xenia variant, and warn once if a context asks.
 NOBODY HAS HEARD THIS ON SPEAKERS: there is still no output device, which is
 step (c) and now the only thing between this and audible sound.
+
+### Resolution (2026-07-28)
+AUDIO WORKS END TO END. The chain is: pump -> the title's callback -> its own
+mix (decoding XMA to build it) -> SDL playback device.
+
+Step (c), the output device, is runtime/audio_out.cpp on SDL3 -- already linked
+for the presenter, so no new dependency. The title's 6-channel 48 kHz float
+frames go in verbatim and SDL converts to whatever the device wants, including
+the 5.1-to-stereo downmix, which is a conversion worth letting a library own.
+
+MEASURED on a run to gameplay: the device opens (6 channels at 48000 Hz) and
+plays 10000+ frames with ZERO arriving to an empty device. That counter is the
+point of the instrument -- the pump had been measured falling behind under a
+CPU-bound guest, so "audio works" and "audio works when the machine is not
+busy" needed separating. Rendering is unaffected at 29.95 fps.
+
+TWO DEFAULTS CHANGED, both deliberately:
+
+- The audio pump is ON by default. It was opt-in while driving the callback
+  turned a stable silent title into a crashing one, then a stalled one; both
+  causes are fixed. A port with working audio that does not ask for it is
+  silent on purpose. It costs about 4% of frame rate under a CPU-bound guest
+  (15.9 fps against 16.6 in a control with no pump), which is the price of the
+  title actually mixing.
+- The device is on in a windowed run and OFF in a headless one. A capture or a
+  scripted walk is measurement, and measurement that unexpectedly makes noise
+  out of the operator's speakers is a bad neighbour. Found by doing exactly
+  that on the first run. GEARS_AUDIO_OUT=1 forces it on headless.
+
+Both arms of both knobs were verified rather than assumed: headless opens no
+device, headless with GEARS_AUDIO_OUT=1 opens one, no knobs at all gives a
+pumping run at 29.94 fps, GEARS_AUDIO_PUMP=0 gives no pump.
+
+WHAT REMAINS, and it is no longer this issue: loop playback and true
+double-buffer streaming are ported from the reference but exercised by no
+stream yet; mono decodes live but has no golden reference; the audio pump falls
+behind under a CPU-bound guest (16875 invocations where 187.5 Hz wants 26250)
+and decode is only 1.6 s of that, so the cause is elsewhere. Those are tracked
+as their own entries rather than holding this one open.
