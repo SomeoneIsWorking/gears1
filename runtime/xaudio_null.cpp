@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <mutex>
@@ -21,6 +22,7 @@
 
 #include "guest_heap.h"
 #include "guest_memory.h"
+#include "audio_out.h"
 #include "guest_thread.h"
 #include "xma.h"
 
@@ -30,6 +32,9 @@ std::atomic<uint32_t> g_nextClientId{1};
 std::atomic<uint64_t> g_submittedFrames{0};
 std::atomic<uint64_t> g_nullSampleFrames{0};
 std::atomic<uint64_t> g_silentFrames{0};
+// Whether a device is actually consuming these frames, so the periodic line
+// does not claim they are unplayed once they are being played.
+std::atomic<bool> g_playing{false};
 uint32_t g_callback = 0;
 uint32_t g_callbackContext = 0;
 
@@ -261,12 +266,18 @@ void __imp__XAudioRegisterRenderDriverClient(PPCContext& __restrict ctx, uint8_t
     if (clientIdPtr != 0)
         *reinterpret_cast<uint32_t*>(base + clientIdPtr) = ByteSwap(clientId);
 
-    // OFF BY DEFAULT (GEARS_AUDIO_PUMP=1 enables it), because it works and that
-    // is the problem: the guest's audio callback immediately calls
-    // KeWaitForMultipleObjects, which is unimplemented and aborts. Driving the
-    // callback therefore turns a stable silent title into a crashing one. It
-    // stays here, off, so the next step has a one-line repro (catalog #40).
-    if (lucent::config::flag("AUDIO_PUMP") && g_callback &&
+    // ON BY DEFAULT now. It was opt-in while driving the callback turned a
+    // stable silent title into a crashing one, and then into a stalled one;
+    // both causes are fixed and the whole chain -- pump, callback, XMA decode,
+    // submitted frame -- is verified. A port that has working audio and does
+    // not ask for it is just silent on purpose. GEARS_AUDIO_PUMP=0 turns it off.
+    //
+    // It costs about 4% of frame rate under a CPU-bound guest (15.9 fps against
+    // 16.6 in a control with no pump), which is the price of the title actually
+    // mixing its audio.
+    const bool pumpWanted = !lucent::config::present("AUDIO_PUMP") ||
+                            lucent::config::flag("AUDIO_PUMP");
+    if (pumpWanted && g_callback &&
         !g_pumpThread.joinable())
     {
         g_pumpThread = std::thread(AudioPump);
@@ -314,6 +325,33 @@ void __imp__XAudioSubmitRenderDriverFrame(PPCContext& __restrict ctx, uint8_t* b
         if (peak == 0.0f)
             g_silentFrames.fetch_add(1);
 
+        // Play it. Opened lazily on the first frame that has samples, using
+        // the geometry the frame actually has rather than a guess made at
+        // startup. GEARS_AUDIO_OUT=0 turns it off for a run that only wants to
+        // measure the mix.
+        // Playing the audio is the point, so this is on by default -- but NOT
+        // in a headless run. A capture or a scripted walk is measurement, and
+        // measurement that unexpectedly makes noise out of the operator's
+        // speakers is a bad neighbour; GEARS_NO_WINDOW already means "this run
+        // is not a presentation". GEARS_AUDIO_OUT=1 forces it on anyway, and
+        // GEARS_AUDIO_OUT=0 forces it off. `present` is what separates "not
+        // set" from "set to 0".
+        const bool audioOutDefault = !lucent::config::flag("NO_WINDOW");
+        if (lucent::config::present("AUDIO_OUT") ? lucent::config::flag("AUDIO_OUT")
+                                                 : audioOutDefault)
+        {
+            static std::once_flag opened;
+            std::call_once(opened, [] {
+                if (gears::OpenAudioOutput(kFrameChannels, kFrameSampleRate))
+                    std::atexit(gears::CloseAudioOutput);
+            });
+            float host[kFrameFloats];
+            for (uint32_t i = 0; i < kFrameFloats; ++i)
+                host[i] = LoadGuestFloat(samples + i * 4);
+            gears::PlayAudioFrame(host, kFrameSamplesPerChannel);
+            g_playing = true;
+        }
+
         if (const std::string& path = lucent::config::text("AUDIO_WAV"); !path.empty())
         {
             std::call_once(g_wavOpened, [&path] {
@@ -328,9 +366,10 @@ void __imp__XAudioSubmitRenderDriverFrame(PPCContext& __restrict ctx, uint8_t* b
 
     if (frames == 1 || frames % 1000 == 0)
         lucent::info("audio", "{} frames submitted ({} pump calls, samples at"
-            " {:#x}, {} with no buffer, {} silent), peak {:.4f} -- not played yet",
+            " {:#x}, {} with no buffer, {} silent), peak {:.4f}{}",
             frames, g_pumpCalls.load(), samplesPtr, g_nullSampleFrames.load(),
-            g_silentFrames.load(), peak);
+            g_silentFrames.load(), peak,
+            g_playing ? "" : " -- not played, no device on this run");
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
