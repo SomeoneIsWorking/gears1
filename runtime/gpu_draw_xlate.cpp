@@ -951,9 +951,24 @@ bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv)
     const spv::Id srcCoord = builder.createBinOp(spv::OpIAdd, typeInt2, pushMember(0), id2);
     const spv::Id dstCoord = builder.createBinOp(spv::OpIAdd, typeInt2, pushMember(1), id2);
 
-    // d = texelFetch(depth, srcCoord).x
-    const spv::Id fetched = builder.createOp(spv::OpImageFetch, typeFloat4,
-        {builder.createLoad(imageSrc, spv::NoPrecision), srcCoord});
+    // d = texelFetch(depth, srcCoord, 0).x
+    //
+    // The Lod image operand is REQUIRED for a fetch from a non-multisampled
+    // sampled image. Omitting it does not fail validation or pipeline creation
+    // -- it just returns zero, which is indistinguishable from "the depth buffer
+    // is empty".
+    spv::Id fetched;
+    {
+        spv::Instruction* fetch = new spv::Instruction(builder.getUniqueId(),
+                                                       typeFloat4, spv::OpImageFetch);
+        fetch->addIdOperand(builder.createLoad(imageSrc, spv::NoPrecision));
+        fetch->addIdOperand(srcCoord);
+        fetch->addImmediateOperand(unsigned(spv::ImageOperandsMask::Lod));
+        fetch->addIdOperand(builder.makeIntConstant(0));
+        builder.getBuildPoint()->addInstruction(
+            std::unique_ptr<spv::Instruction>(fetch));
+        fetched = fetch->getResultId();
+    }
     spv::Id d = builder.createCompositeExtract(fetched, typeFloat, 0);
     // Clamp to [0,1]: the encode below assumes a pre-clamped value, as Xenia's
     // PreClampedDepthTo20e4 does.
