@@ -17,7 +17,7 @@
 #include <lucent/log.h>
 
 #include "guest_heap.h"
-#include "pump_probe.h"
+#include "wait_probe.h"
 #include "xma_context.h"
 
 namespace gears

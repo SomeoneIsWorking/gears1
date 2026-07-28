@@ -13,6 +13,7 @@
 #include "guest_thread.h"
 
 namespace gears { bool CommitDeviceWindow(GuestMemory& memory); }
+#include "wait_probe.h"
 #include "xma.h"
 #include "import_variables.h"
 #include "ppc_recomp_shared.h"
@@ -116,6 +117,11 @@ int main(int argc, char* argv[])
     // Must follow the device window, since it publishes a register into it.
     if (!gears::SetupXmaRegisters(memory))
         return EXIT_FAILURE;
+
+    // Watches for the guest going quiet and reports what every guest thread was
+    // doing when it did (catalog #44). Costs one atomic increment per kernel
+    // call and a thread that sleeps.
+    gears::StartStallDetector();
 
     gears::GuestThreadBlock mainThread{};
     if (!gears::CreateGuestThreadBlock(memory, kStackSize, mainThread))

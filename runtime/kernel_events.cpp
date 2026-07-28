@@ -9,7 +9,7 @@
 #include <lucent/log.h>
 
 #include "guest_thread.h"
-#include "pump_probe.h"
+#include "wait_probe.h"
 #include "kernel_objects.h"
 
 namespace
@@ -45,7 +45,7 @@ uint32_t WaitOn(uint32_t handle, int64_t timeout100ns)
     // Logged on both sides of the wait: a hang is only diagnosable if the
     // record shows which handles were entered and never left.
     lucent::debug("wait", "-> {:#x} (timeout {})", handle, timeout100ns);
-    gears::PumpWaitScope probe("NtWait");
+    gears::WaitProbe probe("NtWait");
     const bool signalled = object->Wait(timeout100ns);
     lucent::debug("wait", "<- {:#x} {}", handle, signalled ? "signalled" : "timed out");
     return signalled ? gears::kStatusSuccess : gears::kStatusTimeout;
@@ -154,7 +154,7 @@ void __imp__NtWaitForMultipleObjectsEx(PPCContext& __restrict ctx, uint8_t* base
         // Wait-all: acquired one after another. Not atomic the way the real
         // dispatcher is, but the objects are acquired in a stable order so two
         // all-waiters cannot deadlock against each other on the same set.
-        gears::PumpWaitScope probe("NtWaitAll");
+        gears::WaitProbe probe("NtWaitAll");
         for (uint32_t i = 0; i < count; i++)
         {
             if (!objects[i]->Wait(timeout100ns))
@@ -171,7 +171,7 @@ void __imp__NtWaitForMultipleObjectsEx(PPCContext& __restrict ctx, uint8_t* base
     // each pass try-acquires every object with a zero timeout, then sleeps
     // briefly. Millisecond-scale latency, which is the granularity the
     // console's own scheduler quantum gave titles anyway.
-    gears::PumpWaitScope probe("NtWaitAny");
+    gears::WaitProbe probe("NtWaitAny");
     uint64_t pollRounds = 0;
     const auto start = std::chrono::steady_clock::now();
     for (;;)
@@ -183,7 +183,7 @@ void __imp__NtWaitForMultipleObjectsEx(PPCContext& __restrict ctx, uint8_t* base
             {
                 ctx.r3.u64 = i; // STATUS_WAIT_0 + i
                 if (gears::t_inAudioPumpCallback)
-                    gears::PumpWaitCount("NtWaitAny.rounds", pollRounds);
+                    gears::WaitProbeCount("NtWaitAny.rounds", pollRounds);
                 return;
             }
         }

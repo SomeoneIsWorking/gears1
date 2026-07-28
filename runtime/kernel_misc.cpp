@@ -325,3 +325,73 @@ void __imp__RtlImageXexHeaderField(PPCContext& __restrict ctx, uint8_t* base)
 
     lucent::debug("kernel", "RtlImageXexHeaderField({:#x}) -> not present", key);
 }
+
+// VOID KeBugCheck(ULONG BugCheckCode)
+// VOID KeBugCheckEx(ULONG BugCheckCode, ULONG_PTR P1..P4)
+//
+// The console's kernel panic. The TITLE calls this -- it is the guest deciding
+// something is unrecoverable, not the runtime failing an import -- so the
+// useful thing is to say what it reported and stop, exactly as the console
+// would have.
+//
+// This was found the hard way: the title bug-checks about 70 seconds in on
+// roughly two runs in three, and with the import unimplemented the process
+// aborted with nothing but a register dump. It read as an intermittent hang for
+// an entire investigation (catalog #44).
+namespace
+{
+// The console's bug-check parameters are often pointers to a string in the
+// image. Rendering one is the difference between a code and a reason, so it is
+// worth attempting -- carefully, since a parameter is just as often a number.
+std::string DescribeParameter(uint8_t* base, uint32_t value)
+{
+    if (value < PPC_IMAGE_BASE || value >= PPC_IMAGE_BASE + PPC_IMAGE_SIZE)
+        return {};
+    const char* text = reinterpret_cast<const char*>(base + value);
+    std::string out;
+    for (size_t i = 0; i < 96 && text[i]; ++i)
+    {
+        const unsigned char c = static_cast<unsigned char>(text[i]);
+        if (c < 0x20 || c > 0x7E)
+            return {}; // not a string, or not one worth printing
+        out.push_back(char(c));
+    }
+    return out;
+}
+
+[[noreturn]] void GuestBugCheck(PPCContext& ctx, uint8_t* base, bool extended)
+{
+    const uint32_t code = ctx.r3.u32;
+    lucent::error("kernel", "THE TITLE BUG-CHECKED: KeBugCheck{}(code {:#x})",
+        extended ? "Ex" : "", code);
+
+    if (extended)
+    {
+        const uint32_t params[4] = {ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32};
+        for (int i = 0; i < 4; ++i)
+        {
+            const std::string text = DescribeParameter(base, params[i]);
+            if (text.empty())
+                lucent::error("kernel", "  parameter {}: {:#x}", i + 1, params[i]);
+            else
+                lucent::error("kernel", "  parameter {}: {:#x} -> \"{}\"", i + 1,
+                              params[i], text);
+        }
+    }
+
+    // A bug check is the guest saying it cannot continue. Carrying on would run
+    // code the title itself has declared unsafe, and whatever crashed next
+    // would be nowhere near this.
+    std::exit(70);
+}
+} // namespace
+
+void __imp__KeBugCheck(PPCContext& __restrict ctx, uint8_t* base)
+{
+    GuestBugCheck(ctx, base, false);
+}
+
+void __imp__KeBugCheckEx(PPCContext& __restrict ctx, uint8_t* base)
+{
+    GuestBugCheck(ctx, base, true);
+}
