@@ -1,7 +1,7 @@
 ---
 id: 33
 title: The resolve's copy_dest_exp_bias is ignored, so the HDR scene texture is 8x too bright
-status: investigating
+status: resolved
 symptom: the assembled gameplay frame is heavily overexposed, large areas at 255; a captured Act 1 frame reads mean 208/255 on the top band and 187 on the bottom
 tags: gpu,draw,draw-backend,resolve,hdr,tonemap,exposure,gameplay
 created: 2026-07-28
@@ -90,3 +90,6 @@ The blit remains the default and is byte-identical to the verified tile-assembly
 frame (0 of 2764816 bytes differ), so the working frame is not traded for an
 unverified one. The blit cannot scale, so the exponent bias is still NOT applied
 and this issue stays open.
+
+### Resolution (2026-07-28)
+FIXED and VERIFIED. The resolve is now a compute dispatch that applies the guest's copy_dest_exp_bias (scale = 2^bias) and copy_dest_swap while copying the rectangle to its destination offset. The blit it replaces cannot do either. TWO BUGS had to be found first, and the acceptance test found both -- at scale 1.0 with the swap suppressed the compute path MUST reproduce the blit byte for byte, and it did not: (1) the declared storage-image format. One pipeline serves surfaces that may be 8888, half-float or two-channel float, so hardcoding rgba16f and binding an 8888 view is a mismatch that returns garbage rather than failing. Fixed with an Unknown format plus the two shaderStorageImage*WithoutFormat features, both queried. (2) THE DESCRIPTOR POOL WAS SIZED FROM AN EMPTY LIST. It was sized on the ResolveEvent vector, which is not filled until the draw-preparation loop that runs AFTER the sizing -- so a frame with 12 dispatches got 8 sets, four dispatches silently reused a set that a later dispatch then overwrote, and the resolve targets those sets belonged to were written with the wrong source and destination. It was invisible in the frame; what exposed it was the new GEARS_DRAW_RESOLVE_DUMP=1, which writes every resolve target to a PPM with its maximum colour component: the HDR scene texture read max 0.000 under the compute path against 51.719 under the blit, and a scale sweep to 1000 left it still exactly 0.000, which is not a scaling error but a not-written-at-all error. Exhausting the pool is now counted and reported instead of wrapping. ACCEPTANCE PASSED: compute at scale 1.0 with the swap suppressed differs from the blit on 0 of 2764816 bytes. With the guest's own state applied the difference is 944250 bytes, all of it the red/blue swap the blit cannot perform. RESULT on the captured Act 1 frame: the HDR scene texture goes from max colour 51.719 to 0.808 -- into the [0,1] range its tonemap is written against -- and the presented frame goes from mean 201.8 with 51.6% of pixels SATURATED to mean 22.2 with 0.0% saturated. The frame is now a properly exposed dark interior with visible structure, beams, a lit barred window and legible caption, instead of a white-out. Vulkan validation clean. STILL VISIBLE and not this issue: a seam at the tile boundary (row 512) where the two predicated tiles meet.
