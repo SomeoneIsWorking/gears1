@@ -31,6 +31,18 @@ std::mutex g_dispatcherMutex;
 std::condition_variable g_dispatcherCv;
 } // namespace
 
+const char* KernelObject::KindName() const
+{
+    switch (kind_)
+    {
+    case Kind::NotificationEvent: return "notification-event";
+    case Kind::SynchronizationEvent: return "sync-event";
+    case Kind::Semaphore: return "semaphore";
+    case Kind::Mutant: return "mutant";
+    }
+    return "?";
+}
+
 bool KernelObject::SatisfiedLocked() const
 {
     switch (kind_)

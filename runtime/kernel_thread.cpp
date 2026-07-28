@@ -57,6 +57,7 @@ void GuestThreadMain(std::shared_ptr<GuestThreadStart> start)
         start->resumed->Wait(-1);
 
     t_currentThread = start.get();
+    gears::SetGuestThreadName("guest-" + std::to_string(start->threadId));
 
     PPCContext ctx{};
     ctx.r13.u32 = start->block.pcrAddress;

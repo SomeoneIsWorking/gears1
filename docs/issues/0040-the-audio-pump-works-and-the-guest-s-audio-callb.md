@@ -86,3 +86,75 @@ already names them.
 THE PUMP STAYS OPT-IN. It no longer crashes, but it achieves nothing yet and
 leaves a guest thread blocked forever, so there is no reason to make it the
 default until it produces a frame.
+
+### Note (2026-07-28)
+THE BLOCKED WAIT IS NOT THE PROBLEM -- IT IS A SYMPTOM OF A SPINNING BARRIER.
+
+Two instruments were built first, because the old evidence could not tell
+"blocked forever" from "never reached", and could not say WHICH thread was
+which:
+
+1. KeWaitForMultipleObjects now serves an untimed wait as a loop of 5 s waits
+   and warns once when the first slice expires, naming every object and its
+   kind. WaitMultiple consumes nothing on timeout, so the semantics are
+   unchanged. A wait nothing will satisfy now says so in a default run.
+2. Every log line on the wait channel is prefixed with the guest thread running
+   on that host thread (guest_thread.h: SetGuestThreadName/GuestThreadName),
+   set for title threads, the audio pump and the graphics ISR.
+
+With those, the sequence is unambiguous:
+
+  [guest-4]    KeWait -> 0x82becc28                 (audio worker, created suspended,
+                                                     entry 0x825ea130, waits to be kicked)
+  [audio-pump] KeSetEvent(0x82becc28)               (our pump, inside the callback)
+  [guest-4]    KeWait <- 0x82becc28 signalled
+  [audio-pump] KeWaitMultiple -> WaitAny on
+               [0x82becc04 sync-event] [0x82becc48 notification-event]
+  [audio-pump] ... has blocked 5 s ...; nothing has signalled them
+
+So the callback kicks the title's audio worker and waits for it to answer. The
+worker is what never answers. gdb on the live process (thread apply all bt)
+puts guest-4 NOT in a wait at all but executing guest code:
+
+  #0 sub_825EAA68  #1 sub_825EA930  #2 sub_825EA130
+
+sub_825EAA68, read from the recompiled source, is a RENDEZVOUS BARRIER:
+
+  if (load32(r3+304) == 0) return;
+  store8(r4 + load8(r13 + 268), 1);      // check in at my slot
+  expected = packed bytes, one per CPU, from the dwords at r3+308..r3+328
+  spin until load64(r4) == expected  (or == 0)
+
+r13 is the KPCR, and KPCR+268 (0x10C) is prcb_data.current_cpu -- Xenia's
+X_KPCR has X_KPRCB embedded at 0x100 and current_cpu at +0x0C. The runtime
+never populated it, so EVERY thread read CPU 0 and checked in at slot 0.
+
+FIXED (guest_thread.cpp): the per-thread processor number is now written to
+KPCR+0x10C as well as to the KTHREAD field. This is the same class of bug as
+the scheduler tick already documented in that file -- a field the console
+maintains that we left zero -- and it is correct on its own merits.
+
+IT DID NOT UNBLOCK THE AUDIO, and the reason is the real remaining problem.
+Reading the participant dwords out of the live process (+308 = 0xffffffff,
++312 = 0x00000a00, +316..+328 = 0) the expected mask is 0x0101000000000000:
+big-endian bytes 0 and 1, i.e. TWO participants, on CPU 0 and CPU 1.
+
+Only ONE guest thread ever enters this barrier: the log shows exactly one
+ExCreateThread with entry 0x825ea130 for the whole run. So the barrier waits
+for a second participant that does not exist here, and no amount of CPU-number
+correctness fixes that by itself.
+
+NEXT, and it is a question about the title's design rather than a knob: WHAT is
+the second participant on hardware? Either the title creates a second audio
+thread by a path we do not reach, or the participant is the XAudio driver side
+-- i.e. us -- in which case the pump thread is standing in the wrong place: it
+enters the callback and waits, when the console's audio hardware thread would
+also be checking into this barrier. The decisive instrument is a hardware
+watchpoint on the guest dwords at r3+308/+312 to catch what writes them and
+from which thread; they are already written by the time the barrier spins, so
+the watchpoint has to be armed before audio init, on an address recovered from
+a prior run.
+
+DO NOT try to satisfy the barrier by writing the missing byte. It would make
+the callback return and prove nothing about whether the frame it then submits
+is real.

@@ -5,8 +5,10 @@
 #include <byteswap.h>
 #include <lucent/log.h>
 
+#include <algorithm>
 #include <vector>
 
+#include "guest_thread.h"
 #include "kernel_objects.h"
 
 // NTSTATUS ObReferenceObjectByHandle(HANDLE Handle, POBJECT_TYPE ObjectType,
@@ -71,10 +73,11 @@ void __imp__KeWaitForSingleObject(PPCContext& __restrict ctx, uint8_t* base)
     // pointer-based path titles use for dispatcher objects embedded in their
     // own structures (the D3D per-CPU interrupt events among them), so it needs
     // its own line or those waits are invisible.
-    lucent::debug("wait", "KeWait -> object {:#x} timeout {}", objectAddress, timeout);
+    lucent::debug("wait", "[{}] KeWait -> object {:#x} timeout {}",
+        gears::GuestThreadName(), objectAddress, timeout);
     const bool signalled = object->Wait(timeout);
-    lucent::debug("wait", "KeWait <- object {:#x} {}", objectAddress,
-        signalled ? "signalled" : "timed out");
+    lucent::debug("wait", "[{}] KeWait <- object {:#x} {}", gears::GuestThreadName(),
+        objectAddress, signalled ? "signalled" : "timed out");
     ctx.r3.u64 = signalled ? gears::kStatusSuccess : gears::kStatusTimeout;
 }
 
@@ -110,8 +113,10 @@ void __imp__KeWaitForMultipleObjects(PPCContext& __restrict ctx, uint8_t* base)
     // The array holds POINTERS to dispatcher objects, in guest memory.
     std::vector<std::shared_ptr<gears::KernelObject>> owned;
     std::vector<gears::KernelObject*> objects;
+    std::vector<uint32_t> addresses;
     owned.reserve(count);
     objects.reserve(count);
+    addresses.reserve(count);
     for (uint32_t i = 0; i < count; ++i)
     {
         const uint32_t address =
@@ -128,6 +133,7 @@ void __imp__KeWaitForMultipleObjects(PPCContext& __restrict ctx, uint8_t* base)
         }
         owned.push_back(object);
         objects.push_back(object.get());
+        addresses.push_back(address);
     }
 
     int64_t timeout = -1;
@@ -142,10 +148,46 @@ void __imp__KeWaitForMultipleObjects(PPCContext& __restrict ctx, uint8_t* base)
             timeout = -raw;
     }
 
-    lucent::debug("wait", "KeWaitMultiple -> {} objects, {}, timeout {}", count,
-                  waitAll ? "WaitAll" : "WaitAny", timeout);
-    const int index = gears::KernelObject::WaitMultiple(objects.data(), count,
-                                                        waitAll, timeout);
+    {
+        lucent::Line line;
+        line.add("[{}] KeWaitMultiple -> {} timeout {} on", gears::GuestThreadName(),
+                 waitAll ? "WaitAll" : "WaitAny", timeout);
+        for (uint32_t i = 0; i < count; ++i)
+            line.add(" [{:#x} {}]", addresses[i], objects[i]->KindName());
+        line.flush_debug("wait");
+    }
+
+    // An untimed wait is served as a loop of bounded waits so that a wait
+    // NOTHING will ever satisfy can say so. Blocking forever inside one call is
+    // indistinguishable in a log from never having reached the call at all --
+    // which is exactly the ambiguity the audio callback presented (catalog #40).
+    // The semantics are unchanged: WaitMultiple consumes nothing when it times
+    // out, so re-testing is the same as having waited throughout.
+    constexpr int64_t kStuckReport100ns = 5 * 10'000'000; // 5 s
+    int index = -1;
+    for (int64_t waited = 0;;)
+    {
+        const int64_t slice =
+            timeout < 0 ? kStuckReport100ns : std::min(timeout - waited, kStuckReport100ns);
+        index = gears::KernelObject::WaitMultiple(objects.data(), count, waitAll, slice);
+        if (index >= 0)
+            break;
+        waited += slice;
+        if (timeout >= 0 && waited >= timeout)
+            break;
+        // Reported once per waiter, at the point it becomes suspicious, and then
+        // left alone -- a wait that is legitimately long should not spam.
+        if (waited == kStuckReport100ns)
+        {
+            lucent::Line line;
+            line.add("[{}] KeWaitMultiple has blocked {} s on {} of", gears::GuestThreadName(),
+                     waited / 10'000'000, waitAll ? "all" : "any");
+            for (uint32_t i = 0; i < count; ++i)
+                line.add(" [{:#x} {}]", addresses[i], objects[i]->KindName());
+            line.add("; nothing has signalled them");
+            line.flush(lucent::Level::Warn, "wait");
+        }
+    }
     lucent::debug("wait", "KeWaitMultiple <- {}", index);
     // WaitAny returns STATUS_WAIT_0 + index, which is simply the index.
     ctx.r3.u64 = index < 0 ? gears::kStatusTimeout : uint64_t(index);
