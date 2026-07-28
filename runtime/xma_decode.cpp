@@ -75,6 +75,14 @@ bool XmaFrameDecoder::Open(uint32_t sampleRate, bool stereo)
     context_->sample_rate = int(sampleRate);
     av_channel_layout_default(&context_->ch_layout, int(channels_));
 
+    // The codec reports encoder priming as skip-samples side data, and by
+    // default libavcodec DISCARDS them (frame 1 comes back 384 samples
+    // instead of 512). The hardware emits every decoded sample; the title's
+    // own bookkeeping assumes it. SKIP_MANUAL leaves the samples in and the
+    // side data visible. Same flag, same reason as the reference
+    // (xma_context_new.cc:910).
+    context_->flags2 |= AV_CODEC_FLAG2_SKIP_MANUAL;
+
     if (const int rc = avcodec_open2(context_, codec, nullptr); rc < 0)
     {
         char message[AV_ERROR_MAX_STRING_SIZE] = {};

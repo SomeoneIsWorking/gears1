@@ -180,10 +180,10 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - notes: The blocker was the guest thread's PROCESSOR NUMBER, not the audio API: the title's audio worker checks into a rendezvous barrier at array[KPCR+0x10C] and we invented that number instead of taking it from ExCreateThread's creation flags. Catalog #40.
 
 ### xma-decode — XMA hardware decode
-- status: hack
+- status: re-verified
 - deps: audio-driver
-- evidence: Both live XMA contexts are fully armed and completely static: input_buffer_0_valid=1 with 55 and 1780 packets queued, output_buffer_valid=1, error_set=0, and input_buffer_read_offset frozen at 32 bits with output_buffer_write_offset at 0 across 12 s. Decoded against Xenia's XMA_CONTEXT_DATA.
+- evidence: tools/xma_replay drives the dumped streams through the production xma_context.cpp and the output matches an independent ffmpeg decode: ctx1 correlation 1.000000 over the full 141.84 s (rms diff 0.000023, peak 0.000061, constant 576-sample priming lag), ctx0 correlation 1.000000 over 8.34 s. Reproduced by the operator from a clean build. The comparator was validated against a case that must differ (reversed audio: correlation 0.081, exit 1). Live: a run to gameplay is 81.8% non-silent versus 25% before, with zero xma warnings, and decode costs 1.59 s across 71000 kicks (22 us mean).
 - where: runtime/xaudio_null.cpp: XMACreateContext hands out a zeroed 0x40-byte context in physical memory and nothing decodes
-- gap: The codec is now linked and opens with parameters read from the guest's own context (verified: stereo 24000 Hz and stereo 44100 Hz, matching the offline decodes). What remains is the CONTEXT PROTOCOL -- reassembling frames out of the 2 KB packet stream (frames span packets; a frame's own 15-bit length header can straddle a packet boundary), pacing output per 128-sample subframe into the 256-byte block ring, byte-swapping the PCM to big-endian, and advancing input_buffer_read_offset in bits and output_buffer_write_offset in blocks. Xenia's xma_context_new.cc is the reference.
+- gap: Loop playback, true double-buffer streaming and non-44100/24000 rates are ported from the reference but exercised by no stream yet. Mono decodes live (contexts 23-25) but has not been compared against a golden. No output device: nobody has heard this on speakers.
 - notes: Marked hack rather than missing because the context handout LOOKS like support and the title behaves as if decode were coming. Catalog #39.
 

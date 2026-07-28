@@ -2,12 +2,13 @@
 
 #include <atomic>
 #include <bitset>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <set>
-#include <unordered_map>
 #include <string>
 
 #include <byteswap.h>
@@ -16,7 +17,7 @@
 #include <lucent/log.h>
 
 #include "guest_heap.h"
-#include "xma_decode.h"
+#include "xma_context.h"
 
 namespace gears
 {
@@ -64,6 +65,8 @@ uint32_t* Register(GuestMemory& memory, uint32_t index)
 // honestly. Without it, a title that asks for decode and a title that never
 // asks look identical -- the same ambiguity that hid the audio blocker.
 std::atomic<uint64_t> g_kicks{0};
+std::atomic<uint64_t> g_decodeMicroseconds{0};
+std::atomic<uint64_t> g_worstDecodeMicroseconds{0};
 
 // GEARS_XMA_DUMP=<dir> writes a kicked context and the XMA data behind it, once
 // per context, so the bitstream can be decoded OFFLINE before any decoder
@@ -141,27 +144,18 @@ void DumpContext(GuestMemory& memory, uint32_t index, uint32_t pointer)
         fields.isStereo ? "stereo" : "mono", fields.sampleRate, fields.inputBuffer);
 }
 
-// Opening the codec for a context is not decoding it, and this does not pretend
-// otherwise. It answers one question the build alone cannot: whether the
-// libavcodec actually linked into this binary has the per-frame XMA decoder.
-// "The wrong libavcodec" and "the bitstream is bad" produce the same silence
-// later, so they are separated now, at the point where the answer is cheap.
-std::unordered_map<uint32_t, XmaFrameDecoder> g_decoders;
-std::mutex g_decoderMutex;
+// The decoder side of every context slot, created on first kick. The protocol
+// lives in XmaHwContext (xma_context.cpp); this file only routes register
+// events to it.
+std::mutex g_hwContextMutex;
+std::array<std::unique_ptr<XmaHwContext>, kContextCount> g_hwContexts;
 
-void OpenDecoderOnce(GuestMemory& memory, uint32_t index, uint32_t pointer)
+XmaHwContext& HwContext(uint32_t index)
 {
-    std::lock_guard<std::mutex> guard(g_decoderMutex);
-    if (g_decoders.count(index))
-        return;
-
-    const ContextFields fields = ReadContext(memory, pointer);
-    if (!fields.inputValid)
-        return;
-
-    XmaFrameDecoder& decoder = g_decoders[index];
-    if (!decoder.Open(fields.sampleRate, fields.isStereo))
-        lucent::warn("xma", "context {} has no decoder behind it", index);
+    std::lock_guard<std::mutex> guard(g_hwContextMutex);
+    if (!g_hwContexts[index])
+        g_hwContexts[index] = std::make_unique<XmaHwContext>(index);
+    return *g_hwContexts[index];
 }
 
 void ReportContextBits(const char* what, uint32_t group, uint32_t bits)
@@ -173,9 +167,9 @@ void ReportContextBits(const char* what, uint32_t group, uint32_t bits)
         bits &= bits - 1;
         const uint32_t index = group * 32 + bit;
         // A streaming title kicks continuously, so a line per kick would drown
-        // the run it is meant to explain. The totals are reported at exit.
+        // the run it is meant to explain.
         if (s_reported.fetch_add(1) < 8)
-            lucent::info("xma", "context {} {}, and nothing decodes it", index, what);
+            lucent::info("xma", "context {} {}", index, what);
     }
 }
 
@@ -247,7 +241,19 @@ void ReleaseXmaContext(uint32_t guestPointer)
             guestPointer);
         return;
     }
-    g_contextInUse[offset / kContextSize] = false;
+    const uint32_t index = offset / kContextSize;
+    {
+        // Zero the slot (the console kernel does) and drop the decoder with
+        // its state: a recycled slot starting with a previous stream's
+        // overlap history would bleed the old sound into the new one.
+        std::lock_guard<std::mutex> hwGuard(g_hwContextMutex);
+        if (g_hwContexts[index])
+        {
+            g_hwContexts[index]->Release(*g_memory, guestPointer);
+            g_hwContexts[index].reset();
+        }
+    }
+    g_contextInUse[index] = false;
 }
 
 bool OnXmaRegisterStore(uint32_t address, uint32_t value)
@@ -274,21 +280,54 @@ bool OnXmaRegisterStore(uint32_t address, uint32_t value)
             const uint32_t index = group * 32 + uint32_t(__builtin_ctz(bits));
             const uint32_t pointer = g_contextArray + index * kContextSize;
             DumpContext(*g_memory, index, pointer);
-            OpenDecoderOnce(*g_memory, index, pointer);
+            // Synchronous, like this Xenia's own kick handling (its register
+            // write blocks until the worker finishes, xma_decoder.cc:351): by
+            // the time the title's stwbrx returns, the context data reflects
+            // the decode.
+            // Timed, because this decode runs INSIDE the title's own register
+            // store: the guest thread is stopped for however long it takes.
+            // "The audio pump fell behind" and "gameplay is CPU-bound" look
+            // the same from the pump's rate alone, and only one of them is
+            // this code's fault.
+            const auto began = std::chrono::steady_clock::now();
+            HwContext(index).Work(*g_memory, pointer);
+            const auto took = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - began).count();
+            g_decodeMicroseconds.fetch_add(uint64_t(took));
+            for (uint64_t worst = g_worstDecodeMicroseconds.load();
+                 uint64_t(took) > worst &&
+                 !g_worstDecodeMicroseconds.compare_exchange_weak(worst, uint64_t(took));)
+                ;
         }
         // Reported as it goes rather than at exit. These runs end by being
         // killed -- the capture script sends SIGKILL and atexit never sees it --
         // so an exit summary is a summary nobody ever reads.
         if (kicks % 1000 == 0)
-            lucent::info("xma", "{} context kicks asked for, none decoded", kicks);
+        {
+            const uint64_t spent = g_decodeMicroseconds.load();
+            lucent::info("xma", "{} kicks, {} ms decoding in total ({} us mean,"
+                " {} us worst)", kicks, spent / 1000, spent / kicks,
+                g_worstDecodeMicroseconds.load());
+        }
     }
     else if (index >= kRegContext0Lock && index < kRegContext0Lock + kContextGroupCount)
     {
+        // The lock exists to keep the hardware from touching a context while
+        // the title rewrites it. Decoding is synchronous here -- no decode is
+        // ever in flight when the store returns -- so honoring the lock takes
+        // nothing beyond not decoding, which is already the case.
         ReportContextBits("locked", index - kRegContext0Lock, reg);
     }
     else if (index >= kRegContext0Clear && index < kRegContext0Clear + kContextGroupCount)
     {
         ReportContextBits("cleared", index - kRegContext0Clear, reg);
+        for (uint32_t bits = reg; bits; bits &= bits - 1)
+        {
+            const uint32_t index2 = (index - kRegContext0Clear) * 32 +
+                uint32_t(__builtin_ctz(bits));
+            HwContext(index2).Clear(*g_memory,
+                g_contextArray + index2 * kContextSize);
+        }
     }
     else
     {
