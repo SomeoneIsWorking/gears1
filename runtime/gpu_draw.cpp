@@ -2212,6 +2212,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     uint32_t resolveSetsUsed = 0;
     uint32_t resolvesUnstorable = 0;
     uint32_t resolvesOutOfSets = 0;
+    uint32_t midFrameDepthClears = 0;
 
     // --- the resolve compute pipeline -----------------------------------
     // Built once. It applies the guest's copy_dest_exp_bias and copy_dest_swap
@@ -2787,6 +2788,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // times too bright for the tonemap that samples it (catalog #33).
         float resolveScale = 1.0f;
         bool resolveSwapRB = false;
+        // A resolve can also CLEAR the EDRAM it copied out of, and on this
+        // title's tiled frame the DEPTH clear rides on each tile's depth
+        // resolve -- twice per frame, once per tile. Clearing depth only at the
+        // start of the frame leaves the second tile rendering against the first
+        // tile's depth buffer.
+        bool clearsDepth = false;
+        float depthClearValue = 0.0f;
+        bool copyIsServed = true;   // false: this entry only clears
         // --- diagnostic only (GEARS_DRAW_DIAG), never read by the renderer ---
         // Everything that can make a draw contribute nothing, recorded next to
         // the draw that did nothing. A summary cannot answer "which stage did
@@ -3183,11 +3192,26 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             static const uint32_t kColorInfo[4] = {0x2001, 0x2003, 0x2004, 0x2005};
             const uint32_t srcBase = srcSelect < 4
                 ? (R[kColorInfo[srcSelect & 3]] & 0xFFF) : 0xFFFFFFFFu;
+            // Does this copy also clear? RB_COPY_CONTROL bit 9 is
+            // depth_clear_enable, and the value is RB_DEPTH_CLEAR, in the EDRAM
+            // depth format. This is read for EVERY kCopy draw, including the
+            // depth resolves whose copy we cannot serve, because the clear is
+            // real even when the copy is not.
+            const bool clearsDepthHere = ((R[0x2318] >> 9) & 1) != 0;
+            float depthClearHere = 0.0f;
+            if (clearsDepthHere)
+            {
+                const uint32_t d24 = R[0x231D] >> 8;
+                depthClearHere = ((R[0x2002] >> 16) & 1) == 1 /*kD24FS8*/
+                    ? Depth20e4To32(d24) : DepthUnorm24To32(d24);
+            }
             auto route = resolveRouting.find(destBase);
             if (formatsPerBase.count(srcBase) && route != resolveRouting.end())
             {
                 PreparedDraw pd{};
                 pd.isResolve = true;
+                pd.clearsDepth = clearsDepthHere;
+                pd.depthClearValue = depthClearHere;
                 pd.surfaceBase = srcBase;
                 pd.resolveDest = route->second.first;   // the TEXTURE, not the base
                 // The resolve rectangle, per Xenia's GetResolveInfo: three
@@ -3300,6 +3324,19 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             else
             {
                 ++skippedResolves;
+                // The copy cannot be served -- a depth resolve, with no host
+                // depth texture chain yet -- but its CLEAR still has to happen,
+                // at this point in the stream and with the guest's value.
+                if (clearsDepthHere)
+                {
+                    PreparedDraw pd{};
+                    pd.isResolve = true;
+                    pd.copyIsServed = false;
+                    pd.clearsDepth = true;
+                    pd.depthClearValue = depthClearHere;
+                    prepared.push_back(pd);
+                    ++midFrameDepthClears;
+                }
             }
             continue;
         }
@@ -4185,6 +4222,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // overwrote it".
     const long onlyDraw = lucent::config::number("DRAW_ONLY", -1);
     uint32_t drawn = 0, segments = 0, surfaceSwitches = 0, resolvesDone = 0;
+    uint32_t depthClearsDone = 0;
     // The surface a render pass is currently open on, if any.
     bool inPass = false;
     uint32_t openSurface = 0;
@@ -4225,6 +4263,47 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     {
         if (pd.isResolve)
         {
+            // A resolve that also clears -- or only clears. The clear happens at
+            // THIS point in the stream, which is the whole point: on a tiled
+            // frame the guest clears depth once per tile, and doing it only at
+            // the start of the frame leaves the second tile testing against the
+            // first tile's depth.
+            auto doDepthClear = [&]() {
+                if (!pd.clearsDepth)
+                    return;
+                VkImageSubresourceRange dr{VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+                VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                b.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                b.oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                b.image = P.depth;
+                b.subresourceRange = dr;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+                VkClearDepthStencilValue cv{pd.depthClearValue, 0};
+                vkCmdClearDepthStencilImage(cmd, P.depth,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &dr);
+                VkImageMemoryBarrier r{b};
+                r.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                r.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                r.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0, 0, nullptr,
+                    0, nullptr, 1, &r);
+                ++depthClearsDone;
+            };
+            if (!pd.copyIsServed)
+            {
+                // Clear-only: no copy to perform, but the pass still has to end
+                // so the depth image can be cleared outside it.
+                endPass();
+                doDepthClear();
+                continue;
+            }
             // The source surface must be outside a render pass to be blitted,
             // and it is left in TRANSFER_SRC_OPTIMAL by whichever pass wrote it.
             auto src = P.surfaceTargets.find(pd.surfaceBase);
@@ -4236,6 +4315,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             resolveSurfaceTo(src->second, dst->second, pd.resolveSrcRect,
                              pd.resolveDstX, pd.resolveDstY, pd.resolveScale,
                              pd.resolveSwapRB);
+            doDepthClear();
             ++resolvesDone;
             continue;
         }
@@ -4748,6 +4828,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 " rectangle (whole surface copied), {} with a destination format"
                 " of unknown size (cannot be placed in a texture)",
                 resolveNoRect, resolveNoFormat);
+        lucent::info("draw", "frame mid-stream depth clears: {} executed of {}"
+            " carried by the frame's copy draws (the guest clears depth once per"
+            " predicated tile)", depthClearsDone, midFrameDepthClears);
         lucent::info("draw", "frame render pass: {} segments across {} surface"
             " switches, {} resolves executed (RT link {})", segments,
             surfaceSwitches, resolvesDone, rtLinkEnabled ? "on" : "off");
