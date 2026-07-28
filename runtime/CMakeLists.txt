@@ -27,9 +27,21 @@ target_include_directories(gears_ppc PUBLIC
 target_include_directories(gears_ppc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_options(gears_ppc PRIVATE -include ppc_mmio.h)
 
-# 49k functions of straight-line translated code; -O0 keeps build times sane
-# while the runtime is still being brought up.
-target_compile_options(gears_ppc PRIVATE -Wno-unused-variable)
+# 49k functions of straight-line translated code. The optimisation level is a
+# knob because it is a real trade: -O0 keeps the build under a couple of minutes
+# while the runtime is being brought up, and the translated code is exactly the
+# kind of thing -- long straight-line basic blocks over a register struct --
+# that an optimiser eats for breakfast. GEARS_PPC_OPT=-O1 (or -O2) rebuilds it
+# optimised.
+# -O2 by default. The old default was -O0 with the comment "keeps build times
+# sane", and that reason turned out to be false when anyone measured it: the
+# whole 49k-function image rebuilds at -O2 in 106 seconds on this machine,
+# against 98 at -O1. The cost was being paid for nothing, and it was not small
+# -- the title's own audio mixer took 16.7 ms per frame at -O0 and 6.7 ms at
+# -O2, which is the difference between the audio pipeline missing its rate by
+# 3x and missing it by 1.25x.
+set(GEARS_PPC_OPT "-O2" CACHE STRING "Optimisation level for the translated guest code")
+target_compile_options(gears_ppc PRIVATE -Wno-unused-variable ${GEARS_PPC_OPT})
 
 # Import stubs are generated because the import list comes from the game.
 set(IMPORT_STUBS "${CMAKE_CURRENT_BINARY_DIR}/imports_generated.cpp")
@@ -77,6 +89,7 @@ add_executable(gears1
     kernel_spinlock.cpp
     audio_out.cpp
     ppc_mmio.cpp
+    pump_probe.cpp
     xaudio_null.cpp
     xma.cpp
     xma_context.cpp

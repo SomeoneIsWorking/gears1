@@ -16,6 +16,8 @@
 #include <string>
 #include <thread>
 
+#include <sys/resource.h>
+
 #include <byteswap.h>
 #include <lucent/config.h>
 #include <lucent/log.h>
@@ -24,6 +26,7 @@
 #include "guest_memory.h"
 #include "audio_out.h"
 #include "guest_thread.h"
+#include "pump_probe.h"
 #include "xma.h"
 
 namespace
@@ -192,6 +195,51 @@ std::atomic<bool> g_pumpStop{false};
 std::thread g_pumpThread;
 std::atomic<uint64_t> g_pumpCalls{0};
 
+// The pump thread's CPU time, for separating two explanations of a slow pump
+// that look identical from outside (catalog #43): a callback that is genuinely
+// expensive burns thread CPU time roughly equal to its wall time; a callback
+// that is preempted or blocked shows wall time far above CPU time. One number
+// distinguishes "the mixer is slow" from "the mixer is starved", which decide
+// for opposite fixes.
+uint64_t PumpThreadCpuNanos()
+{
+    timespec ts{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+    return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+}
+
+// Context switches distinguish the two ways a thread loses wall time while
+// burning no CPU: voluntary switches are waits it chose (a lock, a sleep --
+// something the wait-site probes can name); involuntary switches are the
+// scheduler taking the core away while the thread was RUNNABLE. Wall >> CPU
+// with no named wait site and rising involuntary switches is preemption under
+// load, which no amount of code inside the callback can fix.
+void PumpThreadSwitches(uint64_t& voluntary, uint64_t& involuntary)
+{
+    rusage usage{};
+    getrusage(RUSAGE_THREAD, &usage);
+    voluntary = uint64_t(usage.ru_nvcsw);
+    involuntary = uint64_t(usage.ru_nivcsw);
+}
+
+// The scheduler's own account of time this thread spent RUNNABLE but not
+// running (/proc/thread-self/schedstat, second field, nanoseconds). This is
+// the direct measurement of "the machine would not give the pump a core":
+// if wall - cpu for an interval is roughly this delta, the pump is starved by
+// scheduling and nothing inside the callback explains anything.
+uint64_t PumpThreadRunqueueNanos()
+{
+    // Reopened per read: the file is per-thread and this runs 10 times a
+    // second on a thread whose whole job is waiting.
+    std::FILE* f = std::fopen("/proc/thread-self/schedstat", "r");
+    if (!f)
+        return 0;
+    unsigned long long ran = 0, waited = 0, slices = 0;
+    const int got = std::fscanf(f, "%llu %llu %llu", &ran, &waited, &slices);
+    std::fclose(f);
+    return got == 3 ? waited : 0;
+}
+
 void AudioPump()
 {
     gears::GuestThreadBlock block{};
@@ -213,6 +261,13 @@ void AudioPump()
     const auto period = std::chrono::duration_cast<clock::duration>(
         std::chrono::duration<double>(1.0 / kAudioFramesPerSecond));
     auto next = clock::now() + period;
+
+    // Interval accumulators for the periodic report. Wall vs CPU time of the
+    // callback is the load-bearing pair; the rest sizes the backlog.
+    uint64_t wallNanos = 0, wallMaxNanos = 0;
+    uint64_t cpuNanos = 0, cpuMaxNanos = 0;
+    uint64_t lateSlots = 0, timedCalls = 0;
+
     while (!g_pumpStop.load(std::memory_order_relaxed))
     {
         std::this_thread::sleep_until(next);
@@ -220,16 +275,63 @@ void AudioPump()
         const uint32_t callback = g_callback;
         if (!callback)
             continue;
+
+        const auto wallBefore = clock::now();
+        const uint64_t cpuBefore = PumpThreadCpuNanos();
+        // Behind by a full slot or more even after sleeping: this iteration is
+        // a catch-up run, not a paced one.
+        if (wallBefore >= next)
+            ++lateSlots;
+
         ctx.r1.u32 = block.stackBase - 0x100;
         ctx.r3.u32 = g_callbackContext;
+        gears::t_inAudioPumpCallback = true;
         (PPC_LOOKUP_FUNC(base, callback))(ctx, base);
+        gears::t_inAudioPumpCallback = false;
+
+        const uint64_t cpuDelta = PumpThreadCpuNanos() - cpuBefore;
+        const uint64_t wallDelta =
+            uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock::now() - wallBefore).count());
+        wallNanos += wallDelta;
+        cpuNanos += cpuDelta;
+        wallMaxNanos = std::max(wallMaxNanos, wallDelta);
+        cpuMaxNanos = std::max(cpuMaxNanos, cpuDelta);
+        ++timedCalls;
+
         const uint64_t n = g_pumpCalls.fetch_add(1, std::memory_order_relaxed) + 1;
         // Report the pump separately from the submissions: "the callback is
         // being entered and returning" and "the title is producing frames" are
         // different facts, and only the first one is ours to guarantee.
         if (n == 1 || n % 1875 == 0)
+        {
+            const auto now = clock::now();
+            const double backlogSlots = now < next ? 0.0
+                : std::chrono::duration<double>(now - next).count() *
+                  kAudioFramesPerSecond;
+            static uint64_t lastVoluntary = 0, lastInvoluntary = 0;
+            static uint64_t lastRunqueue = 0;
+            uint64_t voluntary = 0, involuntary = 0;
+            PumpThreadSwitches(voluntary, involuntary);
+            const uint64_t runqueue = PumpThreadRunqueueNanos();
             lucent::info("audio", "pump: {} callback invocations, {} frames"
-                " submitted by the title", n, g_submittedFrames.load());
+                " submitted by the title; last {}: wall {}/{} us mean/max,"
+                " cpu {}/{} us mean/max, {} late slots, backlog {:.0f} slots,"
+                " csw {} vol {} invol, runqueue {} ms",
+                n, g_submittedFrames.load(), timedCalls,
+                timedCalls ? wallNanos / timedCalls / 1000 : 0,
+                wallMaxNanos / 1000,
+                timedCalls ? cpuNanos / timedCalls / 1000 : 0,
+                cpuMaxNanos / 1000, lateSlots, backlogSlots,
+                voluntary - lastVoluntary, involuntary - lastInvoluntary,
+                (runqueue - lastRunqueue) / 1000000);
+            lastVoluntary = voluntary;
+            lastInvoluntary = involuntary;
+            lastRunqueue = runqueue;
+            wallNanos = wallMaxNanos = cpuNanos = cpuMaxNanos = 0;
+            lateSlots = timedCalls = 0;
+            gears::PumpWaitReport();
+        }
     }
 }
 } // namespace
@@ -396,9 +498,9 @@ void __imp__XAudioGetVoiceCategoryVolumeChangeMask(PPCContext& __restrict ctx, u
 // a successful init anyway and then crashes dispatching through the members
 // it never built (SIGSEGV in its Update path). So creation succeeds and
 // hands out a real, zeroed context record in physical memory -- the title
-// programs it and kicks the (unmodelled) decoder block through MMIO. What is
-// missing is decode itself: no PCM is ever produced. That gap is logged
-// loudly here and tracked as the audio subsystem's frontier.
+// programs it and kicks the decoder block through MMIO, where xma_context.cpp
+// decodes it (verified against an independent reference, catalog #43's
+// neighbours).
 void __imp__XMACreateContext(PPCContext& __restrict ctx, uint8_t* base)
 {
     static std::atomic<uint64_t> s_created{0};
@@ -418,9 +520,6 @@ void __imp__XMACreateContext(PPCContext& __restrict ctx, uint8_t* base)
         *reinterpret_cast<uint32_t*>(base + ctx.r3.u32) = ByteSwap(context);
 
     const uint64_t n = s_created.fetch_add(1) + 1;
-    if (n == 1)
-        lucent::warn("audio", "XMA contexts handed out with NO decoder behind them"
-            " -- audio will be silent and decode never progresses");
     lucent::debug("audio", "XMACreateContext -> {:#x} ({} live)", context, n);
     ctx.r3.u64 = gears::kStatusSuccess;
 }

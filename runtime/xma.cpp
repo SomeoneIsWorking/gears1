@@ -17,6 +17,7 @@
 #include <lucent/log.h>
 
 #include "guest_heap.h"
+#include "pump_probe.h"
 #include "xma_context.h"
 
 namespace gears
@@ -61,10 +62,12 @@ uint32_t* Register(GuestMemory& memory, uint32_t index)
 }
 
 // Kicks arrive as WRITES, from the device-store hook, so every one is seen.
-// Nothing decodes them yet; what this does is make them visible and count them
-// honestly. Without it, a title that asks for decode and a title that never
-// asks look identical -- the same ambiguity that hid the audio blocker.
 std::atomic<uint64_t> g_kicks{0};
+// Kicks arriving on the audio pump's own thread, inside the title's render
+// callback. Those decodes spend the callback's slot budget (decode is
+// synchronous in the kick store), so their count decides whether decode time
+// belongs in the pump-rate story at all.
+std::atomic<uint64_t> g_kicksFromPump{0};
 std::atomic<uint64_t> g_decodeMicroseconds{0};
 std::atomic<uint64_t> g_worstDecodeMicroseconds{0};
 
@@ -274,6 +277,8 @@ bool OnXmaRegisterStore(uint32_t address, uint32_t value)
         const uint32_t group = index - kRegContext0Kick;
         const uint64_t kicks =
             g_kicks.fetch_add(uint32_t(__builtin_popcount(reg))) + __builtin_popcount(reg);
+        if (t_inAudioPumpCallback)
+            g_kicksFromPump.fetch_add(uint32_t(__builtin_popcount(reg)));
         ReportContextBits("kicked", group, reg);
         for (uint32_t bits = reg; bits; bits &= bits - 1)
         {
@@ -305,8 +310,9 @@ bool OnXmaRegisterStore(uint32_t address, uint32_t value)
         if (kicks % 1000 == 0)
         {
             const uint64_t spent = g_decodeMicroseconds.load();
-            lucent::info("xma", "{} kicks, {} ms decoding in total ({} us mean,"
-                " {} us worst)", kicks, spent / 1000, spent / kicks,
+            lucent::info("xma", "{} kicks ({} on the audio pump thread),"
+                " {} ms decoding in total ({} us mean, {} us worst)", kicks,
+                g_kicksFromPump.load(), spent / 1000, spent / kicks,
                 g_worstDecodeMicroseconds.load());
         }
     }

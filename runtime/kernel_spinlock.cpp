@@ -10,6 +10,7 @@
 #include <unordered_map>
 
 #include <lucent/log.h>
+#include "pump_probe.h"
 
 namespace
 {
@@ -36,7 +37,10 @@ constexpr uint32_t kDpcLevel = 2;
 
 void __imp__KfAcquireSpinLock(PPCContext& __restrict ctx, uint8_t*)
 {
-    HostLockFor(ctx.r3.u32).lock();
+    {
+        gears::PumpWaitScope probe("KfAcquireSpinLock");
+        HostLockFor(ctx.r3.u32).lock();
+    }
     const uint32_t previous = t_irql;
     t_irql = kDpcLevel;
     ctx.r3.u64 = previous;
@@ -50,6 +54,7 @@ void __imp__KfReleaseSpinLock(PPCContext& __restrict ctx, uint8_t*)
 
 void __imp__KeAcquireSpinLockAtRaisedIrql(PPCContext& __restrict ctx, uint8_t*)
 {
+    gears::PumpWaitScope probe("KeAcquireSpinLock");
     HostLockFor(ctx.r3.u32).lock();
 }
 

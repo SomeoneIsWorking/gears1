@@ -7,6 +7,7 @@
 
 #include <byteswap.h>
 #include <lucent/log.h>
+#include "pump_probe.h"
 
 namespace
 {
@@ -79,7 +80,10 @@ void __imp__RtlInitializeCriticalSectionAndSpinCount(PPCContext& __restrict ctx,
 void __imp__RtlEnterCriticalSection(PPCContext& __restrict ctx, uint8_t* base)
 {
     const uint32_t address = ctx.r3.u32;
-    HostLockFor(address).lock();
+    {
+        gears::PumpWaitScope probe("RtlEnterCS");
+        HostLockFor(address).lock();
+    }
 
     GuestCriticalSection* cs = CriticalSectionAt(base, address);
     cs->lockCount = ByteSwap(int32_t(ByteSwap(cs->lockCount) + 1));
