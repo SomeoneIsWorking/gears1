@@ -68,6 +68,7 @@ add_executable(gears1
     kernel_dispatcher.cpp
     kernel_spinlock.cpp
     xaudio_null.cpp
+    xma.cpp
     guest_filesystem.cpp
     kernel_file.cpp
     "${IMPORT_STUBS}")
