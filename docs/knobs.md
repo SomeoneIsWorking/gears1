@@ -33,6 +33,7 @@ the same commit that removes it.
 | `GEARS_NO_VBLANK=1` | Disable the 60 Hz vblank |
 | `GEARS_AUDIO_PUMP=1` | Drive the guest's audio callback at 187.5 Hz so it submits frames. Off by default: nothing plays the frames yet, so the only effect on a normal run is cost |
 | `GEARS_AUDIO_WAV=<path>` | Write every submitted frame verbatim to a WAV (6 channels, 48 kHz, 32-bit float). The header is refreshed once a second so a killed run still leaves a readable file |
+| `GEARS_XMA_DUMP=<dir>` | On the first kick of each XMA context, dump its 64-byte context and the raw 2 KB packets behind it, for offline decode with `tools/xma_wrap.py` |
 | `GEARS_CP_STALL_MS=N` | Block the command processor N ms at the first swap — the control arm for "did host work perturb the guest?" |
 
 ## Capture and replay
