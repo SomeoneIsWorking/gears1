@@ -107,6 +107,10 @@ HandleTable& Handles();
 // guest address lazily, the first time one is actually asked for, so the common
 // handle-only path costs nothing.
 uint32_t GuestAddressForHandle(uint32_t handle);
+// The reverse: which handle a guest object address was minted for, or 0. The
+// title passes these pointers back to APIs that name a thread (affinity among
+// them), so the runtime has to be able to get back to what it created.
+uint32_t HandleForGuestAddress(uint32_t address);
 std::shared_ptr<KernelObject> LookupByGuestAddress(uint32_t address);
 
 // Binds a host object to a dispatcher object that lives in guest memory. Titles
