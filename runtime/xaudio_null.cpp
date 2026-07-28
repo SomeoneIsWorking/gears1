@@ -22,6 +22,7 @@
 #include "guest_heap.h"
 #include "guest_memory.h"
 #include "guest_thread.h"
+#include "xma.h"
 
 namespace
 {
@@ -361,11 +362,13 @@ void __imp__XAudioGetVoiceCategoryVolumeChangeMask(PPCContext& __restrict ctx, u
 // loudly here and tracked as the audio subsystem's frontier.
 void __imp__XMACreateContext(PPCContext& __restrict ctx, uint8_t* base)
 {
-    constexpr uint32_t kContextSize = 0x40; // the hardware context record
     static std::atomic<uint64_t> s_created{0};
 
-    uint32_t size = kContextSize;
-    const uint32_t context = gears::PhysicalHeap().Allocate(0, size, gears::kMemCommit);
+    // A slot in the hardware's context array, not a fresh allocation. The title
+    // identifies a context by its INDEX in that array -- the kick, lock and
+    // clear registers are bitmaps over those indices -- so a context that lives
+    // anywhere else cannot be named by the interface that drives it (xma.h).
+    const uint32_t context = gears::AllocateXmaContext();
     if (context == 0)
     {
         ctx.r3.u64 = gears::kStatusNoMemory;
@@ -385,6 +388,6 @@ void __imp__XMACreateContext(PPCContext& __restrict ctx, uint8_t* base)
 
 void __imp__XMAReleaseContext(PPCContext& __restrict ctx, uint8_t*)
 {
-    gears::PhysicalHeap().Free(ctx.r3.u32);
+    gears::ReleaseXmaContext(ctx.r3.u32);
     ctx.r3.u64 = 0;
 }

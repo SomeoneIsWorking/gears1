@@ -13,6 +13,7 @@
 #include "guest_thread.h"
 
 namespace gears { bool CommitDeviceWindow(GuestMemory& memory); }
+#include "xma.h"
 #include "import_variables.h"
 #include "ppc_recomp_shared.h"
 
@@ -110,6 +111,10 @@ int main(int argc, char* argv[])
     gears::InitialiseHeaps(memory);
 
     if (!gears::CommitDeviceWindow(memory))
+        return EXIT_FAILURE;
+
+    // Must follow the device window, since it publishes a register into it.
+    if (!gears::SetupXmaRegisters(memory))
         return EXIT_FAILURE;
 
     gears::GuestThreadBlock mainThread{};
