@@ -132,7 +132,7 @@ bool Renderer::Init()
     ii.pApplicationInfo = &app;
     const char* valLayer = "VK_LAYER_KHRONOS_validation";
     const char* dbgExt = "VK_EXT_debug_utils";
-    if (std::getenv("GEARS_DRAW_VALIDATE"))
+    if (lucent::config::flag("DRAW_VALIDATE"))
     {
         ii.enabledLayerCount = 1;
         ii.ppEnabledLayerNames = &valLayer;
@@ -238,7 +238,7 @@ bool Renderer::Init()
         return false;
     }
     vkGetDeviceQueue(device, queueFamily, 0, &queue);
-    if (std::getenv("GEARS_DRAW_VALIDATE"))
+    if (lucent::config::flag("DRAW_VALIDATE"))
     {
         auto create = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
             instance, "vkCreateDebugUtilsMessengerEXT");
@@ -1528,7 +1528,8 @@ bool Renderer::Render(const HotDrawInputs& in)
             " RT-sampling pass and texture0 is a 1x1 stub (the 1280x720 render"
             " target it samples is not produced yet)");
 
-    const char* dir = std::getenv("GEARS_DRAW_DIR");
+    const std::string& hotDirStr = lucent::config::text("DRAW_DIR");
+    const char* dir = hotDirStr.empty() ? nullptr : hotDirStr.c_str();
     std::filesystem::path out =
         (dir ? std::filesystem::path(dir) : std::filesystem::path("scratch/screenshots"))
         / "hot_draw.ppm";
@@ -1945,7 +1946,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // GEARS_DRAW_TEX_DUMP=1 writes the decoded (detiled, endian-swapped)
         // blob so the decode can be checked outside the renderer -- the only
         // way to tell "detiling is right" from "the shader is dark".
-        if (std::getenv("GEARS_DRAW_TEX_DUMP"))
+        if (lucent::config::flag("DRAW_TEX_DUMP"))
         {
             std::filesystem::create_directories("scratch/raw/textures");
             const std::string fn = std::format(
@@ -2660,8 +2661,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         rs.polygonMode = VK_POLYGON_MODE_FILL;
         rs.cullMode = VK_CULL_MODE_NONE;
         rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        static const bool noCull = std::getenv("GEARS_DRAW_NOCULL") != nullptr;
-        static const bool invertFace = std::getenv("GEARS_DRAW_CULL_INVERT") != nullptr;
+        static const bool noCull = lucent::config::flag("DRAW_NOCULL");
+        static const bool invertFace = lucent::config::flag("DRAW_CULL_INVERT");
         if (om.polygonal && !noCull)
         {
             if (om.suScModeCntl & 1) rs.cullMode |= VK_CULL_MODE_FRONT_BIT;
@@ -2684,7 +2685,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // GEARS_DRAW_NODEPTH=1 is a DIAGNOSTIC control arm only: it separates
         // "this draw is depth-rejected" from "this draw shades black". It is
         // never a fix -- the depth state below is the guest's own.
-        static const bool noDepth = std::getenv("GEARS_DRAW_NODEPTH") != nullptr;
+        static const bool noDepth = lucent::config::flag("DRAW_NODEPTH");
         ds.depthTestEnable =
             (!noDepth && ((om.depthControl >> 1) & 1)) ? VK_TRUE : VK_FALSE;
         ds.depthWriteEnable = ((om.depthControl >> 2) & 1) ? VK_TRUE : VK_FALSE;
@@ -2710,7 +2711,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // shades something the blend equation multiplies away" -- every world
         // draw of this frame uses colour src factor kSrcAlpha, so an output
         // alpha of zero would erase it whatever its RGB is.
-        static const bool noBlend = std::getenv("GEARS_DRAW_NOBLEND") != nullptr;
+        static const bool noBlend = lucent::config::flag("DRAW_NOBLEND");
         cba.blendEnable = (noBlend || blendIsIdentity) ? VK_FALSE : VK_TRUE;
         cba.srcColorBlendFactor = BlendFactorOf(cSrc);
         cba.dstColorBlendFactor = BlendFactorOf(cDst);
@@ -3028,7 +3029,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     std::map<std::string, uint64_t> viewportCensus; // guest viewport/scissor -> draws
     // Upload is on by default; GEARS_DRAW_NOTEX=1 is the control arm that
     // restores the stub-only frame for an A/B comparison.
-    const bool texUploadEnabled = std::getenv("GEARS_DRAW_NOTEX") == nullptr;
+    const bool texUploadEnabled = !lucent::config::flag("DRAW_NOTEX");
 
     VkDescriptorImageInfo iiSamp{};
     iiSamp.sampler = samp;
@@ -3197,7 +3198,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // below has something to give it).
     // GEARS_DRAW_NORT=1 is the control arm that restores the old behaviour of
     // decoding a resolve destination out of stale guest memory, for an A/B.
-    const bool rtLinkEnabled = std::getenv("GEARS_DRAW_NORT") == nullptr;
+    const bool rtLinkEnabled = !lucent::config::flag("DRAW_NORT");
     const bool listDraws = lucent::config::flag("DRAW_FRAME_LIST");
     // (depth resolve destination, pixel shader hash) -> bindings. Names the
     // shaders that decode resolved depth, so their microcode can be read.
@@ -3479,16 +3480,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     // DIAGNOSTIC control arm: at 1.0 the compute resolve must
                     // reproduce the old blit exactly, which is how the compute
                     // path is separated from the bias value it applies.
-                    static const char* forced = std::getenv("GEARS_DRAW_RESOLVE_SCALE");
-                    if (forced)
-                        pd.resolveScale = float(std::atof(forced));
+                    static const std::string& forced =
+                        lucent::config::text("DRAW_RESOLVE_SCALE");
+                    if (!forced.empty())
+                        pd.resolveScale = float(std::atof(forced.c_str()));
                     pd.resolveSwapRB = ((R[0x231B] >> 24) & 1) != 0;
                     // GEARS_DRAW_RESOLVE_NOSWAP=1 suppresses the red/blue swap.
                     // A DIAGNOSTIC control arm: the blit path cannot swap, so
                     // the compute path only has to match it byte-for-byte with
                     // the swap disabled and the scale forced to 1.
                     static const bool noSwap =
-                        std::getenv("GEARS_DRAW_RESOLVE_NOSWAP") != nullptr;
+                        lucent::config::flag("DRAW_RESOLVE_NOSWAP");
                     if (noSwap)
                         pd.resolveSwapRB = false;
                 }
@@ -3598,7 +3600,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // GEARS_DRAW_DEPTHONLY_PS=1 restores the old behaviour: a DIAGNOSTIC
         // control arm for A/B-ing exactly this, never a fix.
         static const bool depthOnlyRunsPs =
-            std::getenv("GEARS_DRAW_DEPTHONLY_PS") != nullptr;
+            lucent::config::flag("DRAW_DEPTHONLY_PS");
         const bool pixelShaderUsed = edramMode == 4 /*kColorDepth*/ || depthOnlyRunsPs;
         if (!pixelShaderUsed)
             ++drawsNoPixelShader;
@@ -3830,7 +3832,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // GEARS_DRAW_FIXEDVP=1 restores the old host-fixed full-target
             // viewport: the control arm for measuring what the guest-derived
             // viewport/scissor changed.
-            static const bool fixedVp = std::getenv("GEARS_DRAW_FIXEDVP") != nullptr;
+            static const bool fixedVp = lucent::config::flag("DRAW_FIXEDVP");
             if (fixedVp)
             {
                 gv.x = gv.y = gv.scissorX = gv.scissorY = 0;
@@ -4181,7 +4183,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             " has ever programmed another value and the per-format unpack of"
             " RB_COLOR_CLEAR is therefore untestable. Falling back.",
             unverifiableColorClears);
-    static const bool slateClear = std::getenv("GEARS_DRAW_SLATE_CLEAR") != nullptr;
+    static const bool slateClear = lucent::config::flag("DRAW_SLATE_CLEAR");
     const bool useGuestColorClear = haveGuestColorClear &&
                                     !unverifiableColorClears && !slateClear;
     if (in.report)
@@ -4208,8 +4210,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     //
     // GEARS_DRAW_DEPTH_CLEAR=<float> remains as an override, a control arm only.
     {
-        const char* dc = std::getenv("GEARS_DRAW_DEPTH_CLEAR");
-        clears[1].depthStencil = {dc ? float(std::atof(dc)) : guestDepthClear, 0};
+        const std::string& dc = lucent::config::text("DRAW_DEPTH_CLEAR");
+        clears[1].depthStencil =
+            {dc.empty() ? guestDepthClear : float(std::atof(dc.c_str())), 0};
     }
     // Checkpoint dumps (GEARS_DRAW_FRAME_STEP=N): after every N draws the colour
     // target is copied to its own readback buffer and written out, so the frame
@@ -4341,7 +4344,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // (0 of 2764816 differ). GEARS_DRAW_RESOLVE_BLIT=1 goes back to the
         // blit, as a control arm.
         static const bool blitResolve =
-            std::getenv("GEARS_DRAW_RESOLVE_BLIT") != nullptr;
+            lucent::config::flag("DRAW_RESOLVE_BLIT");
         const bool computeResolve = !blitResolve;
         const bool canCompute = computeResolve &&
             P.resolvePipeline != VK_NULL_HANDLE && !resolveSets.empty() &&
@@ -4514,7 +4517,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // GEARS_DRAW_DIAG=<path.tsv> writes the per-draw diagnostic table (below),
     // which is only useful joined with the pipeline statistics -- so it turns
     // them on rather than making the user remember two knobs.
-    const char* diagPath = std::getenv("GEARS_DRAW_DIAG");
+    const std::string& diagPathStr = lucent::config::text("DRAW_DIAG");
+    const char* diagPath = diagPathStr.empty() ? nullptr : diagPathStr.c_str();
     const bool statsEnabled = (lucent::config::flag("DRAW_STATS") || diagPath) &&
                               hasPipelineStats &&
                               lucent::config::number("DRAW_ONLY", -1) < 0;
@@ -4786,7 +4790,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // indistinguishable from "the resolve wrote nothing".
     struct ResolveDump { uint32_t base, w, h; bool isDepth; VkBuffer buf; VkDeviceMemory mem; };
     std::vector<ResolveDump> resolveDumps;
-    if (std::getenv("GEARS_DRAW_RESOLVE_DUMP"))
+    if (lucent::config::flag("DRAW_RESOLVE_DUMP"))
     {
         for (auto& [k, r] : P.resolveTargets)
         {
@@ -4881,7 +4885,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                         rgba[i * 4 + c] = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
                     }
             }
-            const char* dir = std::getenv("GEARS_DRAW_DIR");
+            const std::string& dirStr = lucent::config::text("DRAW_DIR");
+        const char* dir = dirStr.empty() ? nullptr : dirStr.c_str();
             const std::filesystem::path out =
                 (dir ? std::filesystem::path(dir)
                      : std::filesystem::path("scratch/screenshots")) /
@@ -5247,7 +5252,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             " switches, {} resolves executed (RT link {})", segments,
             surfaceSwitches, resolvesDone, rtLinkEnabled ? "on" : "off");
 
-        const char* dir = std::getenv("GEARS_DRAW_DIR");
+        const std::string& dirStr = lucent::config::text("DRAW_DIR");
+        const char* dir = dirStr.empty() ? nullptr : dirStr.c_str();
         const std::filesystem::path reportDir =
             dir ? std::filesystem::path(dir) : std::filesystem::path("scratch/screenshots");
         std::filesystem::path out = in.sequence >= 0
@@ -5265,7 +5271,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         sinceStartMs(), msSetup, msDrawLoop, msTranslate, msPipeline, msTexture,
         msSsboUpload, msSubmit, msReadback);
     // Checkpoint images, each labelled with how many draws had run.
-    const char* checkpointDir = std::getenv("GEARS_DRAW_DIR");
+    const std::string& checkpointDirStr = lucent::config::text("DRAW_DIR");
+    const char* checkpointDir = checkpointDirStr.empty() ? nullptr
+                                                         : checkpointDirStr.c_str();
     const std::filesystem::path outDir = checkpointDir
         ? std::filesystem::path(checkpointDir)
         : std::filesystem::path("scratch/screenshots");
