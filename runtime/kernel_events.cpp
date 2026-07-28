@@ -8,6 +8,7 @@
 #include <byteswap.h>
 #include <lucent/log.h>
 
+#include "guest_thread.h"
 #include "kernel_objects.h"
 
 namespace
@@ -195,7 +196,7 @@ void __imp__NtWaitForMultipleObjectsEx(PPCContext& __restrict ctx, uint8_t* base
 
 void __imp__NtSetEvent(PPCContext& __restrict ctx, uint8_t*)
 {
-    lucent::debug("wait", "NtSetEvent({:#x})", ctx.r3.u32);
+    lucent::debug("wait", "[{}] NtSetEvent({:#x})", gears::GuestThreadName(), ctx.r3.u32);
     if (auto object = gears::Handles().Lookup(ctx.r3.u32))
         object->Set();
     else

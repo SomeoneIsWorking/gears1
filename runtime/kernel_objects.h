@@ -62,6 +62,12 @@ public:
     static int WaitMultiple(KernelObject* const* objects, size_t count,
                             bool waitAll, int64_t timeout100ns);
 
+    // For diagnostics. A wait that never returns is indistinguishable from a
+    // wait that was never reached unless the log says WHAT was waited on, and
+    // the kind is the part that says whether anything could have signalled it.
+    Kind kind() const { return kind_; }
+    const char* KindName() const;
+
 private:
     // True when this object would let a waiter through. Caller holds the
     // dispatcher lock.

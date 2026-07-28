@@ -118,6 +118,7 @@ struct InterruptThreadState
             return false;
         ctx.r13.u32 = block.pcrAddress;
         ctx.fpscr.loadFromHost();
+        gears::SetGuestThreadName("gpu-isr");
         ready = true;
         return true;
     }

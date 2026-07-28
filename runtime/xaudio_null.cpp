@@ -56,6 +56,7 @@ void AudioPump()
             " never be asked for a frame");
         return;
     }
+    gears::SetGuestThreadName("audio-pump");
     lucent::info("audio", "audio pump thread running (pcr {:#x}, stack {:#x})",
                  block.pcrAddress, block.stackBase);
     PPCContext ctx{};
