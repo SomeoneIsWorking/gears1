@@ -35,6 +35,11 @@ approximate, `docs/codemap.md` says where each subsystem lives, and
   geometry, textures, constants, viewport and output-merger state into
   per-EDRAM-surface render targets. Menus render correctly; the in-game HUD and
   world both render.
+- **Audio works, end to end.** The render-driver pump asks the title for a
+  frame at the console's 187.5 Hz, the title mixes one — decoding XMA through
+  the hardware register block and context protocol to do it — and SDL plays the
+  result. The decode is verified against an independent reference decode of the
+  title's own streams at correlation 1.000000 over a full 142-second stream.
 
 ## What does not
 
@@ -42,7 +47,9 @@ approximate, `docs/codemap.md` says where each subsystem lives, and
   still lost at clipping, the second predicated tile (the bottom 208 rows) is
   empty, and the HDR-to-LDR tonemap blows out. Each of these is measured and
   tracked on `docs/re-frontier.md` rather than guessed at.
-- **No audio.** `xaudio_null.cpp` accepts frames and plays nothing.
+- **Audio has unexercised paths.** Loop playback and true double-buffered
+  streaming are ported from the reference but no stream has used them yet, and
+  the pump falls behind its 187.5 Hz under a CPU-bound guest.
 - **No networking, no user/content services.** Those imports abort on first call.
 - **File I/O is read-only**, with no directory enumeration.
 
