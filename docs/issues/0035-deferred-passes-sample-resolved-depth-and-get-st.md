@@ -51,3 +51,43 @@ The compute resolve built for catalog #33 is the right vehicle: this is a second
 shader variant reading the depth image and writing the packed 8888 texture. The
 20e4 encode is the inverse of the Depth20e4To32 already ported for the depth
 clear.
+
+### Note (2026-07-28)
+HALF IMPLEMENTED. The encode and the shader exist and build; the wiring into the
+renderer does not, so nothing has changed behaviourally yet (the replayed frame
+is byte-identical, 0 of 2764816).
+
+What is done, and verified:
+
+  The float32 -> float24 (20e4) ENCODE, ported from Xenia's
+  PreClampedDepthTo20e4 (itself CFloat24 from d3dref9.dll): denormal path,
+  normal path, and round-to-nearest-even. Verified as the exact inverse of the
+  Depth20e4To32 already in the tree -- 200001 round trips sampled across [0,1],
+  ALL within one ULP of the 20-bit mantissa, and the anchors exact: 0 -> 0x000000,
+  1 -> 0xf00000, 0.5 -> 0xe00000, 0.25 -> 0xd00000.
+
+  BuildDepthResolveComputeShader. Separate from the colour resolve shader for two
+  reasons that are not stylistic: a depth image CANNOT be a storage image on
+  Vulkan, so the source is bound as a SAMPLED image and read with OpImageFetch
+  (no sampler needed -- VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE gives an OpTypeImage
+  with Sampled=1); and the destination is not a copy of the source but an
+  encoding of it. The shader encodes to float24 or unorm24 per the depth format,
+  packs depth into bits 8..31 with stencil in 0..7 exactly as RB_DEPTH_CLEAR is
+  laid out, and writes the four bytes as normalised components -- which is what
+  a fetch of the guest's k_8_8_8_8 destination would hand the shader.
+
+STILL TO DO: the pipeline (a different descriptor layout from the colour
+resolve), a sampled view of the host depth image, resolve targets for depth
+destinations (they are currently dropped in the pre-pass), and the dispatch.
+
+ONE ASSUMPTION IS NOT YET DERIVED FROM ANYTHING, and is flagged in the shader
+itself: the BYTE ORDER of the packed dword across the four components. It is
+written most-significant-first. Everything else here comes from a register or
+from Xenia; this does not, and the way to settle it is to disassemble the pixel
+shader that samples 0xba40000 and read how it recombines the components -- the
+microcode is in the frame capture. A wrong order will show as a depth image that
+bands or looks like noise rather than a smooth ramp, so the resolve-target dump
+can also falsify it.
+
+STENCIL is written as zero. We carry no stencil buffer; recorded rather than
+hidden, because a title that tests resolved stencil would need it.

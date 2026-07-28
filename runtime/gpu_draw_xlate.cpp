@@ -20,6 +20,7 @@
 #include "xenia/gpu/registers.h"
 #include "xenia/gpu/shader.h"
 #include "xenia/gpu/spirv_builder.h"
+#include "third_party/glslang/SPIRV/GLSL.std.450.h"
 // Maps glslang's scoped SPIR-V enums back onto the flat spv::CapabilityFoo
 // names; every one of Xenia's own SPIR-V translation units includes it.
 #include "xenia/gpu/spirv_compatibility.h"
@@ -822,6 +823,203 @@ bool BuildResolveComputeShader(std::vector<uint32_t>& spirv)
     const spv::Id doSwap = builder.createBinOp(spv::OpINotEqual, typeBool,
         pushMember(4, typeUint), builder.makeUintConstant(0));
     texel = builder.createTriOp(spv::OpSelect, typeFloat4, doSwap, swapped, texel);
+
+    builder.createNoResultOp(spv::OpImageWrite,
+        {builder.createLoad(imageDst, spv::NoPrecision), dstCoord, texel});
+
+    builder.leaveFunction();
+
+    std::vector<unsigned int> code;
+    builder.dump(code);
+    spirv.assign(code.begin(), code.end());
+    return !spirv.empty();
+}
+
+// The DEPTH resolve compute shader. Separate from the colour one because the
+// source is a depth image, which cannot be a storage image on Vulkan -- it is
+// bound as a SAMPLED image and read with OpImageFetch (no sampler needed; a
+// VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE gives an OpTypeImage with Sampled=1) -- and
+// because the destination is not a copy of the source at all.
+//
+// The guest resolves depth to a k_8_8_8_8 destination: the Xenos
+// depth-as-colour resolve. The 24-bit depth is packed with its 8-bit stencil
+// into a dword and the sampling shaders decode it arithmetically. So this
+// shader ENCODES our float32 depth back into the guest's 24-bit format --
+// float24 (20e4) for kD24FS8, unorm24 for kD24S8 -- packs it with stencil, and
+// writes the four bytes as normalised components, which is exactly what a fetch
+// of an 8888 texture would hand the shader.
+bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv)
+{
+    constexpr uint32_t kGroupSize = 8;
+
+    xe::gpu::SpirvBuilder builder(spv::Spv_1_0,
+        (SpirvShaderTranslator::kSpirvMagicToolId << 16) | 1, nullptr);
+    builder.addCapability(spv::CapabilityShader);
+    builder.addCapability(spv::Capability::StorageImageWriteWithoutFormat);
+    builder.setMemoryModel(spv::AddressingModelLogical, spv::MemoryModelGLSL450);
+    builder.setSource(spv::SourceLanguageUnknown, 0);
+    const spv::Id extGlsl = builder.import("GLSL.std.450");
+
+    const spv::Id typeVoid = builder.makeVoidType();
+    const spv::Id typeBool = builder.makeBoolType();
+    const spv::Id typeInt = builder.makeIntType(32);
+    const spv::Id typeUint = builder.makeUintType(32);
+    const spv::Id typeFloat = builder.makeFloatType(32);
+    const spv::Id typeInt2 = builder.makeVectorType(typeInt, 2);
+    const spv::Id typeUint3 = builder.makeVectorType(typeUint, 3);
+    const spv::Id typeFloat4 = builder.makeVectorType(typeFloat, 4);
+
+    // Sampled depth in, storage colour out.
+    const spv::Id typeDepthImage = builder.makeImageType(typeFloat, spv::Dim2D,
+        /*depth=*/false, /*arrayed=*/false, /*ms=*/false, /*sampled=*/1,
+        spv::ImageFormat::Unknown);
+    const spv::Id typeDstImage = builder.makeImageType(typeFloat, spv::Dim2D,
+        false, false, false, /*sampled=*/2, spv::ImageFormat::Unknown);
+
+    std::vector<spv::Id> mainInterface;
+    const spv::Id imageSrc = builder.createVariable(spv::NoPrecision,
+        spv::StorageClassUniformConstant, typeDepthImage, "xe_depth_src");
+    builder.addDecoration(imageSrc, spv::DecorationDescriptorSet, 0);
+    builder.addDecoration(imageSrc, spv::DecorationBinding, 0);
+    const spv::Id imageDst = builder.createVariable(spv::NoPrecision,
+        spv::StorageClassUniformConstant, typeDstImage, "xe_depth_dst");
+    builder.addDecoration(imageDst, spv::DecorationDescriptorSet, 0);
+    builder.addDecoration(imageDst, spv::DecorationBinding, 1);
+    builder.addDecoration(imageDst, spv::DecorationNonReadable);
+    mainInterface.push_back(imageSrc);
+    mainInterface.push_back(imageDst);
+
+    // Same push-constant block as the colour resolve, plus the depth format:
+    // swapRB is reused as "1 = kD24FS8 (float24), 0 = kD24S8 (unorm24)".
+    std::vector<spv::Id> pushMembers{typeInt2, typeInt2, typeInt2, typeFloat, typeUint};
+    const spv::Id typePush = builder.makeStructType(pushMembers, "XeResolveConstants");
+    builder.addDecoration(typePush, spv::DecorationBlock);
+    static const int kOffsets[5] = {0, 8, 16, 24, 28};
+    for (int i = 0; i < 5; ++i)
+        builder.addMemberDecoration(typePush, unsigned(i), spv::DecorationOffset, kOffsets[i]);
+    const spv::Id pushVar = builder.createVariable(spv::NoPrecision,
+        spv::StorageClassPushConstant, typePush, "xe_resolve_constants");
+    mainInterface.push_back(pushVar);
+
+    const spv::Id inGlobalId = builder.createVariable(spv::NoPrecision,
+        spv::StorageClassInput, typeUint3, "gl_GlobalInvocationID");
+    builder.addDecoration(inGlobalId, spv::DecorationBuiltIn,
+                          int(spv::BuiltIn::GlobalInvocationId));
+    mainInterface.push_back(inGlobalId);
+
+    std::vector<spv::Id> mainParamTypes;
+    std::vector<std::vector<spv::Decoration>> mainPrecisions;
+    spv::Block* mainEntry = nullptr;
+    spv::Function* mainFunction = builder.makeFunctionEntry(spv::NoPrecision, typeVoid,
+        "main", mainParamTypes, mainPrecisions, &mainEntry);
+    spv::Instruction* entryPoint =
+        builder.addEntryPoint(spv::ExecutionModelGLCompute, mainFunction, "main");
+    for (spv::Id id : mainInterface)
+        entryPoint->addIdOperand(id);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeLocalSize,
+                             int(kGroupSize), int(kGroupSize), 1);
+
+    auto pushMember = [&](int index) {
+        std::vector<spv::Id> chain{builder.makeIntConstant(index)};
+        return builder.createLoad(
+            builder.createAccessChain(spv::StorageClassPushConstant, pushVar, chain),
+            spv::NoPrecision);
+    };
+
+    const spv::Id globalId = builder.createLoad(inGlobalId, spv::NoPrecision);
+    const spv::Id idU2 = builder.createRvalueSwizzle(spv::NoPrecision,
+        builder.makeVectorType(typeUint, 2), globalId, {0, 1});
+    const spv::Id id2 = builder.createUnaryOp(spv::OpBitcast, typeInt2, idU2);
+    const spv::Id extent = pushMember(2);
+    const spv::Id outside = builder.createBinOp(spv::OpLogicalOr, typeBool,
+        builder.createBinOp(spv::OpSGreaterThanEqual, typeBool,
+            builder.createCompositeExtract(id2, typeInt, 0),
+            builder.createCompositeExtract(extent, typeInt, 0)),
+        builder.createBinOp(spv::OpSGreaterThanEqual, typeBool,
+            builder.createCompositeExtract(id2, typeInt, 1),
+            builder.createCompositeExtract(extent, typeInt, 1)));
+    {
+        spv::Block& thenBlock = builder.makeNewBlock();
+        spv::Block& mergeBlock = builder.makeNewBlock();
+        builder.createSelectionMerge(&mergeBlock, spv::SelectionControlMaskNone);
+        builder.createConditionalBranch(outside, &thenBlock, &mergeBlock);
+        builder.setBuildPoint(&thenBlock);
+        builder.makeReturn(false);
+        builder.setBuildPoint(&mergeBlock);
+    }
+
+    const spv::Id srcCoord = builder.createBinOp(spv::OpIAdd, typeInt2, pushMember(0), id2);
+    const spv::Id dstCoord = builder.createBinOp(spv::OpIAdd, typeInt2, pushMember(1), id2);
+
+    // d = texelFetch(depth, srcCoord).x
+    const spv::Id fetched = builder.createOp(spv::OpImageFetch, typeFloat4,
+        {builder.createLoad(imageSrc, spv::NoPrecision), srcCoord});
+    spv::Id d = builder.createCompositeExtract(fetched, typeFloat, 0);
+    // Clamp to [0,1]: the encode below assumes a pre-clamped value, as Xenia's
+    // PreClampedDepthTo20e4 does.
+    d = builder.createTriBuiltinCall(typeFloat, extGlsl, GLSLstd450FClamp, d,
+        builder.makeFloatConstant(0.0f), builder.makeFloatConstant(1.0f));
+
+    // --- float24 (20e4), a port of Xenia's PreClampedDepthTo20e4 -------------
+    const spv::Id dBits = builder.createUnaryOp(spv::OpBitcast, typeUint, d);
+    // denormal = ((bits & 0x7FFFFF) | 0x800000) >> min(113 - (bits >> 23), 24)
+    const spv::Id denormMantissa = builder.createBinOp(spv::OpBitwiseOr, typeUint,
+        builder.createBinOp(spv::OpBitwiseAnd, typeUint, dBits,
+            builder.makeUintConstant(0x7FFFFF)),
+        builder.makeUintConstant(0x800000));
+    const spv::Id shiftAmount = builder.createBinBuiltinCall(typeUint, extGlsl,
+        GLSLstd450UMin,
+        builder.createBinOp(spv::OpISub, typeUint, builder.makeUintConstant(113),
+            builder.createBinOp(spv::OpShiftRightLogical, typeUint, dBits,
+                builder.makeUintConstant(23))),
+        builder.makeUintConstant(24));
+    const spv::Id denormBiased = builder.createBinOp(spv::OpShiftRightLogical,
+        typeUint, denormMantissa, shiftAmount);
+    const spv::Id normalBiased = builder.createBinOp(spv::OpISub, typeUint, dBits,
+        builder.makeUintConstant(112u << 23));
+    spv::Id biased = builder.createTriOp(spv::OpSelect, typeUint,
+        builder.createBinOp(spv::OpULessThan, typeBool, dBits,
+            builder.makeUintConstant(0x38800000)),
+        denormBiased, normalBiased);
+    // Round to nearest even: biased += 3 + ((biased >> 3) & 1)
+    biased = builder.createBinOp(spv::OpIAdd, typeUint,
+        builder.createBinOp(spv::OpIAdd, typeUint, biased, builder.makeUintConstant(3)),
+        builder.createTriOp(spv::OpBitFieldUExtract, typeUint, biased,
+            builder.makeUintConstant(3), builder.makeUintConstant(1)));
+    const spv::Id float24 = builder.createTriOp(spv::OpBitFieldUExtract, typeUint,
+        biased, builder.makeUintConstant(3), builder.makeUintConstant(24));
+
+    // --- unorm24: roundEven(d * 0xFFFFFF) ------------------------------------
+    const spv::Id unorm24 = builder.createUnaryOp(spv::OpConvertFToU, typeUint,
+        builder.createUnaryBuiltinCall(typeFloat, extGlsl, GLSLstd450RoundEven,
+            builder.createBinOp(spv::OpFMul, typeFloat, d,
+                builder.makeFloatConstant(float(0xFFFFFF)))));
+
+    const spv::Id isFloat24 = builder.createBinOp(spv::OpINotEqual, typeBool,
+        pushMember(4), builder.makeUintConstant(0));
+    const spv::Id depth24 = builder.createTriOp(spv::OpSelect, typeUint,
+        isFloat24, float24, unorm24);
+
+    // Pack depth into bits 8..31 with the stencil in 0..7, exactly as
+    // RB_DEPTH_CLEAR is laid out. We carry no stencil, so it is zero -- recorded
+    // rather than hidden, because a title that tests resolved stencil would need
+    // it.
+    const spv::Id packed = builder.createBinOp(spv::OpShiftLeftLogical, typeUint,
+        depth24, builder.makeUintConstant(8));
+
+    // The four bytes as normalised components, most significant first. This
+    // byte ORDER is the one assumption here that is not derived from a register.
+    const spv::Id inv255 = builder.makeFloatConstant(1.0f / 255.0f);
+    auto byteAt = [&](uint32_t shift) {
+        const spv::Id b = builder.createBinOp(spv::OpBitwiseAnd, typeUint,
+            builder.createBinOp(spv::OpShiftRightLogical, typeUint, packed,
+                builder.makeUintConstant(shift)),
+            builder.makeUintConstant(0xFF));
+        return builder.createBinOp(spv::OpFMul, typeFloat,
+            builder.createUnaryOp(spv::OpConvertUToF, typeFloat, b), inv255);
+    };
+    const spv::Id texel = builder.createCompositeConstruct(typeFloat4,
+        {byteAt(24), byteAt(16), byteAt(8), byteAt(0)});
 
     builder.createNoResultOp(spv::OpImageWrite,
         {builder.createLoad(imageDst, spv::NoPrecision), dstCoord, texel});
