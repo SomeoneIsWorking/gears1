@@ -1,7 +1,7 @@
 ---
 id: 32
 title: Predicated tiles stack on top of each other: the frame's bottom 208 rows are never written
-status: open
+status: resolved
 symptom: the rendered gameplay frame's bottom 208 rows are flat clear colour while the top rows are overexposed; 195 of the HDR surface's 391 draws carry PA_SC_WINDOW_OFFSET window_y_offset = -512
 tags: gpu,draw,draw-backend,edram,tiling,resolve,predication,gameplay
 created: 2026-07-28
@@ -95,3 +95,6 @@ tiles correctly share one EDRAM host image (same base 0x400), and tile 1 is
 resolved OUT (draw 407) before tile 2's draws begin (draw 604+). Our renderer
 already executes the resolves in submission order. Only the destination side is
 wrong.
+
+### Resolution (2026-07-28)
+FIXED. A resolve destination is now a REGION OF A TEXTURE rather than a texture. getResolveTarget takes RB_COPY_DEST_PITCH/_INFO alongside the base, and a destination whose base falls inside an existing target -- same pitch, same bytes-per-pixel, a whole number of rows in -- joins that target at the implied row offset instead of minting an image of its own. Measured on the captured frame: 'resolve destination 0xc2e0000 is row 512 of the texture at 0xbde0000 (1280x720), not a target of its own', and the frame's resolve destinations drop from 6 to 5. The blit now copies the guest's RECTANGLE to the guest's OFFSET: the rectangle comes from vertex fetch constant 0 per Xenia's GetResolveInfo (three vertices of two floats, plus the PA_SU_VTX_CNTL half-pixel offset, converted to 16p8 fixed with the top-left rule, shifted by PA_SC_WINDOW_OFFSET, clamped to the scissor and aligned to 8), and the destination offset is that rectangle's origin plus the routed row offset. A SECOND defect had to be fixed for this to work at all: the resolve blit set oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, which permits the driver to DISCARD the destination -- harmless while a resolve wrote the whole image, fatal once one tile's rows must survive the other tile's resolve. It now preserves, tracked per target. RESULT, replayed on the captured Act 1 frame: rows 512-719 go from flat (mean 115.2 std 5.1) to real scene content (mean 186.8 std 75.6). Verified live too: a gameplay frame renders full height with legible in-game subtitle dialogue (scratch/screenshots/live-tiles2/best.png), and the routing fires on every gameplay frame. Menus unregressed. The frame is still badly OVEREXPOSED -- that is the HDR-to-LDR tonemap, a separate gap on re-frontier gameplay-scene, not this.
