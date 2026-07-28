@@ -290,3 +290,46 @@ pinned down rather than guessed.
 This also produces the GOLDEN REFERENCE the runtime decoder must later match:
 the runtime's PCM for the same context and stream offset has to agree with these
 files, modulo the priming samples ffmpeg trims and a hardware context does not.
+
+### Note (2026-07-28)
+THE DECODER IS LINKED AND OPENS. THE CONTEXT PROTOCOL IS WHAT IS LEFT.
+
+Following the architecture decision recorded above -- upstream's packet-level
+xma2 is the wrong shape for a hardware context -- Xenia's FFmpeg fork is now
+vendored at extern/ffmpeg-xmaframes and built by the build itself
+(cmake/ffmpeg_xma.cmake). --disable-everything with two decoders enabled gives
+libavcodec.a + libavutil.a totalling under 2 MB; x86 assembly is off because it
+needs nasm and buys nothing for audio.
+
+VERIFIED, and it is a real cross-check rather than a smoke test: on the first
+kick of each context the runtime opens AV_CODEC_ID_XMAFRAMES using the sample
+rate and channel count read out of the GUEST's context, and reports
+
+    [xma] decoder open: stereo at 24000 Hz
+    [xma] decoder open: stereo at 44100 Hz
+
+which is exactly what the offline dumps decoded to. Two independent paths --
+the runtime's own field decoding and ffmpeg's reading of the wrapped file --
+agree on both streams. Rendering unaffected at 29.86 fps, both suites pass.
+
+The failure mode this closes is worth naming: "the wrong libavcodec was linked"
+and "the bitstream is bad" produce identical silence downstream, so the codec
+lookup is checked at the point where the answer is cheap, and says which one it
+is.
+
+TWO BUILD TRAPS, recorded because both cost a cycle and both were silent:
+- include() shares the caller's scope, so `set(... PARENT_SCOPE)` in an included
+  .cmake writes PAST the top-level list file. The feature flag was set and never
+  arrived, and the runtime reported "this build has no XMA decoder" while the
+  libraries sat built on disk.
+- FFmpeg refuses an out-of-tree build if a config.h exists in the source tree.
+  An earlier in-tree configure poisons every later CMake build until the
+  submodule is cleaned.
+
+STILL NOT DECODING. What remains is the context protocol: reassembling frames
+out of the 2 KB packet stream (frames span packets, and a frame's own 15-bit
+length header can straddle a packet boundary -- undetectable for XMA1),
+pacing output per 128-sample subframe into the 256-byte block ring, byte-
+swapping the PCM to big-endian, and advancing input_buffer_read_offset in BITS
+and output_buffer_write_offset in blocks. Xenia's xma_context_new.cc is the
+reference; its rest value for the read offset is 32 bits, never 0.

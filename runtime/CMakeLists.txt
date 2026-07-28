@@ -78,12 +78,18 @@ add_executable(gears1
     ppc_mmio.cpp
     xaudio_null.cpp
     xma.cpp
+    xma_decode.cpp
     guest_filesystem.cpp
     kernel_file.cpp
     "${IMPORT_STUBS}")
 
 target_include_directories(gears1 PRIVATE .)
 target_link_libraries(gears1 PRIVATE gears_ppc XenonUtils lucent::lucent)
+
+if(GEARS_HAVE_XMA_DECODER)
+    target_link_libraries(gears1 PRIVATE ffmpeg_xma)
+    target_compile_definitions(gears1 PRIVATE GEARS_HAVE_XMA_DECODER=1)
+endif()
 
 # The guest-draw renderer, in its own static library rather than compiled into
 # gears1 -- because it depends on NOTHING in the runtime (gpu_draw.cpp includes
