@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 #include <cstring>
+#include <string>
 #include <string_view>
 
 #include <byteswap.h>
@@ -362,8 +363,11 @@ std::string DescribeParameter(uint8_t* base, uint32_t value)
 [[noreturn]] void GuestBugCheck(PPCContext& ctx, uint8_t* base, bool extended)
 {
     const uint32_t code = ctx.r3.u32;
-    lucent::error("kernel", "THE TITLE BUG-CHECKED: KeBugCheck{}(code {:#x})",
-        extended ? "Ex" : "", code);
+    // The link register is the return address, so it names WHICH of the
+    // image's fifteen bug-check call sites this is. Without it the code alone
+    // (often 0) says nothing about where the title gave up.
+    lucent::error("kernel", "THE TITLE BUG-CHECKED: KeBugCheck{}(code {:#x}),"
+        " called from {:#x}", extended ? "Ex" : "", code, uint32_t(ctx.lr));
 
     if (extended)
     {
@@ -376,6 +380,22 @@ std::string DescribeParameter(uint8_t* base, uint32_t value)
             else
                 lucent::error("kernel", "  parameter {}: {:#x} -> \"{}\"", i + 1,
                               params[i], text);
+        }
+    }
+
+    if (!extended)
+    {
+        // KeBugCheck takes one argument, so r4..r7 are whatever the caller left
+        // there. Labelled as residual because that is what they are -- but one
+        // of them pointing at a string in the image has been the difference
+        // between a code and a reason.
+        const uint32_t residual[4] = {ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32};
+        for (int i = 0; i < 4; ++i)
+        {
+            const std::string text = DescribeParameter(base, residual[i]);
+            if (!text.empty())
+                lucent::error("kernel", "  residual r{}: {:#x} -> \"{}\"", i + 4,
+                              residual[i], text);
         }
     }
 
