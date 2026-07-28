@@ -75,6 +75,7 @@ add_executable(gears1
     kernel_config.cpp
     kernel_dispatcher.cpp
     kernel_spinlock.cpp
+    audio_out.cpp
     ppc_mmio.cpp
     xaudio_null.cpp
     xma.cpp
