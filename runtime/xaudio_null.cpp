@@ -8,6 +8,11 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <mutex>
+#include <string>
 #include <thread>
 
 #include <byteswap.h>
@@ -23,8 +28,142 @@ namespace
 std::atomic<uint32_t> g_nextClientId{1};
 std::atomic<uint64_t> g_submittedFrames{0};
 std::atomic<uint64_t> g_nullSampleFrames{0};
+std::atomic<uint64_t> g_silentFrames{0};
 uint32_t g_callback = 0;
 uint32_t g_callbackContext = 0;
+
+// A submitted frame is 6 channels x 256 samples of interleaved big-endian
+// float, which is Xenia's XAudioSubmitRenderDriverFrame contract.
+constexpr uint32_t kFrameChannels = 6;
+constexpr uint32_t kFrameSamplesPerChannel = 256;
+constexpr uint32_t kFrameFloats = kFrameChannels * kFrameSamplesPerChannel;
+constexpr uint32_t kFrameSampleRate = 48000;
+
+float LoadGuestFloat(const uint8_t* at)
+{
+    uint32_t bits;
+    std::memcpy(&bits, at, sizeof(bits));
+    bits = ByteSwap(bits);
+    float value;
+    std::memcpy(&value, &bits, sizeof(value));
+    return value;
+}
+
+// The peak of the frame the title just handed us.
+//
+// This exists because "the title submitted 11250 frames" and "the title
+// submitted 11250 frames of digital silence" are the same observation from the
+// driver's side, and only one of them is audio working. Cheap enough to run
+// unconditionally at 187.5 Hz.
+float FramePeak(const uint8_t* samples)
+{
+    float peak = 0.0f;
+    for (uint32_t i = 0; i < kFrameFloats; ++i)
+    {
+        const float value = LoadGuestFloat(samples + i * 4);
+        // NaNs compare false, so they are not mistaken for a loud frame.
+        const float magnitude = value < 0.0f ? -value : value;
+        if (magnitude > peak)
+            peak = magnitude;
+    }
+    return peak;
+}
+
+// GEARS_AUDIO_WAV=<path> writes what the title submits, verbatim: 32-bit float,
+// six channels, 48 kHz. Verbatim matters -- a downmix or a conversion here would
+// be a second thing that can be wrong when the question is whether the FIRST
+// thing produced anything.
+class WavWriter
+{
+public:
+    void Open(const std::string& path)
+    {
+        std::error_code ec;
+        const std::filesystem::path out(path);
+        if (out.has_parent_path())
+            std::filesystem::create_directories(out.parent_path(), ec);
+        file_ = std::fopen(path.c_str(), "wb");
+        if (!file_)
+        {
+            lucent::error("audio", "cannot open {} for the sample dump", path);
+            return;
+        }
+        WriteHeader(0);
+        lucent::info("audio", "writing submitted samples to {} ({} ch, {} Hz, f32)",
+                     path, kFrameChannels, kFrameSampleRate);
+    }
+
+    void Write(const uint8_t* samples)
+    {
+        if (!file_)
+            return;
+        float host[kFrameFloats];
+        for (uint32_t i = 0; i < kFrameFloats; ++i)
+            host[i] = LoadGuestFloat(samples + i * 4);
+        std::fwrite(host, sizeof(float), kFrameFloats, file_);
+        dataBytes_ += sizeof(host);
+
+        // The header is refreshed about once a second of audio, because runs
+        // end by being killed far more often than they end cleanly -- the
+        // capture script sends SIGKILL, and atexit never sees it. A dump that
+        // only becomes readable on a graceful exit is a dump that is unreadable
+        // when it matters.
+        if (++framesSinceHeader_ >= kHeaderRefreshFrames)
+        {
+            framesSinceHeader_ = 0;
+            const long end = std::ftell(file_);
+            std::fseek(file_, 0, SEEK_SET);
+            WriteHeader(dataBytes_);
+            std::fseek(file_, end, SEEK_SET);
+        }
+    }
+
+    void Close()
+    {
+        if (!file_)
+            return;
+        std::fseek(file_, 0, SEEK_SET);
+        WriteHeader(dataBytes_);
+        std::fclose(file_);
+        file_ = nullptr;
+        lucent::info("audio", "sample dump closed: {} bytes of PCM ({:.1f} s)",
+                     dataBytes_,
+                     double(dataBytes_) / (sizeof(float) * kFrameChannels * kFrameSampleRate));
+    }
+
+    bool open() const { return file_ != nullptr; }
+
+private:
+    void WriteHeader(uint32_t dataBytes)
+    {
+        const uint32_t byteRate = kFrameSampleRate * kFrameChannels * sizeof(float);
+        const uint16_t blockAlign = uint16_t(kFrameChannels * sizeof(float));
+        auto u32 = [this](uint32_t v) { std::fwrite(&v, 4, 1, file_); };
+        auto u16 = [this](uint16_t v) { std::fwrite(&v, 2, 1, file_); };
+        std::fwrite("RIFF", 1, 4, file_);
+        u32(36 + dataBytes);
+        std::fwrite("WAVEfmt ", 1, 8, file_);
+        u32(16);
+        u16(3); // IEEE float
+        u16(uint16_t(kFrameChannels));
+        u32(kFrameSampleRate);
+        u32(byteRate);
+        u16(blockAlign);
+        u16(32);
+        std::fwrite("data", 1, 4, file_);
+        u32(dataBytes);
+    }
+
+    static constexpr uint32_t kHeaderRefreshFrames = 188; // ~1 s at 187.5 Hz
+
+    std::FILE* file_ = nullptr;
+    uint32_t dataBytes_ = 0;
+    uint32_t framesSinceHeader_ = 0;
+};
+
+WavWriter g_wav;
+std::once_flag g_wavOpened;
+std::mutex g_wavMutex;
 
 // The audio pump.
 //
@@ -154,16 +293,43 @@ void __imp__XAudioUnregisterRenderDriverClient(PPCContext& __restrict ctx, uint8
 // r4 is the SAMPLES -- a float* of 6 channels x 256 samples interleaved (Xenia:
 // xboxkrnl_audio.cc). It used to be discarded, which would have thrown the audio
 // away even once the pump started asking for it.
-void __imp__XAudioSubmitRenderDriverFrame(PPCContext& __restrict ctx, uint8_t*)
+void __imp__XAudioSubmitRenderDriverFrame(PPCContext& __restrict ctx, uint8_t* base)
 {
     const uint32_t samplesPtr = ctx.r4.u32;
     const uint64_t frames = g_submittedFrames.fetch_add(1) + 1;
+
+    float peak = 0.0f;
     if (samplesPtr == 0)
+    {
         g_nullSampleFrames.fetch_add(1);
+    }
+    else
+    {
+        const uint8_t* samples = base + samplesPtr;
+        peak = FramePeak(samples);
+        // Exact zero, not a threshold: the question here is whether the title
+        // wrote anything at all, and a quiet frame is a different finding from
+        // an untouched buffer.
+        if (peak == 0.0f)
+            g_silentFrames.fetch_add(1);
+
+        if (const std::string& path = lucent::config::text("AUDIO_WAV"); !path.empty())
+        {
+            std::call_once(g_wavOpened, [&path] {
+                g_wav.Open(path);
+                if (g_wav.open())
+                    std::atexit([] { g_wav.Close(); });
+            });
+            std::lock_guard<std::mutex> guard(g_wavMutex);
+            g_wav.Write(samples);
+        }
+    }
+
     if (frames == 1 || frames % 1000 == 0)
         lucent::info("audio", "{} frames submitted ({} pump calls, samples at"
-            " {:#x}, {} with no buffer) -- not played yet", frames,
-            g_pumpCalls.load(), samplesPtr, g_nullSampleFrames.load());
+            " {:#x}, {} with no buffer, {} silent), peak {:.4f} -- not played yet",
+            frames, g_pumpCalls.load(), samplesPtr, g_nullSampleFrames.load(),
+            g_silentFrames.load(), peak);
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 

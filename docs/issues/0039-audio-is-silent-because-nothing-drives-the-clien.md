@@ -71,3 +71,39 @@ that look exactly like 11250 buffers of music from the driver's side. Dump the
 PCM to scratch/wav/ and look at it before wiring any output device: an output
 device fed silence and an output device fed nothing sound identical, and only
 one of them is a bug you can find afterwards.
+
+### Note (2026-07-28)
+STEP (b) IS DONE, AND THE ANSWER IS: THE TITLE IS PRODUCING REAL AUDIO.
+
+Two instruments, both in xaudio_null.cpp:
+
+- every submitted frame's peak is measured and the count of digitally silent
+  frames is reported, unconditionally. This is the check that distinguishes
+  "11250 frames of music" from "11250 frames of nothing", which look identical
+  from the driver's side.
+- GEARS_AUDIO_WAV=<path> writes the frames verbatim -- 6 channels, 48 kHz,
+  32-bit float, no downmix and no conversion, because a transform here would be
+  a second thing that can be wrong. The header is refreshed once a second, since
+  runs end by SIGKILL far more often than they end cleanly and a dump that is
+  only readable on a graceful exit is unreadable when it matters.
+
+Measured on a run to gameplay (11000 frames submitted, none without a buffer):
+
+    2763 frames are non-silent, 8237 are digital zero
+    peak 0.518, mean peak of the non-silent frames 0.136
+    ffmpeg volumedetect over the dump: mean -27.4 dB, max -5.7 dB
+
+The non-silent frames are not scattered -- they are TWO contiguous runs,
+4.4 s to 10.4 s and 10.5 s to 19.3 s. So the title produces genuine sound
+through boot and the intro, and then goes silent from about 19 s onward, which
+is around when it settles on the title screen.
+
+That shape is the next question and it is a good one: audio is not broken in
+general, it stops. The obvious suspect remains XMA -- contexts are still handed
+out with no decoder, so anything streamed rather than mixed from resident PCM
+would fall silent exactly like this once the intro's own samples are exhausted.
+Suspect, not conclusion; nothing has yet tied the two runs to a source.
+
+STEP (c), an output device, is now unblocked and is deliberately still last: it
+would add nothing this measurement has not already established, and a device fed
+silence sounds exactly like a device fed nothing.
