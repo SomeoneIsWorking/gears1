@@ -45,15 +45,37 @@ public:
     // A negative timeout means wait forever.
     bool Wait(int64_t timeout100ns);
 
+    // Wait on SEVERAL objects at once. `waitAll` false is WaitAny: return as
+    // soon as one is satisfied, consuming only that one. `waitAll` true returns
+    // only when every object is satisfied, and consumes them together.
+    //
+    // This cannot be built from Wait() in a loop. A synchronisation event or a
+    // semaphore is CONSUMED by the waiter that takes it, so checking objects one
+    // at a time can take a signal from an object the caller then abandons, and
+    // WaitAll would consume some objects while blocking on another -- both lose
+    // signals the guest is entitled to. The check and the consume have to be
+    // atomic across every object, which is why all dispatcher state now lives
+    // under one shared lock rather than a mutex per object.
+    //
+    // Returns the index of the object that satisfied a WaitAny, 0 for a
+    // satisfied WaitAll, or -1 on timeout.
+    static int WaitMultiple(KernelObject* const* objects, size_t count,
+                            bool waitAll, int64_t timeout100ns);
+
 private:
+    // True when this object would let a waiter through. Caller holds the
+    // dispatcher lock.
+    bool SatisfiedLocked() const;
+    // Take the signal, for the object kinds that consume one. Caller holds the
+    // dispatcher lock.
+    void ConsumeLocked();
+
     Kind kind_;
     bool signalled_;
     int32_t count_ = 0;
     int32_t limit_ = 0;
     std::thread::id owner_{};       // Mutant only
     int32_t recursion_ = 0;         // Mutant only
-    std::mutex mutex_;
-    std::condition_variable cv_;
 };
 
 // Maps guest handles to host objects. Handles are opaque to the guest, so any

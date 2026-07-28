@@ -110,7 +110,13 @@ void __imp__XAudioRegisterRenderDriverClient(PPCContext& __restrict ctx, uint8_t
         g_callbackContext = ByteSwap(*reinterpret_cast<uint32_t*>(base + callbackPtr + 4));
     }
 
-    const uint32_t clientId = g_nextClientId.fetch_add(1);
+    // The driver handle the title gets back is 0x41550000 | index -- an 'AU'
+    // magic in the top half (Xenia: XAudioRegisterRenderDriverClient_entry, and
+    // XAudioSubmitRenderDriverFrame asserts on it). We were handing back a bare
+    // 1, so any title that checks or unpacks the handle sees a value the console
+    // would never produce.
+    const uint32_t index = g_nextClientId.fetch_add(1);
+    const uint32_t clientId = 0x41550000u | (index & 0xFFFFu);
     if (clientIdPtr != 0)
         *reinterpret_cast<uint32_t*>(base + clientIdPtr) = ByteSwap(clientId);
 
