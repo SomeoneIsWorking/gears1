@@ -1198,7 +1198,17 @@ struct CommandProcessor
         // vertex fetches resolve. Vertex/index buffers observed so far live in
         // the low MBs; a draw whose fetch base exceeds this reads zero and is
         // reported by the backend as empty geometry rather than faked.
-        in.guestPhysicalMirrorBytes = 0x4000000; // 64 MiB
+        // How much guest physical memory the shaders can FETCH from -- the whole
+        // console window, because a vertex fetch constant may name any of it.
+        // This was 64 MiB, and that was the missing world (catalog #30): an Act 1
+        // frame fetches vertices as high as 0xecf926c (237 MiB), 606 of its 722
+        // draws fetched past the mirror, and a fetch past it reads ZERO, so every
+        // primitive collapsed to the origin and was destroyed at clipping.
+        //
+        // The renderer does not copy this much per frame: it uploads only the
+        // ranges the frame's draws actually fetch (a few MiB), so the span costs
+        // address space rather than bandwidth.
+        in.guestPhysicalMirrorBytes = 0x20000000; // 512 MiB
         // Textures live anywhere in the console's 512 MiB of physical RAM,
         // which is mapped at the 0x0 alias; the texture decoder reads it
         // directly (bounds-checked) rather than through the SSBO mirror.

@@ -80,6 +80,7 @@ suppressed; adding an implementation means adding its name there.
 
 ## Where is X?
 
+- *A draw's geometry vanished before rasterisation?* → check the **frame geometry reach** line first. A vertex fetch past the guest-memory SSBO mirror reads **zero**, so every vertex collapses to the origin and the whole primitive dies at clipping — which looks nothing like a memory bug and exactly like a transform bug. This cost the project the entire in-game world: the mirror was 64 MiB while an Act 1 frame fetches to 237 MiB (`catalog.py show 30`). The mirror now spans the full 512 MiB window and uploads only the ranges the frame fetches
 - *Why does the game see zeros at an address?* → `import_variables.cpp` (variable imports start zeroed)
 - *Why is a physical pointer valid at four addresses?* → `guest_memory.cpp`, `MapPhysicalAliases`
 - *What decides an import traps vs runs?* → `implemented_imports.h` + `tools/gen_import_stubs.py`
