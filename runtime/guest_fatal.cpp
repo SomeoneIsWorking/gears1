@@ -14,6 +14,8 @@
 // calls it directly, which is how it is reached.
 #include "import_stub.h"
 
+#include <string>
+
 #include <byteswap.h>
 #include <lucent/log.h>
 
@@ -38,6 +40,41 @@ constexpr uint32_t kFatalReentryFlag = 0x82BC9E18;
 
 namespace
 {
+// Printable runs in a window of guest memory, reported as candidates rather
+// than as fact: this is a stack frame, so some of what looks like text will be
+// coincidence. Naming it a guess is the difference between a lead and a lie.
+void DumpNearbyText(uint32_t around)
+{
+    if (around == 0)
+        return;
+    constexpr int32_t kBefore = 512;
+    constexpr int32_t kAfter = 2048;
+    const uint8_t* memory = gears::Memory().Base();
+
+    std::string run;
+    uint32_t runStart = 0;
+    uint32_t found = 0;
+    for (int32_t offset = -kBefore; offset <= kAfter && found < 8; ++offset)
+    {
+        const uint32_t address = uint32_t(int64_t(around) + offset);
+        const unsigned char c = memory[address];
+        if (c >= 0x20 && c <= 0x7E)
+        {
+            if (run.empty())
+                runStart = address;
+            run.push_back(char(c));
+            continue;
+        }
+        if (run.size() >= 8)
+        {
+            lucent::error("fatal", "  text near the fatal frame at {:#x}: \"{}\"",
+                          runStart, run);
+            ++found;
+        }
+        run.clear();
+    }
+}
+
 void ReportEntry(const char* entry, const PPCContext& ctx)
 {
     const uint32_t flag = ByteSwap(*gears::Memory().Translate<uint32_t>(kFatalReentryFlag));
@@ -47,6 +84,13 @@ void ReportEntry(const char* entry, const PPCContext& ctx)
         flag,
         flag == 1 ? "WILL bug-check" : "is the first, and something already went"
                                        " wrong to get here");
+
+    // The caller (sub_828D9FD8) builds something in its stack frame before
+    // handing control here, and the calls it makes on the way look like
+    // formatting. If that is an error message it names the failure outright,
+    // which is worth more than every register in the report above. Scanning is
+    // cheap and happens exactly once per process death.
+    DumpNearbyText(ctx.r6.u32);
 }
 } // namespace
 

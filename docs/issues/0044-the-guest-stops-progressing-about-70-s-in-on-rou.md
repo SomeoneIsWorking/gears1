@@ -222,3 +222,51 @@ WHAT THIS MEANS FOR MEASUREMENT: "pump calls = 11250" is not a failure signal
 and must not be used as one. The signals that mean something are the bug-check
 line, the stall detector's report, and the submission counters. I used a proxy
 because it was easy to grep, and it was wrong three times in a row.
+
+### Note (2026-07-29)
+CAUGHT THE FIRST ENTRY. THE RE-ENTRANCY-GUARD READING WAS WRONG TOO.
+
+    [fatal:error] the title entered its fatal handler (sub_828D2FB8) from
+      0x828da088: r3=0x3 r4=0x1 r5=0x0 r6=0x411dfcb0, re-entry flag 0 --
+      this entry is the first
+    [kernel:error] THE TITLE BUG-CHECKED: KeBugCheck(code 0x0), called from
+      0x828d30b0
+
+The handler panics on its FIRST entry, with the re-entry flag still 0. So the
+guard I described in this entry is not what fires -- that guard is a different
+call site (return address 0x828D3008). The one that actually fires, at
+0x828D30B0, is:
+
+    sub_828D30D8(...)                  // some finishing step
+    r11 = load32(r31 + 164)
+    if (r11 != 0) return               // normal exit
+    KeBugCheck(0)                      // the field is ZERO -> panic
+
+So the handler runs, does its work, and then panics because a field in its own
+frame is zero. Not a double fault. A single failure whose handler cannot
+complete.
+
+THE CALLER CHAIN IS NOW NAMED. sub_828D9FD8 reaches 0x828DA080 and does:
+
+    li r3, 3
+    bl sub_828D3118        // -> the fatal handler, entered at +8
+
+r3=3 is the only argument it sets; r4/r5/r6 in the trace are residual. So the
+title is deliberately taking a fatal exit with code 3, not crashing into one.
+
+WHAT IT DOES IMMEDIATELY BEFORE IS THE LEAD: it fills a structure at r1+80 with
+pointers to r1+96 and r1+176, then calls sub_826138E8 and sub_826139B8. That
+shape -- an argument block pointing at a buffer and a cursor, two calls, then a
+fatal exit -- is what formatting an error message looks like. If it is, the
+message names the failure outright.
+
+ARMED FOR NEXT TIME: the fatal trace now scans the guest stack around the
+handler's frame for printable runs and reports them as candidates (they are on
+a stack, so some will be coincidence -- the log says so). It has not fired yet:
+five more runs after adding it were all clean. The panic came in run 2 of the
+previous batch of five, so the rate is well under the one-in-three this entry
+estimated from nine runs.
+
+STILL UNKNOWN: what sub_828D9FD8 is and what makes it choose the fatal path. It
+is reached from somewhere in ppc_recomp.133, near the code that formats. That is
+the next thing to read.
