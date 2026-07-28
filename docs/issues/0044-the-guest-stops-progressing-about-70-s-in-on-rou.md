@@ -96,3 +96,52 @@ Frequency has also moved: 2 of 3 runs failed earlier today, 0 of 6 in the last
 two batches, on a tree whose only behavioural change since is KeBugCheck. That
 is not a fix and must not be read as one; it is more evidence the trigger is
 timing-dependent.
+
+### Note (2026-07-29)
+THE PANIC IS A RE-ENTRANCY GUARD, SO SOMETHING FAILS SILENTLY BEFORE IT.
+
+Static analysis of the image, which does not need the intermittent repro:
+KeBugCheck has fifteen call sites, and their codes separate them cleanly.
+
+    code 244  x7  in ppc_recomp.98.cpp   (returns 0x82614E80, 0x82615C00,
+                                          0x826164E8, 0x826167D8)
+    code 30   x1  returns 0x828D808C
+    computed  x2  returns 0x828DE4AC
+    code 0    x5  returns 0x828D3008 and 0x828D30B0
+
+Ours is code 0, so it is one of the last five, all inside sub_828D2FB0. Reading
+that code, the shape is unmistakable:
+
+    r11 = load32(0x82BC9E18)
+    if (r11 != 1) goto carry_on
+    KeBugCheck(0)
+  carry_on:
+    store32(0x82BC9E18, 1)
+
+That is a re-entrancy guard on a fatal-error path: the first entry sets the flag
+and proceeds, and a SECOND entry panics. So the bug check is not the failure --
+it is the title's fatal handler being entered twice. Something goes wrong,
+the handler runs, and then something goes wrong again while it is running.
+
+THE FIRST FAILURE IS SILENT. The 25 log lines before the panic are unbroken
+3-draw frames at a loading or menu screen -- no warning, no unimplemented
+import, no wait-site anomaly. Whatever the handler was called for produced no
+trace on our side at all, which is itself informative: it is not a missing
+import and not a kernel primitive misbehaving, or we would have logged it.
+
+WHAT WOULD LOCALISE IT, and why it is not done here: sub_828D2FB0 has NO direct
+callers anywhere in the recompiled image, so it is reached indirectly -- a
+function pointer, a vtable, or a registered handler. The project's HLE override
+seam works by defining a strong sub_<addr> that wins at link time, and that
+cannot intercept an indirect call, because indirect calls go through
+ppc_func_mapping.cpp straight to __imp__sub_<addr>. Instrumenting this needs
+either a hook in the mapping table itself or a trace on the handler's
+REGISTRATION (find what installs it: RtlSetUnhandledExceptionFilter and the
+exception-dispatch imports are the first places to look).
+
+WHAT IS BUILT NOW: KeBugCheck reports the link register, which names which of
+the fifteen sites fired, and renders any residual register that points at a
+string in the image. That distinguishes the code-0 sites from each other and
+from the code-244 cluster. NOT YET SEEN FIRING -- the bug check has not
+reproduced since it was added (0 of 6 runs), so the LR reporting is written and
+compiled but unobserved.
