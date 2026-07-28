@@ -88,6 +88,7 @@ add_executable(gears1
     kernel_dispatcher.cpp
     kernel_spinlock.cpp
     audio_out.cpp
+    guest_fatal.cpp
     ppc_mmio.cpp
     wait_probe.cpp
     xaudio_null.cpp

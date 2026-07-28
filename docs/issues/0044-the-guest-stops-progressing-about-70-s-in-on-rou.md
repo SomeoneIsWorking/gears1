@@ -145,3 +145,41 @@ string in the image. That distinguishes the code-0 sites from each other and
 from the code-244 cluster. NOT YET SEEN FIRING -- the bug check has not
 reproduced since it was added (0 of 6 runs), so the LR reporting is written and
 compiled but unobserved.
+
+### Note (2026-07-29)
+TWO OF MY OWN CLAIMS IN THIS ENTRY WERE WRONG. BOTH CORRECTED, WITH EVIDENCE.
+
+WRONG CLAIM 1: "the HLE override seam cannot intercept an indirect call, because
+indirect calls go through ppc_func_mapping.cpp straight to __imp__sub_<addr>".
+It does not. PPCFuncMappings holds `sub_X` -- the WEAK ALIAS -- so a strong
+`sub_X` wins at link time for indirect calls exactly as it does for direct ones.
+Verified with nm on the linked binary: sub_828D2FB0 resolves to the override's
+object, at a different address from __imp__sub_828D2FB0. I had reasoned about
+the table's contents instead of reading them.
+
+WRONG CLAIM 2: "the five code-0 sites are all inside sub_828D2FB0". They are not.
+An override on sub_828D2FB0 caught NOTHING across two runs that bug-checked
+anyway -- which is how the error surfaced. Listing every function boundary in
+the region shows the sites split across sub_828D2FB0 (lines 13064-13219) and
+sub_828D2FB8 (13220-13371), and BOTH reach a call whose return address is
+0x828D30B0. Two entry points eight bytes apart into the same body, and whatever
+registers this handler registers the +8 one. My earlier analysis took the last
+function boundary before the first call site and assumed it covered the rest.
+
+WHAT IS NOW CONFIRMED RATHER THAN INFERRED: the link-register reporting added
+last commit fired twice and named the site both times --
+
+    THE TITLE BUG-CHECKED: KeBugCheck(code 0x0), called from 0x828d30b0
+
+so the panic really is a code-0 site, and it really is the re-entrancy guard.
+
+A RED HERRING, recorded so nobody chases it: 35 "wait on unknown handle
+0xf8000040" errors appear right after the panic and in no healthy run. They
+start on the line AFTER the bug check, so they are threads unwinding through a
+handle table being torn down at exit -- aftermath, not cause.
+
+STILL NOT SEEN: the first entry into the handler. The trace now covers both
+entry points, but the bug check has not reproduced in the three runs since
+(0 of 3, on top of 0 of 6 before). The instrument is in place and unexercised,
+which is an honest state to leave it in -- it costs nothing until the failure
+happens, and it will name the first failure when it does.
