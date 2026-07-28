@@ -47,3 +47,46 @@ tonemap is non-linear, so an 8x input error does not map to a simple 8x output
 error, and the other two candidates are untested. This entry records the
 measured defect; whether it is the whole of the overexposure is settled by
 implementing it and re-measuring, not by argument.
+
+### Note (2026-07-28)
+IMPLEMENTATION IN PROGRESS, and NOT yet correct -- recorded here rather than
+shipped, because a control arm caught it.
+
+The resolve compute pipeline is built (runtime/gpu_draw_xlate.cpp
+BuildResolveComputeShader, a hand-built SPIR-V compute shader that copies the
+rectangle applying scale = 2^copy_dest_exp_bias and copy_dest_swap; the images
+are declared with an UNKNOWN format because one pipeline serves surfaces that
+may be 8888, half-float or two-channel float). Vulkan validation is clean and
+the dispatches run.
+
+It is OFF BY DEFAULT (GEARS_DRAW_RESOLVE_COMPUTE=1 selects it) because it fails
+its own acceptance test. GEARS_DRAW_RESOLVE_SCALE=<float> forces the factor, and
+at scale 1.0 the compute resolve MUST reproduce the blit it replaces. It does
+not: 2762958 of 2764816 bytes differ. A scale sweep shows the destination
+responds only weakly --
+
+    scale 0.0   ->   2459/921600 px non-black (0.3%)
+    scale 1.0   ->  85066/921600 px non-black (9.2%)
+    scale 64.0  ->  95450/921600 px non-black (10.4%)
+
+-- against 100% non-black from the blit. So the dispatch writes and is sampled,
+but covers only a fraction of the destination. The likely area is the rectangle
+and offset plumbing (push-constant extent, or the dispatch group count), not the
+bias, which is confirmed correct against Xenia: its dest_exp_bias_factor is
+exp2(bias) built by adding the bias to the exponent field of 1.0, matching
+std::ldexp(1.0f, bias).
+
+Ruled out along the way, each by a controlled arm rather than by reading:
+  - The bias SIGN. Xenia's factor is 2^bias, the same convention.
+  - The declared storage image format. Hardcoding rgba16f while binding an 8888
+    surface view is a real mismatch and was fixed (Unknown format plus the two
+    shaderStorageImage*WithoutFormat features, both queried, never assumed) --
+    but fixing it changed the output by ZERO bytes, so it was not the cause of
+    this failure. Worth keeping anyway: it would have been a latent defect the
+    moment an 8888 surface resolved correctly.
+  - The host being unable to store a format: no resolve reported unstorable.
+
+The blit remains the default and is byte-identical to the verified tile-assembly
+frame (0 of 2764816 bytes differ), so the working frame is not traded for an
+unverified one. The blit cannot scale, so the exponent bias is still NOT applied
+and this issue stays open.

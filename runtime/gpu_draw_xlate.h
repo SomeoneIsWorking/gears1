@@ -124,6 +124,30 @@ bool DeriveRectangleGeometryShaderKey(uint64_t vsModification,
 bool BuildRectangleGeometryShader(const RectangleGeometryShaderKey& key,
                                   std::vector<uint32_t>& spirv);
 
+// The compute shader that performs a RESOLVE: copies a rectangle from an EDRAM
+// surface's host image into a destination texture's host image, applying the
+// state the guest attached to the copy.
+//
+// A resolve cannot be a vkCmdBlitImage, because a blit cannot do the two things
+// the guest asks for. RB_COPY_DEST_INFO carries copy_dest_exp_bias, a signed
+// exponent bias that scales the colour on its way out of EDRAM -- this title
+// resolves its HDR scene with bias -3, so a plain copy leaves the texture eight
+// times brighter than the tonemap that samples it expects (catalog #33) -- and
+// copy_dest_swap, which exchanges red and blue.
+//
+// The shader is deliberately parameterless in its SPIR-V: rectangle, offsets,
+// scale and swap all arrive in push constants (ResolvePushConstants below), so
+// one pipeline serves every resolve in a frame.
+struct ResolvePushConstants
+{
+    int32_t srcOffset[2];
+    int32_t dstOffset[2];
+    int32_t extent[2];
+    float scale;      // 2^copy_dest_exp_bias
+    uint32_t swapRB;  // copy_dest_swap
+};
+bool BuildResolveComputeShader(std::vector<uint32_t>& spirv);
+
 // Translates a single stage (vertex or pixel) under the given modification --
 // the value DeriveShaderModifications produced for the draw's pair. Lets the
 // whole-frame backend translate and cache each distinct (shader, modification)

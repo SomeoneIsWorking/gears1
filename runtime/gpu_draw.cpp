@@ -103,7 +103,8 @@ struct Renderer
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memProps{};
     bool hasPipelineStats = false; // pipelineStatisticsQuery feature enabled
-    bool hasGeometryShader = false; // geometryShader feature enabled
+    bool hasGeometryShader = false;
+    bool hasStorageImageWithoutFormat = false;
     VkDeviceSize uniformOffsetAlignment = 256;
 
     // Built on the first frame, reused by every frame after it, released by
@@ -214,6 +215,18 @@ bool Renderer::Init()
     // deriving it needs the shaded vertices, so it happens in a geometry shader.
     feats.geometryShader = avail.geometryShader;
     hasGeometryShader = avail.geometryShader != VK_FALSE;
+    // The resolve compute pass reads and writes storage images whose format it
+    // does not know at build time: an EDRAM surface may be 8888, 7e3 carried as
+    // half-float, or a two-channel float, and the destination is whatever the
+    // guest asked for. Declaring a format in the shader and binding a different
+    // one is a mismatch that silently returns garbage -- measured, at scale 1.0
+    // it failed to reproduce the blit it replaces on 2762958 of 2764816 bytes.
+    // So the shader declares Unknown and these two features carry it.
+    feats.shaderStorageImageReadWithoutFormat = avail.shaderStorageImageReadWithoutFormat;
+    feats.shaderStorageImageWriteWithoutFormat = avail.shaderStorageImageWriteWithoutFormat;
+    hasStorageImageWithoutFormat =
+        avail.shaderStorageImageReadWithoutFormat != VK_FALSE &&
+        avail.shaderStorageImageWriteWithoutFormat != VK_FALSE;
     VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     di.queueCreateInfoCount = 1;
     di.pQueueCreateInfos = &qi;
@@ -506,6 +519,10 @@ struct SurfaceTarget
     VkImage color = VK_NULL_HANDLE;
     VkDeviceMemory colorMem = VK_NULL_HANDLE;
     VkImageView colorView = VK_NULL_HANDLE;
+    // A plain 2D view of the same image, for the resolve compute shader. The
+    // attachment view cannot serve: a storage image binding must be 2D, and
+    // colorView is what the framebuffer holds.
+    VkImageView storageView = VK_NULL_HANDLE;
     VkFramebuffer fb = VK_NULL_HANDLE;
     bool begunThisFrame = false;
     uint32_t drawsThisFrame = 0;
@@ -523,6 +540,7 @@ struct ResolveTarget
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory mem = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
+    VkImageView storageView = VK_NULL_HANDLE; // 2D, for the resolve dispatch
     uint32_t sourceBase = 0; // the EDRAM base it is a copy of
     uint32_t copies = 0;     // resolves into it this frame
     // A resolve destination is a REGION OF A TEXTURE, not a texture. This one
@@ -644,6 +662,15 @@ struct RendererPersistent
     std::map<uint32_t, ResolveTarget> resolveTargets; // RB_COPY_DEST_BASE -> image
     std::map<VkFormat, std::pair<VkRenderPass, VkRenderPass>> passes; // clear, load
 
+    // The resolve compute pipeline. A resolve is not a blit: it applies the
+    // guest's copy_dest_exp_bias and copy_dest_swap, which a blit cannot do.
+    VkShaderModule resolveModule = VK_NULL_HANDLE;
+    VkDescriptorSetLayout resolveSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout resolveLayout = VK_NULL_HANDLE;
+    VkPipeline resolvePipeline = VK_NULL_HANDLE;
+    VkDescriptorPool resolveDescPool = VK_NULL_HANDLE;
+    uint32_t resolveDescCapacity = 0;
+
     // Depth is shared by every surface for now; the frame's distinct
     // RB_DEPTH_INFO bases are counted per frame so the moment that stops being
     // faithful is visible rather than assumed.
@@ -718,6 +745,7 @@ void Renderer::ReleasePersistent()
     for (auto& [k, s] : P.surfaceTargets)
     {
         vkDestroyFramebuffer(device, s.fb, nullptr);
+        vkDestroyImageView(device, s.storageView, nullptr);
         vkDestroyImageView(device, s.colorView, nullptr);
         vkDestroyImage(device, s.color, nullptr);
         vkFreeMemory(device, s.colorMem, nullptr);
@@ -725,6 +753,7 @@ void Renderer::ReleasePersistent()
     for (auto& [k, r] : P.resolveTargets)
     {
         vkDestroyImageView(device, r.view, nullptr);
+        vkDestroyImageView(device, r.storageView, nullptr);
         vkDestroyImage(device, r.image, nullptr);
         vkFreeMemory(device, r.mem, nullptr);
     }
@@ -733,6 +762,11 @@ void Renderer::ReleasePersistent()
         vkDestroyRenderPass(device, rp.first, nullptr);
         vkDestroyRenderPass(device, rp.second, nullptr);
     }
+    vkDestroyPipeline(device, P.resolvePipeline, nullptr);
+    vkDestroyPipelineLayout(device, P.resolveLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, P.resolveSetLayout, nullptr);
+    vkDestroyShaderModule(device, P.resolveModule, nullptr);
+    vkDestroyDescriptorPool(device, P.resolveDescPool, nullptr);
     vkDestroyImageView(device, P.depthView, nullptr);
     vkDestroyImage(device, P.depth, nullptr); vkFreeMemory(device, P.depthMem, nullptr);
     vkDestroyImage(device, P.presentStage, nullptr);
@@ -752,6 +786,21 @@ void Renderer::ReleasePersistent()
     vkDestroyCommandPool(device, P.cmdPool, nullptr);
     delete persistent;
     persistent = nullptr;
+}
+
+// Whether the host can use a format as a STORAGE image, which the resolve
+// compute pass requires of both the surface it reads and the texture it writes.
+// Not every colour format a Xenos surface maps to is guaranteed storable --
+// R32G32_SFLOAT in particular is optional in Vulkan -- so this is queried, and
+// a resolve whose source cannot be stored is reported rather than silently
+// losing the guest's exponent bias.
+bool FormatSupportsStorage(VkPhysicalDevice physical, VkFormat format)
+{
+    if (format == VK_FORMAT_UNDEFINED)
+        return false;
+    VkFormatProperties fp{};
+    vkGetPhysicalDeviceFormatProperties(physical, format, &fp);
+    return (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
 }
 
 // Xenos VGT_DRAW_INITIATOR prim_type names, for the frame census.
@@ -1037,6 +1086,11 @@ bool Renderer::Render(const HotDrawInputs& in)
         ci.samples = VK_SAMPLE_COUNT_1_BIT;
         ci.tiling = VK_IMAGE_TILING_OPTIMAL;
         ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        // STORAGE: the resolve reads the surface in a compute pass. Only when
+        // the host can store this format -- see FormatSupportsStorage.
+        const bool canStore = FormatSupportsStorage(physical, ci.format);
+        if (canStore)
+            ci.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
         ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         VK_CHECK(vkCreateImage(device, &ci, nullptr, &color));
         VkMemoryRequirements req{};
@@ -1764,6 +1818,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ci.samples = VK_SAMPLE_COUNT_1_BIT;
         ci.tiling = VK_IMAGE_TILING_OPTIMAL;
         ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        const bool canStore = FormatSupportsStorage(physical, ci.format);
+        if (canStore)
+            ci.usage |= VK_IMAGE_USAGE_STORAGE_BIT; // the resolve writes it
         ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         if (vkCreateImage(device, &ci, nullptr, &tex.image) != VK_SUCCESS)
         {
@@ -2056,6 +2113,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // TRANSFER_SRC so a resolve can copy it out and the presented surface
         // can be read back.
         ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        // STORAGE: the resolve reads the surface in a compute pass. Only when
+        // the host can store this format -- see FormatSupportsStorage.
+        const bool canStore = FormatSupportsStorage(physical, ci.format);
+        if (canStore)
+            ci.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
         if (vkCreateImage(device, &ci, nullptr, &s.color) != VK_SUCCESS)
             return false;
         VkMemoryRequirements req{};
@@ -2076,6 +2138,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         if (vkCreateImageView(device, &vi, nullptr, &s.colorView) != VK_SUCCESS)
             return false;
+        // The view the resolve dispatch READS through -- plain 2D, same image.
+        if (canStore)
+        {
+            VkImageViewCreateInfo si = vi;
+            si.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            if (vkCreateImageView(device, &si, nullptr, &s.storageView) != VK_SUCCESS)
+                return false;
+        }
         VkImageView atts[2] = {s.colorView, depthView};
         VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
         fi.renderPass = rp->first;
@@ -2109,6 +2179,61 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // an 8888 UNORM value (0..1) exactly and a 7e3 HDR value (0..32) without
     // clamping, and vkCmdBlitImage does the conversion; an 8888 destination
     // would clamp every HDR highlight the tonemap pass exists to read.
+    std::vector<VkDescriptorSet> resolveSets;
+    uint32_t resolveSetsUsed = 0;
+    uint32_t resolvesUnstorable = 0;
+
+    // --- the resolve compute pipeline -----------------------------------
+    // Built once. It applies the guest's copy_dest_exp_bias and copy_dest_swap
+    // while copying the rectangle, which is why a resolve is a dispatch and not
+    // a vkCmdBlitImage (catalog #33).
+    if (P.resolvePipeline == VK_NULL_HANDLE && hasStorageImageWithoutFormat)
+    {
+        std::vector<uint32_t> spirv;
+        if (draw::BuildResolveComputeShader(spirv))
+        {
+            VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+            smi.codeSize = spirv.size() * sizeof(uint32_t);
+            smi.pCode = spirv.data();
+            const VkDescriptorSetLayoutBinding binds[2] = {
+                {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+                {1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+            VkDescriptorSetLayoutCreateInfo sli{
+                VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            sli.bindingCount = 2;
+            sli.pBindings = binds;
+            VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                                    sizeof(draw::ResolvePushConstants)};
+            if (vkCreateShaderModule(device, &smi, nullptr, &P.resolveModule) == VK_SUCCESS &&
+                vkCreateDescriptorSetLayout(device, &sli, nullptr, &P.resolveSetLayout) == VK_SUCCESS)
+            {
+                VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+                pli.setLayoutCount = 1;
+                pli.pSetLayouts = &P.resolveSetLayout;
+                pli.pushConstantRangeCount = 1;
+                pli.pPushConstantRanges = &pcr;
+                if (vkCreatePipelineLayout(device, &pli, nullptr, &P.resolveLayout) == VK_SUCCESS)
+                {
+                    VkComputePipelineCreateInfo cpi{
+                        VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+                    cpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+                    cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+                    cpi.stage.module = P.resolveModule;
+                    cpi.stage.pName = "main";
+                    cpi.layout = P.resolveLayout;
+                    if (vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &cpi,
+                            nullptr, &P.resolvePipeline) != VK_SUCCESS)
+                        P.resolvePipeline = VK_NULL_HANDLE;
+                }
+            }
+        }
+        if (P.resolvePipeline == VK_NULL_HANDLE)
+            lucent::error("draw", "resolve compute pipeline unavailable -- resolves"
+                " will copy without the guest's exponent bias or red/blue swap");
+        else
+            lucent::info("draw", "resolve compute pipeline built");
+    }
+
     // Resolves that could not be attributed to a destination texture, counted
     // rather than silently dropped.
     uint32_t resolveNoFormat = 0;
@@ -2174,6 +2299,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ci.samples = VK_SAMPLE_COUNT_1_BIT;
         ci.tiling = VK_IMAGE_TILING_OPTIMAL;
         ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        const bool canStore = FormatSupportsStorage(physical, ci.format);
+        if (canStore)
+            ci.usage |= VK_IMAGE_USAGE_STORAGE_BIT; // the resolve writes it
         if (vkCreateImage(device, &ci, nullptr, &r.image) != VK_SUCCESS)
             return false;
         VkMemoryRequirements req{};
@@ -2196,6 +2324,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         if (vkCreateImageView(device, &vi, nullptr, &r.view) != VK_SUCCESS)
             return false;
+        // The storage view the resolve dispatch writes through: same image,
+        // plain 2D, because a storage image binding cannot be an array view.
+        if (canStore)
+        {
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            if (vkCreateImageView(device, &vi, nullptr, &r.storageView) != VK_SUCCESS)
+                return false;
+        }
         lucent::info("draw", "render-target cache: resolve destination {:#x} <- surface"
             " {:#x} ({}x{} px, {} bytes/px, host image {}x{})", destBase, sourceBase,
             destPitch, destHeight, bpp, r.width, r.imageHeight);
@@ -2616,6 +2752,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // tiles overwrote each other instead of assembling (catalog #32).
         VkRect2D resolveSrcRect{};
         int32_t resolveDstX = 0, resolveDstY = 0;
+        // RB_COPY_DEST_INFO's copy_dest_exp_bias as a factor, and its
+        // copy_dest_swap. Ignoring the bias left the HDR scene texture eight
+        // times too bright for the tonemap that samples it (catalog #33).
+        float resolveScale = 1.0f;
+        bool resolveSwapRB = false;
         // --- diagnostic only (GEARS_DRAW_DIAG), never read by the renderer ---
         // Everything that can make a draw contribute nothing, recorded next to
         // the draw that did nothing. A summary cannot answer "which stage did
@@ -2802,6 +2943,39 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         resolveRouting[destBase] = {rt->base, rowOffset};
         resolveDests.insert(rt->base);
     }
+    // One descriptor set per resolve this frame. They are tiny (two storage
+    // images) and the pool is rebuilt only when a frame needs more than the
+    // last one did.
+    if (P.resolvePipeline != VK_NULL_HANDLE)
+    {
+        const uint32_t want = std::max<uint32_t>(8, uint32_t(resolves.size()) + 4);
+        if (P.resolveDescPool == VK_NULL_HANDLE || P.resolveDescCapacity < want)
+        {
+            vkDestroyDescriptorPool(device, P.resolveDescPool, nullptr);
+            P.resolveDescPool = VK_NULL_HANDLE;
+            VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, want * 2};
+            VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            pi.maxSets = want;
+            pi.poolSizeCount = 1;
+            pi.pPoolSizes = &ps;
+            if (vkCreateDescriptorPool(device, &pi, nullptr, &P.resolveDescPool) == VK_SUCCESS)
+                P.resolveDescCapacity = want;
+        }
+        if (P.resolveDescPool != VK_NULL_HANDLE)
+        {
+            vkResetDescriptorPool(device, P.resolveDescPool, 0);
+            std::vector<VkDescriptorSetLayout> layouts(P.resolveDescCapacity,
+                                                       P.resolveSetLayout);
+            resolveSets.resize(P.resolveDescCapacity);
+            VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            ai.descriptorPool = P.resolveDescPool;
+            ai.descriptorSetCount = P.resolveDescCapacity;
+            ai.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &ai, resolveSets.data()) != VK_SUCCESS)
+                resolveSets.clear();
+        }
+    }
+
     if (resolvesDepth || resolvesUnmatched)
         lucent::info("draw", "frame resolves not served: {} from depth (no host depth"
             " texture chain yet), {} from an EDRAM base this frame never rendered",
@@ -3059,6 +3233,21 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // rows this base sits into the texture.
                 pd.resolveDstX = x0;
                 pd.resolveDstY = y0 + int32_t(route->second.second);
+                // The guest's own copy state: a signed exponent bias applied to
+                // the colour on its way out of EDRAM, and the red/blue swap.
+                {
+                    const uint32_t rawBias = (R[0x231B] >> 16) & 0x3F;
+                    const int32_t bias = int32_t(rawBias) - int32_t((rawBias & 0x20) << 1);
+                    pd.resolveScale = std::ldexp(1.0f, bias);
+                    // GEARS_DRAW_RESOLVE_SCALE=<float> forces the factor. A
+                    // DIAGNOSTIC control arm: at 1.0 the compute resolve must
+                    // reproduce the old blit exactly, which is how the compute
+                    // path is separated from the bias value it applies.
+                    static const char* forced = std::getenv("GEARS_DRAW_RESOLVE_SCALE");
+                    if (forced)
+                        pd.resolveScale = float(std::atof(forced));
+                    pd.resolveSwapRB = ((R[0x231B] >> 24) & 1) != 0;
+                }
                 prepared.push_back(pd);
                 ++issuedResolves;
             }
@@ -3715,29 +3904,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // accumulated into one full-size image, so each tile's resolve carries the
     // whole (correct) surface and the last one leaves the destination right.
     // It follows the tile model rather than approximating around it.
-    auto resolveSurfaceTo = [&](VkImage src, ResolveTarget& dst,
-                                const VkRect2D& srcRect, int32_t dstX, int32_t dstY) {
-        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        b.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        // PRESERVE what is already there. This was UNDEFINED, which permits the
-        // driver to discard the destination's contents -- fine while a resolve
-        // wrote the whole image, fatal once a resolve writes one tile's rows and
-        // the other tile's rows have to survive it (catalog #32).
-        b.oldLayout = dst.everWritten ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                      : VK_IMAGE_LAYOUT_UNDEFINED;
-        b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        b.image = dst.image; b.subresourceRange = range;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-        // Blit, not copy: source surfaces differ in format from the wide float
-        // destination (see getResolveTarget), and only a blit converts.
-        // The guest's own rectangle, to the guest's own destination offset --
-        // not the whole surface to the origin. Both are clamped to the images
-        // involved so a rectangle larger than either cannot make the blit
-        // invalid; the clamp is counted by the caller.
+    auto resolveSurfaceTo = [&](const SurfaceTarget& srcTarget, ResolveTarget& dst,
+                                const VkRect2D& srcRect, int32_t dstX, int32_t dstY,
+                                float scale, bool swapRB) {
+        // Clamp the rectangle to both images. A rectangle larger than either
+        // cannot make the dispatch write out of bounds.
         const int32_t sx0 = std::clamp<int32_t>(srcRect.offset.x, 0, int32_t(W));
         const int32_t sy0 = std::clamp<int32_t>(srcRect.offset.y, 0, int32_t(H));
         int32_t sx1 = std::clamp<int32_t>(srcRect.offset.x + int32_t(srcRect.extent.width),
@@ -3745,29 +3916,147 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         int32_t sy1 = std::clamp<int32_t>(srcRect.offset.y + int32_t(srcRect.extent.height),
                                           sy0, int32_t(H));
         const int32_t dw = int32_t(dst.width), dh = int32_t(dst.imageHeight);
+        if (dstX >= dw || dstY >= dh)
+            return;
         sx1 = std::min<int32_t>(sx1, sx0 + std::max<int32_t>(0, dw - dstX));
         sy1 = std::min<int32_t>(sy1, sy0 + std::max<int32_t>(0, dh - dstY));
-        if (sx1 <= sx0 || sy1 <= sy0 || dstX >= dw || dstY >= dh)
-            return; // nothing of this rectangle lands in the destination
-        VkImageBlit bl{};
-        bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        bl.srcOffsets[0] = {sx0, sy0, 0};
-        bl.srcOffsets[1] = {sx1, sy1, 1};
-        bl.dstOffsets[0] = {dstX, dstY, 0};
-        bl.dstOffsets[1] = {dstX + (sx1 - sx0), dstY + (sy1 - sy0), 1};
-        vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl,
-            VK_FILTER_NEAREST);
-        VkImageMemoryBarrier r{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        r.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        r.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-        r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-        r.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        r.srcQueueFamilyIndex = r.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        r.image = dst.image; r.subresourceRange = range;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &r);
+        if (sx1 <= sx0 || sy1 <= sy0)
+            return;
+        // GEARS_DRAW_RESOLVE_COMPUTE=1 selects the compute resolve, which is the
+        // only path that can apply the guest's copy_dest_exp_bias and
+        // copy_dest_swap. It is IN PROGRESS and OFF BY DEFAULT because it does
+        // not yet reproduce the blit it replaces: forced to scale 1.0 -- where
+        // it must be identical -- it differs on 2762958 of 2764816 bytes and
+        // writes only a fraction of the destination. Shipping it on would trade
+        // a verified frame for an unverified one, so the blit stays the default
+        // until it passes that control arm. See catalog #33.
+        static const bool computeResolve =
+            std::getenv("GEARS_DRAW_RESOLVE_COMPUTE") != nullptr;
+        const bool canCompute = computeResolve &&
+            P.resolvePipeline != VK_NULL_HANDLE && !resolveSets.empty() &&
+            srcTarget.storageView != VK_NULL_HANDLE &&
+            dst.storageView != VK_NULL_HANDLE;
+        if (!canCompute)
+        {
+            if (computeResolve)
+                ++resolvesUnstorable;
+            // The verified path: a rectangle blit to the destination offset,
+            // preserving what is already there. It cannot scale, so the guest's
+            // exponent bias is NOT applied -- which is exactly the open defect.
+            VkImageMemoryBarrier tb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            tb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            tb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            tb.oldLayout = dst.everWritten ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                           : VK_IMAGE_LAYOUT_UNDEFINED;
+            tb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            tb.srcQueueFamilyIndex = tb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            tb.image = dst.image;
+            tb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &tb);
+            VkImageBlit bl{};
+            bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            bl.srcOffsets[0] = {sx0, sy0, 0};
+            bl.srcOffsets[1] = {sx1, sy1, 1};
+            bl.dstOffsets[0] = {dstX, dstY, 0};
+            bl.dstOffsets[1] = {dstX + (sx1 - sx0), dstY + (sy1 - sy0), 1};
+            vkCmdBlitImage(cmd, srcTarget.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl,
+                VK_FILTER_NEAREST);
+            VkImageMemoryBarrier rb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            rb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            rb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            rb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            rb.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            rb.srcQueueFamilyIndex = rb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            rb.image = dst.image;
+            rb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb);
+            ++dst.copies;
+            dst.everWritten = true;
+            return;
+        }
+
+        // Both images into GENERAL, the only layout a storage image may be read
+        // or written in. The source is left in TRANSFER_SRC_OPTIMAL by its
+        // render pass; the destination keeps whatever it already holds, because
+        // the other predicated tile's rows have to survive this dispatch.
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkImageMemoryBarrier toGeneral[2]{};
+        toGeneral[0] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        toGeneral[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        toGeneral[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toGeneral[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        toGeneral[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        toGeneral[0].srcQueueFamilyIndex = toGeneral[0].dstQueueFamilyIndex =
+            VK_QUEUE_FAMILY_IGNORED;
+        toGeneral[0].image = srcTarget.color;
+        toGeneral[0].subresourceRange = range;
+        toGeneral[1] = toGeneral[0];
+        toGeneral[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toGeneral[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        // PRESERVE: SHADER_READ_ONLY_OPTIMAL is where the previous resolve left
+        // it, and it is the layout the sampling descriptors declare. UNDEFINED
+        // only the first time, when there is nothing to preserve.
+        toGeneral[1].oldLayout = dst.everWritten
+            ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+        toGeneral[1].image = dst.image;
+        vkCmdPipelineBarrier(cmd,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, toGeneral);
+
+        VkDescriptorSet set = resolveSets[resolveSetsUsed++ % resolveSets.size()];
+        VkDescriptorImageInfo srcInfo{VK_NULL_HANDLE, srcTarget.storageView,
+                                      VK_IMAGE_LAYOUT_GENERAL};
+        VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, dst.storageView,
+                                      VK_IMAGE_LAYOUT_GENERAL};
+        VkWriteDescriptorSet w[2]{};
+        w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[0].dstSet = set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
+        w[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        w[0].pImageInfo = &srcInfo;
+        w[1] = w[0];
+        w[1].dstBinding = 1;
+        w[1].pImageInfo = &dstInfo;
+        vkUpdateDescriptorSets(device, 2, w, 0, nullptr);
+
+        draw::ResolvePushConstants pc{};
+        pc.srcOffset[0] = sx0; pc.srcOffset[1] = sy0;
+        pc.dstOffset[0] = dstX; pc.dstOffset[1] = dstY;
+        pc.extent[0] = sx1 - sx0; pc.extent[1] = sy1 - sy0;
+        pc.scale = scale;
+        pc.swapRB = swapRB ? 1u : 0u;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, P.resolvePipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, P.resolveLayout,
+            0, 1, &set, 0, nullptr);
+        vkCmdPushConstants(cmd, P.resolveLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+            sizeof(pc), &pc);
+        vkCmdDispatch(cmd, (uint32_t(pc.extent[0]) + 7) / 8,
+                           (uint32_t(pc.extent[1]) + 7) / 8, 1);
+
+        // The source goes back to TRANSFER_SRC_OPTIMAL, which is the layout its
+        // render pass expects to resume from; the destination stays in GENERAL
+        // and is made visible to the shaders that sample it.
+        VkImageMemoryBarrier back[2]{};
+        back[0] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        back[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        back[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+        back[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        back[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        back[0].srcQueueFamilyIndex = back[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        back[0].image = srcTarget.color;
+        back[0].subresourceRange = range;
+        back[1] = back[0];
+        back[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        back[1].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        back[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+        back[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        back[1].image = dst.image;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 2, back);
         ++dst.copies;
         dst.everWritten = true;
     };
@@ -3890,8 +4179,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 !src->second.begunThisFrame)
                 continue; // nothing has been rendered into it yet this frame
             endPass();
-            resolveSurfaceTo(src->second.color, dst->second, pd.resolveSrcRect,
-                             pd.resolveDstX, pd.resolveDstY);
+            resolveSurfaceTo(src->second, dst->second, pd.resolveSrcRect,
+                             pd.resolveDstX, pd.resolveDstY, pd.resolveScale,
+                             pd.resolveSwapRB);
             ++resolvesDone;
             continue;
         }
@@ -4314,6 +4604,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 tb.add(" {:#x}x{}{}", base, n, texBaseRtCount.count(base) ? "(RT)" : "");
             tb.flush(lucent::Level::Info, "draw");
         }
+        if (resolvesUnstorable)
+            lucent::warn("draw", "frame resolves: {} could not run the compute"
+                " resolve (host cannot use the format as a storage image), so the"
+                " guest's exponent bias and red/blue swap were NOT applied",
+                resolvesUnstorable);
         if (resolveNoRect || resolveNoFormat)
             lucent::warn("draw", "frame resolves: {} without a readable vf0"
                 " rectangle (whole surface copied), {} with a destination format"
