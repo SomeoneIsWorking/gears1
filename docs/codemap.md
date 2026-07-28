@@ -105,8 +105,10 @@ suppressed; adding an implementation means adding its name there.
 ## Current state
 
 Boots, loads its own packages, plays the startup movies, walks its own menus
-under a controller, reaches **Act 1 gameplay**, and renders the guest's frames at
-~30 fps. The deferred in-game frame renders: whole (both predicated tiles),
+under a controller, reaches **Act 1 gameplay**, renders the guest's frames at
+~30 fps, and **responds to the player** — holding the left stick moves the camera
+through the level, proven against a no-input control arm (172 of 173 frames
+changed with the stick, 0 of 129 without; `catalog.py show 38`). The deferred in-game frame renders: whole (both predicated tiles),
 correctly exposed (0.0% of pixels saturated), depth-tested and depth-lit.
 
 **Not yet faithful**, each measured rather than guessed and tracked on
