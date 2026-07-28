@@ -158,3 +158,55 @@ a prior run.
 DO NOT try to satisfy the barrier by writing the missing byte. It would make
 the callback return and prove nothing about whether the frame it then submits
 is real.
+
+### Note (2026-07-28)
+RESOLVED, AND ONE EARLIER MEASUREMENT IN THIS ENTRY WAS WRONG -- CORRECTED BELOW.
+
+CORRECTION FIRST. The previous note claimed the barrier's participant mask was
+0x0101000000000000, "two participants, on CPU 0 and CPU 1". That was read out of
+gdb by printing ctx.r3/ctx.r4/ctx.r10 in an optimised frame, where the register
+fields had not been written back to the PPCContext -- one of the values printed
+was obvious garbage, which should have been the tell. Re-measured properly, by
+following the fixed global pointer at 0x82BFAAAC to the audio context at
++0x4016033c and dumping guest memory there:
+
+    +304 = 1                 (the gate/count)
+    +308 = 0   +312 = 0   +316 = 0
+    +320 = 0   +324 = 0xf8000014   +328 = 0
+
++324 is the FIFTH per-CPU slot and it holds guest thread 4's own handle. The mask
+is therefore 0x0000000001000000 -- ONE participant, on CPU 4, and that
+participant is the audio worker itself. The barrier was never waiting for a
+second thread. It was waiting for the one thread it had to check in at slot 4,
+while that thread checked in at slot 0.
+
+ROOT CAUSE: the runtime invented processor numbers instead of taking the
+title's. On the console the processor comes from the top byte of ExCreateThread's
+creation flags as a one-hot mask, empty meaning "inherit my creator's", and
+KeSetAffinityThread moves a thread afterwards; both write KPCR+0x10C
+(prcb_data.current_cpu) and KTHREAD+0xBF (current_cpu). We honoured neither and
+assigned round-robin in creation order, so the number every per-CPU table in the
+title is indexed by was unrelated to the number the title had chosen.
+
+Gears creates its audio worker with cpu 4 in the creation flags, stores the
+handle in slot 4 of the audio context, and the worker checks in at
+`array[KPCR[0x10C]]`. With the number taken from the title rather than invented,
+the slot the worker writes and the slot the mask expects are the same one.
+
+FIXED, and audio frames now flow:
+
+  [audio-pump] KeSetEvent(0x82becc28)          kick the worker
+  [guest-4]    KeWait <- 0x82becc28 signalled
+  [audio-pump] KeWaitMultiple -> WaitAny on [0x82becc04] [0x82becc48]
+  [guest-4]    KeSetEvent(0x82becc04)          worker answers
+  [audio]      1 frames submitted
+
+Over a 60 s run: 11250 callback invocations and 11250 frames submitted by the
+title, one for one, which is exactly 60 s at the driver's 187.5 Hz. Rendering is
+unaffected at 29.96 fps and both test suites pass.
+
+The samples pointer is stable at 0x40165380 and no submission arrives without a
+buffer. WHAT IS STILL NOT PROVEN is that those samples are audible sound rather
+than 11250 buffers of silence -- XMA contexts are still handed out with no
+decoder behind them, and nothing has looked at the PCM. That is step (b) of
+catalog #39 and it now has something real to look at.

@@ -8,6 +8,8 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
+#include <unordered_map>
 #include <chrono>
 #include <thread>
 
@@ -33,9 +35,15 @@ struct GuestThreadStart
     uint32_t startAddress;
     uint32_t startContext;
     uint32_t threadId;
+    uint8_t processor;
     std::shared_ptr<gears::KernelObject> exited;
     std::shared_ptr<gears::KernelObject> resumed;
 };
+
+// Threads by handle, so an API that names a thread by the object pointer the
+// title holds can get back to the block the runtime built for it.
+std::mutex g_threadsMutex;
+std::unordered_map<uint32_t, std::shared_ptr<GuestThreadStart>> g_threadsByHandle;
 
 // Thrown by ExTerminateThread to unwind the calling guest thread back to
 // GuestThreadMain. The recompiled functions are plain C++ with no cleanup of
@@ -58,6 +66,9 @@ void GuestThreadMain(std::shared_ptr<GuestThreadStart> start)
 
     t_currentThread = start.get();
     gears::SetGuestThreadName("guest-" + std::to_string(start->threadId));
+    // So threads this one creates without a processor of their own inherit it,
+    // which is what the console does.
+    gears::SetCurrentGuestProcessor(start->processor);
 
     PPCContext ctx{};
     ctx.r13.u32 = start->block.pcrAddress;
@@ -137,6 +148,15 @@ void __imp__ExCreateThread(PPCContext& __restrict ctx, uint8_t* base)
     start->startAddress = startAddress;
     start->startContext = startContext;
     start->threadId = g_nextThreadId.fetch_add(1);
+
+    // The console takes the processor from the top byte of the creation flags,
+    // as a one-hot mask; an empty mask means "wherever my creator runs". The
+    // number is guest-visible -- title code indexes per-CPU tables with it -- so
+    // it is recorded faithfully even though host threads are not pinned by it.
+    const uint8_t requested = gears::ProcessorNumberFromMask(uint8_t(creationFlags >> 24));
+    start->processor = requested == 0xFF ? gears::CurrentGuestProcessor() : requested;
+    gears::SetGuestThreadProcessor(gears::Memory(), start->block.pcrAddress,
+                                   start->block.threadAddress, start->processor);
     start->exited = std::make_shared<gears::KernelObject>(
         gears::KernelObject::Kind::NotificationEvent, false);
 
@@ -149,14 +169,18 @@ void __imp__ExCreateThread(PPCContext& __restrict ctx, uint8_t* base)
     // The handle waits on thread exit, which is what the guest joins against.
     const uint32_t handle = gears::Handles().Insert(start->exited);
     gears::RegisterThreadResume(handle, start->resumed);
+    {
+        std::lock_guard<std::mutex> guard(g_threadsMutex);
+        g_threadsByHandle[handle] = start;
+    }
 
     if (handlePtr != 0)
         *reinterpret_cast<uint32_t*>(base + handlePtr) = ByteSwap(handle);
     if (threadIdPtr != 0)
         *reinterpret_cast<uint32_t*>(base + threadIdPtr) = ByteSwap(start->threadId);
 
-    lucent::info("thread", "ExCreateThread -> handle {:#x} id {} entry {:#x} stack {:#x}{}",
-        handle, start->threadId, startAddress, stackSize,
+    lucent::info("thread", "ExCreateThread -> handle {:#x} id {} entry {:#x} stack {:#x}"
+        " cpu {}{}", handle, start->threadId, startAddress, stackSize, start->processor,
         start->resumed ? " (suspended)" : "");
 
     std::thread(GuestThreadMain, start).detach();
@@ -175,18 +199,46 @@ void __imp__KeResumeThread(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
-// The title pins work to specific Xenon hardware threads. That mapping is
-// meaningless on a host with different topology and core counts, so the request
-// is recorded and reported back but not honoured -- the host scheduler places
-// the thread. Forcing a host affinity to mimic six SMT threads would constrain
-// the scheduler for no benefit.
+// The title pins work to specific Xenon hardware threads.
+//
+// Where the HOST thread runs is still left to the host scheduler: pinning six
+// guest threads onto six logical processors buys nothing on a machine with a
+// different topology. What is honoured is the processor NUMBER, because that
+// number is guest-visible state -- the audio worker indexes a per-CPU
+// rendezvous array with it, and reading 0 there when the title assigned 4 left
+// the barrier waiting on a slot nobody would ever fill (catalog #40).
 void __imp__KeSetAffinityThread(PPCContext& __restrict ctx, uint8_t* base)
 {
     const uint32_t affinity = ctx.r4.u32;
     const uint32_t previousPtr = ctx.r5.u32;
 
-    lucent::debug("thread", "KeSetAffinityThread(object={:#x}, mask={:#x}) -- not honoured",
-        ctx.r3.u32, affinity);
+    const uint8_t cpu = gears::ProcessorNumberFromMask(uint8_t(affinity));
+    const uint32_t handle = gears::HandleForGuestAddress(ctx.r3.u32);
+    std::shared_ptr<GuestThreadStart> target;
+    if (handle != 0)
+    {
+        std::lock_guard<std::mutex> guard(g_threadsMutex);
+        if (auto it = g_threadsByHandle.find(handle); it != g_threadsByHandle.end())
+            target = it->second;
+    }
+
+    if (target && cpu != 0xFF)
+    {
+        target->processor = cpu;
+        gears::SetGuestThreadProcessor(gears::Memory(), target->block.pcrAddress,
+                                       target->block.threadAddress, cpu);
+        lucent::debug("thread", "KeSetAffinityThread(object={:#x}, mask={:#x})"
+            " -> guest thread {} on cpu {}", ctx.r3.u32, affinity, target->threadId, cpu);
+    }
+    else
+    {
+        // Reported rather than ignored: a thread whose processor the runtime
+        // could not place keeps whatever number it was created with, and any
+        // per-CPU table the title builds for it will disagree.
+        lucent::warn("thread", "KeSetAffinityThread(object={:#x}, mask={:#x}): no thread"
+            " behind that object, processor left at its creation value",
+            ctx.r3.u32, affinity);
+    }
 
     if (previousPtr != 0)
         *reinterpret_cast<uint32_t*>(base + previousPtr) = ByteSwap(affinity);
