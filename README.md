@@ -6,39 +6,45 @@ time and overriding only at hardware/OS seams (graphics, audio, input, file
 I/O), following the [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) /
 [N64Recomp](https://github.com/N64Recomp/N64Recomp) model.
 
-**Status: early.** The executable recompiles, and guest code executes on
-multiple threads, running past Xenos GPU initialisation on three threads. Nothing is
-rendered yet. See
-[`debug_journal/`](debug_journal/) for dated, honest write-ups of what has and
-has not been verified.
+**Status: it boots, it plays its own menus, and it renders.** The title runs
+from boot through its startup movies into the main menu, takes a controller into
+the Act 1 campaign, and the guest-draw backend renders the game's own frames at
+~30 fps. The in-game 3D world renders but is **not yet faithful** — see below.
+`docs/re-frontier.md` tracks what is real reverse-engineering and what is still
+approximate, `docs/codemap.md` says where each subsystem lives, and
+[`debug_journal/`](debug_journal/) carries dated, honest write-ups.
 
 ## What works
 
 - The XEX is decrypted and decompressed to a real PE image (13.5 MB, load base
-  `0x82000000`).
-- Register save/restore helpers and 360 jump tables are located automatically.
-- XenonRecomp emits **49,012 functions** (~176 MB of C++) with **zero
-  unimplemented instructions**, and all 193 translation units compile.
-- The runtime maps the image, installs 49,475 functions into the indirect-call
-  table, and runs guest code through memory allocation, the kernel object
-  manager, timing and display queries — **74 of 226** kernel imports.
-- **Guest threading works.** `ExCreateThread` gives each guest thread its own
-  context, KPCR, TLS and stack; two guest threads run concurrently with the
-  main thread, deterministically across runs.
+  `0x82000000`), and XenonRecomp emits **~49,000 functions** (~176 MB of C++)
+  with **zero unimplemented instructions**.
+- **The title boots and plays.** It loads its own packages, plays the startup
+  movies, walks its menus under a scripted or real controller, and reaches Act 1
+  gameplay. ~102 of 226 kernel imports are implemented; the rest abort loudly
+  with their name and arguments rather than stubbing silently.
+- **Guest threading, heaps and timing are real.** Each guest thread gets its own
+  context, KPCR, TLS and stack. Heap use plateaus and the title has run past
+  frame 25,000 at a steady ~30 fps.
+- **Input is the console's own.** `XamInput*` fills the real `X_INPUT_STATE`
+  structures from an SDL gamepad, the keyboard, or a scripted timeline so a
+  headless run is reproducible.
+- **The renderer draws the guest's own frames.** The PM4 command processor
+  executes the ring, the title's Xenos shaders are translated to SPIR-V through
+  Xenia's translator, and every draw of a frame is issued with the guest's own
+  geometry, textures, constants, viewport and output-merger state into
+  per-EDRAM-surface render targets. Menus render correctly; the in-game HUD and
+  world both render.
 
 ## What does not
 
-- **Nothing is rendered.** No graphics, audio, input or file I/O. 152 kernel
-  imports are unimplemented; each aborts loudly with its name and arguments the
-  first time the game calls it.
-- **1,394 jump-table / function-boundary errors.** XenonRecomp's function
-  analyser treats a jump table as a tail call and cuts functions short.
-- **Boot dies during UE3 initialisation** — a float is dereferenced as a pointer.
-  Twelve mechanisms eliminated; see `docs/issues/`.
-- **No GPU backend.** The `Vd*` surface is a *null GPU*: it tracks driver state
-  and retires command buffers without executing them, and the Xenos register
-  file is inert memory. Registered graphics interrupts never fire. Nothing is
-  rasterised or presented.
+- **The in-game world is not yet faithful.** A third of the world draws are
+  still lost at clipping, the second predicated tile (the bottom 208 rows) is
+  empty, and the HDR-to-LDR tonemap blows out. Each of these is measured and
+  tracked on `docs/re-frontier.md` rather than guessed at.
+- **No audio.** `xaudio_null.cpp` accepts frames and plays nothing.
+- **No networking, no user/content services.** Those imports abort on first call.
+- **File I/O is read-only**, with no directory enumeration.
 
 ## You must supply the game
 
