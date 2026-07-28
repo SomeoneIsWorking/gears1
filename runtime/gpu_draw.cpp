@@ -717,6 +717,50 @@ bool BlendIsIdentity(uint32_t blend0)
     return cSrc == 1 && cDst == 0 && cOp == 0 && aSrc == 1 && aDst == 0 && aOp == 0;
 }
 
+// RB_DEPTH_CLEAR holds the clear in the EDRAM depth buffer's own format, so it
+// has to be decoded before a host float depth target can be cleared with it.
+//
+// kD24FS8 is Xenos "float24": an unsigned 20e4 number (4-bit exponent, 20-bit
+// mantissa, no sign). This is a direct port of Xenia's
+// SpirvShaderTranslator::Depth20e4To32 (spirv_shader_translator_rb.cc), which is
+// itself CFloat24 from d3dref9.dll -- ported rather than approximated, because a
+// denormal clear would silently land in the wrong place otherwise.
+float Depth20e4To32(uint32_t f24)
+{
+    const uint32_t exponent = (f24 >> 20) & 0xF;
+    const uint32_t mantissa = f24 & 0xFFFFF;
+    uint32_t unbiasedExponent, f32Mantissa;
+    if (exponent != 0)
+    {
+        unbiasedExponent = exponent;
+        f32Mantissa = mantissa;
+    }
+    else if (mantissa != 0)
+    {
+        // Denormal: normalise the mantissa and pay for it in the exponent.
+        const uint32_t msb = 31u - uint32_t(__builtin_clz(mantissa));
+        unbiasedExponent = msb - 19u;             // wraps below 19, as intended
+        f32Mantissa = mantissa << (20u - msb);
+    }
+    else
+    {
+        // Zero in, zero out: -112 cancels the +112 bias below.
+        unbiasedExponent = uint32_t(-112);
+        f32Mantissa = 0;
+    }
+    const uint32_t biased = (unbiasedExponent + 112u) & 0xFFu;
+    const uint32_t bits = ((f32Mantissa & 0xFFFFFu) | (biased << 20)) << 3;
+    float out;
+    std::memcpy(&out, &bits, sizeof(out));
+    return out;
+}
+
+// kD24S8 is a plain 24-bit unorm.
+float DepthUnorm24To32(uint32_t d24)
+{
+    return float(d24 & 0xFFFFFFu) / float(0xFFFFFF);
+}
+
 const char* PrimName(uint32_t primType)
 {
     switch (primType)
@@ -2536,6 +2580,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         uint32_t srcBase = 0;     // EDRAM tile base of the source surface
         uint32_t srcFormat = 0;   // its ColorRenderTargetFormat (colour only)
         uint32_t destBase = 0;    // RB_COPY_DEST_BASE, main memory
+        // A resolve can also CLEAR the surface it copies from: RB_COPY_CONTROL
+        // carries colour/depth clear enables, and the values live in
+        // RB_COLOR_CLEAR / RB_DEPTH_CLEAR. This is where the guest's own clear
+        // values come from -- our depth clear is still a host constant, which
+        // rejects every reverse-Z draw (catalog #31).
+        bool colorClear = false, depthClear = false;
+        uint32_t copyCommand = 0;
+        uint32_t colorClearValue = 0, depthClearValue = 0;
+        uint32_t depthBase = 0, depthFormat = 0;
     };
     std::vector<ResolveEvent> resolves;
     std::set<uint32_t> depthBases;              // distinct RB_DEPTH_INFO.depth_base
@@ -2718,6 +2771,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             re.srcBase = info & 0xFFF;
             re.srcFormat = (info >> 16) & 0xF;
             re.destBase = R[0x2319] & ~0xFFFu;
+            const uint32_t copyControl = R[0x2318];
+            re.colorClear = (copyControl >> 8) & 1;
+            re.depthClear = (copyControl >> 9) & 1;
+            re.copyCommand = (copyControl >> 20) & 3;
+            re.colorClearValue = R[0x231E];
+            re.depthClearValue = R[0x231D];
+            re.depthBase = R[0x2002] & 0xFFF;
+            re.depthFormat = (R[0x2002] >> 16) & 1;
             resolves.push_back(re);
         }
         // How many distinct depth surfaces the frame uses. One host depth image
@@ -3327,19 +3388,53 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             0, 0, nullptr, 0, nullptr, 1, &toRead);
     }
 
+    // The depth clear value the guest programmed, taken from the frame's own
+    // clear-carrying resolves. If the frame contains none, there is nothing to
+    // take and the previous host constant stands -- reported, not hidden, so a
+    // frame that clears differently is never silently given someone else's value.
+    float guestDepthClear = 1.0f;
+    bool haveGuestDepthClear = false;
+    for (const ResolveEvent& re : resolves)
+    {
+        if (!re.depthClear)
+            continue;
+        // RB_DEPTH_CLEAR packs depth in bits 8..31 and stencil in bits 0..7.
+        const uint32_t d24 = re.depthClearValue >> 8;
+        const float v = re.depthFormat == 1 /*kD24FS8*/ ? Depth20e4To32(d24)
+                                                        : DepthUnorm24To32(d24);
+        if (haveGuestDepthClear && v != guestDepthClear)
+            lucent::warn("draw", "frame programs two different depth clears"
+                " ({} and {}); using the first", guestDepthClear, v);
+        else
+            guestDepthClear = v;
+        haveGuestDepthClear = true;
+    }
+    if (in.report)
+        lucent::info("draw", "frame depth clear: {} ({})", guestDepthClear,
+            haveGuestDepthClear ? "the guest's own, from RB_DEPTH_CLEAR"
+                                : "HOST DEFAULT -- this frame programs no depth clear");
+
     VkClearValue clears[2]{};
     clears[0].color.float32[0] = 0.05f; // dark slate: any lit pixel is guest geometry
     clears[0].color.float32[1] = 0.05f;
     clears[0].color.float32[2] = 0.08f;
     clears[0].color.float32[3] = 1.0f;
-    // Diagnostic only: the depth clear is still HOST-FIXED (the guest's own
-    // comes from its clear packet / RB_DEPTH_CLEAR, which we do not yet track).
-    // This frame's draws test GEQUAL, which is a reverse-Z convention, so 1.0
-    // may be the wrong initial value -- GEARS_DRAW_DEPTH_CLEAR=<float> is the
-    // control arm for measuring that, not a fix.
+    // The depth clear is the GUEST'S OWN. On Xenos a clear is not a packet of
+    // its own: it rides on a resolve (a kCopy draw) whose RB_COPY_CONTROL sets
+    // depth_clear_enable, with the value in RB_DEPTH_CLEAR -- so the frame's own
+    // copy draws carry it, and they are already decoded above.
+    //
+    // This was a host constant of 1.0, and that was catalog #31: 390 of this
+    // frame's world draws are reverse-Z (PA_CL_VPORT_ZSCALE -1, ZOFFSET 1)
+    // testing GEQUAL, so a 1.0 clear rejects every fragment. The guest programs
+    // 0x00000000. Taking it from the guest rather than swapping 1.0 for 0.0 is
+    // the difference between a fix and a second magic number: a frame that
+    // clears to something else now gets what it asked for.
+    //
+    // GEARS_DRAW_DEPTH_CLEAR=<float> remains as an override, a control arm only.
     {
         const char* dc = std::getenv("GEARS_DRAW_DEPTH_CLEAR");
-        clears[1].depthStencil = {dc ? float(std::atof(dc)) : 1.0f, 0};
+        clears[1].depthStencil = {dc ? float(std::atof(dc)) : guestDepthClear, 0};
     }
     // Checkpoint dumps (GEARS_DRAW_FRAME_STEP=N): after every N draws the colour
     // target is copied to its own readback buffer and written out, so the frame
@@ -3843,6 +3938,26 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                                   re.srcBase, re.srcFormat, re.destBase)];
             lucent::info("draw", "frame resolves: {} copy draws, {} distinct"
                 " source->destination pairs", resolves.size(), pairs.size());
+            // The guest's own clear values, which the render target cache does
+            // NOT yet use -- our depth clear is a host constant (catalog #31).
+            // Reported so the values are visible before they are trusted.
+            std::map<std::string, uint32_t> clears;
+            for (const ResolveEvent& re : resolves)
+            {
+                if (!re.colorClear && !re.depthClear)
+                    continue;
+                ++clears[std::format("cmd{} color{}={:#010x} depth{}={:#010x}"
+                    " (depth base {:#x} fmt {})", re.copyCommand,
+                    re.colorClear ? "" : "(off)", re.colorClearValue,
+                    re.depthClear ? "" : "(off)", re.depthClearValue,
+                    re.depthBase, re.depthFormat)];
+            }
+            lucent::Line cl;
+            cl.add("frame clears programmed by resolves: {} of {} copy draws"
+                   " carry a clear;", clears.size(), resolves.size());
+            for (const auto& [k, n] : clears)
+                cl.add(" [{}x {}]", n, k);
+            cl.flush(lucent::Level::Info, "draw");
             for (const auto& [what, n] : pairs)
                 lucent::info("draw", "  resolve {} x{}", what, n);
         }
