@@ -127,5 +127,8 @@ endorsed by the Xenia project or its contributors.
 ## Licence
 
 Tooling here is MIT. XenonRecomp is MIT (see the submodule). Xenia is
-BSD 3-Clause (see above). Gears of War is copyright Epic Games / Microsoft;
-this project ships none of it, and none of it is required to build.
+BSD 3-Clause (see above). The XMA decoder is built from a fork of FFmpeg
+(`extern/ffmpeg-xmaframes`, LGPL 2.1 or later) that adds a per-frame XMA codec;
+it is compiled from source by the build and linked statically. Gears of War is
+copyright Epic Games / Microsoft; this project ships none of it, and none of it
+is required to build.

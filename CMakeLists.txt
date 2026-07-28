@@ -34,6 +34,11 @@ add_subdirectory(extern/XenonRecomp/XenonUtils XenonUtils EXCLUDE_FROM_ALL)
 # everything downstream of it drops out of the build.
 add_subdirectory(xenia_gpu)
 
+# The XMA audio decoder (extern/ffmpeg-xmaframes). Optional in the same way the
+# Xenos translator is: without the submodule, the build simply has no decoder.
+set(GEARS_HAVE_XMA_DECODER OFF)
+include(cmake/ffmpeg_xma.cmake)
+
 add_subdirectory(runtime)
 
 if(GEARS_HAVE_XENOS_TRANSLATOR)

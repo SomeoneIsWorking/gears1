@@ -5,3 +5,7 @@
 [submodule "extern/xenia"]
 	path = extern/xenia
 	url = https://github.com/SomeoneIsWorking/xenia-canary.git
+[submodule "extern/ffmpeg-xmaframes"]
+	path = extern/ffmpeg-xmaframes
+	url = https://github.com/has207/FFmpeg.git
+	branch = xmaframes
