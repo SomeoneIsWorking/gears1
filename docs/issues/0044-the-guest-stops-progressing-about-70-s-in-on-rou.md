@@ -183,3 +183,42 @@ entry points, but the bug check has not reproduced in the three runs since
 (0 of 3, on top of 0 of 6 before). The instrument is in place and unexercised,
 which is an honest state to leave it in -- it costs nothing until the failure
 happens, and it will name the first failure when it does.
+
+### Note (2026-07-29)
+THERE IS ONLY ONE FAILURE HERE. "FAILURE 2" WAS ME MISREADING A LOG. RETRACTED.
+
+This entry claimed a second, separate failure: "audio stops while drawing
+continues", from a run whose pump report froze at 11250 invocations while the
+renderer kept going. The pump did not stop. Reading the SUBMISSION counter
+instead of the pump's own periodic line shows that same run reached 12000
+submitted frames, near the end of the log. The pump had merely slowed below one
+report per remaining minute -- which is issue #43, already known and already
+measured, not a new failure.
+
+The tell was there and I did not use it: the stall detector, watching audio as
+its own channel, stayed SILENT through that run. It was right. A subsystem
+progressing slowly is not a subsystem that stopped, and the instrument made
+exactly that distinction while I was reading a missing log line as a dead
+pipeline. That is a point in the detector's favour -- specificity, not just
+sensitivity.
+
+RECLASSIFIED, by bug check rather than by the pump-count heuristic I had been
+using (nine runs, 120 s each):
+
+    bug check:      3 of 9
+    reached ~12000 audio frames / ~1900 swaps:  8 of 9
+    reached ~19000 audio frames / ~2640 swaps:  1 of 9
+
+So the bug check happens in about a third of runs, and how far the guest gets
+varies independently of it -- the runs that bug-checked reached the same point
+as several that did not. The earlier "2 of 3 runs stall" figure counted
+slow-but-healthy runs as failures.
+
+THE ENTRY'S TITLE IS NOW WRONG. The guest does not stop progressing; it
+occasionally panics, and otherwise runs at a rate that varies with machine load.
+Read the title as "the title bug-checks intermittently".
+
+WHAT THIS MEANS FOR MEASUREMENT: "pump calls = 11250" is not a failure signal
+and must not be used as one. The signals that mean something are the bug-check
+line, the stall detector's report, and the submission counters. I used a proxy
+because it was easy to grep, and it was wrong three times in a row.
