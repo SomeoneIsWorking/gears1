@@ -333,3 +333,68 @@ pacing output per 128-sample subframe into the 256-byte block ring, byte-
 swapping the PCM to big-endian, and advancing input_buffer_read_offset in BITS
 and output_buffer_write_offset in blocks. Xenia's xma_context_new.cc is the
 reference; its rest value for the read offset is 32 bits, never 0.
+
+### Note (2026-07-28)
+XMA DECODES. The title's audio now runs continuously instead of dying at 19 s.
+
+runtime/xma_context.cpp is a port of Xenia's current decoder
+(extern/xenia/src/xenia/apu/xma_context_new.cc): frame-chain walking, frames
+spanning packets, 0xFF skip packets, subframe pacing into the 256-byte block
+ring, big-endian int16 output, StoreContextMerged, and the Clear register.
+Decode is synchronous on the kick, which is what this Xenia does too, and it
+means the title's kick/lock cycle needs no cross-thread choreography.
+
+VERIFIED BY THE OPERATOR, from a clean build, not taken on report:
+
+    ctx1 (1780 packets): correlation 1.000000 over the full 141.84 s
+                         rms diff 0.000023, peak 0.000061, constant 576-sample lag
+    ctx0 (55 packets):   correlation 1.000000 over 8.34 s
+
+The 576-sample lag is the encoder priming ffmpeg's file decoder trims and the
+hardware does not. The residual rms is 1-2 LSB of int16 -- float rounding
+between the two pipelines, no structural difference anywhere in the stream.
+
+THE COMPARATOR WAS VALIDATED BEFORE ITS VERDICT WAS BELIEVED: fed the golden
+against a reversed copy of itself it reports correlation 0.081 and exits 1;
+fed the real match it reports 1.000000 and exits 0. A comparator that cannot
+say "different" is not evidence.
+
+LIVE, on a run to gameplay: 81.8% of submitted frames are non-silent, against
+25% before, and the audio now spans 4.4 s to 60.7 s and resumes at 69.6 s after
+the level load rather than stopping dead at 19.3 s. Zero xma warnings or errors.
+
+TWO FINDINGS FROM THE PORT, both root causes rather than symptoms:
+
+1. GEARS SHIPS XMA1-TYPE PACKETS, and the reference decoder silently loses
+   frames on them. Packet metadata is 0, so the byte the reference reads as a
+   frame count is an XMA1 sequence number. When a packet's last frame ends
+   0 < n < 15 bits before the boundary, its 15-bit header straddles the edge,
+   and the reference's only detection is the XMA2 frame count -- its own
+   comment (xma_context_new.cc:487-489) admits those frames "will be silently
+   lost". Four frames vanished in the 142 s music stream. The fix detects the
+   split from the CONTINUATION BIT, which both variants carry, and only when
+   more than zero bits remain: a frame ending exactly on the boundary means the
+   next frame starts cleanly in the next packet, and counting it sends the
+   next-offset arithmetic wrapping back to the packet's own start, decoding it
+   forever.
+
+2. AV_CODEC_FLAG2_SKIP_MANUAL was missing. Without it libavcodec discards
+   priming samples through skip side data -- the first frame returns 384
+   samples instead of 512, and mid-stream discards happen too. That plus the
+   lost frames held correlation at 0.678.
+
+PERFORMANCE, measured rather than assumed: decode costs 1.59 s across 71000
+kicks over a ~140 s run (22 us mean, 2.4 ms worst). Frame rate in gameplay is
+15.9 fps WITH decode and 16.6 fps in a control run with no audio pump at all,
+so the drop is gameplay being CPU-bound and not this code. The audio pump does
+fall behind under that load -- 16875 invocations where 187.5 Hz wants 26250 --
+but removing 1.59 s from 140 s cannot account for it, so the pump's rate under
+a CPU-bound guest is a separate open question, not an XMA regression.
+
+WHAT IS NOT VERIFIED, and the code says so where it matters: loop playback and
+true double-buffer streaming are ported from the reference and exercised by no
+stream here. Mono DOES decode live (contexts 23-25, 24 kHz and 44.1 kHz) but has
+not been compared against a golden. interrupt_when_done and stop_when_done are
+not implemented, as in every Xenia variant, and warn once if a context asks.
+NOBODY HAS HEARD THIS ON SPEAKERS: there is still no output device, which is
+step (c) and now the only thing between this and audible sound.

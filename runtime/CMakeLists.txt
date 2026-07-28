@@ -78,6 +78,7 @@ add_executable(gears1
     ppc_mmio.cpp
     xaudio_null.cpp
     xma.cpp
+    xma_context.cpp
     xma_decode.cpp
     guest_filesystem.cpp
     kernel_file.cpp
