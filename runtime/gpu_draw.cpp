@@ -881,6 +881,35 @@ const char* PrimName(uint32_t primType)
     }
 }
 
+// IEEE half to float, for reading back R16G16B16A16_SFLOAT targets.
+float HalfToFloat(uint16_t h)
+{
+    const uint32_t sign = uint32_t(h & 0x8000) << 16;
+    uint32_t exponent = (h >> 10) & 0x1F;
+    uint32_t mantissa = h & 0x3FF;
+    uint32_t bits;
+    if (exponent == 0)
+    {
+        if (mantissa == 0)
+            bits = sign;
+        else
+        {
+            // Subnormal: normalise into a float32 normal.
+            exponent = 1;
+            while ((mantissa & 0x400) == 0) { mantissa <<= 1; --exponent; }
+            mantissa &= 0x3FF;
+            bits = sign | ((exponent + (127 - 15)) << 23) | (mantissa << 13);
+        }
+    }
+    else if (exponent == 0x1F)
+        bits = sign | 0x7F800000u | (mantissa << 13); // inf / NaN
+    else
+        bits = sign | ((exponent + (127 - 15)) << 23) | (mantissa << 13);
+    float f;
+    std::memcpy(&f, &bits, sizeof(f));
+    return f;
+}
+
 bool WritePpm(const std::filesystem::path& path, const uint8_t* rgba,
               uint32_t w, uint32_t h)
 {
@@ -2182,6 +2211,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     std::vector<VkDescriptorSet> resolveSets;
     uint32_t resolveSetsUsed = 0;
     uint32_t resolvesUnstorable = 0;
+    uint32_t resolvesOutOfSets = 0;
 
     // --- the resolve compute pipeline -----------------------------------
     // Built once. It applies the guest's copy_dest_exp_bias and copy_dest_swap
@@ -2915,6 +2945,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     uint32_t resolvesUnmatched = 0, resolvesDepth = 0;
     // RB_COPY_DEST_BASE -> (destination texture base, row offset within it).
     std::map<uint32_t, std::pair<uint32_t, uint32_t>> resolveRouting;
+    // How many colour resolves this frame will DISPATCH. The descriptor pool is
+    // sized from this, and it has to be counted here rather than from the
+    // ResolveEvent list, which is not filled until the draw-preparation loop
+    // that runs after -- sizing from an empty list gave 8 sets for 12
+    // dispatches, so four of them silently reused a set that a later dispatch
+    // then overwrote, and the resolves those sets belonged to wrote nothing.
+    uint32_t resolveDrawCount = 0;
     for (const FrameDrawItem& d : in.draws)
     {
         if (d.registerFile.size() < 0x8000)
@@ -2942,13 +2979,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // into it. A tile's base is the texture's base plus whole rows.
         resolveRouting[destBase] = {rt->base, rowOffset};
         resolveDests.insert(rt->base);
+        ++resolveDrawCount;
     }
     // One descriptor set per resolve this frame. They are tiny (two storage
     // images) and the pool is rebuilt only when a frame needs more than the
     // last one did.
     if (P.resolvePipeline != VK_NULL_HANDLE)
     {
-        const uint32_t want = std::max<uint32_t>(8, uint32_t(resolves.size()) + 4);
+        const uint32_t want = std::max<uint32_t>(8, resolveDrawCount + 4);
         if (P.resolveDescPool == VK_NULL_HANDLE || P.resolveDescCapacity < want)
         {
             vkDestroyDescriptorPool(device, P.resolveDescPool, nullptr);
@@ -3247,6 +3285,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     if (forced)
                         pd.resolveScale = float(std::atof(forced));
                     pd.resolveSwapRB = ((R[0x231B] >> 24) & 1) != 0;
+                    // GEARS_DRAW_RESOLVE_NOSWAP=1 suppresses the red/blue swap.
+                    // A DIAGNOSTIC control arm: the blit path cannot swap, so
+                    // the compute path only has to match it byte-for-byte with
+                    // the swap disabled and the scale forced to 1.
+                    static const bool noSwap =
+                        std::getenv("GEARS_DRAW_RESOLVE_NOSWAP") != nullptr;
+                    if (noSwap)
+                        pd.resolveSwapRB = false;
                 }
                 prepared.push_back(pd);
                 ++issuedResolves;
@@ -3922,16 +3968,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         sy1 = std::min<int32_t>(sy1, sy0 + std::max<int32_t>(0, dh - dstY));
         if (sx1 <= sx0 || sy1 <= sy0)
             return;
-        // GEARS_DRAW_RESOLVE_COMPUTE=1 selects the compute resolve, which is the
-        // only path that can apply the guest's copy_dest_exp_bias and
-        // copy_dest_swap. It is IN PROGRESS and OFF BY DEFAULT because it does
-        // not yet reproduce the blit it replaces: forced to scale 1.0 -- where
-        // it must be identical -- it differs on 2762958 of 2764816 bytes and
-        // writes only a fraction of the destination. Shipping it on would trade
-        // a verified frame for an unverified one, so the blit stays the default
-        // until it passes that control arm. See catalog #33.
-        static const bool computeResolve =
-            std::getenv("GEARS_DRAW_RESOLVE_COMPUTE") != nullptr;
+        // The compute resolve is the only path that can apply the guest's
+        // copy_dest_exp_bias and copy_dest_swap, so it is the default. It earned
+        // that: forced to scale 1.0 with the swap suppressed -- where it must be
+        // identical to the blit it replaces -- it reproduces it byte for byte
+        // (0 of 2764816 differ). GEARS_DRAW_RESOLVE_BLIT=1 goes back to the
+        // blit, as a control arm.
+        static const bool blitResolve =
+            std::getenv("GEARS_DRAW_RESOLVE_BLIT") != nullptr;
+        const bool computeResolve = !blitResolve;
         const bool canCompute = computeResolve &&
             P.resolvePipeline != VK_NULL_HANDLE && !resolveSets.empty() &&
             srcTarget.storageView != VK_NULL_HANDLE &&
@@ -3940,9 +3985,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         {
             if (computeResolve)
                 ++resolvesUnstorable;
-            // The verified path: a rectangle blit to the destination offset,
-            // preserving what is already there. It cannot scale, so the guest's
-            // exponent bias is NOT applied -- which is exactly the open defect.
+            // The blit path: a rectangle copy to the destination offset,
+            // preserving what is already there. It cannot scale or swap
+            // channels, so the guest's exponent bias and red/blue swap are NOT
+            // applied -- it is a control arm, not an equal alternative.
             VkImageMemoryBarrier tb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
             tb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
             tb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -4007,7 +4053,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, toGeneral);
 
-        VkDescriptorSet set = resolveSets[resolveSetsUsed++ % resolveSets.size()];
+        if (resolveSetsUsed >= resolveSets.size())
+        {
+            // Never wrap: reusing a set means an earlier dispatch reads the
+            // descriptors a later one wrote, and that failure is invisible in
+            // the frame -- it just makes some resolve targets empty.
+            ++resolvesOutOfSets;
+            return;
+        }
+        VkDescriptorSet set = resolveSets[resolveSetsUsed++];
         VkDescriptorImageInfo srcInfo{VK_NULL_HANDLE, srcTarget.storageView,
                                       VK_IMAGE_LAYOUT_GENERAL};
         VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, dst.storageView,
@@ -4289,6 +4343,50 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vkCmdCopyImageToBuffer(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             readback, 1, &region);
     }
+    // GEARS_DRAW_RESOLVE_DUMP=1: copy every resolve target out so it can be
+    // written to a PPM after the frame. These images are what the guest's post
+    // and tonemap passes SAMPLE, so when a frame looks wrong the question "is
+    // the scene in the resolved texture, and does it look right there?" is the
+    // one that splits a resolve defect from a shading defect -- and it cannot be
+    // answered from the presented frame alone.
+    struct ResolveDump { uint32_t base, w, h; VkBuffer buf; VkDeviceMemory mem; };
+    std::vector<ResolveDump> resolveDumps;
+    if (std::getenv("GEARS_DRAW_RESOLVE_DUMP"))
+    {
+        for (auto& [k, r] : P.resolveTargets)
+        {
+            if (!r.everWritten || r.width == 0 || r.imageHeight == 0)
+                continue;
+            const VkDeviceSize bytes = VkDeviceSize(r.width) * r.imageHeight * 8;
+            VkBuffer b = VK_NULL_HANDLE; VkDeviceMemory m = VK_NULL_HANDLE;
+            if (!MakeBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m, true))
+                continue;
+            VkImageMemoryBarrier tb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            tb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            tb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            tb.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            tb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            tb.srcQueueFamilyIndex = tb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            tb.image = r.image;
+            tb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &tb);
+            VkBufferImageCopy rg{};
+            rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            rg.imageExtent = {r.width, r.imageHeight, 1};
+            vkCmdCopyImageToBuffer(cmd, r.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                b, 1, &rg);
+            VkImageMemoryBarrier rb2 = tb;
+            rb2.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            rb2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            rb2.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            rb2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb2);
+            resolveDumps.push_back({r.base, r.width, r.imageHeight, b, m});
+        }
+    }
+
     VK_CHECK(vkEndCommandBuffer(cmd));
 
     P.arenaHighWater = std::max(P.arenaHighWater, arenaCursor);
@@ -4310,6 +4408,39 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     VK_CHECK(vkQueueSubmit(queue, 1, &submit, fence));
     VK_CHECK(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
     accumulate(msSubmit, tSubmit);
+
+    for (const ResolveDump& rd : resolveDumps)
+    {
+        void* mapped = nullptr;
+        const VkDeviceSize bytes = VkDeviceSize(rd.w) * rd.h * 8;
+        if (vkMapMemory(device, rd.mem, 0, bytes, 0, &mapped) == VK_SUCCESS)
+        {
+            // R16G16B16A16_SFLOAT -> 8-bit, clamped. An HDR target holds values
+            // well above 1, so the clamp is honest saturation, not a tonemap.
+            const uint16_t* src = static_cast<const uint16_t*>(mapped);
+            std::vector<uint8_t> rgba(size_t(rd.w) * rd.h * 4);
+            double maxSeen = 0.0;
+            for (size_t i = 0; i < size_t(rd.w) * rd.h; ++i)
+                for (int c = 0; c < 4; ++c)
+                {
+                    const float v = HalfToFloat(src[i * 4 + c]);
+                    if (c < 3) maxSeen = std::max(maxSeen, double(v));
+                    rgba[i * 4 + c] = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
+                }
+            const char* dir = std::getenv("GEARS_DRAW_DIR");
+            const std::filesystem::path out =
+                (dir ? std::filesystem::path(dir)
+                     : std::filesystem::path("scratch/screenshots")) /
+                std::format("resolve_{:08x}.ppm", rd.base);
+            if (WritePpm(out, rgba.data(), rd.w, rd.h))
+                lucent::info("draw", "resolve target {:#x} ({}x{}) dumped to {}"
+                    " (max colour component {:.3f})", rd.base, rd.w, rd.h,
+                    out.string(), maxSeen);
+            vkUnmapMemory(device, rd.mem);
+        }
+        vkDestroyBuffer(device, rd.buf, nullptr);
+        vkFreeMemory(device, rd.mem, nullptr);
+    }
 
     if (statPool != VK_NULL_HANDLE)
     {
@@ -4604,6 +4735,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 tb.add(" {:#x}x{}{}", base, n, texBaseRtCount.count(base) ? "(RT)" : "");
             tb.flush(lucent::Level::Info, "draw");
         }
+        if (resolvesOutOfSets)
+            lucent::warn("draw", "frame resolves: {} had no descriptor set and were"
+                " DROPPED -- the pool was sized too small", resolvesOutOfSets);
         if (resolvesUnstorable)
             lucent::warn("draw", "frame resolves: {} could not run the compute"
                 " resolve (host cannot use the format as a storage image), so the"
