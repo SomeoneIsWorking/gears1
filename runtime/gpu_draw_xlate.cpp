@@ -1048,6 +1048,14 @@ bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv)
     return !spirv.empty();
 }
 
+bool IsPrimitivePolygonal(const uint32_t* registerFile)
+{
+    RegisterFile regs;
+    std::memcpy(regs.values, registerFile,
+        RegisterFile::kRegisterCount * sizeof(uint32_t));
+    return draw_util::IsPrimitivePolygonal(regs);
+}
+
 std::vector<uint8_t> DeriveSystemConstants(const uint32_t* registerFile)
 {
     RegisterFile regs;

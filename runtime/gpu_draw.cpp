@@ -466,11 +466,17 @@ struct OutputMergerState
     uint32_t colorMask = 0;    // RB_COLOR_MASK
     uint32_t blend0 = 0;       // RB_BLENDCONTROL0
     uint32_t depthControl = 0; // RB_DEPTHCONTROL
+    // PA_SU_SC_MODE_CNTL: cull_front (bit 0), cull_back (bit 1), and face
+    // (bit 2, 0 = front is counter-clockwise). Culling applies only to POLYGONAL
+    // primitives -- Xenia gates the whole block on that, and faceness is
+    // meaningless for points and lines.
+    uint32_t suScModeCntl = 0;
+    bool polygonal = false;
 
     bool operator<(const OutputMergerState& o) const
     {
-        return std::tie(colorMask, blend0, depthControl) <
-               std::tie(o.colorMask, o.blend0, o.depthControl);
+        return std::tie(colorMask, blend0, depthControl, suScModeCntl, polygonal) <
+               std::tie(o.colorMask, o.blend0, o.depthControl, o.suScModeCntl, o.polygonal);
     }
 };
 
@@ -1282,6 +1288,14 @@ bool Renderer::Render(const HotDrawInputs& in)
         VkPipelineRasterizationStateCreateInfo rs{
             VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
         rs.polygonMode = VK_POLYGON_MODE_FILL;
+        // The guest's own culling (Xenia: VulkanPipelineCache::
+        // GetCurrentStateDescription). Only for polygonal primitives -- faceness
+        // has no meaning for points and lines, and applying it to them would
+        // drop geometry the hardware keeps.
+        //
+        // This was host-fixed to NONE, which can only keep MORE primitives than
+        // the guest asked for: back faces were being rasterised and, where the
+        // guest blends, blended twice.
         rs.cullMode = VK_CULL_MODE_NONE;
         rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
         rs.lineWidth = 1.0f;
@@ -2646,6 +2660,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         rs.polygonMode = VK_POLYGON_MODE_FILL;
         rs.cullMode = VK_CULL_MODE_NONE;
         rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        static const bool noCull = std::getenv("GEARS_DRAW_NOCULL") != nullptr;
+        static const bool invertFace = std::getenv("GEARS_DRAW_CULL_INVERT") != nullptr;
+        if (om.polygonal && !noCull)
+        {
+            if (om.suScModeCntl & 1) rs.cullMode |= VK_CULL_MODE_FRONT_BIT;
+            if (om.suScModeCntl & 2) rs.cullMode |= VK_CULL_MODE_BACK_BIT;
+            // face: 0 = front is counter-clockwise. GEARS_DRAW_CULL_INVERT is a
+            // control arm for the one thing not settled by the register: our
+            // Y-flip lives in the shader's ndc_scale, and a Y flip reverses
+            // screen-space winding.
+            const bool cw = ((om.suScModeCntl >> 2) & 1) != 0;
+            rs.frontFace = (cw != invertFace) ? VK_FRONT_FACE_CLOCKWISE
+                                              : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        }
         rs.lineWidth = 1.0f;
         VkPipelineMultisampleStateCreateInfo ms{
             VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
@@ -3549,6 +3577,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         om.colorMask = R[0x2104];
         om.blend0 = R[0x2201];
         om.depthControl = R[0x2200];
+        om.suScModeCntl = R[0x2205];
+        om.polygonal = draw::IsPrimitivePolygonal(R);
         // Rectangle lists go through the geometry shader that builds the fourth
         // vertex. Everything else runs with no geometry stage at all.
         VkShaderModule gsMod = VK_NULL_HANDLE;

@@ -155,6 +155,11 @@ bool BuildResolveComputeShader(std::vector<uint32_t>& spirv);
 // components. `swapRB` in the push constants selects the format: 1 = float24.
 bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv);
 
+// Whether this draw's primitive is POLYGONAL -- Xenia's
+// draw_util::IsPrimitivePolygonal. Culling and faceness apply only to polygons;
+// applying them to points or lines would drop geometry the hardware keeps.
+bool IsPrimitivePolygonal(const uint32_t* registerFile);
+
 // Translates a single stage (vertex or pixel) under the given modification --
 // the value DeriveShaderModifications produced for the draw's pair. Lets the
 // whole-frame backend translate and cache each distinct (shader, modification)
