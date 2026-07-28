@@ -19,7 +19,7 @@
 #include "guest_heap.h"
 #include "guest_memory.h"
 #include "guest_thread.h"
-#include "pump_probe.h"
+#include "wait_probe.h"
 #include "kernel_objects.h"
 
 namespace
@@ -274,7 +274,7 @@ void __imp__KeDelayExecutionThread(PPCContext& __restrict ctx, uint8_t* base)
     }
     else
     {
-        gears::PumpWaitScope probe("KeDelay");
+        gears::WaitProbe probe("KeDelay");
         std::this_thread::sleep_for(std::chrono::nanoseconds(-raw * 100));
     }
 

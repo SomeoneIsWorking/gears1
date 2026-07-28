@@ -7,7 +7,7 @@
 
 #include <byteswap.h>
 #include <lucent/log.h>
-#include "pump_probe.h"
+#include "wait_probe.h"
 
 namespace
 {
@@ -81,7 +81,7 @@ void __imp__RtlEnterCriticalSection(PPCContext& __restrict ctx, uint8_t* base)
 {
     const uint32_t address = ctx.r3.u32;
     {
-        gears::PumpWaitScope probe("RtlEnterCS");
+        gears::WaitProbe probe("RtlEnterCS");
         HostLockFor(address).lock();
     }
 

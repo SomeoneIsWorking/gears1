@@ -89,7 +89,7 @@ add_executable(gears1
     kernel_spinlock.cpp
     audio_out.cpp
     ppc_mmio.cpp
-    pump_probe.cpp
+    wait_probe.cpp
     xaudio_null.cpp
     xma.cpp
     xma_context.cpp

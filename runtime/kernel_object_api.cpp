@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "guest_thread.h"
-#include "pump_probe.h"
+#include "wait_probe.h"
 #include "kernel_objects.h"
 
 // NTSTATUS ObReferenceObjectByHandle(HANDLE Handle, POBJECT_TYPE ObjectType,
@@ -76,7 +76,7 @@ void __imp__KeWaitForSingleObject(PPCContext& __restrict ctx, uint8_t* base)
     // its own line or those waits are invisible.
     lucent::debug("wait", "[{}] KeWait -> object {:#x} timeout {}",
         gears::GuestThreadName(), objectAddress, timeout);
-    gears::PumpWaitScope probe("KeWait");
+    gears::WaitProbe probe("KeWait");
     const bool signalled = object->Wait(timeout);
     lucent::debug("wait", "[{}] KeWait <- object {:#x} {}", gears::GuestThreadName(),
         objectAddress, signalled ? "signalled" : "timed out");
@@ -167,7 +167,7 @@ void __imp__KeWaitForMultipleObjects(PPCContext& __restrict ctx, uint8_t* base)
     // out, so re-testing is the same as having waited throughout.
     constexpr int64_t kStuckReport100ns = 5 * 10'000'000; // 5 s
     int index = -1;
-    gears::PumpWaitScope probe(waitAll ? "KeWaitMultiple.all" : "KeWaitMultiple.any");
+    gears::WaitProbe probe(waitAll ? "KeWaitMultiple.all" : "KeWaitMultiple.any");
     for (int64_t waited = 0;;)
     {
         const int64_t slice =
