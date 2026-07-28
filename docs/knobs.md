@@ -31,7 +31,8 @@ the same commit that removes it.
 | `GEARS_INPUT_SCRIPT=<steps>` | Timed pad input, e.g. `25000:START,25300:,150000:LY+`. Buttons and stick deflections (`LX/LY/RX/RY` with `+`/`-`), combined with `&`. Only advances when the guest polls, so a headless run is reproducible |
 | `GEARS_NO_WINDOW=1` | Headless |
 | `GEARS_NO_VBLANK=1` | Disable the 60 Hz vblank |
-| `GEARS_AUDIO_PUMP=1` | Drive the guest's audio callback at 187.5 Hz so it submits frames. **Off by default: it currently aborts on the unimplemented `KeWaitForMultipleObjects` (catalog #40)**, so enabling it trades silence for a crash |
+| `GEARS_AUDIO_PUMP=1` | Drive the guest's audio callback at 187.5 Hz so it submits frames. Off by default: nothing plays the frames yet, so the only effect on a normal run is cost |
+| `GEARS_AUDIO_WAV=<path>` | Write every submitted frame verbatim to a WAV (6 channels, 48 kHz, 32-bit float). The header is refreshed once a second so a killed run still leaves a readable file |
 | `GEARS_CP_STALL_MS=N` | Block the command processor N ms at the first swap — the control arm for "did host work perturb the guest?" |
 
 ## Capture and replay
