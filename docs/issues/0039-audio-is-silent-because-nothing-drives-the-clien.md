@@ -107,3 +107,44 @@ Suspect, not conclusion; nothing has yet tied the two runs to a source.
 STEP (c), an output device, is now unblocked and is deliberately still last: it
 would add nothing this measurement has not already established, and a device fed
 silence sounds exactly like a device fed nothing.
+
+### Note (2026-07-28)
+THE SILENCE AFTER 19 s IS XMA, AND IT IS NOW MEASURED RATHER THAN SUSPECTED.
+
+The previous note named XMA as the suspect and refused to call it the cause.
+Dumping the live contexts settles it.
+
+The title creates a handful of XMA contexts and PROGRAMS THEM FULLY. Decoding
+one against Xenia's XMA_CONTEXT_DATA (extern/xenia/src/xenia/apu/xma_context.h):
+
+    input_buffer_0_valid  = 1        input_buffer_0_ptr = 0xaba10000
+    input_buffer_0_packet_count = 55 (55 x 2 KB of XMA queued)
+    output_buffer_valid   = 1        output_buffer_ptr  = 0xaa012880
+    output_buffer_block_count = 30   work_buffer_ptr    = 0xaa014680
+    is_stereo = 1   subframe_decode_count = 8
+    error_set = 0   parser_error_set = 0
+    input_buffer_read_offset = 32 bits   output_buffer_write_offset = 0
+
+A second context is armed with 1780 packets and BOTH input buffers valid, which
+is the streaming double-buffer pattern -- music.
+
+Sampled twice, 12 s apart, both contexts byte-for-byte IDENTICAL. Nothing
+consumes the input and nothing produces output: the read offset never leaves the
+start of the stream and the write offset never leaves zero. No error bit is set,
+because from the title's side nothing has gone wrong -- it queued data for the
+hardware decoder and is waiting, exactly as it would on a console where the
+decode is late.
+
+So the shape of the earlier measurement is explained. The sound from 4.4 s to
+19.3 s is the voices the title mixes in software; everything streamed is XMA,
+and it has been silently pending since boot.
+
+RECORDED ON THE FRONTIER as `xma-decode`, status HACK rather than missing:
+XMACreateContext handing out a context record LOOKS like support, and the title
+behaves as though decode were coming. The real step is an XMA bitstream parser
+plus a WMA-Pro-class decoder over the packet stream, writing decoded blocks to
+output_buffer_ptr and advancing the offsets the title polls.
+
+DO NOT fake this by writing zeros or noise into the output buffer to make the
+offsets move. It would advance the title past its wait and produce audible
+garbage that looks like progress.
