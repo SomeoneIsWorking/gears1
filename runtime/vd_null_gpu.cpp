@@ -51,6 +51,7 @@
 #include "gpu_present.h"
 #include "input.h"
 #include "gpu_draw.h"
+#include "frame_capture.h"
 #include "hle_d3d.h"
 #include "guest_thread.h"
 #include "guest_memory.h"
@@ -520,6 +521,8 @@ struct CommandProcessor
     // race it away.
     std::vector<gears::FrameDrawItem> frameDraws;
     bool frameRenderDone = false;
+    // One frame capture per run (GEARS_DRAW_FRAME_DUMP), not one per frame.
+    bool frameDumpWritten = false;
     long framesRendered = 0;
     long lastRenderFrames = 0;
     uint64_t renderedMs = 0;
@@ -1212,6 +1215,17 @@ struct CommandProcessor
         // filmstrip rather than overwriting one file.
         if (frameCount <= 0 && in.report)
             in.sequence = framesRendered;
+
+        // GEARS_DRAW_FRAME_DUMP=<path>: write this frame's whole draw stream to a
+        // file that tools/frame_replay renders offline. Reaching a gameplay frame
+        // costs a scripted 200-second walk through the menus, and two such runs
+        // never land on the same game moment -- so a captured frame, replayable
+        // in a second, is the only way to compare two renderer arms on identical
+        // input. Written for the REPORTED frame only, so a live run leaves one
+        // capture rather than one per frame.
+        if (const char* dumpPath = std::getenv("GEARS_DRAW_FRAME_DUMP"))
+            if (in.report && !frameDumpWritten)
+                frameDumpWritten = gears::WriteFrameCapture(dumpPath, in);
 
         lucent::info("gpu", "guest-draw: rendering whole frame ({} draws captured)",
             in.draws.size());
