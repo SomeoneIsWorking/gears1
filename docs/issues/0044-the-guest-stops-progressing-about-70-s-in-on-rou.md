@@ -5,7 +5,7 @@ status: open
 symptom: the audio pump stops at exactly 11250 callback invocations and VdSwap plateaus at 1860-1920 frames, while the process stays alive and the renderer keeps drawing; other runs sail past the same point
 tags: hang,nondeterministic,guest,audio,blocker
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-07-29
 ---
 
 Found while trying to verify an unrelated change, and the way it was found is
@@ -47,3 +47,52 @@ running one. The -O2 numbers recorded in issue #43 came from runs that did get
 through, but any future comparison has to check that both arms actually
 progressed before comparing anything. That check is cheap: the last VdSwap count
 and the last pump call count.
+
+### Note (2026-07-29)
+DIAGNOSED, AND IT WAS NEVER A HANG. TWO SEPARATE FAILURES WERE BEING COUNTED AS ONE.
+
+A stall detector now watches each subsystem's progress independently and, when
+one stops, reports what every guest thread was doing (runtime/wait_probe.cpp).
+Pointing it at this issue found that "the guest stalls" was two things:
+
+FAILURE 1 -- THE TITLE BUG-CHECKS. The process was not hanging, it was EXITING.
+The last line of a stalled run's log is an unimplemented-import abort on
+KeBugCheck, the console's kernel panic: the guest itself decided something was
+unrecoverable. Identical registers every time (r3=0, r4=0x82b8f4a0, r8=2).
+
+    [kernel:error] THE TITLE BUG-CHECKED: KeBugCheck(code 0x0)
+
+KeBugCheck and KeBugCheckEx are now implemented (kernel_misc.cpp): they report
+the code, render any parameter that points at a string in the image, and exit.
+That turns an anonymous abort into a named panic. WHY the title panics is now
+the open question, and it is a much better question than the one this entry
+started with.
+
+FAILURE 2 -- AUDIO STOPS WHILE DRAWING CONTINUES. A separate run showed the pump
+frozen at 11250 invocations with NO bug check and the renderer still drawing
+3-draw frames at full rate. So the title's audio pipeline can stop on its own,
+without the process dying and without the renderer noticing.
+
+THE PART OF THIS ENTRY THAT WAS WRONG: it said "the process stays alive, checked
+at 30/60/75/90/105 s". That observation was real but came from a run that did not
+fail -- the healthy third of the distribution. I generalised it across all the
+stalled runs without checking, which is the same mistake as the clamp
+retraction recorded above: reasoning about a bimodal system from whichever
+sample was to hand.
+
+INSTRUMENT NOTES, both learned by the detector being wrong first:
+- Its original progress signal was "any guest thread entered the kernel". That
+  never fires: threads that poll (a 30 ms timed wait, a 500 us poll loop) keep
+  entering the kernel forever, so a completely stuck guest still ticks. Kernel
+  calls are now REPORTED as a description of the stall -- nothing running at all
+  versus something spinning -- and progress is measured as subsystem work.
+- A single global progress signal called failure 2 healthy, because drawing was
+  progressing. Channels are watched independently for exactly that reason.
+- Validated against a case that must trigger: GEARS_CP_STALL_MS=15000 with a
+  short threshold produces the full report -- per-thread wait sites, durations,
+  blocked-versus-running counts, and the recovery line when drawing resumes.
+
+Frequency has also moved: 2 of 3 runs failed earlier today, 0 of 6 in the last
+two batches, on a tree whose only behavioural change since is KeBugCheck. That
+is not a fix and must not be read as one; it is more evidence the trigger is
+timing-dependent.

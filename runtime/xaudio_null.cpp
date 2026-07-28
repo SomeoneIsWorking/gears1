@@ -26,7 +26,7 @@
 #include "guest_memory.h"
 #include "audio_out.h"
 #include "guest_thread.h"
-#include "pump_probe.h"
+#include "wait_probe.h"
 #include "xma.h"
 
 namespace
@@ -330,7 +330,7 @@ void AudioPump()
             lastRunqueue = runqueue;
             wallNanos = wallMaxNanos = cpuNanos = cpuMaxNanos = 0;
             lateSlots = timedCalls = 0;
-            gears::PumpWaitReport();
+            gears::WaitProbeReport();
         }
     }
 }
@@ -411,6 +411,9 @@ void __imp__XAudioSubmitRenderDriverFrame(PPCContext& __restrict ctx, uint8_t* b
 {
     const uint32_t samplesPtr = ctx.r4.u32;
     const uint64_t frames = g_submittedFrames.fetch_add(1) + 1;
+    // The title mixing a frame is audio progress. Watched separately from
+    // drawing because they have been seen to stop independently.
+    gears::NoteGuestProgress("audio");
 
     float peak = 0.0f;
     if (samplesPtr == 0)

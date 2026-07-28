@@ -54,6 +54,7 @@
 #include "frame_capture.h"
 #include "hle_d3d.h"
 #include "guest_thread.h"
+#include "wait_probe.h"
 #include "guest_memory.h"
 
 PPC_EXTERN_FUNC(__imp__XGetVideoMode);
@@ -2165,6 +2166,10 @@ void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
     gears::HleDumpCensus("swap");
     gears::HleWorkerCensus();
     gears::HleShaderCaptureFrame(frame);
+    // Drawing is progress even when the guest is making no kernel calls, so the
+    // stall detector does not report a busy renderer as a dead guest.
+    gears::NoteGuestProgress("draw");
+
     if (frame == 1 || frame % 60 == 0)
     {
         // Frame rate is the metric the presentation work is judged on, so
