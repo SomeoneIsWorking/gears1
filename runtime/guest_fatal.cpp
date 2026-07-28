@@ -27,6 +27,13 @@
 // share the return address 0x828D30B0, but one lives in the range the
 // recompiler labelled sub_828D2FB0 and the other in sub_828D2FB8. Whatever
 // registers this handler registers the +8 entry.
+// The chain, from the outside in. Everything below sub_828D0790 is
+// unconditional -- sub_828D9FD8 always ends in the fatal exit -- so the DECISION
+// is made above sub_828D0790, and that is the only one of these whose caller is
+// still unknown. It has no direct callers anywhere in the image, so like the
+// handler it is reached through a pointer, and like the handler it can be
+// caught here.
+extern "C" PPC_FUNC(__imp__sub_828D0790);
 extern "C" PPC_FUNC(__imp__sub_828D2FB0);
 extern "C" PPC_FUNC(__imp__sub_828D2FB8);
 
@@ -104,4 +111,15 @@ PPC_FUNC(sub_828D2FB8)
 {
     ReportEntry("sub_828D2FB8", ctx);
     __imp__sub_828D2FB8(ctx, base);
+}
+
+PPC_FUNC(sub_828D0790)
+{
+    // The top of the shutdown chain: runs a registered handler, then reports,
+    // then dies. Its caller is what actually decided to end the process, and
+    // the link register is the only thing that names it.
+    lucent::error("fatal", "the title began shutting down (sub_828D0790) from"
+        " {:#x}: r3={:#x} r4={:#x} r5={:#x} r6={:#x}", uint32_t(ctx.lr),
+        ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32);
+    __imp__sub_828D0790(ctx, base);
 }
