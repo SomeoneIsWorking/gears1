@@ -1,7 +1,7 @@
 ---
 id: 29
 title: Depth-only draws run their pixel shader and write colour
-status: open
+status: resolved
 symptom: 269 of an Act 1 gameplay frame's 743 draws carry RB_MODECONTROL.edram_mode == kDepthOnly (5); the whole-frame guest-draw backend issues them with a pixel shader bound and colour writes enabled
 tags: gpu,draw,draw-backend,frame,edram,depth
 created: 2026-07-27
@@ -26,3 +26,6 @@ NOT fixed in the render-target-cache change deliberately: it is a separate
 behaviour change and deserves its own A/B measurement rather than being folded
 into the routing change. The fix is to build the pipeline with no fragment stage
 when edram_mode == kDepthOnly, as Xenia does by leaving pixel_shader null.
+
+### Resolution (2026-07-27)
+Fixed in runtime/gpu_draw.cpp: getPipeline builds NO fragment stage unless RB_MODECONTROL.edram_mode is kColorDepth, per Xenia's contract (269 of a gameplay frame's 743 draws). GEARS_DRAW_DEPTHONLY_PS=1 is the control arm. Correct by the hardware contract, but with NO visual effect on this frame: the presented image is BYTE-IDENTICAL (0 of 921600 pixels changed), because those draws' colour was fully overwritten later anyway. It is therefore NOT the missing world -- see #30, where it is recorded as falsified.

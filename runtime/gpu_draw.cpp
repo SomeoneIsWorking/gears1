@@ -704,6 +704,19 @@ void Renderer::ReleasePersistent()
 }
 
 // Xenos VGT_DRAW_INITIATOR prim_type names, for the frame census.
+// "src ONE, dst ZERO, add" on both colour and alpha is the blend identity, so
+// blending is only switched on when the guest actually asked for it. Shared
+// between the pipeline builder and the per-draw diagnostic table, so the table
+// reports the state the pipeline was actually built with.
+bool BlendIsIdentity(uint32_t blend0)
+{
+    const uint32_t cSrc = blend0 & 0x1F, cOp = (blend0 >> 5) & 0x7;
+    const uint32_t cDst = (blend0 >> 8) & 0x1F;
+    const uint32_t aSrc = (blend0 >> 16) & 0x1F, aOp = (blend0 >> 21) & 0x7;
+    const uint32_t aDst = (blend0 >> 24) & 0x1F;
+    return cSrc == 1 && cDst == 0 && cOp == 0 && aSrc == 1 && aDst == 0 && aOp == 0;
+}
+
 const char* PrimName(uint32_t primType)
 {
     switch (primType)
@@ -2184,10 +2197,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             stages[stageCount].module = gsMod; stages[stageCount].pName = "main";
             ++stageCount;
         }
-        stages[stageCount] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        stages[stageCount].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        stages[stageCount].module = psMod; stages[stageCount].pName = "main";
-        ++stageCount;
+        // A null psMod means this draw has NO fragment stage. That is not an
+        // optimisation: RB_MODECONTROL.edram_mode decides whether the pixel
+        // shader runs at all, and a depth-only draw that runs one writes colour
+        // the hardware would never have written. See the call site.
+        if (psMod != VK_NULL_HANDLE)
+        {
+            stages[stageCount] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+            stages[stageCount].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+            stages[stageCount].module = psMod; stages[stageCount].pName = "main";
+            ++stageCount;
+        }
         VkPipelineVertexInputStateCreateInfo vin{
             VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
         VkPipelineInputAssemblyStateCreateInfo ia{
@@ -2241,10 +2261,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         const uint32_t aSrc = (om.blend0 >> 16) & 0x1F;
         const uint32_t aOp = (om.blend0 >> 21) & 0x7;
         const uint32_t aDst = (om.blend0 >> 24) & 0x1F;
-        // "src ONE, dst ZERO, add" on both colour and alpha is the identity, so
-        // blending is only switched on when the guest actually asked for it.
-        const bool blendIsIdentity = cSrc == 1 && cDst == 0 && cOp == 0 &&
-                                     aSrc == 1 && aDst == 0 && aOp == 0;
+        const bool blendIsIdentity = BlendIsIdentity(om.blend0);
         // GEARS_DRAW_NOBLEND=1 is a DIAGNOSTIC control arm only, never a fix: it
         // disables blending so the pixel shader's own output lands in the target
         // unmodified. It separates "this draw shades black" from "this draw
@@ -2433,6 +2450,27 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // issues no draw at all.
         bool isResolve = false;
         uint32_t resolveDest = 0;
+        // --- diagnostic only (GEARS_DRAW_DIAG), never read by the renderer ---
+        // Everything that can make a draw contribute nothing, recorded next to
+        // the draw that did nothing. A summary cannot answer "which stage did
+        // this surface's draws die at" -- only the join of per-draw state with
+        // per-draw pipeline statistics can, and that join is this table.
+        uint32_t diagIndex = 0;      // index in the frame's submission order
+        uint32_t edramMode = 0;
+        uint32_t primType = 0;
+        uint64_t vsHash = 0, psHash = 0;
+        bool hasFragmentStage = false;
+        uint32_t colorMask = 0, depthControl = 0, blend0 = 0;
+        uint32_t colorFormat = 0;    // RB_COLOR_INFO color_format
+        // The state that decides whether a primitive survives to rasterisation,
+        // which is where this frame's world geometry dies. Raw, so the table
+        // shows what the guest programmed rather than our interpretation of it.
+        uint32_t clipCntl = 0;       // PA_CL_CLIP_CNTL   0x2204
+        uint32_t suScModeCntl = 0;   // PA_SU_SC_MODE_CNTL 0x2205
+        uint32_t vteCntl = 0;        // PA_CL_VTE_CNTL    0x206C
+        uint32_t windowOffset = 0;   // PA_SC_WINDOW_OFFSET 0x2080
+        float vportXScale = 0, vportXOffset = 0, vportYScale = 0, vportYOffset = 0;
+        float vportZScale = 0, vportZOffset = 0;
     };
     std::vector<PreparedDraw> prepared;
     uint32_t issued = 0, skipped = 0;
@@ -2445,7 +2483,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // regardless of this base, which is why a deferred in-game frame -- many
     // surfaces -- comes out black while a one-surface menu does not. This tally
     // is the ground truth for the render-target cache (re-frontier gameplay-scene).
-    struct SurfaceStat { uint32_t draws = 0; uint32_t format = 0; uint32_t mode = 0; };
+    // The mode breakdown is PER SURFACE, not just per frame: "353 draws target
+    // the HDR world surface" and "how many of those can write colour at all"
+    // are different questions, and only the second one explains an empty
+    // surface. A frame-wide mode tally cannot answer it.
+    struct SurfaceStat
+    {
+        uint32_t draws = 0; uint32_t format = 0; uint32_t mode = 0;
+        uint32_t colorDepth = 0, depthOnly = 0, otherMode = 0;
+    };
     std::map<uint32_t, SurfaceStat> surfaces; // RB_COLOR_INFO color_base -> stat
     // RB_MODECONTROL.edram_mode (0x2208, bits 0..2) per draw. This is NOT a
     // detail: on Xenos a draw with edram_mode == kCopy (6) is not geometry at
@@ -2456,6 +2502,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // the colour target. Counted here before anything acts on it.
     //   0 kNoOperation  4 kColorDepth  5 kDepthOnly  6 kCopy
     std::map<uint32_t, uint32_t> edramModes;
+    // Draws issued with NO fragment stage because their edram_mode is not
+    // kColorDepth. Counted, because "the frame got darker" and "36% of the
+    // frame's draws stopped writing colour they should never have written" are
+    // the same observation and only this number tells them apart.
+    uint32_t drawsNoPixelShader = 0;
     // Every resolve of the frame, decoded per the Xenia contract: which colour
     // surface it reads (RB_COPY_CONTROL.copy_src_select indexes RB_COLOR_INFO
     // 0x2001/0x2003/0x2004/0x2005; >= 4 means depth) and where it writes
@@ -2634,6 +2685,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             ++st.draws;
             st.format = (R[0x2001] >> 16) & 0xF;
             st.mode = edramMode;
+            if (edramMode == 4) ++st.colorDepth;
+            else if (edramMode == 5) ++st.depthOnly;
+            else ++st.otherMode;
         }
         ++edramModes[edramMode];
         if (edramMode == 6 /*kCopy*/)
@@ -2728,8 +2782,23 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (getRectGeomShader(vsModification, gsMod))
                 ++rectDrawsExpanded;
         }
+        // The pixel shader runs ONLY when edram_mode is kColorDepth. This is
+        // Xenia's contract (xenos.h EdramMode, vulkan_command_processor.cc
+        // IssueDraw leaves pixel_shader null otherwise), and the evidence for it
+        // is recorded in Xenia's own comment: titles bind shaders to kDepthOnly
+        // draws that clearly belong to the colour pass -- shadowmap fetches and
+        // all -- so the mode, not the binding, decides. A kDepthOnly draw that
+        // runs its pixel shader writes colour the hardware never wrote.
+        // GEARS_DRAW_DEPTHONLY_PS=1 restores the old behaviour: a DIAGNOSTIC
+        // control arm for A/B-ing exactly this, never a fix.
+        static const bool depthOnlyRunsPs =
+            std::getenv("GEARS_DRAW_DEPTHONLY_PS") != nullptr;
+        const bool pixelShaderUsed = edramMode == 4 /*kColorDepth*/ || depthOnlyRunsPs;
+        if (!pixelShaderUsed)
+            ++drawsNoPixelShader;
         VkPipeline pipe = VK_NULL_HANDLE;
-        if (!getPipeline(vsMod, psMod, gsMod, d.primType, om, rp->first, pipeLayout, pipe))
+        if (!getPipeline(vsMod, pixelShaderUsed ? psMod : VK_NULL_HANDLE, gsMod,
+                         d.primType, om, rp->first, pipeLayout, pipe))
         { ++skipped; ++skipReasons[3]; continue; }
 
         // Per-draw constant UBOs from this draw's own register snapshot.
@@ -2927,6 +2996,26 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pd.count = drawCount;
         pd.indexed = drawIndexed;
         pd.surfaceBase = surfaceBase;
+        pd.diagIndex = uint32_t(&d - in.draws.data());
+        pd.edramMode = edramMode;
+        pd.primType = d.primType;
+        pd.vsHash = d.vsHash;
+        pd.psHash = d.psHash;
+        pd.hasFragmentStage = pixelShaderUsed;
+        pd.colorMask = om.colorMask;
+        pd.depthControl = om.depthControl;
+        pd.blend0 = om.blend0;
+        pd.colorFormat = (R[0x2001] >> 16) & 0xF;
+        pd.clipCntl = R[0x2204];
+        pd.suScModeCntl = R[0x2205];
+        pd.vteCntl = R[0x2206];
+        pd.windowOffset = R[0x2080];
+        std::memcpy(&pd.vportXScale, &R[0x210F], 4);
+        std::memcpy(&pd.vportXOffset, &R[0x2110], 4);
+        std::memcpy(&pd.vportYScale, &R[0x2111], 4);
+        std::memcpy(&pd.vportYOffset, &R[0x2112], 4);
+        std::memcpy(&pd.vportZScale, &R[0x2113], 4);
+        std::memcpy(&pd.vportZOffset, &R[0x2114], 4);
         // Viewport/scissor from this draw's own registers, clamped to the host
         // target. A zero extent is a legitimately empty viewport on Xenos.
         {
@@ -3254,7 +3343,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // culled geometry), 0 fragment invocations (rasterised nothing), or many
     // fragment invocations (it ran and shaded/blended to nothing).
     // Not combinable with DRAW_ONLY: unwritten queries would never resolve.
-    const bool statsEnabled = lucent::config::flag("DRAW_STATS") &&
+    // GEARS_DRAW_DIAG=<path.tsv> writes the per-draw diagnostic table (below),
+    // which is only useful joined with the pipeline statistics -- so it turns
+    // them on rather than making the user remember two knobs.
+    const char* diagPath = std::getenv("GEARS_DRAW_DIAG");
+    const bool statsEnabled = (lucent::config::flag("DRAW_STATS") || diagPath) &&
                               hasPipelineStats &&
                               lucent::config::number("DRAW_ONLY", -1) < 0;
     const uint32_t kStatCounters = 4;
@@ -3491,6 +3584,90 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             lucent::info("draw", "frame pipeline statistics: {} draws produced no"
                 " primitive after clip+cull, {} produced primitives but no fragment,"
                 " {} ran the fragment shader", noPrims, noFrags, shaded);
+
+            // --- the per-draw diagnostic table -------------------------------
+            // One row per issued draw, joining what the draw WAS (surface,
+            // EDRAM mode, primitive, shaders) with what it DID (pipeline
+            // statistics) and with every piece of state that can silently zero
+            // it (depth test and function, colour mask, blend, viewport and
+            // scissor extents, whether it even had a fragment stage).
+            //
+            // This table replaces guessing. "Surface 0x400 renders nothing" is
+            // not actionable; "all 348 of surface 0x400's colour draws report
+            // primitives in and zero primitives after clip+cull, and every one
+            // of them has depth func GEQUAL against a cleared 1.0 depth buffer"
+            // names the defect. Grouping and filtering belong to whatever reads
+            // the TSV, so the renderer stays out of the analysis business.
+            if (diagPath)
+            {
+                std::error_code ec;
+                const std::filesystem::path dp(diagPath);
+                if (dp.has_parent_path())
+                    std::filesystem::create_directories(dp.parent_path(), ec);
+                std::ofstream t(dp, std::ios::binary);
+                if (!t)
+                {
+                    lucent::error("draw", "per-draw diagnostic: cannot write {}", diagPath);
+                }
+                else
+                {
+                    t << "draw\tsurface\tcolor_fmt\tedram_mode\tprim\tprim_name"
+                         "\tindexed\tcount\tfrag_stage\tia_verts\tia_prims"
+                         "\tprims_after_clip\tfrag_invocations\tverdict"
+                         "\tdepth_test\tdepth_write\tdepth_func\tcolor_mask"
+                         "\tblend_on\tblend0\tvp_x\tvp_y\tvp_w\tvp_h\tvp_minz"
+                         "\tvp_maxz\tsc_x\tsc_y\tsc_w\tsc_h"
+                         "\tclip_cntl\tsu_sc_mode\tvte_cntl\twindow_offset"
+                         "\tvport_xs\tvport_xo\tvport_ys\tvport_yo"
+                         "\tvport_zs\tvport_zo\tvs_hash\tps_hash\n";
+                    uint32_t row = 0;
+                    for (const PreparedDraw& pd : prepared)
+                    {
+                        if (pd.isResolve || row >= drawn)
+                        { if (!pd.isResolve) ++row; continue; }
+                        const uint64_t* s = &st[size_t(row) * kStatCounters];
+                        // The verdict is the whole point: it says which stage
+                        // this draw died at, in the vocabulary the pipeline
+                        // statistics can actually support.
+                        const char* verdict =
+                            s[1] == 0 ? "no_primitive_assembled" :
+                            s[2] == 0 ? "killed_by_clip_or_cull" :
+                            s[3] == 0 ? "rasterised_no_fragment" :
+                            !pd.hasFragmentStage ? "depth_only_no_colour" :
+                            pd.colorMask == 0 ? "colour_fully_masked" : "shaded";
+                        t << pd.diagIndex << '\t' << std::hex << "0x" << pd.surfaceBase
+                          << std::dec << '\t' << pd.colorFormat << '\t' << pd.edramMode
+                          << '\t' << pd.primType << '\t' << PrimName(pd.primType)
+                          << '\t' << (pd.indexed ? 1 : 0) << '\t' << pd.count
+                          << '\t' << (pd.hasFragmentStage ? 1 : 0)
+                          << '\t' << s[0] << '\t' << s[1] << '\t' << s[2] << '\t' << s[3]
+                          << '\t' << verdict
+                          << '\t' << ((pd.depthControl >> 1) & 1)
+                          << '\t' << ((pd.depthControl >> 2) & 1)
+                          << '\t' << ((pd.depthControl >> 4) & 7)
+                          << '\t' << (pd.colorMask & 0xF)
+                          << '\t' << (BlendIsIdentity(pd.blend0) ? 0 : 1)
+                          << '\t' << std::hex << "0x" << pd.blend0 << std::dec
+                          << '\t' << pd.viewport.x << '\t' << pd.viewport.y
+                          << '\t' << pd.viewport.width << '\t' << pd.viewport.height
+                          << '\t' << pd.viewport.minDepth << '\t' << pd.viewport.maxDepth
+                          << '\t' << pd.scissor.offset.x << '\t' << pd.scissor.offset.y
+                          << '\t' << pd.scissor.extent.width << '\t' << pd.scissor.extent.height
+                          << '\t' << std::hex << "0x" << pd.clipCntl
+                          << '\t' << "0x" << pd.suScModeCntl
+                          << '\t' << "0x" << pd.vteCntl
+                          << '\t' << "0x" << pd.windowOffset << std::dec
+                          << '\t' << pd.vportXScale << '\t' << pd.vportXOffset
+                          << '\t' << pd.vportYScale << '\t' << pd.vportYOffset
+                          << '\t' << pd.vportZScale << '\t' << pd.vportZOffset
+                          << '\t' << std::hex << pd.vsHash << '\t' << pd.psHash
+                          << std::dec << '\n';
+                        ++row;
+                    }
+                    lucent::info("draw", "per-draw diagnostic: {} rows written to {}",
+                                 row, diagPath);
+                }
+            }
         }
         vkDestroyQueryPool(device, statPool, nullptr);
     }
@@ -3537,10 +3714,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 geomShaders.size());
         {
             lucent::Line sl;
-            sl.add("frame EDRAM surfaces: {} distinct RB_COLOR_INFO bases (draws@base:fmt):",
-                surfaces.size());
+            sl.add("frame EDRAM surfaces: {} distinct RB_COLOR_INFO bases"
+                " (draws@base:fmt colour/depth-only/other):", surfaces.size());
             for (const auto& [base, st] : surfaces)
-                sl.add(" {}@{:#x}:f{}", st.draws, base, st.format);
+                sl.add(" {}@{:#x}:f{} {}/{}/{}", st.draws, base, st.format,
+                       st.colorDepth, st.depthOnly, st.otherMode);
             sl.flush(lucent::Level::Info, "draw");
         }
         {
@@ -3553,6 +3731,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     mode == 5 ? "depth_only" : mode == 6 ? "COPY(resolve)" : "?";
                 ml.add(" {}={}", name, n);
             }
+            ml.add("; {} draws issued with no fragment stage", drawsNoPixelShader);
             ml.flush(lucent::Level::Info, "draw");
         }
         {
