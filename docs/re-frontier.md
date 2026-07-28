@@ -1,14 +1,33 @@
-# RE Frontier — the ordered RE dependency chain toward a faithful BL2
+# RE Frontier — the ordered dependency chain toward a working PC Gears of War
 
 Tracked by `tools/re_frontier.py` (consult it FIRST; update it in the SAME commit
 that changes a step). This is the fine-grained companion to `docs/codemap.md`:
-the codemap says *what subsystem exists*, this says *which ordered RE step is
-real reverse-engineering vs a hack that jumped ahead*.
+the codemap says *what subsystem exists*, this says *which ordered step is
+genuinely done vs a hack that jumped ahead*.
+
+**NATIVE IMPLEMENTATION IS NOT A HACK.** The goal of this project is a PC game,
+not an emulator, so replacing a guest mechanism with host code is a legitimate
+engineering choice and always available. A native mixer, a native UI, a native
+file layer — none of these are forbidden, and the frontier does not exist to
+push work toward emulation.
+
+What the frontier exists for is to stop a stand-in from MASQUERADING as the real
+thing. The failure it guards against is a tracker that says a step is done while
+something else is quietly producing the output, so nobody can tell what actually
+works. That is a labelling failure, not a question of where the code came from.
+
+So: implement natively whenever it is the better engineering. Record it as such
+in the entry (say plainly that the implementation is native and what it replaces),
+and hold it to the same faithfulness bar below — its OUTPUT has to match the real
+game. A native implementation whose output is verified is a finished step.
 
 **Hard rule (no hacks / no fallbacks):** a `⛔ hack` status is DEBT, never an
-acceptable resting state. It marks a shortcut standing in for absent RE and MUST
-be removed as its real mechanism lands. `re_frontier.py hacks` is the debt list;
-`re_frontier.py next` tells you the next RE-ready step.
+acceptable resting state. A hack is specifically: something that produces the
+APPEARANCE of a working step without doing the work (advancing offsets while
+decoding nothing, a magic constant that makes one case line up, output faked to
+satisfy a caller), or a substitution that is not declared. It MUST be removed as
+its real mechanism lands. `re_frontier.py hacks` is the debt list;
+`re_frontier.py next` tells you the next ready step.
 
 **`re-verified` MEANS FAITHFUL to the real target — not "the mechanism runs."** A
 step is `re-verified` only when its OUTPUT matches the real game/binary (look /
