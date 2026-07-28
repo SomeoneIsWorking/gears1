@@ -200,3 +200,43 @@ decoder. The real mechanism is to trap the write -- the recompiler already
 routes device stores through PPC_MM_STORE_U32, which is #ifndef-guarded
 precisely so a runtime can define it. Decoder work starts there, not with
 ffmpeg.
+
+### Note (2026-07-28)
+THE KICK POLLER WAS WRONG BY THREE ORDERS OF MAGNITUDE, AND NOW IT IS A WRITE HOOK.
+
+The previous note said polling the kick register was "an instrument, not a
+design" and that driving a decoder would need the write trapped. That was the
+right call and the size of the error is worth recording, because it is the
+difference between a plausible instrument and a correct one.
+
+The recompiler emits PPC_MM_STORE_* instead of a plain store wherever it decided
+a store is memory-mapped I/O, and ppc_context.h leaves those macros
+#ifndef-guarded so a runtime can take them over. Taking over PPC_MM_STORE_U32
+(runtime/ppc_mmio.h, force-included into gears_ppc ahead of ppc_context.h)
+delivers every device write as it happens.
+
+The cost is nothing. The ENTIRE recompiled image contains eleven
+PPC_MM_STORE_U32 sites and no PPC_MM_LOAD sites at all -- five of them are the
+XMA library's register writes in ppc_recomp.95.cpp, the rest are the GPU's.
+Reads need no hook because the registers live in real guest memory and an
+ordinary load already sees them.
+
+MEASURED, same 50 s headless run:
+
+    polling every 2 ms  ->    8 "distinct contexts kicked"
+    the write hook      -> 8000+ context kicks
+
+The title kicks context 0 in a tight kick/lock/kick/lock cycle. Sampling saw one
+event per context per run; the truth is thousands. A decoder driven off the
+poller would have decoded a handful of blocks, produced almost nothing, and
+looked like a decoder bug rather than a delivery bug -- which is exactly the
+kind of silent-wrong plumbing this project keeps paying for.
+
+Rendering is unaffected at 29.88 fps, audio is unchanged at 2763 non-silent
+frames, both suites pass. Still nothing decodes; what is now true is that the
+decoder, when it exists, will be asked at the right moments.
+
+ALSO FIXED, same lesson as the WAV header: the kick total was originally
+reported from atexit, which never runs because these runs end by SIGKILL. It is
+reported as it accumulates instead. An exit summary in a process that is always
+killed is a summary nobody reads.

@@ -29,4 +29,9 @@ bool SetupXmaRegisters(GuestMemory& memory);
 uint32_t AllocateXmaContext();
 void ReleaseXmaContext(uint32_t guestPointer);
 
+// A store to the XMA register window, delivered from the device-store hook
+// (ppc_mmio.h) as it happens rather than sampled afterwards. Returns false if
+// the address is not one of ours, so the caller can go on looking.
+bool OnXmaRegisterStore(uint32_t address, uint32_t value);
+
 } // namespace gears

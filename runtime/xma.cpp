@@ -2,9 +2,8 @@
 
 #include <atomic>
 #include <bitset>
-#include <chrono>
+#include <cstring>
 #include <mutex>
-#include <thread>
 
 #include <lucent/log.h>
 
@@ -20,6 +19,7 @@ namespace
 // word offset, so a register's address is base + index * 4 (Xenia's own
 // arithmetic: r = (addr & 0xFFFF) / 4).
 constexpr uint32_t kXmaRegisterBase = 0x7FEA0000;
+constexpr uint32_t kXmaRegisterWindow = 0x00010000;
 constexpr uint32_t kRegContextArrayAddress = 0x0600;
 constexpr uint32_t kRegNextContextIndex = 0x0607;
 constexpr uint32_t kRegContext0Kick = 0x0650;
@@ -48,58 +48,25 @@ uint32_t* Register(GuestMemory& memory, uint32_t index)
     return memory.Translate<uint32_t>(kXmaRegisterBase + index * 4);
 }
 
-std::atomic<bool> g_watchStop{false};
-std::thread g_watchThread;
+// Kicks arrive as WRITES, from the device-store hook, so every one is seen.
+// Nothing decodes them yet; what this does is make them visible and count them
+// honestly. Without it, a title that asks for decode and a title that never
+// asks look identical -- the same ambiguity that hid the audio blocker.
+std::atomic<uint64_t> g_kicks{0};
 
-// The kick registers are how the title says "decode this context now": one bit
-// per context index, across ten 32-bit registers.
-//
-// Nothing decodes yet, so this thread does not pretend to. What it does is make
-// the kicks VISIBLE -- without it, a title that asks for decode and a title that
-// never asks look identical, which is the same ambiguity that hid the audio
-// blocker for two sessions. The bits are left standing rather than consumed,
-// because clearing a register the hardware may not clear would be a guess about
-// a contract nothing has established yet.
-//
-// POLLING IS AN INSTRUMENT HERE, NOT A DESIGN. A kick is a register WRITE, and
-// the title overwrites the register with a fresh bitmap each time, so a poll
-// can only report which contexts it has ever caught set -- two kicks inside one
-// poll interval are indistinguishable from one. That is fine for "is the title
-// asking at all", and NOT fine for driving a decoder, which must see every
-// kick. The real mechanism is to trap the write: the recompiler already routes
-// device stores through PPC_MM_STORE_U32, which is #ifndef-guarded and exists
-// precisely so a runtime can define it. Any decoder work starts there.
-void WatchKicks(GuestMemory& memory)
+void ReportContextBits(const char* what, uint32_t group, uint32_t bits)
 {
-    uint32_t seen[kContextGroupCount] = {};
-    uint64_t reported = 0;
-    while (!g_watchStop.load(std::memory_order_relaxed))
+    static std::atomic<uint64_t> s_reported{0};
+    while (bits)
     {
-        for (uint32_t group = 0; group < kContextGroupCount; ++group)
-        {
-            const uint32_t kick = *Register(memory, kRegContext0Kick + group);
-            const uint32_t fresh = kick & ~seen[group];
-            if (fresh == 0)
-                continue;
-            seen[group] |= fresh;
-
-            for (uint32_t bit = 0; bit < 32; ++bit)
-            {
-                if ((fresh & (1u << bit)) == 0)
-                    continue;
-                const uint32_t index = group * 32 + bit;
-                // Only the first few, then a count: a title that streams audio
-                // kicks continuously, and a log line per kick would drown the
-                // run it is meant to explain.
-                if (++reported <= 8)
-                    lucent::info("xma", "context {} kicked (register {:#x}), and nothing"
-                        " decodes it", index, kRegContext0Kick + group);
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        const uint32_t bit = uint32_t(__builtin_ctz(bits));
+        bits &= bits - 1;
+        const uint32_t index = group * 32 + bit;
+        // A streaming title kicks continuously, so a line per kick would drown
+        // the run it is meant to explain. The totals are reported at exit.
+        if (s_reported.fetch_add(1) < 8)
+            lucent::info("xma", "context {} {}, and nothing decodes it", index, what);
     }
-    if (reported > 8)
-        lucent::info("xma", "{} distinct contexts kicked, none decoded", reported);
 }
 
 } // namespace
@@ -136,7 +103,6 @@ bool SetupXmaRegisters(GuestMemory& memory)
         " register {:#x}", g_contextArray, kContextCount, kContextSize,
         kRegContextArrayAddress);
 
-    g_watchThread = std::thread(WatchKicks, std::ref(memory));
     return true;
 }
 
@@ -171,6 +137,46 @@ void ReleaseXmaContext(uint32_t guestPointer)
         return;
     }
     g_contextInUse[offset / kContextSize] = false;
+}
+
+bool OnXmaRegisterStore(uint32_t address, uint32_t value)
+{
+    if (address < kXmaRegisterBase || address >= kXmaRegisterBase + kXmaRegisterWindow)
+        return false;
+
+    // The value reaching the hook is what a big-endian store would put in
+    // memory; the registers are little-endian, so the register's value is the
+    // byte-reversed form. (The title writes these with stwbrx, which the
+    // recompiler turns into a byte-swapped argument to this same store -- so
+    // reversing here recovers exactly what it meant.)
+    const uint32_t index = (address & 0xFFFF) / 4;
+    const uint32_t reg = __builtin_bswap32(value);
+
+    if (index >= kRegContext0Kick && index < kRegContext0Kick + kContextGroupCount)
+    {
+        const uint32_t group = index - kRegContext0Kick;
+        const uint64_t kicks =
+            g_kicks.fetch_add(uint32_t(__builtin_popcount(reg))) + __builtin_popcount(reg);
+        ReportContextBits("kicked", group, reg);
+        // Reported as it goes rather than at exit. These runs end by being
+        // killed -- the capture script sends SIGKILL and atexit never sees it --
+        // so an exit summary is a summary nobody ever reads.
+        if (kicks % 1000 == 0)
+            lucent::info("xma", "{} context kicks asked for, none decoded", kicks);
+    }
+    else if (index >= kRegContext0Lock && index < kRegContext0Lock + kContextGroupCount)
+    {
+        ReportContextBits("locked", index - kRegContext0Lock, reg);
+    }
+    else if (index >= kRegContext0Clear && index < kRegContext0Clear + kContextGroupCount)
+    {
+        ReportContextBits("cleared", index - kRegContext0Clear, reg);
+    }
+    else
+    {
+        lucent::debug("xma", "register {:#x} <- {:#x}", index, reg);
+    }
+    return true;
 }
 
 } // namespace gears

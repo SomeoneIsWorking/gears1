@@ -19,6 +19,14 @@ target_include_directories(gears_ppc PUBLIC
     "${GEARS_PPC_DIR}"
     "${THIRDPARTY_ROOT}/simde")
 
+# Take over the recompiler's device-store hook. ppc_context.h leaves the
+# PPC_MM_STORE_* macros #ifndef-guarded precisely so a runtime can define them,
+# and this must reach every translation unit BEFORE that header, so it is a
+# forced include rather than an #include anyone could forget. Eleven sites in
+# the whole image use it, so nothing hot is affected.
+target_include_directories(gears_ppc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(gears_ppc PRIVATE -include ppc_mmio.h)
+
 # 49k functions of straight-line translated code; -O0 keeps build times sane
 # while the runtime is still being brought up.
 target_compile_options(gears_ppc PRIVATE -Wno-unused-variable)
@@ -67,6 +75,7 @@ add_executable(gears1
     kernel_config.cpp
     kernel_dispatcher.cpp
     kernel_spinlock.cpp
+    ppc_mmio.cpp
     xaudio_null.cpp
     xma.cpp
     guest_filesystem.cpp
