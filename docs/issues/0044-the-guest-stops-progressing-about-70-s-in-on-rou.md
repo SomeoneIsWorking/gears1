@@ -517,3 +517,38 @@ differences -- processor numbers that alias so two host threads can claim one
 guest CPU (#41, #42), IRQL modelled per thread rather than per processor -- are
 the kind of thing that opens it. Confirming the mechanism first is what makes
 that testable rather than speculative.
+
+### Note (2026-07-29)
+THE TICKABLE-REGISTRY HYPOTHESIS IS WEAKENED BY ITS OWN EVIDENCE. RECORD BEFORE IT HARDENS.
+
+Sorting the 43 references to the global at 0x82C0CB64 by enclosing function
+gives 43 sites in 43 DISTINCT functions -- exactly one each. A registration
+list would not look like that. It would show a small number of functions doing
+the work (an append in a constructor, a removal in a destructor, a walk in the
+tick) called from many places, not forty-three different functions each
+touching the container once.
+
+Two of those functions are slots 17 and 18 of the very vtable the failing object
+carries (sub_8221BD60 and sub_8221C1B8 at 0x820bc85c and 0x820bc860). So the
+global is state that this class's own methods manipulate, not a registry shared
+by unrelated classes registering themselves.
+
+That does not disprove the tickable-object reading, but it removes the evidence I
+offered for it. The honest position is that the structure is a container this
+subsystem owns and walks, and its exact role is unknown. I am recording this
+immediately because the previous note made the UE3 pattern sound established,
+and a pattern that FEELS right is what produced four wrong models of this bug
+already.
+
+WHAT SURVIVES, all measured rather than inferred:
+  - a pure virtual call, from a per-frame walk (sub_82444EF0)
+  - on an object whose vtable is genuine and is a secondary base, 39 slots into
+    a multiple-inheritance block at 0x820bc818
+  - the vtable's owning class manipulates the same global the walk iterates
+  - the failure is rare, timing-dependent, and lands around 70 s
+
+NEXT, and it should be a narrower question than the one I have been asking: read
+sub_8221BD60 and sub_8221C1B8 -- the two vtable methods that touch the container.
+They are the class's own interface to the list it lives in, so what they do to it
+(insert? remove? mark?) says what the lifetime contract is, and therefore what
+breaking it looks like.
