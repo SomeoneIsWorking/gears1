@@ -657,3 +657,42 @@ measurement cheaper, which is worth more than another five runs of the null.
 Try that before accumulating further. A null obtained slowly is worth less than
 a positive obtained quickly, and this is the rare case where the failing
 condition can be asked for directly rather than waited for.
+
+### Note (2026-07-29)
+NEGATIVE EVIDENCE AGAINST THE MOVIE MECHANISM, AND A WEAKNESS IN MY OWN IDENTIFICATION.
+
+The sharper experiment does not work as designed: idling at the title screen for
+130 s cycles NO attract movie. The only .bik files the title ever opens are the
+four boot movies -- Startup, MGSLogo, EpicLogo, ESRB -- and AttractMode.bik
+never appears. The prediction was wrong, so that route to a higher failure rate
+is closed.
+
+Worse for the hypothesis, tracing file access across three runs puts the LAST
+.bik access at line 118 of 4000-7700 -- two to three percent through the run,
+during boot. The panic lands around 70 s, roughly fifty seconds after the movie
+subsystem last touched a file. NO MOVIE IS LOADING ANYWHERE NEAR THE FAILURE.
+
+That does not kill the class identification, but it does undercut the mechanism
+I proposed: "a movie starting or stopping" cannot be it, because nothing is
+starting or stopping then.
+
+AND THE IDENTIFICATION ITSELF IS WEAKER THAN I PRESENTED IT. It rests on the
+vtable at 0x820bc818 being ADJACENT in the data section to a block of movie
+strings. Adjacency is suggestive; it is not ownership. Constants from unrelated
+translation units land next to each other all the time. I wrote it up as "the
+class is the title's movie player", and the evidence supports something more
+like "the vtable sits in the same region of .rdata as the movie subsystem's
+strings".
+
+WHAT WOULD IDENTIFY IT PROPERLY: find the code that WRITES 0x820bc818 (or
+0x820bc8b4) into an object -- the constructor. Earlier I looked for a lis/ori
+pair building the address and found none, which means it is loaded from a
+pointer in data. The search is for words in the image whose VALUE is
+0x820bc818, then for code that loads from those addresses.
+
+THE -nomovie ARM KEEPS ITS VALUE regardless: if disabling movies removes a panic
+that happens fifty seconds after the last movie file access, that is a strong
+and surprising result. Current tally, matched arms:
+
+    nomovie:  0 panics /  8 runs
+    control:  0 panics /  7 runs
