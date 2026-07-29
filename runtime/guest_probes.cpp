@@ -542,6 +542,18 @@ void NoteRingThread(const char* which, std::string& slot, std::atomic<uint32_t>&
 
 PPC_FUNC(sub_8221CBA8)
 {
+    // CHECK WHICH RING. The allocator takes the ring in r4, and this probe used
+    // to ignore it -- so every allocation from any ring counted as a render-ring
+    // producer. It happens not to matter (all 45 call sites in this image target
+    // 0x82C0CB24, so there is exactly one such ring), but an instrument that
+    // assumes its own premise is how the last several wrong conclusions
+    // happened. Checking costs one compare.
+    if (ctx.r4.u32 != kRenderRing)
+    {
+        __imp__sub_8221CBA8(ctx, base);
+        return;
+    }
+
     NoteRingThread("the render-ring allocator", g_producerThreadName, g_producerThreads);
 
     // WHICH CALL SITE, per thread. Two producers on a ring with a non-atomic
