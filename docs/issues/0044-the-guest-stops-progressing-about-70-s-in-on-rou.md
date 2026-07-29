@@ -8,6 +8,47 @@ created: 2026-07-28
 updated: 2026-07-29
 ---
 
+> ## STATE AS OF THE LATEST NOTE — READ THIS FIRST
+>
+> **This is a lost-update race on UE3's render-command ring, and it is the
+> TITLE'S race, not one this port introduces.**
+>
+> **Measured:**
+> - The ring is `FRingBuffer` at `0x82C0CB24`; there is exactly ONE in the image
+>   (all 45 allocator call sites target it).
+> - The consumer is always `guest-7` alone, across 8 runs.
+> - The PRODUCER is entered by both the game thread (12+ call sites) and the
+>   rendering thread (**exactly one**: `0x82327d4c`, a `FlushCommand` from
+>   `sub_82327BC8`).
+> - The commit is a **non-atomic read-modify-write** on the ring's `+8`, done by
+>   the caller, confirmed at three sites — each immediately preceded by an
+>   `lwsync`. A release fence with no atomic RMW is a single-producer publish.
+> - `bIsWriting` (+16) is stored and **never loaded**: it guards nothing.
+>
+> Two producers plus a non-atomic commit = one clobbers the other, `WritePointer`
+> lands mid-command, and the consumer reads a header that is not one. It then
+> advances `ReadPointer` by whatever the bogus `Execute()` returns, so it never
+> recovers. That is the observed corruption and it explains the intermittency.
+>
+> **NOT established, and it decides the fix:** how the rendering thread reaches
+> that enqueue. A direct call graph over 48,655 functions finds no path (positive
+> control passes), so the route runs through one of three indirect dispatches in
+> the drain loop. And the reason the console survives this is unknown — plausibly
+> Xenon's 6 threads on 3 cores never truly overlap the RMW, where this port runs
+> them in parallel.
+>
+> **DO NOT serialise the guest's commit yet.** The race being the title's means
+> there is nothing of ours to stop doing; if the topology explanation holds,
+> serialising becomes a defensible PORT decision rather than a bandaid — but that
+> has to be established first.
+>
+> **Superseded below:** the `_purecall`/`KeBugCheck`/`exit` chain was a SECOND
+> crash caused by this one and is FIXED (see `runtime/fatal_exit.h`); the
+> "host-heap corruption" reading was wrong (the map was destroyed, not corrupted);
+> and "no call site tests thread identity" was over-claimed.
+
+
+
 Found while trying to verify an unrelated change, and the way it was found is
 the lesson.
 

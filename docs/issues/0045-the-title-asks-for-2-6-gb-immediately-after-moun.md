@@ -1,12 +1,47 @@
 ---
 id: 45
-title: The title asks for 2.6 GB immediately after mounting its save content
+title: Checkpoint restore calls through a freed object (was: the title asks for 2.6 GB after mounting save content)
 status: open
-symptom: out of guest heap 0x40000000: wanted 0x9f000000 bytes, right after 'content default_checkpoint_sav mounted as save:'; the allocation fails and the title carries on
+symptom: deterministic SIGSEGV at ~1560 frames on the checkpoint restore path, calling virtual slot 13 of a freed pool block; earlier and now superseded: a 2.6 GB allocation after the save content mount
 tags: saves,content,memory,port
 created: 2026-07-29
 updated: 2026-07-29
 ---
+
+> ## STATE AS OF THE LATEST NOTE — READ THIS FIRST
+>
+> **The 2.6 GB allocation this entry is named after NO LONGER HAPPENS, and it was
+> never the defect.** It was a garbage FString length read through a null pointer
+> into low guest memory (which is mapped, because the physical alias window
+> starts at guest address 0). When the allocation pattern shifted, that garbage
+> became zeros and the symptom vanished on its own — without the cause moving.
+>
+> **What is true now, all measured:**
+> - The title reaches the campaign, writes a save (`created 'save:\Pla'`), and
+>   then takes the checkpoint RESTORE path for the first time.
+> - It dies deterministically at ~1560 frames in `sub_824961D0`, calling virtual
+>   slot 13 on the object cached at `holder+1376`.
+> - From the core: `holder = 0x41c94e00`, `cache +1376 = 0x42babc40`,
+>   `guard +1396 = 00000000`. The guard is the "use the cache" branch, and the
+>   cached object is a **freed pool block** — head of a 214-node free list whose
+>   descriptor holds it. Its "vtable" is that list's next pointer.
+> - The block is released by the guest's OWN pool realloc (`sub_822151F8`, free
+>   site `0x822153E4`), measured live with `GEARS_WATCH_FREE`.
+> - The `LoadChapter` op DOES run and DOES fill the carrier with 385 real bytes.
+>   The carrier was never the problem.
+>
+> **So: a stale cache that nothing invalidates.** The open question is who should
+> clear `+1376` when the block is released, or what `+1396` really selects.
+>
+> **Everything below is the investigation trail, oldest first, and several early
+> notes are FALSE.** They are kept because the dead ends are worth knowing, not
+> because they are true. In particular, disregard: "the title does not treat the
+> refusal as fatal" (it segfaults), "this is why no save file appears" (the save
+> is written), "the archive array is empty" (a capped probe saw 4 of 78,278
+> calls; at the crash it holds a corrupt descriptor), and the device-selector
+> fix claim (retracted — it changed memory luck, not the cause).
+
+
 
 Appeared the moment saves started working, and it is on a path that was
 previously unreachable: XamContentCreateEx used to return "device not
