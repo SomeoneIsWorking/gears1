@@ -53,6 +53,10 @@ struct Probe
     uint32_t address;
     std::atomic<uint64_t> calls{0};
     CallSite sites[8]{};
+    // Calls from a NINTH distinct return address. They are in `calls` but their
+    // site is gone, so the site list must not be read as the complete set of
+    // callers -- which is exactly what it looks like without this.
+    std::atomic<uint64_t> sitesDropped{0};
 };
 
 constexpr size_t kMaxProbes = 32;
@@ -64,6 +68,10 @@ void Register(Probe* p)
     size_t i = g_probeCount.fetch_add(1);
     if (i < kMaxProbes)
         g_probes[i] = p;
+    // Over the cap the probe still instruments the guest function -- it just
+    // can never appear in the census. Its absence would read as "that function
+    // is never called". See the census, which refuses to print a clean list
+    // while any probe is unreportable.
 }
 
 void Note(Probe& p, uint32_t lr)
@@ -74,6 +82,7 @@ void Note(Probe& p, uint32_t lr)
         if (s.lr == lr) { ++s.count; return; }
         if (s.lr == 0) { s.lr = lr; s.count = 1; return; }
     }
+    p.sitesDropped.fetch_add(1, std::memory_order_relaxed);
 }
 
 } // namespace
@@ -89,6 +98,15 @@ void HleDumpCensus(const char* why)
     {
         announced = true;
         lucent::info("hle", "{} probes registered", n);
+        // The census can only ever walk the first kMaxProbes slots. A probe past
+        // the cap instruments its guest function and then reports nothing, so
+        // "sub_X never appears in the census" would read as "sub_X is never
+        // called". Loud, once, because it invalidates every absence below it.
+        if (n > kMaxProbes)
+            lucent::error("hle", "{} probes registered but only {} fit: {} probe(s)"
+                " CANNOT APPEAR IN THIS CENSUS AT ALL. Raise kMaxProbes -- until"
+                " then a function missing from the census below may simply be"
+                " one of the unreportable ones", n, kMaxProbes, n - kMaxProbes);
     }
     for (size_t i = 0; i < n && i < kMaxProbes; ++i)
     {
@@ -102,6 +120,11 @@ void HleDumpCensus(const char* why)
             if (s.lr == 0) break;
             line.add("  from {:#x} x{}", s.lr, s.count);
         }
+        // Without this the eight-slot table reads as the complete caller set.
+        if (const uint64_t dropped = p->sitesDropped.load())
+            line.add("  AND {} call(s) from further sites that did not fit in the"
+                     " {}-slot table -- this caller list is INCOMPLETE",
+                     dropped, sizeof(p->sites) / sizeof(p->sites[0]));
         line.flush_debug("hle");
     }
 }
@@ -705,6 +728,7 @@ void ArgReport()
     if (!g_argScan)
         return;
     std::lock_guard<std::mutex> guard(g_argLock);
+    size_t neverCalled = 0;
     for (size_t i = 0; i < g_argProbeCount; ++i)
     {
         ArgProbe* p = g_argProbes[i];
@@ -712,7 +736,10 @@ void ArgReport()
         // times and never handed a shader" is the measurement that eliminates a
         // candidate, and silence would not distinguish it from "never called".
         if (p->calls == 0)
+        {
+            ++neverCalled;
             continue;
+        }
         lucent::Line line;
         line.add("argscan sub_{} calls={}", p->name, p->calls);
         for (int r = 0; r < 8; ++r)
@@ -726,6 +753,13 @@ void ArgReport()
         }
         line.flush_debug("hle");
     }
+    // THE DENOMINATOR. An entry point missing from the list above was skipped
+    // for having zero calls, and that is a different fact from "it was called
+    // and never handed a shader" -- the one the list is designed to show. Named
+    // so a short list is not read as a narrow result.
+    lucent::debug("hle", "argscan: {} of {} probed entry points were never called"
+        " at all, so they appear nowhere above; absence there is not evidence"
+        " about their arguments", neverCalled, g_argProbeCount);
 }
 
 } // namespace

@@ -94,7 +94,18 @@ def _write(cdir, meta, body):
 
 def cmd_add(args):
     cdir = args.dir
+    # A BRAND-NEW CATALOG IS ALMOST ALWAYS A WRONG WORKING DIRECTORY, not a new
+    # project: the default dir is relative, so `add` from the wrong cwd silently
+    # starts a shadow catalog at #1 and every id from then on collides with the
+    # real one. Numbering from an empty directory is the mechanism; say so.
+    fresh = not os.path.isdir(cdir) or not _load_all(cdir)
     os.makedirs(cdir, exist_ok=True)
+    if fresh:
+        sys.stderr.write(
+            "catalog: %s holds no entries, so this one becomes #1. If you meant\n"
+            "the existing catalog, STOP -- you are in the wrong directory and\n"
+            "this id will collide. Pass --dir or $CATALOG_DIR.\n"
+            % os.path.abspath(cdir))
     nid = max([e["id_num"] for e in _load_all(cdir)], default=0) + 1
     fname = f"{nid:04d}-{_slug(args.title)}.md"
     path = os.path.join(cdir, fname)
@@ -159,12 +170,44 @@ def _score(e, terms):
     return score
 
 
+def _corpus_or_die(cdir, what):
+    """Load the catalog, refusing to answer from an empty one.
+
+    THE FAILURE THIS PREVENTS: the default dir is RELATIVE ("docs/issues"), so
+    running from anywhere but the repo root reads nothing and prints
+    "(no matches)". For a registry whose entire job is to stop a session
+    re-deriving a solved problem, an empty corpus answering "nobody has hit
+    this" is the most expensive lie the tool can tell -- and it looks exactly
+    like a genuine miss.
+    """
+    entries = _load_all(cdir)
+    if not os.path.isdir(cdir):
+        sys.stderr.write(
+            "catalog: %s does not exist, so %s searched NOTHING. This is not an\n"
+            "empty result -- run from the repo root or pass --dir/$CATALOG_DIR.\n"
+            % (os.path.abspath(cdir), what))
+        sys.exit(2)
+    if not entries:
+        sys.stderr.write(
+            "catalog: %s contains no entries, so %s searched NOTHING.\n"
+            % (os.path.abspath(cdir), what))
+        sys.exit(2)
+    return entries
+
+
 def cmd_search(args):
     terms = [t.lower() for t in re.split(r"\s+", args.query.strip()) if t]
-    scored = [(s, e) for e in _load_all(args.dir) if (s := _score(e, terms)) > 0]
+    entries = _corpus_or_die(args.dir, "this search")
+    scored = [(s, e) for e in entries if (s := _score(e, terms)) > 0]
     scored.sort(key=lambda x: (-x[0], x[1]["id_num"]))
     if not scored:
-        print("(no matches)")
+        # The denominator, with the negative. A miss across 3 entries and a miss
+        # across 300 justify very different amounts of confidence.
+        print("(no matches for %s across %d entries in %s)"
+              % (terms, len(entries), args.dir))
+        print("matching is per-word substring over symptom/title/tags/body:"
+              " a different word for the same symptom will not match. Try one"
+              " broad term, or `list`.")
         return
     for score, e in scored[: args.limit]:
         _print_row(e, extra=f"score={score}")
