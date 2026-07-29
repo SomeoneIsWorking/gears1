@@ -466,9 +466,21 @@ PPC_FUNC(sub_82214F50)
 // the plain-allocate path that calls sub_82214F50 with the size in r4. Filtering
 // on r4 here therefore tests a POINTER against a size threshold, which is why
 // the first version of this probe never fired while the allocation it was meant
+namespace gears { void ReportReallocOfCached(uint32_t block, uint32_t newSize, uint32_t from); }
+
+
 // to catch happened on every run. THE SIZE IS r5.
 PPC_FUNC(sub_822151F8)
 {
+    // IS THIS REALLOC THE ONE THAT ORPHANS A CACHED OBJECT? r4 is the existing
+    // block and r5 the new size; the free of the old block happens inside, at
+    // 0x822153E4. If r4 is currently cached at some holder's +1376, then THIS
+    // call is what leaves that field dangling -- and r5 names the size that
+    // drove the growth, which is the thing to check against what the console
+    // would have asked for.
+    if (ctx.r4.u32 != 0)
+        gears::ReportReallocOfCached(ctx.r4.u32, ctx.r5.u32, uint32_t(ctx.lr));
+
     static std::atomic<uint64_t> seen{0};
     if (ctx.r5.u32 >= (64u << 20) && seen.fetch_add(1) < 8)
     {
@@ -700,7 +712,7 @@ uint64_t g_constructed = 0;
 uint64_t g_destroyed = 0;
 } // namespace
 
-namespace gears { void ReportArchiveLifetime(uint32_t object); void CheckFreedWhileCached(uint32_t freed); }
+namespace gears { void ReportArchiveLifetime(uint32_t object); void CheckFreedWhileCached(uint32_t freed); void ReportReallocOfCached(uint32_t, uint32_t, uint32_t); }
 
 namespace gears
 {
@@ -898,6 +910,29 @@ void CheckFreedWhileCached(uint32_t freed)
                 " holder {:#x}+1376 (occurrence {}). Nothing nulls that field,"
                 " and the next call uses it on the strength of it being"
                 " non-null", freed, holder, n);
+        }
+    }
+}
+
+// Reports only when the block being reallocated is one a holder still caches.
+void ReportReallocOfCached(uint32_t block, uint32_t newSize, uint32_t from)
+{
+    static std::atomic<uint64_t> total{0};
+    static std::atomic<uint64_t> shown{0};
+    std::lock_guard<std::mutex> guard(g_holderMutex);
+    for (const uint32_t holder : g_holders)
+    {
+        if (ByteSwap(*gears::Memory().Translate<uint32_t>(holder + 1376)) != block)
+            continue;
+        const uint64_t n = total.fetch_add(1) + 1;
+        // First few plus every hundredth: enough to see the shape and the tail
+        // without the flat cap that hid the crashing occurrence last time.
+        if (shown.load() < 4 || n % 100 == 0)
+        {
+            shown.fetch_add(1);
+            lucent::error("lifetime", "REALLOC of {:#x} to {} bytes from {:#x}"
+                " -- that block is cached at holder {:#x}+1376, so this call"
+                " orphans it (occurrence {})", block, newSize, from, holder, n);
         }
     }
 }
