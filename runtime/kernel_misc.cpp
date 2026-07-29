@@ -374,8 +374,8 @@ std::string DescribeParameter(uint8_t* base, uint32_t value)
     const bool deliberate = code == 0 && uint32_t(ctx.lr) == 0x828D30B0;
     lucent::error("kernel", "the title called KeBugCheck{}(code {:#x}) from {:#x}"
         " -- {}", extended ? "Ex" : "", code, uint32_t(ctx.lr),
-        deliberate ? "the tail of its own terminate path, so it MEANT to end;"
-                     " the question is what decided that"
+        deliberate ? "the tail of the terminate path _purecall runs into, so"
+                     " look above for the PURE VIRTUAL CALL that got here"
                    : "an unrecognised bug-check site");
 
     if (extended)
