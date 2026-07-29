@@ -595,3 +595,36 @@ useful for bringing a port up.
 
 NOTE ON WHAT THIS IS NOT: disabling movies would not be a fix. It would be the
 experiment that confirms where the bug lives.
+
+### Note (2026-07-29)
+THE -nomovie EXPERIMENT IS RUNNING. FIVE CLEAN RUNS SO FAR, WHICH IS NOT EVIDENCE YET.
+
+The runtime now hands the title a command line through launch data
+(GEARS_CMDLINE), and the switch is verified to do something real: with no
+switch the title opens EpicLogo.bik, ESRB.bik, MGSLogo.bik and Startup.bik;
+with -nomovie it opens none, in every run of the batch.
+
+Five runs with movies disabled, no panic.
+
+WHAT THAT IS WORTH, stated before anyone reads it as a result. The observed
+baseline is roughly 6 panics in ~48 runs, so p is about 0.125:
+
+    P(0 panics in  5 runs | movies are irrelevant) = 0.51
+    P(0 panics in 10 runs | movies are irrelevant) = 0.26
+    P(0 panics in 20 runs | movies are irrelevant) = 0.07
+    P(0 panics in 30 runs | movies are irrelevant) = 0.02
+
+Five clean runs is MORE LIKELY THAN NOT even if the movie player has nothing to
+do with it. It is worth nothing on its own. Twenty starts to mean something;
+thirty would be convincing.
+
+This is written down deliberately. Earlier in this same investigation I
+concluded a backlog clamp caused a 3.5x regression by comparing one run against
+one run, and had to retract it when the reverted build behaved identically. The
+failure mode is reading a bimodal system off too few samples, and the defence is
+computing the number BEFORE looking at the outcome, not after.
+
+CONTINUE: accumulate -nomovie runs toward twenty, then thirty. A single panic
+with movies disabled ends the experiment immediately and refutes the
+identification, which is the outcome to watch for -- it is much more
+informative, and much cheaper to obtain, than the null.
