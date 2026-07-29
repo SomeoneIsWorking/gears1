@@ -700,7 +700,7 @@ uint64_t g_constructed = 0;
 uint64_t g_destroyed = 0;
 } // namespace
 
-namespace gears { void ReportArchiveLifetime(uint32_t object); }
+namespace gears { void ReportArchiveLifetime(uint32_t object); void CheckFreedWhileCached(uint32_t freed); }
 
 namespace gears
 {
@@ -832,9 +832,91 @@ PPC_FUNC(sub_822153F0)
             lucent::info("lifetime", "watching for the release of {:#x}", value);
         return value;
     }();
+    gears::CheckFreedWhileCached(address);
+
     if (watched != 0 && address == watched)
         lucent::error("lifetime", "WATCHED ADDRESS {:#x} FREED from {:#x}"
             " (free #{})", address, from, g_frees.load());
 
     __imp__sub_822153F0(ctx, base);
+}
+
+// ---------------------------------------------------------------------------
+// Is the checkpoint object still CACHED when the pool frees it? (catalog #45)
+//
+// sub_824961D0 takes the holder in r3 and immediately does `mr r24,r3`, so the
+// holder IS available at entry -- an earlier probe read r24 at entry, which is
+// still the CALLER's value, and reported nonsense. The prologue then does
+//     lwz r11,1376(r24) ; cmplwi 0 ; bne <use the cache>
+// so the cached pointer is used whenever it is merely NON-NULL. Nothing nulls
+// it when the object dies, which is the whole defect -- if the object is indeed
+// still cached at the moment the pool releases it.
+//
+// That is what this measures. Every holder seen is remembered, and every free is
+// checked against their caches. The negative is designed: if no holder is ever
+// seen, the report says the seam never fired rather than implying the cache was
+// always clean.
+extern "C" PPC_FUNC(__imp__sub_824961D0);
+
+namespace
+{
+std::mutex g_holderMutex;
+std::set<uint32_t> g_holders;
+std::atomic<uint64_t> g_holderVisits{0};
+} // namespace
+
+namespace gears
+{
+// Called from the pool-free probe: does any live holder still cache this block?
+void CheckFreedWhileCached(uint32_t freed)
+{
+    // COUNTED IN FULL, REPORTED BY NOVELTY. A flat "first N" cap reported the
+    // first six of these and nothing else -- and the six that matter are the
+    // LAST ones, immediately before the crash. So: every occurrence is counted,
+    // the first three are shown to establish the shape, and after that only a
+    // change of holder is shown. The running total goes out with each line so a
+    // reader can see how much is being elided.
+    static std::atomic<uint64_t> total{0};
+    static std::atomic<uint64_t> shown{0};
+    static uint32_t lastHolder = 0;
+
+    std::lock_guard<std::mutex> guard(g_holderMutex);
+    for (const uint32_t holder : g_holders)
+    {
+        const uint32_t cached =
+            ByteSwap(*gears::Memory().Translate<uint32_t>(holder + 1376));
+        if (cached != freed)
+            continue;
+
+        const uint64_t n = total.fetch_add(1) + 1;
+        const bool novel = holder != lastHolder;
+        lastHolder = holder;
+        if (shown.load() < 3 || novel)
+        {
+            shown.fetch_add(1);
+            lucent::error("lifetime", "FREEING {:#x} WHILE IT IS STILL CACHED at"
+                " holder {:#x}+1376 (occurrence {}). Nothing nulls that field,"
+                " and the next call uses it on the strength of it being"
+                " non-null", freed, holder, n);
+        }
+    }
+}
+
+void ReportHolderSeam()
+{
+    lucent::info("lifetime", "checkpoint holder seam: {} visit(s), {} distinct"
+        " holder(s){}", g_holderVisits.load(), g_holders.size(),
+        g_holders.empty() ? " -- the seam NEVER FIRED, so the free check above"
+                            " proves nothing" : "");
+}
+} // namespace gears
+
+PPC_FUNC(sub_824961D0)
+{
+    g_holderVisits.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> guard(g_holderMutex);
+        g_holders.insert(ctx.r3.u32);
+    }
+    __imp__sub_824961D0(ctx, base);
 }
