@@ -628,3 +628,32 @@ CONTINUE: accumulate -nomovie runs toward twenty, then thirty. A single panic
 with movies disabled ends the experiment immediately and refutes the
 identification, which is the outcome to watch for -- it is much more
 informative, and much cheaper to obtain, than the null.
+
+### Note (2026-07-29)
+EXPERIMENT DESIGN IMPROVED, AND A BETTER ONE IS AVAILABLE.
+
+Progress so far, tracked in scratch/exp/nomovie.tsv:
+
+    nomovie:  0 panics / 8 runs
+    control:  0 panics / 3 runs
+
+The arms are now INTERLEAVED rather than run in blocks, because the 0.125
+baseline was measured across a session with varying machine load and several
+different builds, and a matched control removes both. Zero in three control
+runs is unremarkable (P = 0.67 under the baseline), which is the point: at this
+rate BOTH arms need twenty-plus runs, and grinding toward that is slow.
+
+A SHARPER EXPERIMENT EXISTS. If the failure is a movie start/stop race, then a
+run with MORE movie transitions should fail more often -- and the title has
+'AttractMode.bik' plus an attract-mode loop that plays when it is left alone at
+the title screen. A run with no input script should cycle movies repeatedly
+instead of passing through the menus once.
+
+That predicts something falsifiable and cheap: idling at the title screen should
+raise the panic rate well above 0.125, and if it does not, the movie
+identification is in trouble. Raising the rate also makes every subsequent
+measurement cheaper, which is worth more than another five runs of the null.
+
+Try that before accumulating further. A null obtained slowly is worth less than
+a positive obtained quickly, and this is the rare case where the failing
+condition can be asked for directly rather than waited for.
