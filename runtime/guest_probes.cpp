@@ -273,7 +273,16 @@ PPC_FUNC(sub_8232B548)
         const uint32_t holder = ByteSwap(*gears::Memory().Translate<uint32_t>(archive + 112));
         const uint32_t buffer = holder ? ByteSwap(*gears::Memory().Translate<uint32_t>(holder)) : 0;
         const uint32_t count = holder ? ByteSwap(*gears::Memory().Translate<uint32_t>(holder + 4)) : 0;
-        if (reported.fetch_add(1) < 4)
+        // THE CAP USED TO BE A FLAT `< 4`, AND IT HID THE ONLY CASE THAT
+        // MATTERS. The first four deserialises happen early, before anything
+        // fills the carrier, and are harmless; the one that crashes happens
+        // much later, after the carrier IS populated. Reporting only the first
+        // four therefore showed "the array is always empty" -- a conclusion the
+        // instrument could not have contradicted, because it had stopped
+        // looking. A populated array is now ALWAYS reported: it is the new
+        // information, and the state at the crash is the whole question.
+        const bool populated = buffer != 0 && count != 0;
+        if (reported.fetch_add(1) < 4 || populated)
         {
             // When the array is empty the read goes to LOW GUEST MEMORY, so the
             // length the title gets is whatever physical RAM happens to hold at
@@ -526,4 +535,56 @@ PPC_FUNC(sub_82444EF0)
         " command's payload rather than its header)", data, dataEnd);
 
     __imp__sub_82444EF0(ctx, base);
+}
+
+// ---------------------------------------------------------------------------
+// The two Kismet ops that decide whether a checkpoint restore has anything to
+// restore (catalog #45).
+//
+// sub_82207CC8 sets the "pending data" flag UNCONDITIONALLY on its first tick,
+// with no check that any data exists. sub_82207E98 is the op that parses
+// "LoadChapter=%i" and copies object+420 INTO the global carrier at 0x82BFB36C
+// -- the carrier the restore later copies back out. Measured: that carrier is
+// EMPTY at restore time, so the question is whether this op ever runs.
+//
+// BOTH are probed, and the pairing is the point: sub_82207CC8 firing while
+// sub_82207E98 does not is the difference between "the op ran and found
+// nothing" and "the op never ran", and only one of those is our problem.
+extern "C" PPC_FUNC(__imp__sub_82207CC8);
+extern "C" PPC_FUNC(__imp__sub_82207E98);
+
+namespace
+{
+constexpr uint32_t kChapterCarrier = 0x82BFB36C;
+
+void ReportCarrier(const char* who)
+{
+    const uint32_t data = ByteSwap(*gears::Memory().Translate<uint32_t>(kChapterCarrier));
+    const uint32_t count = ByteSwap(*gears::Memory().Translate<uint32_t>(kChapterCarrier + 4));
+    lucent::info("chapter", "{}: the carrier at {:#x} is {} ({} bytes at {:#x})",
+        who, kChapterCarrier, data == 0 || count == 0 ? "EMPTY" : "populated",
+        count, data);
+}
+} // namespace
+
+PPC_FUNC(sub_82207CC8)
+{
+    static std::atomic<uint64_t> seen{0};
+    const bool first = seen.fetch_add(1) == 0;
+    if (first)
+        ReportCarrier("the startup Kismet op (which sets the pending flag) entered");
+    __imp__sub_82207CC8(ctx, base);
+    if (first)
+        ReportCarrier("the startup Kismet op returned");
+}
+
+PPC_FUNC(sub_82207E98)
+{
+    static std::atomic<uint64_t> seen{0};
+    const uint64_t n = seen.fetch_add(1);
+    if (n < 4)
+        ReportCarrier("THE LoadChapter OP RAN -- before");
+    __imp__sub_82207E98(ctx, base);
+    if (n < 4)
+        ReportCarrier("THE LoadChapter OP RAN -- after");
 }
