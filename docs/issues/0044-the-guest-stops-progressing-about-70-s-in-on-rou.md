@@ -312,3 +312,40 @@ RATE: four more clean runs after adding the trace, on top of five before. The
 "one in three" figure earlier in this entry came from nine runs classified by a
 proxy that turned out to be wrong, and the honest current estimate is closer to
 one in eight. Do not size an investigation off it.
+
+### Note (2026-07-29)
+LAST NOTE'S HYPOTHESIS IS FALSIFIED, STATICALLY, BEFORE ANYTHING WAS BUILT ON IT.
+
+I suggested the handler might be panicking because a field was zero that the
+runtime never set up -- making this our defect. It is not. Reading the wrapper
+that calls the handler:
+
+    sub_828D3118:  r5 = 0;  r4 = 1;  goto sub_828D2FB8
+    sub_828D3128:  r5 = 1;  r4 = 0;  r3 = 0;  goto sub_828D2FB8
+
+The handler stores that r5 at frame+164 and panics precisely when it is zero. So
+the zero is HARDCODED BY THE TITLE, in the wrapper it chose to call. Two
+wrappers onto one handler: one that ends the process and one that returns. The
+bug check is the designed "must not return" tail of a deliberate terminate, not
+state we failed to populate.
+
+That also explains the shape that prompted the hypothesis. It really is an exit
+path -- I was right about that -- but the panic at the end is intended, not a
+symptom of the exit going wrong in our runtime.
+
+CONSEQUENTLY THE LOG LINE WAS MISLEADING and is fixed: "THE TITLE BUG-CHECKED"
+reads as a crash. It now says the title called KeBugCheck from the tail of its
+own terminate path, so it MEANT to end, and names the remaining question. Only
+code 0 from 0x828d30b0 is described that way; any other code or site is still
+reported as unrecognised, because nothing has been seen there and assuming
+would be the same mistake in the other direction.
+
+THE QUESTION IS UNCHANGED AND NARROW: what calls sub_828D0790. Everything from
+there down is unconditional and now understood. That trace is armed.
+
+Worth noting for whoever picks this up: four models of this failure have been
+wrong so far -- a clamp regression, a live-but-stuck process, a double-fault
+re-entrancy guard, and unpopulated runtime state. Every one was a plausible
+reading of disassembly or logs that the running system contradicted. The two
+findings that held up came from the trace firing and from reading the wrapper's
+four instructions. Prefer the small decisive read over the compelling story.

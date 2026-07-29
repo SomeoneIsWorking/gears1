@@ -366,8 +366,17 @@ std::string DescribeParameter(uint8_t* base, uint32_t value)
     // The link register is the return address, so it names WHICH of the
     // image's fifteen bug-check call sites this is. Without it the code alone
     // (often 0) says nothing about where the title gave up.
-    lucent::error("kernel", "THE TITLE BUG-CHECKED: KeBugCheck{}(code {:#x}),"
-        " called from {:#x}", extended ? "Ex" : "", code, uint32_t(ctx.lr));
+    // Deliberately not called a crash. Code 0 from 0x828d30b0 is the tail of
+    // the title's own terminate path, where the bug check is the designed way
+    // of not returning -- the argument that selects it is hardcoded in the
+    // wrapper (catalog #44). Other codes and sites have not been seen and may
+    // well be real faults, so only this one is described as intentional.
+    const bool deliberate = code == 0 && uint32_t(ctx.lr) == 0x828D30B0;
+    lucent::error("kernel", "the title called KeBugCheck{}(code {:#x}) from {:#x}"
+        " -- {}", extended ? "Ex" : "", code, uint32_t(ctx.lr),
+        deliberate ? "the tail of its own terminate path, so it MEANT to end;"
+                     " the question is what decided that"
+                   : "an unrecognised bug-check site");
 
     if (extended)
     {
