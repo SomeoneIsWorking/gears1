@@ -481,3 +481,39 @@ vtable rather than a search of the code.
 RATE, for whoever continues: this took 9 runs at 85 s. Shorter runs are better
 value than longer ones -- the failure lands around 70 s, so anything past ~90 s
 is spent waiting rather than sampling.
+
+### Note (2026-07-29)
+THE LIST IS A GLOBAL REGISTRY WITH 43 REFERENCING SITES. THIS IS THE TICKABLE-OBJECT SHAPE.
+
+sub_82444EF0, the per-frame walk that makes the pure virtual call, iterates a
+global structure at 0x82C0CB64 -- fields at +0, +8, +12 and +20 used as
+start/end/cursor -- and the whole walk is gated on a flag at 0x82BFA380 being
+non-zero. 43 sites across 14 translation units reference that same structure
+(confirmed by matching the lis base, not just the offset).
+
+A global registry that many classes touch, walked every frame, with a virtual
+call per entry, is the shape of UE3's tickable-object list: objects add
+themselves in a constructor and remove themselves in a destructor, and the
+engine calls a virtual method on each one every frame.
+
+THAT MAKES THE MECHANISM A TEXTBOOK ONE, and it is worth naming even though it
+is not yet proven here. The classic pure-virtual-call in that design comes from
+the registration outliving the object's concrete type: the base constructor
+registers `this` before the derived vtable is installed, or the object is
+destroyed without being removed from the list. Either way the walk dispatches
+through a vtable that is the abstract base's, which is exactly what was
+measured -- a genuine vtable, 39 slots into a multiple-inheritance block, with
+_purecall in the slot being called.
+
+STATED AS A HYPOTHESIS. What would confirm it: find which of the 43 sites APPEND
+to the structure and which REMOVE from it, and check whether the appending one
+runs in a constructor whose derived vtable is not yet installed. That is static
+work and does not need the intermittent repro.
+
+WHY THIS MATTERS FOR THE PORT rather than being the title's problem to have: if
+registration and removal are correct on hardware, the window between them is
+closed by the console's scheduling, and our runtime's known threading
+differences -- processor numbers that alias so two host threads can claim one
+guest CPU (#41, #42), IRQL modelled per thread rather than per processor -- are
+the kind of thing that opens it. Confirming the mechanism first is what makes
+that testable rather than speculative.
