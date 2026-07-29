@@ -93,6 +93,7 @@ add_executable(gears1
     user_profile.cpp
     xam_apps.cpp
     xam_content.cpp
+    directory_info.cpp
     ppc_mmio.cpp
     wait_probe.cpp
     xaudio_null.cpp

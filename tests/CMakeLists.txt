@@ -96,3 +96,17 @@ target_include_directories(test_xam_content PRIVATE
     ../extern/XenonRecomp/XenonUtils)
 target_link_libraries(test_xam_content PRIVATE lucent::lucent)
 add_test(NAME xam_content COMMAND test_xam_content)
+
+# Directory listings in the console's FILE_DIRECTORY_INFORMATION form. The
+# chaining rule is the part that matters: a walker follows next_entry_offset
+# until it reads zero.
+add_executable(test_directory_info
+    test_directory_info.cpp
+    ../runtime/directory_info.cpp)
+target_include_directories(test_directory_info PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}"
+    "${THIRDPARTY_ROOT}/simde"
+    ../extern/XenonRecomp/XenonUtils)
+target_link_libraries(test_directory_info PRIVATE lucent::lucent)
+add_test(NAME directory_info COMMAND test_directory_info)
