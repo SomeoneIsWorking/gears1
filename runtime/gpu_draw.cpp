@@ -1594,6 +1594,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // so the rest is measured rather than guessed at -- hoisting the loop's
     // containers out was tried first on a hunch and moved it by 1 ms.
     double msDescAlloc = 0, msDescUpdate = 0, msUniforms = 0, msIndex = 0;
+    double msState = 0, msRecord = 0;
     double msTranslate = 0, msPipeline = 0, msTexture = 0, msSsboUpload = 0;
     auto accumulate = [](double& into, Clock::time_point from) {
         into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
@@ -3341,8 +3342,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     std::deque<VkDescriptorImageInfo> imgInfos;
     w.reserve(32);
 
+    // The constant blocks, reused across draws (see the cache check below).
+    std::vector<uint8_t> syscBuf, fVsBuf, fPsBuf, boolLoopBuf, fetchBuf;
+    VkDescriptorBufferInfo biSysCache{}, biFvsCache{}, biFpsCache{};
+    VkDescriptorBufferInfo biBlCache{}, biFetchCache{};
+    const void* uboCacheSnapshot = nullptr;
+    uint64_t uboCacheVs = 0, uboCachePs = 0;
+    bool uboCacheValid = false;
+    uint64_t uboRebuilds = 0, uboReuses = 0;
+
     for (const FrameDrawItem& d : in.draws)
     {
+        const double stateBegin = sinceStartMs();
         const uint32_t* R = d.registers();
         if (!R)
         { ++skipped; ++skipReasons[1]; continue; }
@@ -3623,23 +3634,51 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                          d.primType, om, rp->first, pipeLayout, pipe))
         { ++skipped; ++skipReasons[3]; continue; }
 
-        // Per-draw constant UBOs from this draw's own register snapshot.
-        std::vector<uint8_t> sysc = draw::DeriveSystemConstants(R);
-        std::vector<uint8_t> fVs = PackFloatConstants(R, vsX->floatBitmap, vsX->floatCount, 0x4000);
-        std::vector<uint8_t> fPs = PackFloatConstants(R, psX->floatBitmap, psX->floatCount, 0x4400);
-        std::vector<uint8_t> boolLoop(sizeof(uint32_t) * (8 + 32));
-        std::memcpy(boolLoop.data(), &R[0x4900], boolLoop.size());
-        std::vector<uint8_t> fetch(sizeof(uint32_t) * 6 * 32);
-        std::memcpy(fetch.data(), &R[0x4800], fetch.size());
-
-        VkDescriptorBufferInfo biSys{}, biFvs{}, biFps{}, biBl{}, biFetch{};
+        // Per-draw constant UBOs.
+        //
+        // These derive ONLY from the register snapshot and the two shaders'
+        // constant bitmaps, so consecutive draws that share a snapshot and a
+        // shader pair produce byte-identical blocks. Recomputing and re-writing
+        // them per draw meant five heap allocations and five arena copies each
+        // -- about 3500 allocations in a gameplay frame -- for data that had
+        // not changed. Reuse the previous result when the inputs are the same
+        // ones; correctness comes from the inputs being the whole input, not
+        // from a heuristic.
         const double uniformsBegin = sinceStartMs();
-        if (!makeUbo(sysc.data(), sysc.size(), biSys) ||
-            !makeUbo(fVs.data(), fVs.size(), biFvs) ||
-            !makeUbo(fPs.data(), fPs.size(), biFps) ||
-            !makeUbo(boolLoop.data(), boolLoop.size(), biBl) ||
-            !makeUbo(fetch.data(), fetch.size(), biFetch))
-        { ++skipped; ++skipReasons[4]; continue; }
+        msState += uniformsBegin - stateBegin;
+        const bool sameConstants = uboCacheValid &&
+                                   uboCacheSnapshot == d.registerFile.get() &&
+                                   uboCacheVs == d.vsHash && uboCachePs == d.psHash;
+        if (!sameConstants)
+        {
+            syscBuf = draw::DeriveSystemConstants(R);
+            fVsBuf = PackFloatConstants(R, vsX->floatBitmap, vsX->floatCount, 0x4000);
+            fPsBuf = PackFloatConstants(R, psX->floatBitmap, psX->floatCount, 0x4400);
+            boolLoopBuf.resize(sizeof(uint32_t) * (8 + 32));
+            std::memcpy(boolLoopBuf.data(), &R[0x4900], boolLoopBuf.size());
+            fetchBuf.resize(sizeof(uint32_t) * 6 * 32);
+            std::memcpy(fetchBuf.data(), &R[0x4800], fetchBuf.size());
+
+            if (!makeUbo(syscBuf.data(), syscBuf.size(), biSysCache) ||
+                !makeUbo(fVsBuf.data(), fVsBuf.size(), biFvsCache) ||
+                !makeUbo(fPsBuf.data(), fPsBuf.size(), biFpsCache) ||
+                !makeUbo(boolLoopBuf.data(), boolLoopBuf.size(), biBlCache) ||
+                !makeUbo(fetchBuf.data(), fetchBuf.size(), biFetchCache))
+            { uboCacheValid = false; ++skipped; ++skipReasons[4]; continue; }
+
+            uboCacheValid = true;
+            uboCacheSnapshot = d.registerFile.get();
+            uboCacheVs = d.vsHash;
+            uboCachePs = d.psHash;
+            ++uboRebuilds;
+        }
+        else
+        {
+            ++uboReuses;
+        }
+        VkDescriptorBufferInfo biSys = biSysCache, biFvs = biFvsCache;
+        VkDescriptorBufferInfo biFps = biFpsCache, biBl = biBlCache;
+        VkDescriptorBufferInfo biFetch = biFetchCache;
         msUniforms += sinceStartMs() - uniformsBegin;
         const double indexBegin = sinceStartMs();
 
@@ -3744,6 +3783,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
 
         msIndex += sinceStartMs() - indexBegin;
+        const double recordBegin = sinceStartMs();
 
         // Descriptor sets for this draw. Sets 2/3 use this shader pair's own
         // texture layouts, so their binding counts match the SPIR-V exactly.
@@ -4000,7 +4040,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             const uint32_t c255bits = R[0x4400 + 255 * 4];
             std::memcpy(&psC255, &c255bits, 4);
             dl.add(" vsconst {}/{} nz, psconst {}/{} nz, ps c255.x={} ({:#x})",
-                   nonZero(fVs), vsX->floatCount, nonZero(fPs), psX->floatCount,
+                   nonZero(fVsBuf), vsX->floatCount, nonZero(fPsBuf), psX->floatCount,
                    psC255, c255bits);
             dl.flush(lucent::Level::Info, "draw");
         }
@@ -5291,12 +5331,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     msReadback = sinceStartMs() - msSetup - msDrawLoop - msSubmit;
     lucent::info("draw", "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f}"
         " (of which shader translation {:.0f}, pipeline creation {:.0f},"
-        " texture upload {:.0f}, uniforms {:.0f}, index prep {:.0f},"
+        " texture upload {:.0f}, state+pipeline {:.0f}, uniforms {:.0f}, index prep {:.0f},"
         " descriptor alloc {:.0f}, descriptor update {:.0f}),"
         " guest-memory upload {:.0f}, submit+wait {:.0f},"
         " readback+report {:.0f}",
         sinceStartMs(), msSetup, msDrawLoop, msTranslate, msPipeline, msTexture,
-        msUniforms, msIndex, msDescAlloc, msDescUpdate, msSsboUpload, msSubmit,
+        msState, msUniforms, msIndex, msDescAlloc, msDescUpdate, msSsboUpload, msSubmit,
         msReadback);
     // Checkpoint images, each labelled with how many draws had run.
     const std::string& checkpointDirStr = lucent::config::text("DRAW_DIR");
