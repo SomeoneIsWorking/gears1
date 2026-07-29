@@ -16,6 +16,8 @@
 
 #include <lucent/log.h>
 
+#include "xam_apps.h"
+
 #include <byteswap.h>
 
 #include "kernel_objects.h"
@@ -70,11 +72,19 @@ void __imp__XNotifyPositionUI(PPCContext& __restrict ctx, uint8_t*)
 
 // DWORD XMsgInProcessCall(DWORD App, DWORD Message, PVOID Arg1, PVOID Arg2)
 //
-// Dispatch into a Xam application. None are provided, so every message is
-// genuinely unhandled and says so, rather than returning a success the caller
-// would read as the service having run.
-void __imp__XMsgInProcessCall(PPCContext& __restrict ctx, uint8_t*)
+// Dispatch into a Xam application. Messages the runtime implements are handled
+// here; anything else stays loud, so an unimplemented service is still visible
+// rather than buried under a blanket success.
+void __imp__XMsgInProcessCall(PPCContext& __restrict ctx, uint8_t* base)
 {
+    uint32_t status = 0;
+    if (gears::DispatchXamMessage(base, ctx.r3.u32, ctx.r4.u32, ctx.r5.u32,
+                                  ctx.r6.u32, status))
+    {
+        ctx.r3.u64 = status;
+        return;
+    }
+
     lucent::warn("xam", "XMsgInProcessCall(app {:#x}, message {:#x}) -- no such service",
         ctx.r3.u32, ctx.r4.u32);
     ctx.r3.u64 = gears::kErrorNotFound;
@@ -86,8 +96,20 @@ void __imp__XMsgInProcessCall(PPCContext& __restrict ctx, uint8_t*)
 // Asynchronous, so the refusal has to be delivered through the overlapped as
 // well as returned. Returning an error alone left callers waiting on a request
 // that never completed.
+// The asynchronous form. The work is synchronous here, so the request is
+// completed immediately -- but it MUST be completed either way, because a
+// caller waiting on the overlapped has no other way to learn the outcome.
 void __imp__XMsgStartIORequest(PPCContext& __restrict ctx, uint8_t* base)
 {
+    uint32_t status = 0;
+    if (gears::DispatchXamMessage(base, ctx.r3.u32, ctx.r4.u32, ctx.r6.u32,
+                                  ctx.r7.u32, status))
+    {
+        gears::CompleteOverlapped(base, ctx.r5.u32, status);
+        ctx.r3.u64 = status;
+        return;
+    }
+
     lucent::warn("xam", "XMsgStartIORequest(app {:#x}, message {:#x}) -- no such service",
         ctx.r3.u32, ctx.r4.u32);
     gears::CompleteOverlapped(base, ctx.r5.u32, gears::kErrorNotFound);
@@ -96,6 +118,15 @@ void __imp__XMsgStartIORequest(PPCContext& __restrict ctx, uint8_t* base)
 
 void __imp__XMsgStartIORequestEx(PPCContext& __restrict ctx, uint8_t* base)
 {
+    uint32_t status = 0;
+    if (gears::DispatchXamMessage(base, ctx.r3.u32, ctx.r4.u32, ctx.r6.u32,
+                                  ctx.r7.u32, status))
+    {
+        gears::CompleteOverlapped(base, ctx.r5.u32, status);
+        ctx.r3.u64 = status;
+        return;
+    }
+
     lucent::warn("xam", "XMsgStartIORequestEx(app {:#x}, message {:#x}) -- no such service",
         ctx.r3.u32, ctx.r4.u32);
     gears::CompleteOverlapped(base, ctx.r5.u32, gears::kErrorNotFound);

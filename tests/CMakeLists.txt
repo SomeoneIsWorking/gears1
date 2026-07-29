@@ -55,3 +55,31 @@ target_include_directories(heap_replay PRIVATE
     "${THIRDPARTY_ROOT}/simde"
     ../extern/XenonRecomp/XenonUtils)
 target_link_libraries(heap_replay PRIVATE lucent::lucent)
+
+# The user profile store and the XamUserReadProfileSettings buffer protocol.
+# Written before the implementation: the layouts are the console's, so the
+# tests encode the contract rather than describing whatever the code does.
+add_executable(test_user_profile
+    test_user_profile.cpp
+    ../runtime/user_profile.cpp)
+target_include_directories(test_user_profile PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}"
+    "${THIRDPARTY_ROOT}/simde"
+    ../extern/XenonRecomp/XenonUtils)
+target_link_libraries(test_user_profile PRIVATE lucent::lucent)
+add_test(NAME user_profile COMMAND test_user_profile)
+
+# The Xam application message dispatch: the media player, the gaming service
+# and the Live client. Written before the implementation, against Xenia's
+# transcription of the console's message numbers and structures.
+add_executable(test_xam_apps
+    test_xam_apps.cpp
+    ../runtime/xam_apps.cpp)
+target_include_directories(test_xam_apps PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}"
+    "${THIRDPARTY_ROOT}/simde"
+    ../extern/XenonRecomp/XenonUtils)
+target_link_libraries(test_xam_apps PRIVATE lucent::lucent)
+add_test(NAME xam_apps COMMAND test_xam_apps)

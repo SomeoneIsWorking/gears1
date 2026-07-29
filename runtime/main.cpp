@@ -10,6 +10,7 @@
 #include "guest_memory.h"
 #include "guest_heap.h"
 #include "guest_filesystem.h"
+#include "user_profile.h"
 #include "guest_thread.h"
 
 namespace gears { bool CommitDeviceWindow(GuestMemory& memory); }
@@ -66,6 +67,11 @@ int main(int argc, char* argv[])
         gears::Files().SetGameDirectory(gameDirectory);
     else
         lucent::warn("fs", "no game directory given; all file opens will fail");
+
+    // The player's profile settings, from the last run. A first run has none,
+    // which is not an error -- the title then reads every setting as unset and
+    // uses its own defaults, exactly as a freshly created console profile does.
+    gears::Profile().Load(gears::Files().SaveDirectory() / "profile.bin");
 
     const std::filesystem::path xexPath = argv[1];
     std::vector<uint8_t> xex = ReadFile(xexPath);
