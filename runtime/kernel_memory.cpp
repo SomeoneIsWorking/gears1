@@ -135,11 +135,38 @@ void __imp__MmFreePhysicalMemory(PPCContext& __restrict ctx, uint8_t*)
     gears::PhysicalHeap().Free(ctx.r4.u32);
 }
 
-// The guest's virtual and physical views are the same buffer here, so a
-// physical address is its own translation.
+// PVOID MmGetPhysicalAddress(PVOID Address)
+//
+// The console maps one bank of physical memory into several virtual windows --
+// 0xA0000000, 0xC0000000 and 0xE0000000 differ only in caching behaviour -- and
+// a physical address is the offset WITHIN that bank. Returning the virtual
+// address unchanged, which this used to do, is only correct for a pointer that
+// was already physical.
+//
+// It is not a cosmetic difference. A title that takes the physical address of a
+// buffer in the 0xA0000000 window and subtracts it from another address gets a
+// number about 2.6 GB too large, because the window base is still in it -- and
+// an unsigned subtraction that should have been small underflows instead
+// (catalog #45: 0x4F800000 - 0xB0800000 is exactly the 0x9F000000 that failed).
+//
+// Xenia does the same subtraction (memory.cc PhysicalHeap::GetPhysicalAddress),
+// including the 0x1000 the 0xE0000000 window is offset by.
 void __imp__MmGetPhysicalAddress(PPCContext& __restrict ctx, uint8_t*)
 {
-    ctx.r3.u64 = ctx.r3.u32;
+    const uint32_t address = ctx.r3.u32;
+    uint32_t physical = address;
+    if (address >= 0xE0000000)
+        physical = address - 0xE0000000 + 0x1000;
+    else if (address >= 0xC0000000)
+        physical = address - 0xC0000000;
+    else if (address >= 0xA0000000)
+        physical = address - 0xA0000000;
+    // Anything else is either already a physical address or not in a physical
+    // window at all, and inventing a translation for it would be worse than
+    // passing it through.
+
+    lucent::debug("kernel", "MmGetPhysicalAddress({:#x}) -> {:#x}", address, physical);
+    ctx.r3.u64 = physical;
 }
 
 // VOID MmSetAddressProtect(PVOID Address, ULONG Size, ULONG Protect)
