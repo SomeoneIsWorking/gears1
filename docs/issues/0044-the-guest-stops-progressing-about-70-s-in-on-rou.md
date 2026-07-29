@@ -785,3 +785,40 @@ THE THREE NEXT INSTRUMENTS, in order of value:
    names the culprit directly.
 3. Print [0x82C0CB24+0] and [+4] and check whether the bad vptr falls inside
    Data..DataEnd -- that would confirm the payload-misalignment reading.
+
+### Note (2026-07-29)
+MEASURED: TWO THREADS ENTER THE RING'S PRODUCER PATH. NOT YET SHOWN TO BE THE CAUSE.
+
+Three instruments were added (runtime/guest_probes.cpp) and run:
+
+  [ring] the render-ring drain loop entered by guest thread 'guest-7'
+  [ring] drain loop starting: Data=0x40270000 DataEnd=0x402b0000
+  [ring] the render-ring allocator entered by guest thread 'host'
+  [ring:error] the render-ring allocator entered by a SECOND guest thread:
+               'guest-7' after 'host'  ... (8 alternations in one run)
+
+So the consumer is a single thread (guest-7, the rendering thread), but the
+PRODUCER path sub_8221CBA8 is entered by BOTH the main thread ('host', which is
+the title's game thread) and by guest-7 itself. FRingBuffer is documented -- and
+written -- as single-producer/single-consumer.
+
+WHAT THIS DOES **NOT** SHOW, and the distinction matters because it would be
+easy to declare victory here: the _purecall did NOT fire on this run. The run
+died at the save-load deserialise instead (catalog #45's deterministic path),
+having survived all eight thread alternations. So two producers is a real,
+measured HAZARD that breaks a documented invariant, but it is not a demonstrated
+cause of #44. It may even be legitimate -- a render command enqueuing another
+command is a shape UE3 does use.
+
+TO PROMOTE IT TO A CAUSE, one of these is needed:
+  - a run where _purecall fires AND the object pointer lands inside
+    Data..DataEnd (0x40270000..0x402b0000 on this run). The probe now prints
+    that verdict directly when the pure-virtual handler is entered.
+  - or a demonstration that the two producers can interleave INSIDE the
+    reserve/commit window (sub_8221CBA8 reserves, the caller stores the vtable,
+    then the commit advances WritePointer). Overlapping that window is what
+    would actually corrupt the framing; merely alternating between calls would
+    not.
+
+The instruments stay in the tree; they cost nothing and #44 is intermittent, so
+the next occurrence will now carry its own diagnosis.
