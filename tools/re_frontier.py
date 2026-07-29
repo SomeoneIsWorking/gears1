@@ -113,17 +113,32 @@ class Entry:
         return "\n".join(out)
 
 
-def load():
-    """Parse docs/re-frontier.md into {id: Entry}, preserving area order."""
+def load(require=True):
+    """Parse docs/re-frontier.md into {id: Entry}, preserving area order.
+
+    `require` refuses to return an empty roadmap to a READING command. An empty
+    parse makes `next` print "every unblocked step is done" and `hacks` print
+    nothing -- the two most reassuring outputs this tool has, produced by having
+    read no roadmap at all. Only `scaffold` may legitimately start from nothing.
+    """
     if not os.path.exists(ROADMAP):
+        if require:
+            sys.stderr.write(
+                "re-frontier: %s does not exist. Nothing was read, so any\n"
+                "'(none)' below would mean 'I have no roadmap', not 'no steps\n"
+                "remain'. Run `scaffold`, or set $RE_FRONTIER_ROADMAP.\n" % ROADMAP)
+            sys.exit(2)
         return {}, []
     entries = {}
     order = []
     area = "misc"
     cur = None
+    headers = 0
     with open(ROADMAP, encoding="utf-8") as fh:
         for line in fh:
             line = line.rstrip("\n")
+            if line.startswith("### "):
+                headers += 1
             m = re.match(r"^## +(.+)$", line)
             if m and not line.startswith("### "):
                 area = m.group(1).strip()
@@ -143,6 +158,22 @@ def load():
                     cur.deps = [d.strip() for d in val.split(",") if d.strip()]
                 elif key in ("status", "evidence", "where", "gap", "notes"):
                     setattr(cur, key, val)
+    # A `### ` line the header regex could not parse (a hyphen instead of an em
+    # dash, an id with a space in it) drops that step out of the roadmap
+    # SILENTLY -- and a dropped step is one `next` will never offer and `hacks`
+    # will never list. Counted, so a hand edit that breaks the format is visible
+    # instead of quietly shrinking the frontier.
+    if headers != len(order):
+        sys.stderr.write(
+            "re-frontier: %d '### ' heading(s) in %s but only %d parsed as steps."
+            " %d step(s) are INVISIBLE to every command below -- expected"
+            " '### <id> — <title>'.\n"
+            % (headers, ROADMAP, len(order), headers - len(order)))
+    if require and not order:
+        sys.stderr.write(
+            "re-frontier: %s parsed to ZERO steps. Nothing below is a"
+            " measurement.\n" % ROADMAP)
+        sys.exit(2)
     return entries, order
 
 
@@ -218,7 +249,14 @@ def cmd_next(entries, order, args):
             ready.append(e)
     print("== RE-ready steps (all deps satisfied) ==")
     if not ready:
-        print("  (none — every unblocked step is done, or blocked on upstream RE)")
+        # With the denominator, because "no work is ready" out of 19 tracked
+        # steps and out of 0 mean opposite things, and both used to print this.
+        considered = sum(1 for eid in order
+                         if not args.area or entries[eid].area == args.area)
+        print("  (none of the %d step(s) considered is todo/in-progress with its"
+              " deps satisfied)" % considered)
+        print("  This says only that nothing WRITTEN DOWN is ready; a step that"
+              " was never added to the roadmap cannot appear here.")
     for e in ready:
         print(f"  {emoji(e.status)} {e.id:<34} {e.title}")
         if e.gap:
@@ -236,7 +274,13 @@ def cmd_next(entries, order, args):
 def cmd_hacks(entries, order, args):
     hacks = [entries[i] for i in order if entries[i].status == "hack"]
     if not hacks:
-        print("No hacks tracked. (Good — no-hacks rule holds.)")
+        # NOT "the no-hacks rule holds" -- that was a claim about the CODE made
+        # from the absence of a string in a hand-maintained file. This tool can
+        # only report what someone wrote down; an unrecorded hack is invisible
+        # to it, and the old wording certified the project clean on that basis.
+        print("No step among the %d tracked is marked `hack`." % len(order))
+        print("That is a fact about this file, not about the code: a hack nobody"
+              " recorded looks identical from here.")
         return 0
     print(f"⛔ {len(hacks)} hack(s) — DEBT standing in for real RE, must be removed:\n")
     for e in hacks:
@@ -430,7 +474,10 @@ def main():
     sp.add_argument("assignments", nargs="+")
 
     args = p.parse_args()
-    entries, order = load()
+    # `scaffold` and `add` are the only commands with a legitimate reason to
+    # start from an empty roadmap; every other command REPORTS on it, and an
+    # empty report from an empty file is the blind spot `require` exists to stop.
+    entries, order = load(require=args.cmd not in ("scaffold", "add"))
     fn = {
         "list": cmd_list, "show": cmd_show, "next": cmd_next, "hacks": cmd_hacks,
         "blocked": cmd_blocked, "tree": cmd_tree, "stats": cmd_stats, "check": cmd_check,

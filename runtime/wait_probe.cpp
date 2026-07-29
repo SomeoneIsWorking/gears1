@@ -9,6 +9,7 @@
 #include <thread>
 #include <vector>
 
+#include <lucent/config.h>
 #include <lucent/log.h>
 
 #include "guest_thread.h"
@@ -25,6 +26,10 @@ namespace
 // catch a hang while the run is still going.
 constexpr uint32_t kStallSeconds = 8;
 
+// A subsystem that has NEVER ticked is watched too, on a longer fuse -- see the
+// never-started branch in the watchdog loop for why that is a separate state.
+constexpr uint32_t kNeverStartedSeconds = 40;
+
 std::atomic<uint64_t> g_kernelCalls{0};
 
 // One counter per subsystem that can independently stop.
@@ -35,14 +40,31 @@ struct ProgressChannel
     uint64_t last = 0;        // watchdog-only
     uint32_t quietSeconds = 0;
     bool reported = false;
+    // Seconds since the detector armed, counted only while the channel has
+    // never ticked at all.
+    uint32_t deadSeconds = 0;
+    bool neverStartedReported = false;
 };
-ProgressChannel g_progress[] = {{"draw"}, {"audio"}};
+// "selftest.*" are only fed when GEARS_STALL_SELFTEST is set; see
+// StartStallDetector.
+ProgressChannel g_progress[] = {{"draw"}, {"audio"},
+                                {"selftest.stopped"}, {"selftest.silent"}};
+
+// A channel name that matches nothing used to no-op silently, which disables a
+// watchdog outright and leaves the log looking exactly like a healthy run. The
+// name comes from a string literal at a call site, so a mismatch is a typo that
+// nothing else would ever surface.
+std::atomic<bool> g_unknownChannelReported{false};
 
 ProgressChannel* FindProgress(const char* channel)
 {
     for (auto& p : g_progress)
         if (std::string_view(p.name) == channel)
             return &p;
+    if (!g_unknownChannelReported.exchange(true))
+        lucent::error("stall", "NoteGuestProgress(\"{}\") names no known channel:"
+            " that subsystem is not being watched at all, and its silence in this"
+            " log means nothing", channel);
     return nullptr;
 }
 
@@ -99,6 +121,10 @@ struct Site
 };
 constexpr size_t kMaxSites = 16;
 Site g_sites[kMaxSites];
+// Slots are keyed by POINTER, so two identical literals in different
+// translation units can occupy two slots -- the table fills faster than the
+// count of distinct site names suggests.
+uint64_t g_sitesDropped = 0;
 
 Site* FindSite(const char* name, bool isCount)
 {
@@ -113,8 +139,14 @@ Site* FindSite(const char* name, bool isCount)
             return &site;
         }
     }
-    return nullptr; // more sites than slots: the extras are dropped, visibly
-                    // absent from the report rather than silently merged
+    // The table is full and this site's time is being thrown away. The comment
+    // that used to sit here claimed the extras were "visibly absent from the
+    // report" -- they were not: the report printed the sixteen that fitted and
+    // said nothing at all about the rest, so the pump blocking hard in a
+    // seventeenth site read as the pump not blocking there. Counted, and named
+    // in the report, so the omission is visible where the result is.
+    ++g_sitesDropped;
+    return nullptr;
 }
 
 } // namespace
@@ -154,6 +186,15 @@ void WaitProbeReport()
                     std::to_string(site.count);
         site.count = 0;
         site.nanos = 0;
+    }
+    if (g_sitesDropped)
+    {
+        line += line.empty() ? "" : ", ";
+        line += "AND " + std::to_string(g_sitesDropped) +
+                " record(s) from sites that did not fit in the " +
+                std::to_string(kMaxSites) +
+                "-slot table -- their time is NOT in this line";
+        g_sitesDropped = 0;
     }
     if (!line.empty())
         lucent::info("audio", "pump blocked in: {}", line);
@@ -244,9 +285,34 @@ void StartStallDetector()
 {
     static std::once_flag started;
     std::call_once(started, [] {
-        std::thread([] {
+        // SELF-VALIDATION, in the shape of GEARS_ASAN_SELFTEST in main.cpp. A
+        // watchdog's normal output is nothing, so a broken one and a healthy
+        // guest are indistinguishable from the log. GEARS_STALL_SELFTEST=1
+        // feeds two synthetic channels a case each detector branch MUST report:
+        //   selftest.stopped -- ticks exactly once, then never again, so the
+        //                       stalled-after-starting branch must fire at
+        //                       kStallSeconds;
+        //   selftest.silent  -- never ticks at all, so the never-started branch
+        //                       must fire at kNeverStartedSeconds.
+        // A run with the flag set that prints neither report has a detector
+        // that cannot detect, and any "no stall was reported" conclusion drawn
+        // from a normal run is worthless.
+        const bool selftest = lucent::config::flag("STALL_SELFTEST");
+        if (selftest)
+        {
+            lucent::info("stall", "self-test: two synthetic channels armed."
+                " 'selftest.stopped' MUST be reported stalled after {} s and"
+                " 'selftest.silent' MUST be reported never-started after {} s."
+                " If neither line appears, the stall detector is not working"
+                " and its silence on the real channels means nothing.",
+                kStallSeconds, kNeverStartedSeconds);
+            NoteGuestProgress("selftest.stopped");
+        }
+
+        std::thread([selftest] {
             lucent::info("stall", "stall detector armed: reports after {} s with no"
-                " progress on a subsystem", kStallSeconds);
+                " progress on a subsystem, and after {} s on one that never"
+                " started at all", kStallSeconds, kNeverStartedSeconds);
             uint64_t lastCalls = 0;
             for (;;)
             {
@@ -255,6 +321,12 @@ void StartStallDetector()
 
                 for (auto& channel : g_progress)
                 {
+                    // The synthetic channels are inert unless asked for; they
+                    // would otherwise report a never-started subsystem on every
+                    // single run, which is the cry-wolf this design avoids.
+                    if (!selftest &&
+                        std::string_view(channel.name).substr(0, 9) == "selftest.")
+                        continue;
                     const uint64_t now = channel.count.load(std::memory_order_relaxed);
                     if (now != channel.last)
                     {
@@ -266,10 +338,33 @@ void StartStallDetector()
                         channel.reported = false;
                         continue;
                     }
-                    // Nothing has happened on this channel yet at all: a
-                    // subsystem that has not started is not a subsystem that
-                    // stopped, and reporting it would cry wolf every boot.
-                    if (now == 0 || channel.reported)
+                    // NEVER-STARTED IS ITS OWN STATE, NOT SILENCE. A subsystem
+                    // that has not started is genuinely not one that stopped,
+                    // and reporting it at kStallSeconds would cry wolf on every
+                    // boot -- which is why this used to `continue` outright.
+                    // But that made the detector structurally unable to report
+                    // the most common hang there is: the guest wedging BEFORE
+                    // its first swap or its first mixed audio frame. The
+                    // detector armed, printed "armed", and then could only ever
+                    // stay quiet, so its silence proved nothing. It is watched
+                    // on a longer fuse instead, reported once, and worded so it
+                    // cannot be confused with a stall after a healthy start.
+                    if (now == 0)
+                    {
+                        if (channel.neverStartedReported)
+                            continue;
+                        if (++channel.deadSeconds < kNeverStartedSeconds)
+                            continue;
+                        channel.neverStartedReported = true;
+                        lucent::warn("stall", "{} has NEVER made progress in the"
+                            " {} s since the detector armed -- not a stall, a"
+                            " subsystem that never started:", channel.name,
+                            channel.deadSeconds);
+                        ReportStall(channel.name, channel.deadSeconds,
+                                    calls - lastCalls);
+                        continue;
+                    }
+                    if (channel.reported)
                         continue;
                     if (++channel.quietSeconds < kStallSeconds)
                         continue;
