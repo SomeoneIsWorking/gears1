@@ -50,7 +50,15 @@ struct OpenFile
 };
 
 std::mutex g_filesMutex;
-std::unordered_map<uint32_t, std::unique_ptr<OpenFile>> g_openFiles;
+// SHARED, not unique, and FindFile hands out a shared_ptr rather than a raw
+// pointer. The lock is released when FindFile returns, so with a raw pointer a
+// concurrent NtClose could erase and destroy the OpenFile while another thread
+// was still reading or writing through it -- a use-after-free that would land
+// somewhere else entirely, which is exactly the kind of second-order crash that
+// masked the real one in catalog #46. A shared_ptr keeps the object alive for
+// as long as the caller holds it; the close still removes it from the table
+// immediately, so no new lookup can find it.
+std::unordered_map<uint32_t, std::shared_ptr<OpenFile>> g_openFiles;
 uint32_t g_nextFileHandle = 0xF4000000;
 
 // X_OBJECT_ATTRIBUTES: root directory, a pointer to an X_ANSI_STRING name, and
@@ -84,11 +92,11 @@ void StoreU64(uint8_t* base, uint32_t address, uint64_t value)
         *reinterpret_cast<uint64_t*>(base + address) = ByteSwap(value);
 }
 
-OpenFile* FindFile(uint32_t handle)
+std::shared_ptr<OpenFile> FindFile(uint32_t handle)
 {
     std::lock_guard<std::mutex> guard(g_filesMutex);
     auto it = g_openFiles.find(handle);
-    return it != g_openFiles.end() ? it->second.get() : nullptr;
+    return it != g_openFiles.end() ? it->second : nullptr;
 }
 
 } // namespace
@@ -152,7 +160,7 @@ void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
         // A DIRECTORY HANDLE. The title opens the root of its save mount and
         // walks it, so refusing this told a title checking whether its save
         // location is usable that the location cannot be opened at all.
-        auto directory = std::make_unique<OpenFile>();
+        auto directory = std::make_shared<OpenFile>();
         directory->handle = nullptr;
         directory->guestPath = guestPath;
         directory->hostPath = host;
@@ -192,7 +200,7 @@ void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
         return;
     }
 
-    auto file = std::make_unique<OpenFile>();
+    auto file = std::make_shared<OpenFile>();
     file->handle = f;
     file->size = exists ? std::filesystem::file_size(host, ec) : 0;
     file->guestPath = guestPath;
@@ -235,7 +243,7 @@ void __imp__NtReadFile(PPCContext& __restrict ctx, uint8_t* base)
     const uint32_t length = ctx.r9.u32;
     const uint32_t byteOffsetPtr = ctx.r10.u32;
 
-    OpenFile* file = FindFile(handle);
+    const std::shared_ptr<OpenFile> file = FindFile(handle);
     if (file == nullptr)
     {
         lucent::error("fs", "read from unknown handle {:#x}", handle);
@@ -298,7 +306,7 @@ void __imp__NtWriteFile(PPCContext& __restrict ctx, uint8_t* base)
     const uint32_t length = ctx.r9.u32;
     const uint32_t byteOffsetPtr = ctx.r10.u32;
 
-    OpenFile* file = FindFile(handle);
+    const std::shared_ptr<OpenFile> file = FindFile(handle);
     if (file == nullptr)
     {
         lucent::error("fs", "write to unknown handle {:#x}", handle);
@@ -354,7 +362,7 @@ void __imp__NtQueryInformationFile(PPCContext& __restrict ctx, uint8_t* base)
     const uint32_t info = ctx.r5.u32;
     const uint32_t infoClass = ctx.r7.u32;
 
-    OpenFile* file = FindFile(handle);
+    const std::shared_ptr<OpenFile> file = FindFile(handle);
     if (file == nullptr)
     {
         ctx.r3.u64 = gears::kStatusInvalidHandle;
@@ -412,7 +420,7 @@ void __imp__NtSetInformationFile(PPCContext& __restrict ctx, uint8_t* base)
     const uint32_t info = ctx.r5.u32;
     const uint32_t infoClass = ctx.r7.u32;
 
-    OpenFile* file = FindFile(handle);
+    const std::shared_ptr<OpenFile> file = FindFile(handle);
     if (file == nullptr)
     {
         ctx.r3.u64 = gears::kStatusInvalidHandle;
@@ -475,7 +483,7 @@ void __imp__NtQueryDirectoryFile(PPCContext& __restrict ctx, uint8_t* base)
     const uint32_t buffer = ctx.r8.u32;
     const uint32_t length = ctx.r9.u32;
 
-    OpenFile* file = FindFile(handle);
+    const std::shared_ptr<OpenFile> file = FindFile(handle);
     if (file == nullptr || !file->isDirectory)
     {
         ctx.r3.u64 = gears::kStatusInvalidHandle;

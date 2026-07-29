@@ -45,8 +45,6 @@ constexpr uint32_t kSignedInLocally = 1;
 // mistaken for a real Live account.
 constexpr uint64_t kOfflineXuid = 0xE000000000000001ull;
 
-constexpr char kProfileName[] = "Player";
-
 void Store32(uint8_t* base, uint32_t address, uint32_t value)
 {
     if (address != 0)
@@ -150,24 +148,45 @@ void __imp__XamUserGetXUID(PPCContext& __restrict ctx, uint8_t* base)
 }
 
 // DWORD XamUserGetName(DWORD UserIndex, LPSTR Buffer, DWORD Length)
+//
+// Length counts the terminator and the copy TRUNCATES -- it never refuses a
+// short buffer. Gears depends on that: sub_821B5DD8 memsets a 48-byte global,
+// copies "save:\" into it, then calls this with Buffer = global + 6 and
+// Length = 4, and hands the whole string on as a save path. Answering
+// ERROR_INSUFFICIENT_BUFFER wrote nothing, so every path stayed bare "save:\".
+// The rule itself is in gears::CopyGamertag.
 void __imp__XamUserGetName(PPCContext& __restrict ctx, uint8_t* base)
 {
+    const uint32_t userIndex = ctx.r3.u32;
     const uint32_t buffer = ctx.r4.u32;
     const uint32_t length = ctx.r5.u32;
 
-    if (!IsLocalUser(ctx.r3.u32))
+    // A slot that cannot exist is a bad argument; a slot that exists but holds
+    // no profile is a missing user, and XAM distinguishes the two.
+    if (userIndex >= kMaxUsers)
     {
+        ctx.r3.u64 = gears::kErrorInvalidParameter;
+        return;
+    }
+
+    if (!IsLocalUser(userIndex))
+    {
+        // XAM clears only the first byte for an empty slot, so the caller
+        // reads an empty name instead of whatever the buffer held before.
+        // (Xenia's XamUserGetName_entry, from XAM's own behaviour.)
+        if (buffer != 0 && length != 0)
+            base[buffer] = '\0';
         ctx.r3.u64 = gears::kErrorNoSuchUser;
         return;
     }
 
-    if (buffer == 0 || length <= sizeof(kProfileName) - 1)
-    {
-        ctx.r3.u64 = gears::kErrorInsufficientBuffer;
-        return;
-    }
+    // A guest null pointer would fault on hardware; this runtime declines the
+    // write instead, the same convention the store helpers above use. The
+    // status is not a guess about what XAM returns for it -- there is no
+    // caller passing null, so there is nothing to be faithful to.
+    if (buffer != 0)
+        gears::CopyGamertag(reinterpret_cast<char*>(base + buffer), length);
 
-    std::memcpy(base + buffer, kProfileName, sizeof(kProfileName));
     ctx.r3.u64 = gears::kErrorSuccess;
 }
 

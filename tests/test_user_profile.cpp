@@ -216,6 +216,92 @@ void TestUnsetSetting()
         "unset: an absent setting reports type UNSET");
 }
 
+// XamUserGetName's copy rule.
+//
+// The console TRUNCATES: a buffer too small for the whole gamertag gets as
+// much of it as fits plus a terminator, and success. Gears relies on that --
+// sub_821B5DD8 appends the name at offset 6 of "save:\" with Length = 4 and
+// uses the result as a save path, so a refusal leaves the path bare.
+// (Xenia, xam_user.cc:138: bytes_to_copy = min(buffer_len, name.length() + 1),
+// then copy_truncating, which writes bytes_to_copy - 1 characters and a NUL.)
+//
+// The interesting edges are all at the terminator, so they are pinned one
+// byte apart: a buffer one shorter than the name, exactly the name's length,
+// and one longer. An off-by-one here still "succeeds" at every call.
+void TestGamertagCopy()
+{
+    const size_t nameLength = std::strlen(gears::kGamertag);
+    Check(nameLength != 0, "gamertag: the account has a name at all");
+    Check(nameLength + 1 <= gears::kMaxGamertagBytes,
+        "gamertag: fits the console's 15 characters plus terminator");
+
+    // A gamertag reaches the filesystem through save paths built by the title,
+    // so it must not contain anything that would redirect one.
+    Check(std::strpbrk(gears::kGamertag, "\\/:") == nullptr,
+        "gamertag: contains nothing that could redirect a path");
+
+    // 0xCD past the end catches a copy that writes more than it reported.
+    char dest[64];
+
+    // Exactly the name's length: one character has to give way to the NUL.
+    std::memset(dest, 0xCD, sizeof(dest));
+    Check(gears::CopyGamertag(dest, uint32_t(nameLength)) == nameLength,
+        "gamertag: a buffer of exactly the name's length writes that many bytes");
+    Check(dest[nameLength - 1] == '\0',
+        "gamertag: ... and the last of them is the terminator");
+    Check(std::memcmp(dest, gears::kGamertag, nameLength - 1) == 0,
+        "gamertag: ... preceded by the name truncated by one character");
+    Check(dest[nameLength] == '\xCD',
+        "gamertag: ... and nothing beyond the buffer is touched");
+
+    // One shorter: two characters give way.
+    std::memset(dest, 0xCD, sizeof(dest));
+    Check(gears::CopyGamertag(dest, uint32_t(nameLength - 1)) == nameLength - 1,
+        "gamertag: one byte short writes one byte fewer");
+    Check(dest[nameLength - 2] == '\0',
+        "gamertag: ... terminated at the last byte of the buffer");
+    Check(std::memcmp(dest, gears::kGamertag, nameLength - 2) == 0,
+        "gamertag: ... preceded by the name truncated by two characters");
+
+    // One longer -- the first size that holds the whole name.
+    std::memset(dest, 0xCD, sizeof(dest));
+    Check(gears::CopyGamertag(dest, uint32_t(nameLength + 1)) == nameLength + 1,
+        "gamertag: name length plus one writes the whole name and terminator");
+    Check(std::strcmp(dest, gears::kGamertag) == 0,
+        "gamertag: ... and it compares equal to the gamertag");
+    Check(dest[nameLength + 1] == '\xCD',
+        "gamertag: ... with nothing written past the terminator");
+
+    // Larger than needed: XAM stops at the terminator, it does not pad.
+    std::memset(dest, 0xCD, sizeof(dest));
+    Check(gears::CopyGamertag(dest, uint32_t(nameLength + 8)) == nameLength + 1,
+        "gamertag: a roomy buffer still writes only name plus terminator");
+    Check(dest[nameLength + 1] == '\xCD',
+        "gamertag: ... leaving the rest of the caller's buffer alone");
+
+    // The size Gears actually passes: three characters and a NUL.
+    std::memset(dest, 0xCD, sizeof(dest));
+    Check(gears::CopyGamertag(dest, 4) == 4,
+        "gamertag: Gears' Length = 4 writes four bytes");
+    Check(std::strlen(dest) == 3,
+        "gamertag: ... which is three characters of the name");
+    Check(std::memcmp(dest, gears::kGamertag, 3) == 0,
+        "gamertag: ... taken from its front");
+
+    // One byte: room for the terminator only. Still a copy, not a refusal.
+    std::memset(dest, 0xCD, sizeof(dest));
+    Check(gears::CopyGamertag(dest, 1) == 1,
+        "gamertag: a one-byte buffer writes the terminator");
+    Check(dest[0] == '\0', "gamertag: ... and nothing else");
+    Check(dest[1] == '\xCD', "gamertag: ... not even a first character");
+
+    // Zero: there is nowhere to put a terminator, so nothing is written.
+    std::memset(dest, 0xCD, sizeof(dest));
+    Check(gears::CopyGamertag(dest, 0) == 0,
+        "gamertag: a zero-length buffer writes nothing");
+    Check(dest[0] == '\xCD', "gamertag: ... not even a terminator");
+}
+
 } // namespace
 
 int main()
@@ -226,6 +312,7 @@ int main()
     TestPersistence();
     TestWriteResultBuffer();
     TestUnsetSetting();
+    TestGamertagCopy();
 
     if (g_failures == 0)
     {

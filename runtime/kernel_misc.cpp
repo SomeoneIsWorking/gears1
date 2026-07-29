@@ -1,6 +1,8 @@
 // Privileges, pool allocation and thread-local storage.
 #include "import_stub.h"
 
+#include "fatal_exit.h"
+
 #include <array>
 #include <atomic>
 #include <cstring>
@@ -411,7 +413,7 @@ std::string DescribeParameter(uint8_t* base, uint32_t value)
     // A bug check is the guest saying it cannot continue. Carrying on would run
     // code the title itself has declared unsafe, and whatever crashed next
     // would be nowhere near this.
-    std::exit(70);
+    gears::FatalExit(70);
 }
 } // namespace
 

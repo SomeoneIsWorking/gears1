@@ -696,3 +696,39 @@ and surprising result. Current tally, matched arms:
 
     nomovie:  0 panics /  8 runs
     control:  0 panics /  7 runs
+
+### Note (2026-07-29)
+LINKED TO #46 BY A STACK TRACE, and the masking is now removed.
+
+AddressSanitizer, chasing the intermittent crash in #46, produced the chain that
+ties them together:
+
+    sub_828D0790 (_purecall)
+      -> sub_828D2FB8   the title's fatal handler
+      -> KeBugCheck
+      -> GuestBugCheck (kernel_misc.cpp:414)
+      -> std::exit
+      -> ~unordered_map from __run_exit_handlers
+      -> heap-use-after-free on another guest thread
+
+So this pure-virtual call is the PRIMARY fault, and the crash #46 was chasing
+was a second one that this one caused: exiting from one guest thread destroyed
+the function-local statics that nineteen other running threads were still
+calling through.
+
+WHY THAT MATTERS HERE: the second crash was MASKING this one. The process died
+in a hash-map lookup on the audio thread, which is where a debugger pointed and
+where attention went. With the exit path fixed (_Exit, no handlers, no static
+destruction -- runtime/fatal_exit.h) the pure-virtual call now reports cleanly
+and dies where it actually failed.
+
+Also recorded from the same run: the guest-side log line is
+    [fatal:error] PURE VIRTUAL CALL (_purecall at sub_828D0790), from 0x82444f7c
+which names a CALLER this entry did not previously have. sub_82444EF0 is on the
+stack (ppc_recomp.60.cpp:23437). That is a concrete place to start, and it is
+more than 'an object walk somewhere'.
+
+One ASan run caught the same fault as a plain jump through a null vtable slot --
+'SEGV on unknown address 0x000000000000, pc points to the zero page', with
+r15 = 0x82444ef8 -- which corroborates the object's vtable being unusable rather
+than merely abstract.
