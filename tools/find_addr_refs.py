@@ -17,6 +17,17 @@ traced back to the code that uses it.
 
     tools/find_addr_refs.py <image> <base> <address> [address ...]
     tools/find_addr_refs.py scratch/raw/gears_image.bin 0x82000000 0x820bda98
+
+Both shapes that build an address are recognised:
+
+    lis  rA, hi ; addi rA, rA, lo      -- the address computed into a register
+    lis  rA, hi ; stw  rD, lo(rA)      -- the address used directly by a load
+                                          or store
+
+The second was missing until it cost a session: a global whose only WRITER used
+`lis`+`stw` was reported as having no writers at all, and reasoning was built on
+that absence. An instrument that under-reports silently is worse than no
+instrument, because "no hits" reads as an answer.
 """
 import struct
 import sys
@@ -47,6 +58,28 @@ def scan(data, base, targets):
 
         if opcode == 15 and a == 0:          # lis rD, imm
             pending[d] = (i, imm)
+            continue
+
+        # A LOAD OR STORE COMPLETES THE ADDRESS TOO, and missing this made the
+        # tool under-report SILENTLY -- the worst way for an instrument to be
+        # wrong. `lis rA,hi ; stw rD,lo(rA)` writes to hi:lo just as
+        # `lis rA,hi ; addi rA,rA,lo` computes it, and only the second was
+        # recognised. That is how "only ONE reference to 0x82BFAD3C in the whole
+        # image" was concluded, when the site that actually SETS it
+        # (0x82207DBC, `stw r11,-21188(r10)`) was one of these.
+        #
+        # Opcodes 32..55 are the D-form integer and float load/stores: lwz(32)
+        # lwzu lbz lbzu stw(36) stwu stb stbu lhz lhzu lha lhau sth sthu lmw stmw
+        # lfs lfsu lfd lfdu stfs stfsu stfd stfdu. All share the rD,imm(rA) shape.
+        if 32 <= opcode <= 55:
+            entry = pending.get(a)
+            if entry is not None and i - entry[0] <= WINDOW:
+                address = ((entry[1] << 16) + sign16(imm)) & 0xFFFFFFFF
+                if address in hits:
+                    hits[address].append(base + i * 4)
+            # The base register survives a load/store, so `pending` is NOT
+            # cleared here -- one `lis` commonly serves several accesses to
+            # neighbouring fields of the same structure.
             continue
 
         if opcode in (14, 24):               # addi rD,rA,imm / ori rA,rS,imm
