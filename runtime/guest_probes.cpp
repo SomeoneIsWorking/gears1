@@ -175,6 +175,7 @@ PPC_FUNC(sub_828D0790)
 // ABOVE here. Walking further by reading costs a hop per attempt; logging the
 // arguments and the caller answers it in one run.
 extern "C" PPC_FUNC(__imp__sub_82214F50);
+extern "C" PPC_FUNC(__imp__sub_822151F8);
 
 PPC_FUNC(sub_82214F50)
 {
@@ -187,4 +188,17 @@ PPC_FUNC(sub_82214F50)
             ctx.r4.u32 >> 20, uint32_t(ctx.lr), ctx.r3.u32, ctx.r5.u32,
             ctx.r6.u32, ctx.r7.u32);
     __imp__sub_82214F50(ctx, base);
+}
+
+// One level up: the size arrives here as an argument and is passed on through
+// a vtable slot, so this is where it is still traceable to a caller.
+PPC_FUNC(sub_822151F8)
+{
+    static std::atomic<uint64_t> seen{0};
+    if (ctx.r4.u32 >= (64u << 20) && seen.fetch_add(1) < 8)
+        lucent::error("probe", "sub_822151F8 asked for {:#x} bytes ({} MB) from"
+            " {:#x}: r3={:#x} r5={:#x} r6={:#x} r7={:#x}", ctx.r4.u32,
+            ctx.r4.u32 >> 20, uint32_t(ctx.lr), ctx.r3.u32, ctx.r5.u32,
+            ctx.r6.u32, ctx.r7.u32);
+    __imp__sub_822151F8(ctx, base);
 }
