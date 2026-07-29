@@ -267,3 +267,56 @@ one that matters. Everything above it in the chain is now known.
 
 RENAME THIS ENTRY when the owner is confirmed. Leaving "on the save path" in the
 title would send the next session down the same wrong road this one started on.
+
+### Note (2026-07-29)
+THE CHAIN IS CLOSED END TO END. THE SIZE IS EXPLAINED DOWN TO THE BYTE.
+
+The archive's Serialize is vtable slot 1, sub_821B5C28, and it is an unbounded
+memory reader:
+
+    Serialize(this, dest, length):
+        if (length == 0) return
+        buffer = *(uint32*)(this + 112) -> +0     // the byte array
+        memcpy(dest, buffer + this->offset(+108), length)
+        this->offset += length
+
+There is NO bounds check and NO validity check on the buffer.
+
+THE ARRAY IS EMPTY: its data pointer is 0 and its count is 0. So the read was
+literally memcpy(dest, 0 + 4, 4) -- it read LOW GUEST MEMORY. Address 4 holds
+0xb0800000, the FString code takes its absolute value (0x4F800000) and
+multiplies by 2 bytes per character, and that is 0x9f000000. Every step is now
+measured, not inferred, and the number has no mystery left in it.
+
+WHY A NULL READ SUCCEEDS HERE, which is the part worth keeping: guest address 0
+is MAPPED, because kPhysicalAliases in guest_memory.cpp includes 0x00000000 --
+the raw physical window. The console exposes its 512 MiB through several
+windows and the runtime aliases all of them, so the whole physical block is
+readable and writable at guest address 0. A null dereference in guest code
+therefore does not fault; it reads live physical RAM. That is why the length
+was interesting garbage rather than a zero (a zero length would have been
+harmless and there would be no bug here at all).
+
+  This is a standing DEBUGGING HAZARD, not a fix to apply blindly. Unmapping
+  the first page would make null dereferences fault where the console faults --
+  but physical page 0 is inside the physical heap's own range
+  (MmGetPhysicalAddress(0xa0000000) is 0), so a physical allocation can legally
+  land there and the GPU path would then be dereferencing a guard page. Do not
+  unmap it without first proving nothing allocates physical page 0.
+
+WHAT IS LEFT, and it is now a single question: WHY IS THE ARRAY EMPTY? The
+deserialisation is a DEFERRED MESSAGE HANDLER -- sub_821B43F8 dispatches on a
+message id (48 here, 45 nearby) and only calls the deserialiser when a flag in
+the global struct at 0x82BFAD3C is non-zero. So something set "there is data
+pending" while the buffer behind it was never filled. Find what sets that flag:
+the struct at 0x82BFAD10 is filled at 0x821FB4D8 (three FStrings and a flag at
++40), and 0x82BFAD3C is +44 of the same struct, which nothing else in the image
+references by address.
+
+RULED OUT this session, so nobody repeats it: the four XMsg services refused
+just before the failure are NOT the missing filler. Identified against Xenia --
+0x0007001A/B are XMP playback controller get/set, 0x00058004 and 0x00058020 are
+XLiveBase startup and its enumerate, 0x000B0006 is XGIUserSetContext. All are
+either fire-and-forget or write a small status into their own buffer; none of
+them populates a deserialisation blob. They are still worth implementing as
+real services, but not as a fix for this.
