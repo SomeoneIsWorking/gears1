@@ -20,6 +20,7 @@ namespace
 
 constexpr uint32_t kStatusObjectNameNotFound = 0xC0000034;
 constexpr uint32_t kStatusEndOfFile = 0xC0000011;
+constexpr uint32_t kStatusAccessDenied = 0xC0000022;
 constexpr uint32_t kStatusNoSuchFile = 0xC000000F;
 
 constexpr uint32_t kFileAttributeDirectory = 0x10;
@@ -30,6 +31,7 @@ struct OpenFile
     FILE* handle;
     uint64_t size;
     std::string guestPath;
+    bool writable = false;
 };
 
 std::mutex g_filesMutex;
@@ -116,7 +118,12 @@ void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
     const std::string guestPath = ReadObjectPath(base, objectAttributes);
     const std::filesystem::path host = gears::Files().Resolve(guestPath);
 
-    if (host.empty() || !std::filesystem::exists(host))
+    // A save file is CREATED, not found: on a writable mount a missing file is
+    // a file to make, which is the whole difference between the disc and the
+    // player's storage.
+    const bool writable = gears::Files().IsWritable(guestPath);
+    const bool exists = !host.empty() && std::filesystem::exists(host);
+    if (host.empty() || (!exists && !writable))
     {
         lucent::debug("fs", "open '{}' -> not found", guestPath);
         StoreU32(base, ioStatusBlock, kStatusObjectNameNotFound);
@@ -136,7 +143,15 @@ void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
         return;
     }
 
-    FILE* f = fopen(host.c_str(), "rb");
+    if (writable)
+    {
+        std::error_code dirEc;
+        std::filesystem::create_directories(host.parent_path(), dirEc);
+    }
+    // "r+b" keeps an existing save intact for a partial rewrite; "w+b" makes a
+    // new one. Truncating an existing save on open would lose a player's
+    // progress the moment the title looked at it.
+    FILE* f = fopen(host.c_str(), writable ? (exists ? "r+b" : "w+b") : "rb");
     if (f == nullptr)
     {
         StoreU32(base, ioStatusBlock, kStatusObjectNameNotFound);
@@ -146,8 +161,12 @@ void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
 
     auto file = std::make_unique<OpenFile>();
     file->handle = f;
-    file->size = std::filesystem::file_size(host, ec);
+    file->size = exists ? std::filesystem::file_size(host, ec) : 0;
     file->guestPath = guestPath;
+    file->writable = writable;
+    if (writable)
+        lucent::info("fs", "{} '{}' for writing -> {}", exists ? "opened" : "created",
+                     guestPath, host.string());
 
     uint32_t handle;
     {
@@ -204,6 +223,59 @@ void __imp__NtReadFile(PPCContext& __restrict ctx, uint8_t* base)
     StoreU32(base, ioStatusBlock + 4, uint32_t(read));
 
     ctx.r3.u64 = (read == 0 && length != 0) ? kStatusEndOfFile : gears::kStatusSuccess;
+}
+
+// NTSTATUS NtWriteFile(HANDLE, HANDLE Event, PIO_APC_ROUTINE, PVOID ApcContext,
+//                      PIO_STATUS_BLOCK, PVOID Buffer, ULONG Length,
+//                      PLARGE_INTEGER ByteOffset, PULONG Key)
+//
+// The counterpart of NtReadFile, and the reason the title could not save: with
+// no write path, every save it attempted had nowhere to land. Writes are
+// refused on a handle that is not from a writable mount, so nothing can scribble
+// on the player's game data through a path that resolves to the disc.
+void __imp__NtWriteFile(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t handle = ctx.r3.u32;
+    const uint32_t ioStatusBlock = ctx.r7.u32;
+    const uint32_t buffer = ctx.r8.u32;
+    const uint32_t length = ctx.r9.u32;
+    const uint32_t byteOffsetPtr = ctx.r10.u32;
+
+    OpenFile* file = FindFile(handle);
+    if (file == nullptr)
+    {
+        lucent::error("fs", "write to unknown handle {:#x}", handle);
+        ctx.r3.u64 = gears::kStatusInvalidHandle;
+        return;
+    }
+    if (!file->writable)
+    {
+        lucent::warn("fs", "refused a write to '{}', which is not on a writable"
+            " mount", file->guestPath);
+        StoreU32(base, ioStatusBlock, kStatusAccessDenied);
+        ctx.r3.u64 = kStatusAccessDenied;
+        return;
+    }
+
+    if (byteOffsetPtr != 0)
+    {
+        const uint64_t offset = ByteSwap(*reinterpret_cast<uint64_t*>(base + byteOffsetPtr));
+        fseek(file->handle, long(offset), SEEK_SET);
+    }
+
+    const size_t written = fwrite(base + buffer, 1, length, file->handle);
+    // Flushed per write rather than at close: a player who kills the game has
+    // still saved, and a save that exists only in a FILE* buffer is a save that
+    // can vanish for reasons the player will never understand.
+    fflush(file->handle);
+
+    const uint64_t end = uint64_t(ftell(file->handle));
+    file->size = std::max(file->size, end);
+
+    StoreU32(base, ioStatusBlock, gears::kStatusSuccess);
+    StoreU32(base, ioStatusBlock + 4, uint32_t(written));
+    lucent::debug("fs", "wrote {} bytes to '{}'", written, file->guestPath);
+    ctx.r3.u64 = gears::kStatusSuccess;
 }
 
 // NTSTATUS NtQueryInformationFile(HANDLE, PIO_STATUS_BLOCK, PVOID Info,
