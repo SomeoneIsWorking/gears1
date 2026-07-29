@@ -380,3 +380,43 @@ The title still segfaults at the checkpoint, now in sub_824961D0: an indirect ca
 WHAT I GOT WRONG AND WHY IT MATTERS: I claimed a single-variable A/B proved the fix. It did not -- answering the selector changes the menu flow, so the timed input script no longer navigates the same path, and the two arms were never running the same code. Then even the weaker claim ('same milestone reached, allocation gone') turned out to be measuring memory luck. Two levels of over-claiming on the same change.
 
 THE NEXT STEP IS UNCHANGED FROM BEFORE THE DETOUR: find what sets the pending-data flag at 0x82BFAD3C+0 (it is +44 of the struct at 0x82BFAD10, filled at 0x821FB4D8) while the buffer behind it is empty. That is the service that is missing.
+
+### Note (2026-07-29)
+THE PENDING FLAG IS SET UNCONDITIONALLY, AND find_addr_refs.py WAS LYING.
+
+THE INSTRUMENT FIRST, because it invalidates an earlier note in this entry.
+tools/find_addr_refs.py recognised only 'lis rA,hi ; addi rA,rA,lo' -- the
+address COMPUTED into a register. It did not recognise 'lis rA,hi ; stw rD,lo(rA)',
+where the address is used directly by a load or store. Every global whose only
+writer uses the second shape was reported as having NO writers.
+
+That is exactly what happened here. An earlier note in this entry says 'only ONE
+reference to 0x82BFAD3C in the whole image (the dispatcher itself)' and reasons
+from that absence. FALSE. With the tool fixed there are THREE:
+    0x821b4440  the dispatcher's read
+    0x821b44f4  the dispatcher's msg-45 clear
+    0x82207dbc  THE SETTER -- which was invisible
+Fixed in tools/find_addr_refs.py, validated both ways: the five addi-form
+references to 0x82BFAD10 are unchanged, and a control address still reports
+nothing. An instrument that under-reports SILENTLY is worse than none, because
+'no hits' reads as an answer rather than as a blind spot.
+
+WHAT SETS THE FLAG: sub_82207CC8 at 0x82207DBC does 'li r11,1 ; stw r11,-21188(r10)'
+with r10 = 0x82C00000. It is a Kismet SequenceOp: on its FIRST TICK (member +228
+== 0) it plays the movie Startup.sfd, registers the observer for messages 48 and
+45, and then sets the flag UNCONDITIONALLY and +228 = 98. IT PERFORMS NO CHECK
+THAT ANY DATA EXISTS.
+
+So the title is not wrong to announce pending data -- announcing it is
+unconditional by design. The defect is that the buffer behind it was never
+filled. The blob is the TArray<BYTE> at offset 420 of *(APlayerController+1496),
+and its feeder is sub_821BA838, which RETURNS IMMEDIATELY at 0x821BA850 when
+[obj+424] == 0.
+
+NEXT STEP, and it is cheap: one instrumented run logging (1) [obj+424] and
+whether sub_821BA838 gets past its early return, (2) whether sub_82207E98 runs
+and its 'LoadChapter=%i' parse succeeds, (3) the return of the virtual at
+[*(PC+1496)]+656 called at 0x821B4928. Those three discriminate the candidates.
+
+DO NOT add a 'skip the deserialise if the array is empty' guard. That is a
+bandaid over an unexplained state, and the state is now nearly explained.
