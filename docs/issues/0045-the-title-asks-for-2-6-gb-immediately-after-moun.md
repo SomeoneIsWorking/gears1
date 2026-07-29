@@ -548,3 +548,43 @@ archive-derived object while the restore path still holds it.
 NOTE ON THE CARRIER: the earlier finding stands -- LoadChapter runs and fills
 the carrier with 385 real bytes. That is NOT the problem. The problem is what
 happens to the object built over it.
+
+### Note (2026-07-29)
+THE FREE IS NAMED: IT COMES FROM THE ENGINE REALLOC.
+
+A new probe on the pool's free (sub_822153F0, identified from the allocator's
+own vtable at runtime -- slot +4 allocate, +8 realloc, +12 FREE) plus
+GEARS_WATCH_FREE=<address> reports the release of a specific block as it
+happens. Run with the address the core file gave (0x42babc40):
+
+  [lifetime] watching for the release of 0x42babc40
+  [lifetime:error] WATCHED ADDRESS 0x42babc40 FREED from 0x822153e4 (free #742078)
+  [lifetime:error] WATCHED ADDRESS 0x42babc40 FREED from 0x82215944 (free #1848647)
+  [lifetime:error] WATCHED ADDRESS 0x42babc40 FREED from 0x822153e4 (free #1873577)
+
+The last one is immediately before the crash. Both sites are inside the
+allocator itself:
+  0x822153E4 is in sub_822151F8, THE ENGINE REALLOC (the return address of its
+             free-the-old-block call)
+  0x82215944 is in sub_82215648
+
+BEING FREED THREE TIMES IS NOT ITSELF A BUG -- a pool reuses addresses, so
+alloc/free/alloc/free on the same address is normal. What matters is that the
+last free comes from the REALLOC path, which is the classic shape for this
+crash: the array grows, realloc moves it, the old block is released, and
+something still holds the OLD pointer. The restore path then calls through it.
+
+WHAT IS STILL NEEDED to close this: show that the pointer the restore path uses
+(the object at r24+1376 inside sub_824961D0, confirmed as 0x42babc40 by gdb) is
+a copy taken BEFORE that realloc. That is a matter of reading who caches it.
+
+INSTRUMENT NOTE, because it cost a run: the obvious probe -- a strong
+sub_824961D0 reading r24+1376 on entry -- IS INVALID. r24 is set up inside that
+function, so on entry it holds the caller's value; the probe reported an object
+of 0x470075 with a null vtable, which is nonsense. A probe can only see a guest
+function's arguments and callee-saved registers after the prologue. For
+mid-function state the core file is the instrument. Also removed: a
+constructor/destructor probe pair that reported '0 constructed, 0 destroyed' --
+those bodies are inlined at their call sites, so that seam is blind and its zero
+means nothing. Both are now documented in the source so the next reader does not
+repeat them.
