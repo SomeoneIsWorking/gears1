@@ -4,6 +4,9 @@
 // title's reads are served from its actual data files.
 #include "import_stub.h"
 
+#include <algorithm>
+#include <vector>
+#include "directory_info.h"
 #include <cstdio>
 #include <memory>
 #include <mutex>
@@ -22,6 +25,8 @@ constexpr uint32_t kStatusObjectNameNotFound = 0xC0000034;
 constexpr uint32_t kStatusEndOfFile = 0xC0000011;
 constexpr uint32_t kStatusAccessDenied = 0xC0000022;
 constexpr uint32_t kStatusNoSuchFile = 0xC000000F;
+constexpr uint32_t kStatusNoMoreFiles = 0x80000006;
+constexpr uint32_t kStatusInfoLengthMismatch = 0xC0000004;
 
 constexpr uint32_t kFileAttributeDirectory = 0x10;
 constexpr uint32_t kFileAttributeNormal = 0x80;
@@ -32,6 +37,13 @@ struct OpenFile
     uint64_t size;
     std::string guestPath;
     bool writable = false;
+    // Directories have no FILE*: they are walked with NtQueryDirectoryFile
+    // instead of read, so the host path is what is kept.
+    bool isDirectory = false;
+    std::filesystem::path hostPath;
+    size_t directoryCursor = 0;
+    std::vector<gears::DirectoryEntry> listing;
+    bool listed = false;
 };
 
 std::mutex g_filesMutex;
@@ -134,12 +146,30 @@ void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
     std::error_code ec;
     if (std::filesystem::is_directory(host, ec))
     {
-        // Directory handles are only useful with NtQueryDirectoryFile, which is
-        // not implemented; refusing is better than handing back a handle that
-        // silently fails every later operation.
-        lucent::warn("fs", "open '{}' is a directory -- not supported", guestPath);
-        StoreU32(base, ioStatusBlock, kStatusNoSuchFile);
-        ctx.r3.u64 = kStatusNoSuchFile;
+        // A DIRECTORY HANDLE. The title opens the root of its save mount and
+        // walks it, so refusing this told a title checking whether its save
+        // location is usable that the location cannot be opened at all.
+        auto directory = std::make_unique<OpenFile>();
+        directory->handle = nullptr;
+        directory->guestPath = guestPath;
+        directory->hostPath = host;
+        directory->isDirectory = true;
+        directory->writable = writable;
+
+        uint32_t directoryHandle;
+        {
+            std::lock_guard<std::mutex> guard(g_filesMutex);
+            directoryHandle = g_nextFileHandle;
+            g_nextFileHandle += 4;
+            g_openFiles[directoryHandle] = std::move(directory);
+        }
+
+        StoreU32(base, handlePtr, directoryHandle);
+        StoreU32(base, ioStatusBlock, gears::kStatusSuccess);
+        StoreU32(base, ioStatusBlock + 4, 1); // FILE_OPENED
+        lucent::debug("fs", "open '{}' -> directory handle {:#x}", guestPath,
+                      directoryHandle);
+        ctx.r3.u64 = gears::kStatusSuccess;
         return;
     }
 
@@ -379,4 +409,83 @@ bool CloseGuestFile(uint32_t handle)
     fclose(it->second->handle);
     g_openFiles.erase(it);
     return true;
+}
+
+// NTSTATUS NtQueryDirectoryFile(HANDLE, HANDLE Event, PIO_APC_ROUTINE, PVOID ApcContext,
+//                               PIO_STATUS_BLOCK, PVOID FileInformation, ULONG Length,
+//                               PANSI_STRING FileName, BOOLEAN RestartScan)
+//
+// Walks a directory handle, ONE ENTRY PER CALL, which is the console's
+// behaviour and what a caller looping until STATUS_NO_MORE_FILES expects.
+//
+// The listing is taken once, on the first query, and then walked from a cursor.
+// Re-reading the directory on every call would let it change underneath a walk
+// -- and this runtime writes save files into exactly these directories, so that
+// is a real possibility rather than a theoretical one.
+void __imp__NtQueryDirectoryFile(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t handle = ctx.r3.u32;
+    const uint32_t ioStatusBlock = ctx.r7.u32;
+    const uint32_t buffer = ctx.r8.u32;
+    const uint32_t length = ctx.r9.u32;
+
+    OpenFile* file = FindFile(handle);
+    if (file == nullptr || !file->isDirectory)
+    {
+        ctx.r3.u64 = gears::kStatusInvalidHandle;
+        return;
+    }
+
+    // The console refuses a buffer that cannot hold the fixed part plus a name.
+    if (length < gears::kDirectoryInfoHeaderSize)
+    {
+        ctx.r3.u64 = kStatusInfoLengthMismatch;
+        return;
+    }
+
+    std::lock_guard<std::mutex> guard(g_filesMutex);
+    if (!file->listed)
+    {
+        std::error_code ec;
+        for (const auto& entry :
+             std::filesystem::directory_iterator(file->hostPath, ec))
+        {
+            gears::DirectoryEntry item;
+            item.name = entry.path().filename().string();
+            item.directory = entry.is_directory(ec);
+            item.size = item.directory ? 0 : entry.file_size(ec);
+            file->listing.push_back(std::move(item));
+        }
+        // Sorted, so two walks of the same directory agree: the filesystem
+        // makes no ordering promise and a title that indexes what it walked
+        // would see entries move between runs.
+        std::sort(file->listing.begin(), file->listing.end(),
+                  [](const gears::DirectoryEntry& a, const gears::DirectoryEntry& b) {
+                      return a.name < b.name;
+                  });
+        file->listed = true;
+        lucent::debug("fs", "directory '{}' has {} entries", file->guestPath,
+                      file->listing.size());
+    }
+
+    if (file->directoryCursor >= file->listing.size())
+    {
+        StoreU32(base, ioStatusBlock + 4, 0);
+        ctx.r3.u64 = kStatusNoMoreFiles;
+        return;
+    }
+
+    const gears::DirectoryEntry& entry = file->listing[file->directoryCursor];
+    const uint32_t written = gears::WriteDirectoryEntry(base, buffer, length,
+                                                        entry, true);
+    if (written == 0)
+    {
+        ctx.r3.u64 = kStatusInfoLengthMismatch;
+        return;
+    }
+
+    ++file->directoryCursor;
+    StoreU32(base, ioStatusBlock, gears::kStatusSuccess);
+    StoreU32(base, ioStatusBlock + 4, written);
+    ctx.r3.u64 = gears::kStatusSuccess;
 }

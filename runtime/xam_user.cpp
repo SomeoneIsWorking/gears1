@@ -14,6 +14,7 @@
 #include "import_stub.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <filesystem>
@@ -635,11 +636,20 @@ void __imp__XamContentClose(PPCContext& __restrict ctx, uint8_t* base)
 // System UI. There is no dashboard overlay to raise. Refusing immediately is
 // important: a title told the UI opened would wait for a completion
 // notification that nothing can ever post.
-#define GEARS_XAM_NO_UI(name)                                    \
-    void __imp__##name(PPCContext& __restrict ctx, uint8_t*)     \
-    {                                                            \
-        lucent::debug("xam", #name " -> no system UI");           \
-        ctx.r3.u64 = gears::kErrorAccessDenied;                  \
+// WARN, not debug. A refused system dialog changes what the title does next,
+// and the refusal is invisible at the point where the consequence shows up --
+// XamShowDeviceSelectorUI sat here quietly while the title, unable to obtain a
+// storage device, failed sixty seconds later and four subsystems away. Once
+// each, so a title that polls one cannot drown the log.
+#define GEARS_XAM_NO_UI(name)                                            \
+    void __imp__##name(PPCContext& __restrict ctx, uint8_t*)             \
+    {                                                                    \
+        static std::atomic<bool> reported{false};                        \
+        if (!reported.exchange(true))                                    \
+            lucent::warn("xam", #name " refused: this runtime has no"    \
+                " system UI. If the title misbehaves after this, that"   \
+                " refusal is a candidate for why");                      \
+        ctx.r3.u64 = gears::kErrorAccessDenied;                          \
     }
 
 // DWORD XamShowDeviceSelectorUI(DWORD UserIndex, DWORD ContentType,
