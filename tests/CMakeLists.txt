@@ -83,3 +83,16 @@ target_include_directories(test_xam_apps PRIVATE
     ../extern/XenonRecomp/XenonUtils)
 target_link_libraries(test_xam_apps PRIVATE lucent::lucent)
 add_test(NAME xam_apps COMMAND test_xam_apps)
+
+# Saved-game content: the XCONTENT_DATA descriptor's byte layout, and the rule
+# for when content exists at all.
+add_executable(test_xam_content
+    test_xam_content.cpp
+    ../runtime/xam_content.cpp)
+target_include_directories(test_xam_content PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}"
+    "${THIRDPARTY_ROOT}/simde"
+    ../extern/XenonRecomp/XenonUtils)
+target_link_libraries(test_xam_content PRIVATE lucent::lucent)
+add_test(NAME xam_content COMMAND test_xam_content)
