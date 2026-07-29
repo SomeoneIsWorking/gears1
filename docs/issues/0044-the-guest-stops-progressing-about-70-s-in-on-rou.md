@@ -732,3 +732,56 @@ One ASan run caught the same fault as a plain jump through a null vtable slot --
 'SEGV on unknown address 0x000000000000, pc points to the zero page', with
 r15 = 0x82444ef8 -- which corroborates the object's vtable being unusable rather
 than merely abstract.
+
+### Note (2026-07-29)
+THE PURE VIRTUAL CALL IS A RING-BUFFER FRAMING FAILURE, NOT (NECESSARILY) A LIFETIME BUG.
+
+sub_82444EF0 is UE3's RenderingThreadMain: it drains an FRingBuffer at
+0x82C0CB24. Field map recovered and cross-checked against the allocator
+sub_8221CBA8: +0 Data, +4 DataEnd, +8 WritePointer, +12 WriteEnd, +16
+bIsWriting, +20 ReadPointer.
+
+The faulting call is the command's virtual SLOT 1 (byte offset +4):
+    r30 = ReadPointer ; r11 = [r30+0] ; r11 = [r11+4] ; bctrl   (lr 0x82444F7C)
+    r29 = r3 ; ... ; ReadPointer += r29
+That is FRenderCommand::Execute(), and its RETURN VALUE advances ReadPointer.
+Ground truth for the class: sub_82445278 allocates 8 bytes, stores vtable
+0x82106D58, whose slot +4 returns exactly 8 and whose slot +8 returns the UTF-16
+literal 'FenceCommand'.
+
+CONSEQUENCE: once ReadPointer lands off a command boundary it NEVER recovers,
+because the loop advances it by whatever the bogus Execute() returned. A vptr
+reading as a heap address (0x42babe80, as the probe reported) is what you get
+when ReadPointer sits on a command's PAYLOAD rather than its header.
+
+WHAT IS NOT ESTABLISHED, and this correction matters. The investigation
+concluded that a virtual call during construction/destruction was RULED OUT,
+because no render-command vtable has _purecall at slot +4. That reasoning is
+near-tautological and was refuted on review: the scan RECOGNISES a command
+vtable by slot +8 being a string-returning thunk, so a fully abstract base
+vtable -- shape [real dtor, purecall, purecall] -- is structurally invisible to
+it and the scan can only ever print zero. That shape exists in this image and IS
+stored into objects. So a ctor/dtor race is NOT ruled out. What survives is the
+weaker, direct evidence: the two enqueue sites read instruction by instruction
+(sub_82445278, sub_8221BF50) each emit exactly ONE vptr store, with the commit
+fenced after it.
+
+RULED OUT BY MEASUREMENT: non-constant command sizes (every Execute returns a
+small constant matching its enqueue-site allocation), dropped barriers (lwsync
+is translated as an acq_rel fence, and PPC_LOAD/STORE_U32 are volatile so the
+spin loops cannot be hoisted), and a runtime override sitting on an Execute
+(none of the 13 overrides is one of the 55 Execute addresses).
+
+FLAGGED, NOT BLAMED: stwcx. is translated as a value compare-and-swap rather
+than a store-conditional, so it silently succeeds under ABA where the console
+would fail the reservation.
+
+THE THREE NEXT INSTRUMENTS, in order of value:
+1. A thread-id assertion at the top of sub_82444EF0's loop and in sub_8221CBA8.
+   FRingBuffer assumes ONE producer and ONE consumer; two threads in either is
+   precisely this corruption, and this port has nineteen live guest threads.
+2. Log slot +8 (DescribeCommand, which returns a literal string) before each
+   Execute. The last good command name plus the byte offset of the divergence
+   names the culprit directly.
+3. Print [0x82C0CB24+0] and [+4] and check whether the bad vptr falls inside
+   Data..DataEnd -- that would confirm the payload-misalignment reading.

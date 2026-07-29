@@ -48,12 +48,17 @@ bool UserProfile::Has(uint32_t settingId) const
     return settings_.find(settingId) != settings_.end();
 }
 
-void UserProfile::SetInt32(uint32_t settingId, int32_t value)
+void UserProfile::SetInline(uint32_t settingId, UserDataType type, int64_t value)
 {
     Value& v = settings_[settingId];
-    v.type = UserDataType::Int32;
+    v.type = type;
     v.inlineValue = value;
     v.bytes.clear();
+}
+
+void UserProfile::SetInt32(uint32_t settingId, int32_t value)
+{
+    SetInline(settingId, UserDataType::Int32, value);
 }
 
 bool UserProfile::GetInt32(uint32_t settingId, int32_t& value) const
@@ -215,13 +220,50 @@ bool WriteProfileReadResult(uint8_t* guestBase, uint32_t bufferAddress,
         StoreBE32(record + kSettingId, id);
         StoreBE32(record + kSettingUserIndex, 0);
 
+        // WHICH TYPE GOVERNS: the SETTING ID, always. The id is the caller's
+        // declaration of what it expects and of how much payload it reserved,
+        // and ProfileReadBufferSize sized the buffer from exactly that. If the
+        // stored value is a different SHAPE -- inline where the id declares a
+        // pointer, or the reverse -- projecting it would write a payload the
+        // buffer never reserved, past the end. That was a real overrun: a
+        // stored Binary under an id declaring an inline type reserved zero
+        // payload bytes and then copied into them.
+        const bool idWantsPayload = key.type == UserDataType::Binary ||
+                                    key.type == UserDataType::WString;
+
         const auto it = profile.settings_.find(id);
+        const bool storedWantsPayload =
+            it != profile.settings_.end() &&
+            (it->second.type == UserDataType::Binary ||
+             it->second.type == UserDataType::WString);
+
+        if (it != profile.settings_.end() && idWantsPayload != storedWantsPayload)
+        {
+            // Reported, not silently coerced: the two disagree about the shape
+            // of the value, and guessing which is right is how a buffer gets
+            // overrun.
+            lucent::warn("profile", "setting {:#x} declares {} but holds {};"
+                " reporting it as unset", id,
+                idWantsPayload ? "a payload" : "an inline value",
+                storedWantsPayload ? "a payload" : "an inline value");
+            StoreBE32(record + kSettingSource, uint32_t(SettingSource::NoValue));
+            record[kSettingDataType] = uint8_t(UserDataType::Unset);
+            if (idWantsPayload)
+                payloadAddress += key.size;
+            continue;
+        }
+
         if (it == profile.settings_.end())
         {
             // Never set. The title needs to tell this from a value of zero, so
             // the type is UNSET and the source says there is no value.
             StoreBE32(record + kSettingSource, uint32_t(SettingSource::NoValue));
             record[kSettingDataType] = uint8_t(UserDataType::Unset);
+            // The cursor advances even for an absent setting, because the
+            // buffer was sized with room for its payload and the NEXT setting's
+            // pointer has to land where the sizing put it.
+            if (idWantsPayload)
+                payloadAddress += key.size;
             continue;
         }
 
