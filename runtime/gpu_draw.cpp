@@ -1589,6 +1589,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         return std::chrono::duration<double, std::milli>(Clock::now() - tStart).count();
     };
     double msSetup = 0, msDrawLoop = 0, msSubmit = 0, msReadback = 0;
+    // Inside the draw loop. Recording a gameplay frame costs ~31 ms of CPU
+    // for ~700 draws and the existing breakdown accounts for only ~2 of it,
+    // so the rest is measured rather than guessed at -- hoisting the loop's
+    // containers out was tried first on a hunch and moved it by 1 ms.
+    double msDescAlloc = 0, msDescUpdate = 0, msUniforms = 0, msIndex = 0;
     double msTranslate = 0, msPipeline = 0, msTexture = 0, msSsboUpload = 0;
     auto accumulate = [](double& into, Clock::time_point from) {
         into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
@@ -3058,9 +3063,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // (base, format) pair its own registers happen to carry.
     for (const FrameDrawItem& d : in.draws)
     {
-        if (d.registerFile.size() < 0x8000)
-            continue;
-        const uint32_t* R = d.registerFile.data();
+        const uint32_t* R = d.registers();
+            if (!R)
+                continue;
         const uint32_t mode = R[0x2208] & 0x7;
         if (mode != 4 /*kColorDepth*/ && mode != 5 /*kDepthOnly*/)
             continue;
@@ -3086,9 +3091,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     std::set<uint32_t> depthResolveDests;
     for (const FrameDrawItem& d : in.draws)
     {
-        if (d.registerFile.size() < 0x8000)
-            continue;
-        const uint32_t* R = d.registerFile.data();
+        const uint32_t* R = d.registers();
+            if (!R)
+                continue;
         if ((R[0x2208] & 0x7) != 6 /*kCopy*/)
             continue;
         const uint32_t srcSelect = R[0x2318] & 0x7;
@@ -3327,11 +3332,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
     };
 
+    // Hoisted out of the per-draw loop deliberately. Recording a gameplay frame
+    // costs ~32 ms of CPU for ~700 draws, and a fresh vector plus a fresh deque
+    // per draw is ~700 rounds of heap churn for containers that are rebuilt
+    // from scratch each time anyway. Cleared per draw below; the deque still
+    // gives the pointer stability vkUpdateDescriptorSets needs.
+    std::vector<VkWriteDescriptorSet> w;
+    std::deque<VkDescriptorImageInfo> imgInfos;
+    w.reserve(32);
+
     for (const FrameDrawItem& d : in.draws)
     {
-        if (d.registerFile.size() < 0x8000)
+        const uint32_t* R = d.registers();
+        if (!R)
         { ++skipped; ++skipReasons[1]; continue; }
-        const uint32_t* R = d.registerFile.data();
 
         // Which EDRAM surface this draw targets (RB_COLOR_INFO: color_base is
         // the low 12 bits in tiles, color_format bits 16..19), and what the
@@ -3619,12 +3633,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         std::memcpy(fetch.data(), &R[0x4800], fetch.size());
 
         VkDescriptorBufferInfo biSys{}, biFvs{}, biFps{}, biBl{}, biFetch{};
+        const double uniformsBegin = sinceStartMs();
         if (!makeUbo(sysc.data(), sysc.size(), biSys) ||
             !makeUbo(fVs.data(), fVs.size(), biFvs) ||
             !makeUbo(fPs.data(), fPs.size(), biFps) ||
             !makeUbo(boolLoop.data(), boolLoop.size(), biBl) ||
             !makeUbo(fetch.data(), fetch.size(), biFetch))
         { ++skipped; ++skipReasons[4]; continue; }
+        msUniforms += sinceStartMs() - uniformsBegin;
+        const double indexBegin = sinceStartMs();
 
         // Index buffer: only for kDMA (indexed) draws. A kAutoIndex draw feeds
         // gl_VertexIndex = 0..count-1 directly (vkCmdDraw), matching how the
@@ -3726,6 +3743,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             { ++skipped; ++skipReasons[5]; continue; }
         }
 
+        msIndex += sinceStartMs() - indexBegin;
+
         // Descriptor sets for this draw. Sets 2/3 use this shader pair's own
         // texture layouts, so their binding counts match the SPIR-V exactly.
         VkDescriptorSet sets[4] = {};
@@ -3734,13 +3753,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ai.descriptorPool = pool;
         ai.descriptorSetCount = 4;
         ai.pSetLayouts = drawLayouts;
-        if (vkAllocateDescriptorSets(device, &ai, sets) != VK_SUCCESS)
+        const double descAllocBegin = sinceStartMs();
+        const VkResult allocResult = vkAllocateDescriptorSets(device, &ai, sets);
+        msDescAlloc += sinceStartMs() - descAllocBegin;
+        if (allocResult != VK_SUCCESS)
         { ++skipped; ++skipReasons[6]; continue; }
 
-        std::vector<VkWriteDescriptorSet> w;
-        // Image infos must outlive the vkUpdateDescriptorSets call, so they are
-        // held in a deque-stable store rather than a vector that may reallocate.
-        std::deque<VkDescriptorImageInfo> imgInfos;
+        // Reused across draws (declared before the loop).
+        w.clear();
+        imgInfos.clear();
         auto setBuf = [&](VkDescriptorSet s, uint32_t b, VkDescriptorType t,
                           VkDescriptorBufferInfo* bi) {
             VkWriteDescriptorSet ws{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
@@ -3793,7 +3814,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         writeTextures(*vsX, sets[2]);
         writeTextures(*psX, sets[3]);
         if (!w.empty())
-            vkUpdateDescriptorSets(device, uint32_t(w.size()), w.data(), 0, nullptr);
+            const double descUpdateBegin = sinceStartMs();
+        const double descUpdateBegin = sinceStartMs();
+        vkUpdateDescriptorSets(device, uint32_t(w.size()), w.data(), 0, nullptr);
+        msDescUpdate += sinceStartMs() - descUpdateBegin;
+    msDescUpdate += sinceStartMs() - descUpdateBegin;
 
         PreparedDraw pd{};
         pd.pipeline = pipe;
@@ -5266,10 +5291,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     msReadback = sinceStartMs() - msSetup - msDrawLoop - msSubmit;
     lucent::info("draw", "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f}"
         " (of which shader translation {:.0f}, pipeline creation {:.0f},"
-        " texture upload {:.0f}), guest-memory upload {:.0f}, submit+wait {:.0f},"
+        " texture upload {:.0f}, uniforms {:.0f}, index prep {:.0f},"
+        " descriptor alloc {:.0f}, descriptor update {:.0f}),"
+        " guest-memory upload {:.0f}, submit+wait {:.0f},"
         " readback+report {:.0f}",
         sinceStartMs(), msSetup, msDrawLoop, msTranslate, msPipeline, msTexture,
-        msSsboUpload, msSubmit, msReadback);
+        msUniforms, msIndex, msDescAlloc, msDescUpdate, msSsboUpload, msSubmit,
+        msReadback);
     // Checkpoint images, each labelled with how many draws had run.
     const std::string& checkpointDirStr = lucent::config::text("DRAW_DIR");
     const char* checkpointDir = checkpointDirStr.empty() ? nullptr

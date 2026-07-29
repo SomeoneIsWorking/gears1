@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 // The first real guest draw: the hot vertex/pixel pair's full-screen quad,
@@ -63,7 +64,19 @@ struct FrameDrawItem
     // The register file as it stood at THIS draw (0x8000 dwords). Constants,
     // fetch slots and the draw initiator all live here; each draw needs its own
     // because the command stream reprograms them between draws.
-    std::vector<uint32_t> registerFile;
+    // A SHARED snapshot, not a per-draw copy. The register file is 32768
+    // dwords; copying it per draw cost ~90 MB of memcpy per gameplay frame
+    // (~700 draws x 128 KB) and was the single largest cost in recording a
+    // frame. Consecutive draws overwhelmingly share identical register state,
+    // so the producer snapshots only when a register has actually changed and
+    // every draw in between points at the same one.
+    std::shared_ptr<const std::vector<uint32_t>> registerFile;
+
+    const uint32_t* registers() const
+    {
+        return registerFile && registerFile->size() >= 0x8000 ? registerFile->data()
+                                                             : nullptr;
+    }
 
     const uint8_t* vsUcode = nullptr; // borrowed, stable for the call
     size_t vsUcodeSize = 0;
