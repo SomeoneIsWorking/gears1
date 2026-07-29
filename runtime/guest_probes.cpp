@@ -995,3 +995,51 @@ PPC_FUNC(sub_824961D0)
     }
     __imp__sub_824961D0(ctx, base);
 }
+
+// ---------------------------------------------------------------------------
+// The render fence WAIT (catalog #45).
+//
+// sub_824453A0 is UE3's FRenderCommandFence wait: it spins on [fence+0] until
+// it drops to the threshold in r4, yielding via sub_826128B8 between reads. The
+// counter is raised by the game thread in sub_82445278 (lwarx/addi/stwcx. on
+// the same word) before a FenceCommand is enqueued, and lowered by that
+// command's Execute on the rendering thread.
+//
+// This is the mechanism that is SUPPOSED to stop the game thread touching an
+// object the renderer still owns -- exactly the use-after-free in #45. The loop
+// itself reads correctly (guest loads are volatile in this port), so the
+// question is not whether it works but whether it RUNS.
+//
+// The negative is designed: zero waits is reported as the seam never having
+// fired, because "the fence is never waited on" and "this probe is broken"
+// would otherwise look identical.
+extern "C" PPC_FUNC(__imp__sub_824453A0);
+
+namespace
+{
+std::atomic<uint64_t> g_fenceWaits{0};
+std::atomic<uint64_t> g_fenceBlocked{0};
+} // namespace
+
+PPC_FUNC(sub_824453A0)
+{
+    const uint32_t fence = ctx.r3.u32;
+    const uint32_t threshold = ctx.r4.u32;
+    const uint32_t before =
+        fence ? ByteSwap(*gears::Memory().Translate<uint32_t>(fence)) : 0;
+
+    const uint64_t n = g_fenceWaits.fetch_add(1) + 1;
+    const bool blocks = before > threshold;
+    if (blocks)
+        g_fenceBlocked.fetch_add(1);
+
+    // First few, then only waits that actually block -- a flat cap would hide
+    // the interesting ones exactly as it hid the crashing free earlier.
+    if (n <= 3 || (blocks && g_fenceBlocked.load() <= 8))
+        lucent::info("fence", "wait #{} on {:#x}: counter {} vs threshold {} ->"
+            " {} ({} of {} waits have blocked)", n, fence, before, threshold,
+            blocks ? "WILL BLOCK until the renderer catches up"
+                   : "already satisfied, returns immediately",
+            g_fenceBlocked.load(), n);
+    __imp__sub_824453A0(ctx, base);
+}

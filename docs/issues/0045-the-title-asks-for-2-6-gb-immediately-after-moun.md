@@ -821,3 +821,38 @@ thread's fence WAIT and prove it actually waits. Note the earlier finding that
 lwsync is translated faithfully and the guest loads are volatile, so the memory
 model is not the suspect -- the suspect is a kernel primitive or a completion we
 signal.
+
+### Note (2026-07-29)
+THE FENCE IS NOT BROKEN. HYPOTHESIS ELIMINATED BY MEASUREMENT.
+
+Last note proposed that the game thread's fence wait might not actually block in
+this port, letting it proceed while the renderer still owned the object. It
+does block. sub_824453A0 (FRenderCommandFence's wait: spin on [fence+0] until it
+falls to the threshold in r4, yielding via sub_826128B8 between reads) was
+probed:
+
+  wait #1 on 0x401025c0: counter 1 vs threshold 0 -> WILL BLOCK ...
+  ... 8 waits in a run, EVERY ONE of them blocking ...
+
+So the mechanism runs, the counter is genuinely above the threshold when it is
+consulted, and the loop genuinely waits. Nothing in this port defeats it.
+
+BUT THE NUMBERS ARE THE POINT: 8 fence waits per run against 156 deletes that
+orphan a cached pointer. The fence is used for a handful of specific handoffs,
+and the cached object at holder+1376 is NOT one of them. So the protection
+exists in the engine and simply is not applied on this path.
+
+WHAT THAT LEAVES. The game thread enqueues a render command that DELETES the
+object (the deleter's stack ends at the drain loop's Execute), and then uses its
+own cached pointer to that object without any fence in between. On the console
+that is the same code with the same absence of a fence -- so either
+
+  (a) the game thread is supposed to null +1376 when it enqueues the delete, and
+      something about our path skips that store; or
+  (b) it is a genuine title race that the console's timing hides, in which case
+      it belongs with catalog #44's non-atomic commit as the same class of
+      problem: a latent race this port exposes by running the two threads truly
+      in parallel where Xenon interleaved them on shared cores.
+
+(a) is checkable and should be checked first: find the enqueue site for the
+deleting command and look for a store of 0 to +1376 near it.
