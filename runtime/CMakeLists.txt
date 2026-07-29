@@ -181,3 +181,25 @@ else()
         "gears1: no guest-draw backend -- needs Vulkan and extern/xenia's "
         "translator. The first-draw milestone will be unavailable.")
 endif()
+
+# AddressSanitizer over OUR C++ only -- gears_ppc is deliberately left
+# uninstrumented. A guest store cannot reach the host heap by construction (it
+# is a uint32 guest address added to the mapping base, so it always lands inside
+# the 4 GiB reservation), so the 49k translated functions are not a suspect for
+# a smashed host allocation; instrumenting them would only multiply the build.
+# ASan supports partial instrumentation -- its allocator replaces malloc process
+# wide once the runtime is linked in, so every allocation the runtime makes is
+# still red-zoned and quarantined even though the guest code has no checks.
+option(GEARS_ASAN "Build the runtime, but not the translated guest code, with AddressSanitizer" OFF)
+if(GEARS_ASAN)
+    set(GEARS_ASAN_FLAGS -fsanitize=address -fno-omit-frame-pointer -g)
+    foreach(asan_target gears1 gears_draw gears_draw_xlate)
+        if(TARGET ${asan_target})
+            target_compile_options(${asan_target} PRIVATE ${GEARS_ASAN_FLAGS})
+        endif()
+    endforeach()
+    # Only the executable links, and it must link WITH the sanitizer so the
+    # ASan runtime is the first thing initialised in the process.
+    target_link_options(gears1 PRIVATE -fsanitize=address)
+    message(STATUS "gears1: AddressSanitizer enabled for the runtime (gears_ppc excluded)")
+endif()

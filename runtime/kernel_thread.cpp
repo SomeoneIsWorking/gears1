@@ -6,6 +6,8 @@
 // implemented before this file existed, deliberately.
 #include "import_stub.h"
 
+#include "fatal_exit.h"
+
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -144,7 +146,7 @@ void __imp__ExTerminateThread(PPCContext& __restrict ctx, uint8_t*)
         // The primary thread was not made by ExCreateThread; it ending is the
         // process ending.
         lucent::warn("thread", "ExTerminateThread({:#x}) on the primary thread", ctx.r3.u32);
-        std::exit(int(ctx.r3.u32));
+        gears::FatalExit(int(ctx.r3.u32));
     }
     throw GuestThreadExit{ctx.r3.u32};
 }

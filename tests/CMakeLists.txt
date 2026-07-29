@@ -127,3 +127,25 @@ target_include_directories(test_xconfig PRIVATE
     ../extern/XenonRecomp/XenonUtils)
 target_link_libraries(test_xconfig PRIVATE lucent::lucent)
 add_test(NAME xconfig COMMAND test_xconfig)
+
+# XamUserGetName at the guest seam. The console truncates into a short buffer
+# instead of refusing it, and Gears calls it with a four-byte one -- a refusal
+# is a status the title never checks, so nothing but this test can catch it.
+add_executable(test_xam_user
+    test_xam_user.cpp
+    ../runtime/xam_user.cpp
+    ../runtime/user_profile.cpp
+    ../runtime/xam_content.cpp
+    ../runtime/xam_overlapped.cpp
+    ../runtime/guest_filesystem.cpp
+    ../runtime/guest_heap.cpp
+    ../runtime/guest_memory.cpp
+    ../runtime/input.cpp
+    ../runtime/kernel_objects.cpp)
+target_include_directories(test_xam_user PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}"
+    "${THIRDPARTY_ROOT}/simde"
+    ../extern/XenonRecomp/XenonUtils)
+target_link_libraries(test_xam_user PRIVATE lucent::lucent)
+add_test(NAME xam_user COMMAND test_xam_user)

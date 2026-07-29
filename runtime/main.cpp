@@ -49,6 +49,38 @@ constexpr uint32_t kStackSize = 1 * 1024 * 1024;
 
 } // namespace
 
+// Proving the detector can fire. A sanitizer that reports nothing and a
+// sanitizer that is not actually watching produce the same output -- silence --
+// so an ASan build is worth nothing until it has been shown to report a fault
+// in THIS process, with its 4 GiB guest reservation mapped and its host heap in
+// the state the runtime leaves it. GEARS_ASAN_SELFTEST=1 does exactly one
+// out-of-bounds read of a heap allocation and expects a report. It exists only
+// in a sanitizer build; a normal build has no such code path at all.
+#if defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define GEARS_ASAN_BUILD 1
+#  endif
+#endif
+#if defined(__SANITIZE_ADDRESS__)
+#  define GEARS_ASAN_BUILD 1
+#endif
+
+#ifdef GEARS_ASAN_BUILD
+namespace
+{
+void AsanSelfTest()
+{
+    volatile uint8_t* block = new uint8_t[64]();
+    lucent::info("asan", "self-test: reading one byte past a 64-byte heap block");
+    // Deliberately out of bounds. volatile so it is not optimised away.
+    volatile uint8_t v = block[64];
+    lucent::error("asan", "self-test READ {} WITHOUT A REPORT -- the sanitizer is "
+                          "not watching this process", int(v));
+    delete[] block;
+}
+} // namespace
+#endif
+
 int main(int argc, char* argv[])
 {
     lucent::config::set_prefix("GEARS_");
@@ -128,6 +160,11 @@ int main(int argc, char* argv[])
     // doing when it did (catalog #44). Costs one atomic increment per kernel
     // call and a thread that sleeps.
     gears::StartStallDetector();
+
+#ifdef GEARS_ASAN_BUILD
+    if (lucent::config::flag("ASAN_SELFTEST"))
+        AsanSelfTest();
+#endif
 
     gears::GuestThreadBlock mainThread{};
     if (!gears::CreateGuestThreadBlock(memory, kStackSize, mainThread))

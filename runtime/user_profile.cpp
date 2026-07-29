@@ -270,4 +270,19 @@ UserProfile& Profile()
     return profile;
 }
 
+uint32_t CopyGamertag(char* dest, uint32_t destBytes)
+{
+    // Nowhere even for a terminator, so XAM writes nothing at all rather than
+    // one byte past the caller's buffer.
+    if (destBytes == 0)
+        return 0;
+
+    const uint32_t nameBytes = uint32_t(std::strlen(kGamertag)) + 1;
+    const uint32_t written = destBytes < nameBytes ? destBytes : nameBytes;
+
+    std::memcpy(dest, kGamertag, written - 1);
+    dest[written - 1] = '\0';
+    return written;
+}
+
 } // namespace gears
