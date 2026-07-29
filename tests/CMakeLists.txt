@@ -149,3 +149,30 @@ target_include_directories(test_xam_user PRIVATE
     ../extern/XenonRecomp/XenonUtils)
 target_link_libraries(test_xam_user PRIVATE lucent::lucent)
 add_test(NAME xam_user COMMAND test_xam_user)
+
+# THE INSTRUMENTS' OWN SELF-TESTS, wired into ctest so they cannot rot.
+#
+# Six diagnostics were caught this session reporting a negative their method
+# could never have contradicted -- a scanner blind to one of two address shapes,
+# a vtable scan blind to the abstract case, a dataflow check whose registers were
+# computed and never used, a probe capped at 4 of 78,278 events, a catalog
+# searching a directory that did not exist, and a roadmap tool certifying the
+# project finished when its file was missing. Each now has a self-test that
+# feeds it a case which MUST produce a positive.
+#
+# A self-test nobody runs is the same failure one level up, so they run here.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME instrument_find_addr_refs
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/find_addr_refs.py" --selftest)
+    add_test(NAME instrument_atomic_audit
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/atomic_audit.py" --selftest)
+    # The catalog must REFUSE to answer from a directory that is not there,
+    # rather than reporting "(no matches)" and exiting 0 -- that is the shape
+    # that makes an anti-re-derivation tool actively harmful.
+    add_test(NAME instrument_catalog_refuses_empty_corpus
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/catalog.py"
+                --dir "${CMAKE_CURRENT_BINARY_DIR}/no-such-catalog" search anything)
+    set_tests_properties(instrument_catalog_refuses_empty_corpus
+        PROPERTIES WILL_FAIL TRUE)
+endif()
