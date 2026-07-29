@@ -349,3 +349,47 @@ re-entrancy guard, and unpopulated runtime state. Every one was a plausible
 reading of disassembly or logs that the running system contradicted. The two
 findings that held up came from the trace firing and from reading the wrapper's
 four instructions. Prefer the small decisive read over the compelling story.
+
+### Note (2026-07-29)
+THE DECISION POINT IS FOUND. IT IS A VIRTUAL CALL, AND THAT CHANGES THE QUESTION.
+
+    [fatal] the title began shutting down (sub_828D0790) from 0x82444f7c:
+            r3=0x40274748 r4=0x0 r5=0x0 r6=0x4
+
+0x82444f7c is the return address of a `bctrl` inside sub_82444EF0, and the code
+around it is an ordinary virtual dispatch out of an object walk:
+
+    r30 = load32(r31 + 20)      // current object in a list
+    r11 = load32(r30 + 0)       // its vtable
+    r11 = load32(r11 + 4)       // slot 1
+    mtctr r11 ; bctrl           // call it, this = r30
+
+So nothing "decided" to quit in the sense of a check failing. The title was
+walking a list of objects calling a virtual method on each, and one of those
+calls arrived at the CRT terminate routine.
+
+sub_82444EF0 IS ON THE PER-FRAME PATH. It appeared in the very first thread
+census of this session, in the chain sub_824A5170 -> sub_82487510 ->
+sub_824A42A0 -> sub_82444EF0. This is a routine object iteration that runs
+constantly, which fits the failure being rare and timing-dependent.
+
+TWO POSSIBILITIES, AND THEY WANT OPPOSITE FIXES:
+ (a) slot 1 of that object's vtable legitimately IS a shutdown method, and
+     something upstream asked for shutdown -- a title-level decision we have
+     not found yet.
+ (b) the object is not what the caller believes. A stale, freed or
+     never-constructed object would have a vtable pointer that is garbage, and
+     the dispatch would land in whatever that garbage addresses. Landing in the
+     CRT exit path would then be coincidence, and the real defect is whatever
+     corrupted or freed the object -- which, given everything else here works,
+     would most likely be OUR memory or lifetime handling.
+
+ONE WORD OF GUEST MEMORY SEPARATES THEM: the vtable pointer at the object's
+offset 0. If it points into the image it is a real vtable; if it does not, the
+object is corrupt. The trace now reads it and says which, along with the value
+of slot 1. Armed, not yet fired.
+
+METHOD NOTE: this was caught on run 4 of a batch of 6, after nine consecutive
+clean runs. Batches, not single runs, are the right shape for a one-in-eight
+failure -- and every trace in this chain was placed from static reading first,
+so each catch produced an answer rather than another guess.
