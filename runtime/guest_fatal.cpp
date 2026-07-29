@@ -113,6 +113,11 @@ PPC_FUNC(sub_828D2FB8)
     __imp__sub_828D2FB8(ctx, base);
 }
 
+// sub_828D3118 is `r5 = 0; r4 = 1; goto handler` and sub_828D3128 is
+// `r5 = 1; ...` -- and the handler panics precisely when that argument is zero.
+// So the KeBugCheck is HARDCODED into this path by the title: it is the "must
+// not return" tail of a deliberate terminate, not a field the runtime failed to
+// populate. Two wrappers, one that ends the process and one that does not.
 PPC_FUNC(sub_828D0790)
 {
     // The top of the shutdown chain: runs a registered handler, then reports,
