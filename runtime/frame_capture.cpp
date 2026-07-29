@@ -141,9 +141,13 @@ bool WriteFrameCapture(const std::filesystem::path& path, const FrameDrawInputs&
     for (size_t i = 0; i < in.draws.size(); ++i)
     {
         const FrameDrawItem& d = in.draws[i];
-        w.pod(uint32_t(d.registerFile.size()));
-        if (!d.registerFile.empty())
-            w.raw(d.registerFile.data(), d.registerFile.size() * sizeof(uint32_t));
+        // Written per draw even though draws share snapshots in memory: a
+        // capture is a file that has to stand alone, and the sharing is a
+        // runtime optimisation, not part of the format.
+        const uint32_t regCount = d.registerFile ? uint32_t(d.registerFile->size()) : 0;
+        w.pod(regCount);
+        if (regCount)
+            w.raw(d.registerFile->data(), size_t(regCount) * sizeof(uint32_t));
         w.pod(refs[i].vs);
         w.pod(refs[i].ps);
         w.pod(d.primType);
@@ -241,9 +245,10 @@ bool ReadFrameCapture(const std::filesystem::path& path, FrameCapture& out)
         FrameDrawItem d;
         const uint32_t regDwords = r.pod<uint32_t>();
         if (!r.ok) break;
-        d.registerFile.resize(regDwords);
+        auto regs = std::make_shared<std::vector<uint32_t>>(regDwords);
         if (regDwords)
-            r.raw(d.registerFile.data(), size_t(regDwords) * sizeof(uint32_t));
+            r.raw(regs->data(), size_t(regDwords) * sizeof(uint32_t));
+        d.registerFile = std::move(regs);
         const uint32_t vs = r.pod<uint32_t>();
         const uint32_t ps = r.pod<uint32_t>();
         d.primType = r.pod<uint32_t>();

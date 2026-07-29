@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <array>
+#include <memory>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -165,6 +166,13 @@ struct InterruptThreadState
 // The Xenos register file, as programmed through the command stream. Only the
 // registers the protocol needs are ever read back.
 std::array<uint32_t, 0x8000> g_gpuRegisters{};
+
+// The shared register snapshot handed to draws, and whether anything has
+// changed since it was taken. Consecutive draws overwhelmingly share identical
+// register state, so a per-draw copy of 128 KB was pure waste.
+std::shared_ptr<const std::vector<uint32_t>> g_registerSnapshot;
+bool g_registersDirty = true;
+uint64_t g_registerSnapshots = 0;
 
 constexpr uint32_t kRegScratchUmsk = 0x1DC;
 constexpr uint32_t kRegScratchAddr = 0x1DD;
@@ -394,6 +402,8 @@ void WriteGpuRegister(uint32_t reg, uint32_t value)
     if ((reg == kRegScratchAddr || reg == kRegScratchUmsk) && g_gpuRegisters[reg] != value)
         lucent::debug("gpu", "SCRATCH_{} {:#x} -> {:#x}",
             reg == kRegScratchAddr ? "ADDR" : "UMSK", g_gpuRegisters[reg], value);
+    if (g_gpuRegisters[reg] != value)
+        g_registersDirty = true;
     g_gpuRegisters[reg] = value;
 
     // Scratch write-back: the title programs SCRATCH_ADDR/SCRATCH_UMSK (seen
@@ -1129,7 +1139,17 @@ struct CommandProcessor
         }
 
         gears::FrameDrawItem item;
-        item.registerFile.assign(g_gpuRegisters.begin(), g_gpuRegisters.end());
+        // Snapshot only when a register has actually changed since the last
+        // draw; otherwise every draw shares the previous snapshot. This was
+        // ~90 MB of memcpy per gameplay frame.
+        if (g_registersDirty || !g_registerSnapshot)
+        {
+            g_registerSnapshot = std::make_shared<std::vector<uint32_t>>(
+                g_gpuRegisters.begin(), g_gpuRegisters.end());
+            g_registersDirty = false;
+            ++g_registerSnapshots;
+        }
+        item.registerFile = g_registerSnapshot;
         item.vsUcode = vsIt->second.ucode.data();
         item.vsUcodeSize = vsIt->second.ucode.size();
         item.vsHash = vsHash;
