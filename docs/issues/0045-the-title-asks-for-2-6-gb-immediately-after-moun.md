@@ -119,3 +119,36 @@ argument. The next step is the same probe one level up, which is cheap now that
 the pattern is established. Worth noting 2544 MB is about five times the
 console's entire 512 MB, so whatever computes it is not working from a number
 this machine gave it correctly.
+
+### Note (2026-07-29)
+A REAL BUG FIXED, A PREDICTION FAILED. BOTH RECORDED.
+
+MmGetPhysicalAddress returned its argument unchanged. The console maps one bank
+of physical memory into several virtual windows (0xA0000000, 0xC0000000,
+0xE0000000, differing only in caching), and a physical address is the offset
+WITHIN the bank -- so the window base has to come off. Xenia does exactly this
+subtraction in PhysicalHeap::GetPhysicalAddress, including the 0x1000 the
+0xE0000000 window carries.
+
+Fixed and verified on real calls: MmGetPhysicalAddress(0xa0000000) now returns
+0x0, (0xa0000040) returns 0x40, (0xaa022880) returns 0xa022880. Previously every
+one of those returned its input. The title makes about ten of these calls per
+boot, so it was getting wrong answers throughout.
+
+THE PREDICTION IT WAS MADE ON WAS WRONG. I expected this to fix the 2.6 GB
+request, because 0x4F800000 - 0xB0800000 is exactly 0x9F000000 under 32-bit
+underflow, which looked like a virtual address being subtracted from a physical
+one. After the fix the request is byte-for-byte identical and r7 is still
+0xb0800000. So the arithmetic coincidence remains a coincidence, and whatever
+computes that size does not get it through this function.
+
+The fix stays because it is right, not because it helped here.
+
+TIMEBOX. This entry has now consumed several sessions' worth of iterations and
+produced four eliminated explanations (device capacity, the content enumerator,
+the allocation type discriminating a call site, and physical-address
+translation) against one solid chain. It is worth noting that the ASSUMPTION
+underneath it all -- that this allocation is why no save file appears -- has
+never been tested. The cheaper question is what the title does between mounting
+the content and giving up, and whether it ever opens a file at all. Test that
+before descending another level.
