@@ -118,21 +118,28 @@ PPC_FUNC(sub_828D2FB8)
 // So the KeBugCheck is HARDCODED into this path by the title: it is the "must
 // not return" tail of a deliberate terminate, not a field the runtime failed to
 // populate. Two wrappers, one that ends the process and one that does not.
+// THIS IS _purecall. The address 0x828D0790 appears 1837 times in the loaded
+// image, always inside runs of code pointers -- vtables -- and often in
+// consecutive slots. That is what a compiler emits for a PURE VIRTUAL slot: one
+// shared stub that terminates the process if anyone ever calls it.
+//
+// So reaching here is not the title deciding to quit. It is the title calling a
+// pure virtual function, which means the object's vtable is an abstract base's:
+// the classic causes are a virtual call during construction or destruction, or
+// a call on an object another thread has already destroyed. On a per-frame
+// object walk, rare and timing-dependent, a lifetime race is the shape that
+// fits.
 PPC_FUNC(sub_828D0790)
 {
-    // The top of the shutdown chain: runs a registered handler, then reports,
-    // then dies. Its caller is what actually decided to end the process, and
-    // the link register is the only thing that names it.
-    lucent::error("fatal", "the title began shutting down (sub_828D0790) from"
-        " {:#x}: r3={:#x} r4={:#x} r5={:#x} r6={:#x}", uint32_t(ctx.lr),
+    lucent::error("fatal", "PURE VIRTUAL CALL (_purecall at sub_828D0790), from"
+        " {:#x}: r3={:#x} r4={:#x} r5={:#x} r6={:#x}. The object's vtable is an"
+        " abstract base's -- it is under construction, under destruction, or"
+        " already destroyed", uint32_t(ctx.lr),
         ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32);
 
-    // The one caller seen so far, 0x82444f7c, is a VIRTUAL CALL out of a
-    // per-frame object walk: `vtable = load(this); target = load(vtable + 4);
-    // bctrl`. So either slot 1 of that object's vtable legitimately is a
-    // shutdown method, or the object is not what the caller thinks it is and
-    // the dispatch landed here by accident. Those want completely different
-    // fixes, and one word of guest memory tells them apart.
+    // Which vtable the object actually carries is the whole question now: it
+    // will be some abstract base's, and WHICH one names the class whose
+    // lifetime is being violated.
     if (ctx.r3.u32 != 0)
     {
         const uint32_t vtable = ByteSwap(*gears::Memory().Translate<uint32_t>(ctx.r3.u32));
@@ -143,10 +150,9 @@ PPC_FUNC(sub_828D0790)
             slot1 = ByteSwap(*gears::Memory().Translate<uint32_t>(vtable + 4));
         lucent::error("fatal", "  the object it was called on ({:#x}) has vtable"
             " {:#x} ({}), slot 1 = {:#x}", ctx.r3.u32, vtable,
-            plausible ? "in the image, so a real vtable"
-                      : "NOT in the image -- this object is corrupt or was never"
-                        " constructed, and the virtual call landed here by"
-                        " accident",
+            plausible ? "a real vtable -- find which class it belongs to"
+                      : "NOT in the image, so the object is corrupt rather than"
+                        " merely half-constructed",
             slot1);
     }
     __imp__sub_828D0790(ctx, base);
