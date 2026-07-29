@@ -195,6 +195,36 @@ PPC_FUNC(sub_828D0790)
 // the string it was handed has a corrupt length field -- and WHICH string names
 // the subsystem that produced it. Guessing from what appears nearby in the log
 // is how the last three explanations here died.
+// THE FEEDER for the archive blob that the deferred handler deserialises.
+// sub_821BA838 builds a SAVING archive over the same TArray at object+420 that
+// sub_821B4620 later reads -- but it returns immediately when [object+424] is
+// zero. If that gate is shut, nothing ever fills the array, which is exactly
+// the state the deserialise probe reports on every run.
+extern "C" PPC_FUNC(__imp__sub_821BA838);
+
+PPC_FUNC(sub_821BA838)
+{
+    static std::atomic<uint64_t> seen{0};
+    const uint32_t object = ctx.r3.u32;
+    const uint32_t gate = ByteSwap(*gears::Memory().Translate<uint32_t>(object + 424));
+    const uint32_t before = ByteSwap(*gears::Memory().Translate<uint32_t>(object + 424 - 4));
+
+    __imp__sub_821BA838(ctx, base);
+
+    if (seen.fetch_add(1) < 6)
+    {
+        const uint32_t data = ByteSwap(*gears::Memory().Translate<uint32_t>(object + 420));
+        const uint32_t count = ByteSwap(*gears::Memory().Translate<uint32_t>(object + 424));
+        lucent::info("probe", "save-blob feeder on object {:#x}: gate [+424]={:#x}"
+            " -> {}; afterwards the array at +420 is {} ({} bytes at {:#x}),"
+            " returned {:#x}", object, gate,
+            gate == 0 ? "RETURNED EARLY, nothing serialised" : "proceeded",
+            data == 0 || count == 0 ? "EMPTY" : "populated", count, data,
+            ctx.r3.u32);
+        (void)before;
+    }
+}
+
 extern "C" PPC_FUNC(__imp__sub_8232B548);
 
 namespace
@@ -236,6 +266,20 @@ PPC_FUNC(sub_8232B548)
             // that offset. Printing it says whether an "improvement" is the data
             // arriving or merely the garbage changing.
             const uint32_t low4 = ByteSwap(*gears::Memory().Translate<uint32_t>(4));
+            // WHERE THE BLOB IS SUPPOSED TO COME FROM. sub_821B4620 copies the
+            // global TArray at 0x82BFB36C into object+420 before deserialising
+            // (guest 0x821B4938: dest = r17+420, src = 0x82BFB36C), and that
+            // global is filled by the Kismet "LoadChapter" op sub_82207E98. So
+            // if the global is empty, the copy faithfully produces an empty
+            // array and the read that follows has nothing to read.
+            constexpr uint32_t kCarrier = 0x82BFB36C;
+            const uint32_t carrierData = ByteSwap(*gears::Memory().Translate<uint32_t>(kCarrier));
+            const uint32_t carrierCount = ByteSwap(*gears::Memory().Translate<uint32_t>(kCarrier + 4));
+            lucent::info("probe", "  the global carrier at {:#x} is {} ({} bytes"
+                " at {:#x}) -- this is what gets copied into the object before"
+                " the read", kCarrier,
+                carrierData == 0 || carrierCount == 0 ? "EMPTY" : "populated",
+                carrierCount, carrierData);
             lucent::info("probe", "FString deserialise #{}: archive array is {}"
                 " ({} bytes at {:#x}); guest address 4 currently holds {:#x}",
                 reported.load(),
