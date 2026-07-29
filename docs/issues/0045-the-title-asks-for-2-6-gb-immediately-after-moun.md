@@ -747,3 +747,38 @@ occurrence number goes out with each line so elision is visible.
 REMAINING QUESTION, now narrow: is that free legitimate? The pool is guest code
 and behaves as on console given the same inputs, so if the title releases this
 block where the console would not, the difference is in a SIZE we supply.
+
+### Note (2026-07-29)
+THE 'A SIZE WE SUPPLY' HYPOTHESIS IS ELIMINATED. THE REALLOC IS A DELETE.
+
+Probing the engine realloc for calls whose existing block is currently cached at
+some holder's +1376:
+
+  REALLOC of 0x43f68980 to 0 bytes from 0x822158e4 -- cached at holder
+      0x491fc600+1376, so this call orphans it (occurrence 1)
+  ... 100 occurrences, EVERY ONE to 0 bytes ...
+
+realloc(ptr, 0) is the free idiom. So these are not the array growing and moving
+-- there is no size involved at all, and nothing this runtime supplies drives
+them. The title is DELETING the object and leaving the cache pointing at it.
+
+That kills the line of enquiry the previous note proposed ('if the title
+reallocs where the console would not, the difference is in a size we supply').
+Measured, not argued.
+
+WHAT THE SHAPE ACTUALLY IS: one holder (0x491fc600 in this run) accounts for all
+100, each with a DIFFERENT block. So the field is a cache that is reassigned
+repeatedly -- object cached, object deleted, field left stale until the next use
+overwrites it. That is a WINDOW, not a permanent leak, and the crash is a use
+that lands inside the window:
+
+  1. cache X at +1376
+  2. delete X (realloc to 0)   -- +1376 still points at X
+  3. call sub_824961D0        -- prologue sees +1376 non-null, USES dead X
+
+NEXT: find whether the deleting path is supposed to null +1376 as well. The free
+arrives from 0x822158e4, which is the locked allocator wrapper -- i.e. the
+generic deallocator, so the interesting caller is one level further out. If the
+title's own delete does clear the field, then something about OUR ordering lets
+step 3 happen before the clear; if it never clears it, the guard must be
+something other than non-null and the +1396 selector needs identifying.
