@@ -466,6 +466,14 @@ PPC_FUNC(sub_82214F50)
 // the plain-allocate path that calls sub_82214F50 with the size in r4. Filtering
 // on r4 here therefore tests a POINTER against a size threshold, which is why
 // the first version of this probe never fired while the allocation it was meant
+namespace
+{
+// The realloc's own frame, captured before calling through so the walk starts
+// from the right place rather than from wherever the probe happens to be.
+thread_local uint32_t g_reallocStack = 0;
+thread_local uint32_t g_reallocLr = 0;
+} // namespace
+
 namespace gears { void ReportReallocOfCached(uint32_t block, uint32_t newSize, uint32_t from); }
 
 
@@ -479,7 +487,11 @@ PPC_FUNC(sub_822151F8)
     // drove the growth, which is the thing to check against what the console
     // would have asked for.
     if (ctx.r4.u32 != 0)
+    {
+        g_reallocStack = ctx.r1.u32;
+        g_reallocLr = uint32_t(ctx.lr);
         gears::ReportReallocOfCached(ctx.r4.u32, ctx.r5.u32, uint32_t(ctx.lr));
+    }
 
     static std::atomic<uint64_t> seen{0};
     if (ctx.r5.u32 >= (64u << 20) && seen.fetch_add(1) < 8)
@@ -933,6 +945,20 @@ void ReportReallocOfCached(uint32_t block, uint32_t newSize, uint32_t from)
             lucent::error("lifetime", "REALLOC of {:#x} to {} bytes from {:#x}"
                 " -- that block is cached at holder {:#x}+1376, so this call"
                 " orphans it (occurrence {})", block, newSize, from, holder, n);
+            // WHO IS DELETING IT. The link register only names the generic
+            // allocator wrapper, which every delete goes through; the caller
+            // that actually decided to destroy this object is further out, and
+            // only a stack walk reaches it. Reported as a walker failure if the
+            // walk is too short to be an answer.
+            const std::vector<uint32_t> frames =
+                gears::GuestBacktrace(g_reallocStack, g_reallocLr);
+            if (frames.size() < 4)
+                lucent::error("lifetime", "  stack walk gave {} frame(s) --"
+                    " too few to name the deleter; treat as the WALKER failing",
+                    frames.size());
+            else
+                lucent::error("lifetime", "  deleter: {}",
+                    gears::FormatGuestBacktrace(g_reallocStack, g_reallocLr));
         }
     }
 }
@@ -952,6 +978,20 @@ PPC_FUNC(sub_824961D0)
     {
         std::lock_guard<std::mutex> guard(g_holderMutex);
         g_holders.insert(ctx.r3.u32);
+    }
+    // WHICH THREAD USES THE CACHE. The deleter runs on the rendering thread
+    // (its stack ends at the drain loop's Execute call, 0x82444f7c). If the
+    // USER is a different thread, this is a cross-thread use-after-free and the
+    // two open issues are the same bug seen from two ends.
+    {
+        static std::mutex m;
+        static std::set<std::string> seen;
+        const char* raw = gears::GuestThreadName();
+        const std::string name = raw ? raw : "?";
+        std::lock_guard<std::mutex> guard(m);
+        if (seen.insert(name).second)
+            lucent::info("lifetime", "the cached-object user sub_824961D0 runs"
+                " on guest thread '{}'", name);
     }
     __imp__sub_824961D0(ctx, base);
 }
