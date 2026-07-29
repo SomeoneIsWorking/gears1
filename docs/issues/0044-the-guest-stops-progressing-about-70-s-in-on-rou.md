@@ -393,3 +393,46 @@ METHOD NOTE: this was caught on run 4 of a batch of 6, after nine consecutive
 clean runs. Batches, not single runs, are the right shape for a one-in-eight
 failure -- and every trace in this chain was placed from static reading first,
 so each catch produced an answer rather than another guess.
+
+### Note (2026-07-29)
+IT IS A PURE VIRTUAL CALL. THAT IS THE ANSWER, AND IT IS A LIFETIME BUG.
+
+sub_828D0790 is _purecall. Searched the loaded image (13.5 MB dumped from a
+running process) for its address:
+
+    1837 occurrences, every one 4-byte aligned
+    each sits inside a run of code pointers -- vtables
+    often in CONSECUTIVE slots (0x82055708, 0x8205570c, 0x82055710 all hold it)
+
+One address shared by 1837 vtable slots, which terminates when called, is what
+a compiler emits for PURE VIRTUAL slots: a single stub that dies if anyone
+dispatches to one.
+
+So nothing decided to quit and nothing is corrupt in the "garbage pointer"
+sense. The title made a virtual call on an object whose vtable is an ABSTRACT
+BASE'S. The classic causes are exactly three: a virtual call during
+construction, a virtual call during destruction, or a call on an object another
+thread has already destroyed.
+
+WHY THIS FITS EVERYTHING SEEN: the call comes out of sub_82444EF0, a per-frame
+walk over a list of objects calling virtual slot 1 on each. That runs constantly,
+so a window of a few instructions during some object's construction or teardown
+would be hit rarely and unpredictably -- which is precisely the one-in-eight,
+timing-dependent behaviour that made this so hard to pin down.
+
+WHY IT MAY STILL BE OURS: a lifetime race in the title is latent on hardware and
+can be exposed by a runtime whose threading differs. Two differences are already
+recorded in this project -- processor numbers that alias, so two host threads
+can claim one guest CPU concurrently (catalog #41/#42), and IRQL modelled per
+thread rather than per processor. Either can widen a window the console kept
+shut. That is a hypothesis, and the way to test it is to find WHICH object.
+
+THE NEXT STEP IS NARROW AND ALREADY ARMED: the trace reads the object's vtable
+pointer. That vtable identifies the class. Then the question becomes who
+constructs or destroys that class while the per-frame walk is running, which is
+answerable by tracing its constructor and destructor.
+
+LABELLING FIXED: both the trace and the KeBugCheck line called this a
+deliberate terminate, which was my reading two notes ago and is wrong. A
+pure virtual call is a bug, not an exit. The messages now say so and point at
+each other.
