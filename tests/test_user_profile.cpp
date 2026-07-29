@@ -302,6 +302,68 @@ void TestGamertagCopy()
     Check(dest[0] == '\xCD', "gamertag: ... not even a terminator");
 }
 
+// THE OVERRUN. The buffer is sized from the type the setting ID declares, but
+// the value written came from the STORE -- and if those disagree about whether
+// the value has a payload, the write lands outside what was reserved. This is a
+// real defect that was in the shipped code, not a hypothetical.
+void TestTypeDisagreementDoesNotOverrun()
+{
+    // An id declaring an INLINE type reserves no payload bytes at all...
+    const uint32_t inlineId = MakeSettingId(0x0010, 0, gears::UserDataType::Int32);
+
+    gears::UserProfile profile;
+    // ...while the stored value is a payload-carrying one.
+    profile.SetBinary(inlineId, std::vector<uint8_t>(64, 0xAB));
+
+    const uint32_t ids[] = { inlineId };
+    const uint32_t needed = gears::ProfileReadBufferSize(ids, 1);
+    Check(needed == 8 + 40, "overrun: an inline id reserves no payload");
+
+    std::vector<uint8_t> memory(0x4000, 0xCD);
+    constexpr uint32_t kBufferAddress = 0x1000;
+    Check(gears::WriteProfileReadResult(memory.data(), kBufferAddress, needed,
+                                        profile, ids, 1),
+        "overrun: the write succeeds");
+
+    // Nothing whatsoever may be written past what was reserved.
+    for (uint32_t i = kBufferAddress + needed; i < kBufferAddress + needed + 128; ++i)
+    {
+        if (memory[i] != 0xCD)
+        {
+            printf("FAIL overrun: byte %#x past the reserved buffer was written"
+                   " (%#x)\n", i, memory[i]);
+            ++g_failures;
+            break;
+        }
+    }
+}
+
+// Context, Int32 and Float all live in the same 8-byte union, so a store that
+// collapses them loses which one it was -- and the read path is governed by the
+// type the ID declares, so a Float stored as an Int32 comes back UNSET. The
+// store has to keep the type it was given.
+void TestInlineTypesRoundTrip()
+{
+    const uint32_t floatId = MakeSettingId(0x000B, 4, gears::UserDataType::Float);
+
+    gears::UserProfile profile;
+    profile.SetInline(floatId, gears::UserDataType::Float, 0x40490FDB);
+
+    const uint32_t ids[] = { floatId };
+    const uint32_t needed = gears::ProfileReadBufferSize(ids, 1);
+    std::vector<uint8_t> memory(0x4000, 0xCD);
+    constexpr uint32_t kBufferAddress = 0x1000;
+    Check(gears::WriteProfileReadResult(memory.data(), kBufferAddress, needed,
+                                        profile, ids, 1),
+        "inline: a float setting is written");
+
+    const uint8_t* setting = memory.data() + kBufferAddress + 8;
+    Check(setting[24] == uint8_t(gears::UserDataType::Float),
+        "inline: a FLOAT reads back as a float, not as an int and not as unset");
+    Check(ReadBE32(setting + 32) == 0x40490FDB,
+        "inline: and carries its value");
+}
+
 } // namespace
 
 int main()
@@ -312,6 +374,8 @@ int main()
     TestPersistence();
     TestWriteResultBuffer();
     TestUnsetSetting();
+    TestTypeDisagreementDoesNotOverrun();
+    TestInlineTypesRoundTrip();
     TestGamertagCopy();
 
     if (g_failures == 0)

@@ -68,6 +68,12 @@ class UserProfile
 public:
     bool Has(uint32_t settingId) const;
 
+    // Stores an inline-class value KEEPING ITS TYPE. Context, Int32 and Float
+    // all live in the 8-byte union, and collapsing them to Int32 on the way in
+    // makes them unreadable on the way out: the read path is governed by the
+    // type the setting ID declares, so a Float written as an Int32 would come
+    // back UNSET.
+    void SetInline(uint32_t settingId, UserDataType type, int64_t value);
     void SetInt32(uint32_t settingId, int32_t value);
     bool GetInt32(uint32_t settingId, int32_t& value) const;
 
