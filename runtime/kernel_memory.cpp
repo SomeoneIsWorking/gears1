@@ -46,7 +46,11 @@ void __imp__NtAllocateVirtualMemory(PPCContext& __restrict ctx, uint8_t* base)
     const uint32_t address = gears::TitleHeap().Allocate(requestedBase, size, allocationType);
     if (address == 0)
     {
-        lucent::warn("kernel", "NtAllocateVirtualMemory failed: base={:#x} size={:#x} type={:#x} protect={:#x}",
+        // The link register names the caller, which is the only cheap way to
+        // find out WHY a title wants a size the console could never satisfy
+        // (catalog #45: 2.6 GB requested on the save path).
+        lucent::warn("kernel", "NtAllocateVirtualMemory failed, called from {:#x}:"
+            " base={:#x} size={:#x} type={:#x} protect={:#x}", uint32_t(ctx.lr),
             requestedBase, size, allocationType, protect);
         ctx.r3.u64 = gears::kStatusNoMemory;
         return;
