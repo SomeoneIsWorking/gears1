@@ -94,6 +94,7 @@ add_executable(gears1
     xam_apps.cpp
     xam_content.cpp
     directory_info.cpp
+    xconfig.cpp
     ppc_mmio.cpp
     wait_probe.cpp
     xaudio_null.cpp
