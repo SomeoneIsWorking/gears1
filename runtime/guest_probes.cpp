@@ -21,6 +21,7 @@
 #include "import_stub.h"
 
 #include <atomic>
+#include <mutex>
 #include <string>
 
 #include <byteswap.h>
@@ -170,6 +171,19 @@ PPC_FUNC(sub_828D0790)
                       : "NOT in the image, so the object is corrupt rather than"
                         " merely half-constructed",
             slot1);
+
+        // Is the object inside the render ring? If it is, the read cursor is
+        // sitting on a command's PAYLOAD rather than its header, which is a
+        // framing failure rather than a lifetime one -- and those have
+        // completely different fixes.
+        const uint32_t ringData = ByteSwap(*gears::Memory().Translate<uint32_t>(0x82C0CB24));
+        const uint32_t ringEnd = ByteSwap(*gears::Memory().Translate<uint32_t>(0x82C0CB24 + 4));
+        if (ringData != 0 && ringEnd > ringData)
+            lucent::error("fatal", "  the render ring spans {:#x}..{:#x}; the"
+                " object at {:#x} is {}", ringData, ringEnd, ctx.r3.u32,
+                ctx.r3.u32 >= ringData && ctx.r3.u32 < ringEnd
+                    ? "INSIDE it -- the read cursor is off a command boundary"
+                    : "outside it, so this is not a ring framing failure");
     }
     __imp__sub_828D0790(ctx, base);
 }
@@ -437,4 +451,79 @@ PPC_FUNC(sub_822151F8)
             gears::FormatGuestBacktrace(ctx.r1.u32, uint32_t(ctx.lr)));
     }
     __imp__sub_822151F8(ctx, base);
+}
+
+// ---------------------------------------------------------------------------
+// The render-command ring buffer (catalog #44).
+//
+// sub_82444EF0 is UE3's RenderingThreadMain draining an FRingBuffer at
+// 0x82C0CB24, and sub_8221CBA8 is the allocator that reserves space in it.
+// FRingBuffer assumes exactly ONE producer and ONE consumer, and its drain loop
+// advances ReadPointer by whatever the command's Execute() returns -- so once
+// the read cursor is off a command boundary it never recovers and the next
+// "vtable" it reads is payload bytes.
+//
+// These probes answer the three questions that discriminate the causes, and
+// they answer them by MEASUREMENT rather than by reading the code again:
+//   1. does more than one thread enter either path?
+//   2. what was the last command that executed cleanly before the divergence?
+//   3. does the bad object pointer lie inside the ring's own Data..DataEnd?
+extern "C" PPC_FUNC(__imp__sub_82444EF0);
+extern "C" PPC_FUNC(__imp__sub_8221CBA8);
+
+namespace
+{
+constexpr uint32_t kRenderRing = 0x82C0CB24;
+
+std::atomic<uint32_t> g_drainThreads{0};
+std::atomic<uint32_t> g_producerThreads{0};
+
+// One slot per guest thread name seen in each path. A second distinct name is
+// the whole finding, so it is reported the moment it appears.
+std::mutex g_ringMutex;
+std::string g_drainThreadName;
+std::string g_producerThreadName;
+
+void NoteRingThread(const char* which, std::string& slot, std::atomic<uint32_t>& count)
+{
+    const char* name = gears::GuestThreadName();
+    const std::string current = name ? name : "?";
+    std::lock_guard<std::mutex> guard(g_ringMutex);
+    if (slot.empty())
+    {
+        slot = current;
+        lucent::info("ring", "{} entered by guest thread '{}'", which, current);
+        return;
+    }
+    if (slot != current)
+    {
+        // THE SINGLE-PRODUCER/SINGLE-CONSUMER ASSUMPTION IS BROKEN. FRingBuffer
+        // has no protection against this, and this is exactly the corruption it
+        // produces.
+        lucent::error("ring", "{} entered by a SECOND guest thread: '{}' after"
+            " '{}'. FRingBuffer assumes one producer and one consumer; this is"
+            " the corruption", which, current, slot);
+        count.fetch_add(1);
+        slot = current;
+    }
+}
+} // namespace
+
+PPC_FUNC(sub_8221CBA8)
+{
+    NoteRingThread("the render-ring allocator", g_producerThreadName, g_producerThreads);
+    __imp__sub_8221CBA8(ctx, base);
+}
+
+PPC_FUNC(sub_82444EF0)
+{
+    NoteRingThread("the render-ring drain loop", g_drainThreadName, g_drainThreads);
+
+    const uint32_t data = ByteSwap(*gears::Memory().Translate<uint32_t>(kRenderRing + 0));
+    const uint32_t dataEnd = ByteSwap(*gears::Memory().Translate<uint32_t>(kRenderRing + 4));
+    lucent::info("ring", "drain loop starting: Data={:#x} DataEnd={:#x}"
+        " (a bad object pointer inside this range means the read cursor is on a"
+        " command's payload rather than its header)", data, dataEnd);
+
+    __imp__sub_82444EF0(ctx, base);
 }
