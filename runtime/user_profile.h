@@ -109,4 +109,34 @@ bool WriteProfileReadResult(uint8_t* guestBase, uint32_t bufferAddress,
 // The process-wide profile, loaded from disk on first use.
 UserProfile& Profile();
 
+// The local account's gamertag.
+//
+// It lives beside the settings store rather than inside it: on the console a
+// gamertag belongs to the ACCOUNT, not to a title's profile settings, and
+// XamUserReadProfileSettings never carries one. Xenia draws the same line --
+// its user_profile.h reads the name out of the account blob, not out of the
+// settings map.
+constexpr char kGamertag[] = "Player";
+
+// The console caps a gamertag at 15 characters plus its terminator, which is
+// why XAM can copy one into a caller's buffer with no length query first.
+constexpr size_t kMaxGamertagBytes = 16;
+
+// XamUserGetName's copy rule, which is a TRUNCATING copy rather than an
+// all-or-nothing one: `destBytes` counts the terminator, at most
+// min(destBytes, strlen(gamertag) + 1) bytes are written, and the last byte
+// written is always the terminator. A caller with a four-byte buffer gets
+// three characters and a NUL, not an error -- Gears depends on that: its
+// sub_821B5DD8 builds a save path by appending the name at offset 6 of
+// "save:\" with Length = 4, so an error there leaves the path as bare
+// "save:\".
+//
+// Transcribed from Xenia's XamUserGetName_entry, which clamps to
+// name.length() + 1 and then calls string_util::copy_truncating
+// (extern/xenia/src/xenia/kernel/xam/xam_user.cc:138).
+//
+// Returns the number of bytes written, so a caller can tell a truncated copy
+// from a complete one. Writes nothing when `destBytes` is zero.
+uint32_t CopyGamertag(char* dest, uint32_t destBytes);
+
 } // namespace gears
