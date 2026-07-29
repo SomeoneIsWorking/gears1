@@ -436,3 +436,48 @@ LABELLING FIXED: both the trace and the KeBugCheck line called this a
 deliberate terminate, which was my reading two notes ago and is wrong. A
 pure virtual call is a bug, not an exit. The messages now say so and point at
 each other.
+
+### Note (2026-07-29)
+THE OBJECT IS NAMED, AS FAR AS THE IMAGE ALLOWS. IT IS A SECONDARY BASE.
+
+Caught with the vtable read on run 9 of a batch:
+
+    PURE VIRTUAL CALL (_purecall at sub_828D0790) from 0x82444f7c:
+      r3=0x4029ae44
+      the object it was called on (0x4029ae44) has vtable 0x820bc8b4
+      (a real vtable), slot 1 = 0x828d0790
+
+So the vtable pointer is genuine -- not garbage, not a freed-memory pattern --
+and slot 1 really is _purecall. Walking the image backwards from it, the vtable
+BLOCK starts at 0x820bc818 and the object's pointer sits 39 slots inside it:
+
+    slots  0, 1, 4..11   _purecall
+    slots  2, 3, 12..38  real methods
+    slot  39             = the address the object stores  <-- secondary base
+    slots 40, 41         _purecall   <-- slot 1 from the object's pointer
+
+A pointer landing 39 slots into a vtable block is the signature of MULTIPLE
+INHERITANCE: one contiguous block holds a vtable per base, and a pointer to a
+secondary base subobject points into the middle. So the per-frame walk is
+dispatching through a secondary base interface whose slot 1 is pure.
+
+WHAT THAT NARROWS IT TO, and these are now the only two live explanations:
+ (a) the object is mid-construction or mid-destruction, so its vtable pointer is
+     still (or already) the abstract base's rather than the concrete class's;
+ (b) the caller adjusted the pointer to the wrong base -- a cast whose offset is
+     wrong -- and is calling slot 1 of an interface this object never
+     implements.
+
+(a) remains the better fit for a failure that is rare and timing-dependent; (b)
+would be deterministic and would fail every frame.
+
+WHERE IT STOPS FOR NOW: naming the concrete class needs whoever WRITES
+0x820bc818/0x820bc8b4 into an object, i.e. the constructor. That address is not
+built with a plain lis/ori pair anywhere in the recompiled code -- 753 sites use
+the matching lis, none with a matching low half -- so it is loaded from a data
+pointer, and finding it needs a search of the image's data for pointers TO the
+vtable rather than a search of the code.
+
+RATE, for whoever continues: this took 9 runs at 85 s. Shorter runs are better
+value than longer ones -- the failure lands around 70 s, so anything past ~90 s
+is spent waiting rather than sampling.
