@@ -905,3 +905,62 @@ rendering thread (UE3 does enqueue from render commands in places) or whether
 this port runs that code on the wrong thread. One call site is a small enough
 target to answer by reading the three callers' call graphs, which is in
 progress.
+
+### Note (2026-07-29)
+PROVENANCE SETTLED: THE SECOND PRODUCER IS THE TITLE'S OWN CODE ON THE TITLE'S OWN THREAD. NOT INJECTED BY THIS PORT.
+
+Re-derived independently on review; the numbers below reproduced exactly.
+
+  - 45 call sites of the allocator across 40 functions, and they ALL target the
+    same ring: 36 build 0x82C0CB24 immediately, and the 9 that pass it in a
+    register (r30/r18/r29 in sub_82428238, sub_824453F8, sub_824A3900,
+    sub_824A3EF0) each resolve to that same address. There is exactly ONE render
+    command ring in this image.
+  - guest-7's single enqueue site 0x82327D4C is inside sub_82327BC8, which
+    reserves 112 bytes and stores vtable 0x820E40B8 -- FlushCommand (its slot +8
+    returns that UTF-16 literal). Cross-validated: FlushCommand::Execute
+    (sub_82327E00) has exactly ONE direct caller in the image, the inline arm of
+    that same macro, which is what the two arms of ENQUEUE_UNIQUE_RENDER_COMMAND
+    look like.
+  - Across 8 runs the consumer is ALWAYS guest-7 alone (8 'drain loop entered'
+    lines, zero 'SECOND'), and the producers are only ever host and guest-7,
+    ~30 alternations each corpus-wide.
+
+THE STRONGEST STATIC EVIDENCE THAT ONE PRODUCER IS INTENDED, and it was missed
+first time round: every commit read-modify-write is immediately preceded by an
+lwsync (ppc_recomp.60.cpp:23980, .15.cpp:14804, .40.cpp:2735). A RELEASE FENCE
+WITH NO ATOMIC RMW is exactly the shape of a single-producer publish. An earlier
+note here said the commit path had no barriers at all; that was wrong -- the
+barrier is there, it is just a fence rather than an atomic.
+
+WHAT IS NOT ESTABLISHED, stated plainly because it is the whole remaining gap:
+HOW the rendering thread reaches sub_82327BC8. A whole-image DIRECT call graph
+(48,655 functions) finds no path: not from the drain loop's closure (34
+functions), not from any of the 37 command Execute() bodies (one closes over
+3,042 functions), not from the 4 destructors, and sub_82327BC8's 94 ancestors do
+not include the drain loop. The positive control passes -- the same search
+returns True from four known callers -- so the method works and the route must
+run through one of the three bctrl in sub_82444EF0. Which one is unresolved.
+
+CORRECTIONS TO EARLIER NOTES IN THIS ENTRY:
+  - 'no call site tests thread identity' was over-claimed: it rests on decoding
+    globals loaded before the branch, and there are bl/bctrl in that same window
+    at every site, so a non-inlined IsInRenderingThread is not excluded by that
+    method. The conclusion survives on the MEASUREMENT instead -- guest-7 was
+    observed taking the enqueue arm -- so whatever screening exists did not stop
+    it.
+  - 'eight alternations in one run' is 4+4 in that run, ~30+30 corpus-wide.
+
+WHERE THIS LEAVES THE FIX. The race is the title's, so there is nothing of ours
+to stop doing. The reason it does not sink the console is not established and
+matters: Xenon runs 6 hardware threads on 3 physical cores, so the game and
+render threads may share a core and never truly overlap the RMW, while this port
+runs them genuinely in parallel. If that is the explanation, this is a latent
+title race that the console's topology hides and a PC port exposes -- and
+serialising the commit becomes a defensible PORT decision rather than a bandaid.
+Do not do it until the reason is established.
+
+NEXT MEASUREMENT: a guest backtrace at the render thread's enqueue (the
+instrument exists -- guest_backtrace.cpp) plus what host is doing at that
+instant. That closes the indirect-dispatch gap, which is the only thing still
+unknown.
