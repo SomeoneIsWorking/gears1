@@ -110,3 +110,17 @@ target_include_directories(test_directory_info PRIVATE
     ../extern/XenonRecomp/XenonUtils)
 target_link_libraries(test_directory_info PRIVATE lucent::lucent)
 add_test(NAME directory_info COMMAND test_directory_info)
+
+# The console configuration table. Bare numbers with no structure to check them
+# against, so the test pins each console NAME to its NUMBER -- a shifted table
+# answers every lookup successfully with the wrong setting.
+add_executable(test_xconfig
+    test_xconfig.cpp
+    ../runtime/xconfig.cpp)
+target_include_directories(test_xconfig PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}"
+    "${THIRDPARTY_ROOT}/simde"
+    ../extern/XenonRecomp/XenonUtils)
+target_link_libraries(test_xconfig PRIVATE lucent::lucent)
+add_test(NAME xconfig COMMAND test_xconfig)
