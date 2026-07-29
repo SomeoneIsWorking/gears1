@@ -839,3 +839,43 @@ So whatever moves ReadPointer off a command boundary, it is NOT the atomic
 translation. The place that remains is the drain loop itself: Execute()'s return
 value is added straight to ReadPointer (lwz r11,20(r31); add r11,r11,r29; stw
 r11,20(r31)), with the wrap handling against +12.
+
+### Note (2026-07-29)
+THE FRAMING MECHANISM IS IDENTIFIED: A NON-ATOMIC COMMIT, WITH TWO PRODUCERS.
+
+Static analysis, re-derived independently on review, at two separate commit
+sites (ppc_recomp.60.cpp:23988 for FenceCommand and ppc_recomp.15.cpp:14810
+inside sub_8221BD60), so this is the general shape and not one site:
+
+  - The ALLOCATOR (sub_8221CBA8) never advances WritePointer. The reservation
+    lives only in the caller's own stack frame.
+  - The COMMIT is a non-atomic read-modify-write on the ring's +8:
+        lwz r11,8(ring) ; add r11,r11,size ; stw r11,8(ring)
+    followed by clearing bIsWriting (+16).
+  - bIsWriting is STORED (1 at reserve, 0 at commit) and NEVER LOADED by either
+    function. Whatever it was meant to guard, it guards nothing in this build.
+
+  Ring geometry confirmed against the runtime probe: the constructor allocates
+  0x40000 bytes with Data = WritePointer = ReadPointer = buf and
+  DataEnd = WriteEnd = buf + 0x40000, matching the measured
+  Data=0x40270000 DataEnd=0x402b0000.
+
+COMBINED WITH THE MEASUREMENT already in this entry -- that BOTH the game thread
+and the rendering thread enter the allocator -- this is a lost-update race. Two
+producers each read WritePointer, add their own size, and store; one clobbers
+the other. WritePointer then points into the middle of a command, the consumer
+reads a header that is not one, and ReadPointer advances by whatever garbage
+Execute() returns. That is exactly the observed corruption, and it explains why
+it is intermittent.
+
+WHAT IS STILL NOT ESTABLISHED, and it decides whose bug this is: whether the
+console also has two producers here. If UE3 genuinely enqueues from the
+rendering thread, the non-atomic commit is a title bug that hardware happens to
+survive; if our port introduces the second producer -- by running something on
+the wrong thread -- it is ours. The next measurement is which CALL SITES the two
+producers come from: log the caller (link register) at sub_8221CBA8 per thread,
+and compare the rendering thread's callers against what UE3 is expected to
+enqueue from its own thread.
+
+Do NOT add locking around the guest's commit. If the second producer is ours,
+the fix is to stop producing from that thread.

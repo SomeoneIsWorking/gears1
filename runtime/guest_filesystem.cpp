@@ -1,5 +1,7 @@
 #include "guest_filesystem.h"
 
+#include <mutex>
+
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -42,12 +44,14 @@ std::string StripPrefix(const std::string& path)
 
 void FileSystem::SetGameDirectory(const std::filesystem::path& directory)
 {
+    std::lock_guard<std::mutex> guard(mutex_);
     gameDirectory_ = directory;
     lucent::info("fs", "game directory: {}", gameDirectory_.string());
 }
 
 const std::filesystem::path& FileSystem::SaveDirectory() const
 {
+    std::lock_guard<std::mutex> guard(mutex_);
     if (!saveDirectory_.empty())
         return saveDirectory_;
 
@@ -80,6 +84,7 @@ const std::filesystem::path& FileSystem::SaveDirectory() const
 
 void FileSystem::Mount(const std::string& rootName, const std::filesystem::path& hostDirectory)
 {
+    std::lock_guard<std::mutex> guard(mutex_);
     std::error_code ec;
     std::filesystem::create_directories(hostDirectory, ec);
     std::string key = rootName;
@@ -91,6 +96,7 @@ void FileSystem::Mount(const std::string& rootName, const std::filesystem::path&
 
 void FileSystem::Unmount(const std::string& rootName)
 {
+    std::lock_guard<std::mutex> guard(mutex_);
     std::string key = rootName;
     std::transform(key.begin(), key.end(), key.begin(),
                    [](unsigned char c) { return char(std::tolower(c)); });
@@ -126,12 +132,14 @@ bool SplitMountPath(const std::string& guestPath, std::string& root, std::string
 
 bool FileSystem::IsWritable(const std::string& guestPath) const
 {
+    std::lock_guard<std::mutex> guard(mutex_);
     std::string root, rest;
     return SplitMountPath(guestPath, root, rest) && mounts_.find(root) != mounts_.end();
 }
 
 std::filesystem::path FileSystem::Resolve(const std::string& guestPath) const
 {
+    std::lock_guard<std::mutex> guard(mutex_);
     // A writable mount wins over the disc: the title asks for the same shape of
     // path either way, and only the mount table says which is which.
     {

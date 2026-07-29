@@ -506,6 +506,15 @@ void __imp__XamContentCreateEnumerator(PPCContext& __restrict ctx, uint8_t* base
     // can return -- not the whole enumeration.
     Store32(base, bufferSizePtr, itemCount * gears::kContentDataSize);
 
+    // Read BEFORE the move, not out of the table afterwards. The log line used
+    // to say `g_enumerators[handle]->items.size()` with the lock already
+    // released, which is two faults in one expression: it touches the map with
+    // no lock at all while another thread may be inserting into it, and
+    // std::map::operator[] is a MUTATING call, so an unsynchronised reader is
+    // not even a benign read. Nothing about the count needs the table -- the
+    // enumerator is right here.
+    const size_t itemsFound = enumerator->items.size();
+
     uint32_t handle;
     {
         std::lock_guard<std::mutex> guard(g_enumeratorsMutex);
@@ -516,7 +525,7 @@ void __imp__XamContentCreateEnumerator(PPCContext& __restrict ctx, uint8_t* base
     Store32(base, handlePtr, handle);
 
     lucent::debug("xam", "content enumerator {:#x}: {} item(s) of type {:#x}",
-                  handle, g_enumerators[handle]->items.size(), contentType);
+                  handle, itemsFound, contentType);
     ctx.r3.u64 = gears::kErrorSuccess;
 }
 
