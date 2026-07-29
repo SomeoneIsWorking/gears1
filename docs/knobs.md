@@ -35,6 +35,7 @@ the same commit that removes it.
 | `GEARS_DRAW=1` | Fire the one-shot hot-pair draw instead |
 | `GEARS_DRAW_DIR=<dir>` | Where screenshots, dumps and diagnostics are written |
 | `GEARS_INPUT_SCRIPT=<steps>` | Timed pad input, e.g. `25000:START,25300:,150000:LY+`. Buttons and stick deflections (`LX/LY/RX/RY` with `+`/`-`), combined with `&`. Only advances when the guest polls, so a headless run is reproducible |
+| `GEARS_CMDLINE=<text>` | Hand the title a command line, as a console launcher would (via launch data). It reads `NOMOVIE`, `ONETHREAD`, `NOSOUND`, `BENCHMARK`, `DUMPMOVIE`, `NOINI`, `SECONDS=`, `EXEC=`. Verified: `-nomovie` takes the title's `.bik` opens from four to zero |
 | `GEARS_NO_WINDOW=1` | Headless |
 | `GEARS_NO_VBLANK=1` | Disable the 60 Hz vblank |
 | `GEARS_AUDIO_PUMP=0` | Stop driving the guest's audio callback. **On by default now** — the whole chain works, so a run without it is silent on purpose. Costs ~4% of frame rate under a CPU-bound guest |
