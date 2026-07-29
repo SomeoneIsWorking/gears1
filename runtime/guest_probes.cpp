@@ -220,6 +220,31 @@ PPC_FUNC(sub_8232B548)
     t_serialisingArchive = archive;
     t_archiveIsSaving = ByteSwap(*gears::Memory().Translate<uint32_t>(archive + 20));
 
+    // THE QUESTION THIS ANSWERS: is the archive's byte array populated at all?
+    // The oversized allocation is gone, but "the garbage got smaller" and "the
+    // data is now there" look identical from the outside, and only one of them
+    // is progress.
+    {
+        static std::atomic<uint64_t> reported{0};
+        const uint32_t holder = ByteSwap(*gears::Memory().Translate<uint32_t>(archive + 112));
+        const uint32_t buffer = holder ? ByteSwap(*gears::Memory().Translate<uint32_t>(holder)) : 0;
+        const uint32_t count = holder ? ByteSwap(*gears::Memory().Translate<uint32_t>(holder + 4)) : 0;
+        if (reported.fetch_add(1) < 4)
+        {
+            // When the array is empty the read goes to LOW GUEST MEMORY, so the
+            // length the title gets is whatever physical RAM happens to hold at
+            // that offset. Printing it says whether an "improvement" is the data
+            // arriving or merely the garbage changing.
+            const uint32_t low4 = ByteSwap(*gears::Memory().Translate<uint32_t>(4));
+            lucent::info("probe", "FString deserialise #{}: archive array is {}"
+                " ({} bytes at {:#x}); guest address 4 currently holds {:#x}",
+                reported.load(),
+                buffer == 0 || count == 0 ? "EMPTY -- nothing filled it"
+                                          : "populated",
+                count, buffer, low4);
+        }
+    }
+
     __imp__sub_8232B548(ctx, base);
 
     t_serialisingArchive = 0;
