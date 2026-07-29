@@ -15,18 +15,17 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstring>
 #include <filesystem>
 #include <iterator>
-
-#include "guest_filesystem.h"
-
-#include <cstring>
-
-#include <lucent/log.h>
+#include <vector>
 
 #include <byteswap.h>
+#include <lucent/log.h>
 
+#include "guest_filesystem.h"
 #include "input.h"
+#include "user_profile.h"
 
 namespace
 {
@@ -52,6 +51,13 @@ void Store64(uint8_t* base, uint32_t address, uint64_t value)
 {
     if (address != 0)
         *reinterpret_cast<uint64_t*>(base + address) = ByteSwap(value);
+}
+
+uint32_t Load32(const uint8_t* base, uint32_t address)
+{
+    if (address == 0)
+        return 0;
+    return ByteSwap(*reinterpret_cast<const uint32_t*>(base + address));
 }
 
 void Store16(uint8_t* base, uint32_t address, uint16_t value)
@@ -149,37 +155,102 @@ void __imp__XamUserAreUsersFriends(PPCContext& __restrict ctx, uint8_t* base)
 //                                  PXUID Xuids, DWORD SettingCount, PDWORD SettingIds,
 //                                  PDWORD BufferSize, PVOID Buffer, PVOID Overlapped)
 //
-// The profile exists but carries no stored settings, so the title falls back to
-// its own defaults -- which is what a freshly created profile produces. The
-// buffer-size protocol is still honoured: a null buffer is a size query.
+// Backed by a real store now (user_profile.cpp), persisted next to the saves.
+// The buffer protocol is the console's: a caller with no buffer, or too small a
+// one, is told the size it needs; a caller with room gets a result whose
+// per-setting source says whether the value was ever set, which is how the
+// title tells "no value" from "the value is zero".
 void __imp__XamUserReadProfileSettings(PPCContext& __restrict ctx, uint8_t* base)
 {
+    const uint32_t settingCount = ctx.r7.u32;
+    const uint32_t settingIdsPtr = ctx.r8.u32;
     const uint32_t bufferSizePtr = ctx.r9.u32;
     const uint32_t buffer = ctx.r10.u32;
 
-    if (buffer == 0)
+    // The console bounds this, and a count outside it would size a buffer from
+    // a number the title never meant as one.
+    if (settingCount < 1 || settingCount > 32 || bufferSizePtr == 0 ||
+        settingIdsPtr == 0)
     {
-        // A size query. Reporting the header alone says "no settings" without
-        // asking the caller for memory it will find empty.
-        Store32(base, bufferSizePtr, 4);
+        ctx.r3.u64 = gears::kErrorInvalidParameter;
+        return;
+    }
+
+    std::vector<uint32_t> ids(settingCount);
+    for (uint32_t i = 0; i < settingCount; ++i)
+        ids[i] = Load32(base, settingIdsPtr + i * 4);
+
+    const uint32_t needed =
+        gears::ProfileReadBufferSize(ids.data(), settingCount);
+    const uint32_t bufferSize = Load32(base, bufferSizePtr);
+
+    if (buffer == 0 || bufferSize < needed)
+    {
+        Store32(base, bufferSizePtr, needed);
         ctx.r3.u64 = gears::kErrorInsufficientBuffer;
         return;
     }
 
-    // XUSER_READ_PROFILE_SETTING_RESULT begins with the returned setting count.
-    Store32(base, buffer, 0);
-    lucent::debug("xam", "XamUserReadProfileSettings -> profile has no stored settings");
+    gears::WriteProfileReadResult(base, buffer, bufferSize, gears::Profile(),
+                                  ids.data(), settingCount);
+    lucent::debug("xam", "read {} profile setting(s)", settingCount);
     ctx.r3.u64 = gears::kErrorSuccess;
 }
 
-// DWORD XamUserWriteProfileSettings(...)
+// DWORD XamUserWriteProfileSettings(DWORD UserIndex, DWORD SettingCount,
+//                                   const XUSER_PROFILE_SETTING* Settings,
+//                                   PVOID Overlapped)
 //
-// There is no storage device to write to, and saying otherwise would have the
-// title believe settings persist across runs when they cannot.
-void __imp__XamUserWriteProfileSettings(PPCContext& __restrict ctx, uint8_t*)
+// Settings now have somewhere to go: they are stored and written to disk, so a
+// player's choices survive the run. Refusing this was what made the profile
+// read-only in practice.
+void __imp__XamUserWriteProfileSettings(PPCContext& __restrict ctx, uint8_t* base)
 {
-    lucent::debug("xam", "XamUserWriteProfileSettings -> no storage device");
-    ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+    const uint32_t settingCount = ctx.r4.u32;
+    const uint32_t settings = ctx.r5.u32;
+
+    if (settingCount == 0 || settings == 0)
+    {
+        ctx.r3.u64 = gears::kErrorSuccess;
+        return;
+    }
+
+    for (uint32_t i = 0; i < settingCount; ++i)
+    {
+        const uint32_t record = settings + i * gears::kProfileSettingSize;
+        const uint32_t id = Load32(base, record + 16);
+        const auto type = gears::UserDataType(base[record + 24]);
+
+        switch (type)
+        {
+        case gears::UserDataType::Int32:
+        case gears::UserDataType::Context:
+        case gears::UserDataType::Float:
+            gears::Profile().SetInt32(id, int32_t(Load32(base, record + 32)));
+            break;
+
+        case gears::UserDataType::Binary:
+        {
+            const uint32_t size = Load32(base, record + 32);
+            const uint32_t data = Load32(base, record + 36);
+            if (data != 0 && size != 0 && size <= 0x1000)
+                gears::Profile().SetBinary(id,
+                    std::vector<uint8_t>(base + data, base + data + size));
+            break;
+        }
+
+        default:
+            // Storing a type this runtime cannot round-trip would lose it
+            // silently on the next read; saying so keeps the gap visible.
+            lucent::debug("xam", "profile setting {:#x} has unsupported type {}",
+                          id, uint32_t(type));
+            break;
+        }
+    }
+
+    gears::Profile().Save(gears::Files().SaveDirectory() / "profile.bin");
+    lucent::debug("xam", "wrote {} profile setting(s)", settingCount);
+    ctx.r3.u64 = gears::kErrorSuccess;
 }
 
 void __imp__XamUserCreateStatsEnumerator(PPCContext& __restrict ctx, uint8_t*)

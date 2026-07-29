@@ -90,6 +90,8 @@ add_executable(gears1
     audio_out.cpp
     guest_probes.cpp
     guest_backtrace.cpp
+    user_profile.cpp
+    xam_apps.cpp
     ppc_mmio.cpp
     wait_probe.cpp
     xaudio_null.cpp
