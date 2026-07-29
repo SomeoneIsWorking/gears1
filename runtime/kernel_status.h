@@ -27,4 +27,9 @@ constexpr uint32_t kErrorNoSuchUser = 0x00000525;
 constexpr uint32_t kErrorNoMoreFiles = 0x00000012;
 constexpr uint32_t kErrorInvalidHandle = 0x00000006;
 
+// An asynchronous request that was accepted. A caller that supplied an
+// XOVERLAPPED expects this rather than a result: the outcome reaches it through
+// the overlapped, which may already be complete by the time this returns.
+constexpr uint32_t kErrorIoPending = 0x000003E5;
+
 } // namespace gears
