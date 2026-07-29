@@ -82,3 +82,40 @@ THE INSTRUMENT IS THE REUSABLE PART: reporting the link register on a failed
 allocation cost two lines and turned "something wants 2.6 GB" into a named
 three-function chain in one run. Same technique that cracked the pure-virtual
 call (catalog #44).
+
+### Note (2026-07-29)
+THE REQUEST IS NAMED, WITH ITS ARGUMENTS, AND ONE OF MY EARLIER CLAIMS WAS WRONG.
+
+A probe on the pool allocator (a strong sub_82214F50 that logs and calls
+through) caught both requests in one run:
+
+    140 MB  from 0x82215540: r3=0x401116b0 r5=0x8 r6=0x2 r7=0x0          (succeeds)
+   2544 MB  from 0x822153c4: r3=0x401116b0 r5=0x8 r6=0x8 r7=0xb0800000   (fails)
+
+Same allocator object (r3), same alignment (r5=8). The failing one differs in
+r6 (8 vs 2) and carries r7=0xb0800000 -- a guest PHYSICAL address, not a size.
+So the request is not "give me 2.6 GB of anything"; it is parameterised by a
+region.
+
+The call at 0x822153c4 is itself an indirect dispatch -- `vtable = load(this);
+target = load(vtable+4); bctrl` -- out of sub_822151F8. Slot 1 of an allocator
+interface, which is the same shape of call as the pure-virtual failure in
+catalog #44, though there is no reason yet to think they are related.
+
+CORRECTION TO THE PREVIOUS NOTE: I wrote that the allocation type 0x20001000
+"pinned the call site", since only one of the wrapper's five callers builds it.
+That reasoning was wrong -- the type is built INSIDE sub_82214B58, so every
+caller of that function produces it, and it discriminates nothing. The chain in
+that note is still right; the justification for one step of it was not.
+
+Reading the two callers settles which is which anyway, and better: the site at
+ppc_recomp.14.cpp:23642 computes `r11 * (65536 / r11)`, which cannot exceed
+65536 bytes. So the 2.6 GB must come from the OTHER site, which rounds its
+argument up to a 64 KB boundary and passes it straight through. That matches
+0x9f000000 being 64 KB-aligned.
+
+WHERE IT STANDS: the size is decided above sub_822151F8 and arrives as an
+argument. The next step is the same probe one level up, which is cheap now that
+the pattern is established. Worth noting 2544 MB is about five times the
+console's entire 512 MB, so whatever computes it is not working from a number
+this machine gave it correctly.

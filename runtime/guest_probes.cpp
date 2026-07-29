@@ -1,4 +1,10 @@
-// A trace on the title's own fatal-error path.
+// Probes on specific guest functions, for questions the runtime cannot answer
+// from its own side. Each one is a strong `sub_X` that logs and calls through,
+// which works for indirect calls too because the function-mapping table holds
+// the weak alias.
+//
+// ---------------------------------------------------------------------------
+// The title's own fatal-error path.
 //
 // The title bug-checks intermittently about 70 seconds in (catalog #44), and
 // the panic itself is a RE-ENTRANCY GUARD: sub_828D2FB0 reads a flag, calls
@@ -14,6 +20,7 @@
 // calls it directly, which is how it is reached.
 #include "import_stub.h"
 
+#include <atomic>
 #include <string>
 
 #include <byteswap.h>
@@ -156,4 +163,28 @@ PPC_FUNC(sub_828D0790)
             slot1);
     }
     __imp__sub_828D0790(ctx, base);
+}
+
+// ---------------------------------------------------------------------------
+// The engine's pool allocator, which asks for 2.6 GB on the save path
+// (catalog #45).
+//
+// The chain below it is known -- sub_82214F50 -> sub_82214B58 ->
+// NtAllocateVirtualMemory -- and one of the two call sites rounds its size up
+// to a 64 KB boundary and passes it straight through, so the number is decided
+// ABOVE here. Walking further by reading costs a hop per attempt; logging the
+// arguments and the caller answers it in one run.
+extern "C" PPC_FUNC(__imp__sub_82214F50);
+
+PPC_FUNC(sub_82214F50)
+{
+    static std::atomic<uint64_t> seen{0};
+    // Only the outsized requests: this is a pool allocator on a normal path and
+    // a line per call would bury the one that matters.
+    if (ctx.r4.u32 >= (64u << 20) && seen.fetch_add(1) < 8)
+        lucent::error("probe", "pool allocation of {:#x} bytes ({} MB) requested"
+            " from {:#x}: r3={:#x} r5={:#x} r6={:#x} r7={:#x}", ctx.r4.u32,
+            ctx.r4.u32 >> 20, uint32_t(ctx.lr), ctx.r3.u32, ctx.r5.u32,
+            ctx.r6.u32, ctx.r7.u32);
+    __imp__sub_82214F50(ctx, base);
 }
