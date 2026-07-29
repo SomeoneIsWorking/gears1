@@ -13,7 +13,8 @@ add_executable(test_runtime_logic
     ../runtime/kernel_objects.cpp
     ../runtime/guest_filesystem.cpp
     ../runtime/guest_heap.cpp
-    ../runtime/guest_memory.cpp)
+    ../runtime/guest_memory.cpp
+    ../runtime/guest_thread.cpp)
 target_include_directories(test_runtime_logic PRIVATE
     ../runtime
     "${GEARS_PPC_DIR}"
@@ -116,7 +117,9 @@ add_test(NAME directory_info COMMAND test_directory_info)
 # answers every lookup successfully with the wrong setting.
 add_executable(test_xconfig
     test_xconfig.cpp
-    ../runtime/xconfig.cpp)
+    ../runtime/xconfig.cpp
+    ../runtime/host_time_zone.cpp
+    ../runtime/kernel_config.cpp)
 target_include_directories(test_xconfig PRIVATE
     ../runtime
     "${GEARS_PPC_DIR}"

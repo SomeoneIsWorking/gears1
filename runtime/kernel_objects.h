@@ -107,10 +107,11 @@ HandleTable& Handles();
 // guest address lazily, the first time one is actually asked for, so the common
 // handle-only path costs nothing.
 uint32_t GuestAddressForHandle(uint32_t handle);
-// The reverse: which handle a guest object address was minted for, or 0. The
-// title passes these pointers back to APIs that name a thread (affinity among
-// them), so the runtime has to be able to get back to what it created.
-uint32_t HandleForGuestAddress(uint32_t address);
+// The reverse: the object a guest address stands for, or null. The title passes
+// these pointers back to APIs that name a thread (affinity among them), so the
+// runtime has to be able to get back to what it created. It maps to the OBJECT,
+// not to a handle, because the title duplicates handles and every duplicate
+// names the same object.
 std::shared_ptr<KernelObject> LookupByGuestAddress(uint32_t address);
 
 // Binds a host object to a dispatcher object that lives in guest memory. Titles
@@ -120,10 +121,14 @@ std::shared_ptr<KernelObject> LookupByGuestAddress(uint32_t address);
 std::shared_ptr<KernelObject> BindGuestDispatcherObject(uint32_t address);
 void RegisterGuestObject(uint32_t address, std::shared_ptr<KernelObject> object);
 
-// A suspended thread's resume gate, keyed by its handle. Kept beside the handle
-// table because a thread handle waits on *exit*, so the resume signal needs its
-// own home rather than overloading the same object.
-void RegisterThreadResume(uint32_t handle, std::shared_ptr<KernelObject> resumed);
-void ResumeThread(uint32_t handle);
+// A suspended thread's resume gate, keyed by the thread's dispatcher OBJECT --
+// the same identity rule as above, so a duplicated handle still finds it. Kept
+// beside the handle table because a thread object is what the guest waits on for
+// *exit*, so the resume signal needs its own home rather than overloading it.
+void RegisterThreadResume(const std::shared_ptr<KernelObject>& threadObject,
+                          std::shared_ptr<KernelObject> resumed);
+// Accepts either a handle or the guest address of the thread's object, because
+// NtResumeThread is given one and KeResumeThread the other.
+void ResumeThread(uint32_t handleOrObject);
 
 } // namespace gears

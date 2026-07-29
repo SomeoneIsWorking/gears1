@@ -54,12 +54,13 @@ constexpr uint32_t kThreadTickCount = 0x058;
 constexpr uint32_t kThreadCurrentCpu = 0x0BF;
 constexpr uint32_t kThreadId = 0x14C;
 
-// The console has six hardware threads. Which one a thread runs on is chosen by
-// the title -- through ExCreateThread's flags or KeSetAffinityThread -- and the
-// runtime records that choice rather than inventing one, because guest code
-// indexes per-CPU state with it. Threads the title expresses no preference for
-// inherit their creator's, which is the console's own rule.
-constexpr uint32_t kHardwareThreadCount = 6;
+// Which hardware thread a thread runs on is chosen by the title -- through
+// ExCreateThread's flags or KeSetAffinityThread -- and the runtime records that
+// choice rather than inventing one, because guest code indexes per-CPU state
+// with it. Threads the title expresses no preference for inherit their
+// creator's, which is the console's own rule. (kHardwareThreadCount is in the
+// header: the callers of ProcessorNumberFromMask need it to tell a processor
+// from the sentinels.)
 std::atomic<uint32_t> g_nextProcessorNumber{0};
 
 // The KTHREAD's own id field. Distinct per thread is all the title's
@@ -130,19 +131,44 @@ const char* GuestThreadName()
     return t_guestThreadName.c_str();
 }
 
-uint8_t ProcessorNumberFromMask(uint8_t mask)
+uint8_t ProcessorNumberFromMask(uint32_t mask)
 {
     if (mask == 0)
-        return 0xFF; // "inherit", resolved by the caller
+        return kProcessorInherit;
 
-    // Exactly one bit is expected. More than one is a mask this cannot honour
-    // faithfully, so it is reported rather than silently reduced to the first.
-    const uint8_t cpu = uint8_t(__builtin_ctz(mask));
-    if ((mask & uint8_t(mask - 1)) != 0 || cpu >= kHardwareThreadCount)
+    constexpr uint32_t kEveryProcessor = (1u << kHardwareThreadCount) - 1;
+    const uint32_t named = mask & kEveryProcessor;
+    if (named == 0)
     {
-        lucent::warn("thread", "processor mask {:#x} names {} hardware threads,"
-            " using {}", mask, __builtin_popcount(mask), cpu % kHardwareThreadCount);
-        return uint8_t(cpu % kHardwareThreadCount);
+        // Refused rather than folded back into range. This used to answer
+        // `ctz(mask) % 6`, which turned 0x40 into processor 0 and 0x100 into
+        // processor 2 -- a processor the title never asked for, indistinguishable
+        // afterwards from one it did.
+        lucent::warn("thread", "processor mask {:#x} names none of the console's"
+            " {} hardware threads", mask, kHardwareThreadCount);
+        return kProcessorNone;
+    }
+    if (named != mask)
+    {
+        lucent::warn("thread", "processor mask {:#x} has bits outside the console's"
+            " {} hardware threads; only {:#x} of it is a processor",
+            mask, kHardwareThreadCount, named);
+    }
+
+    // THE HIGHEST named processor, and the rule is the console's rather than a
+    // choice. Two independent sources agree:
+    //   - Xenia's XThread::GetFakeCpuNumber is `7 - lzcnt(proc_mask)`.
+    //   - The title's OWN inverse decoder, which reads back the previous
+    //     affinity mask the kernel wrote (ppc_recomp.97.cpp, guest 0x82613970):
+    //         cntlzw r11,r11 ; subfic r3,r11,31      i.e. 31 - clz
+    // Taking the lowest instead is invisible today because every mask this title
+    // sends is one-hot -- which is exactly why it had to be settled from the
+    // console's rule and not from what currently happens to work.
+    const uint8_t cpu = uint8_t(31 - __builtin_clz(named));
+    if ((named & (named - 1)) != 0)
+    {
+        lucent::warn("thread", "processor mask {:#x} names {} hardware threads;"
+            " recording the highest, {}", mask, __builtin_popcount(named), cpu);
     }
     return cpu;
 }
