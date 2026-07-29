@@ -13,6 +13,13 @@
 // is obliged to handle each of them.
 #include "import_stub.h"
 
+#include <algorithm>
+#include <cctype>
+#include <filesystem>
+#include <iterator>
+
+#include "guest_filesystem.h"
+
 #include <cstring>
 
 #include <lucent/log.h>
@@ -268,14 +275,74 @@ void __imp__XamInputSetState(PPCContext& __restrict ctx, uint8_t*)
 
 // Storage. No memory unit or hard disc is attached, so there is no content to
 // enumerate, create or read.
-void __imp__XamContentGetDeviceState(PPCContext& __restrict ctx, uint8_t*)
+// The console's storage device, which on a PC is a directory.
+//
+// Every one of these used to answer "no device connected", which is why the
+// title opened a "no storage device" dialog on every boot and could not save.
+// A PC always has somewhere to put a save file, so reporting no device was
+// describing a machine this port does not run on.
+namespace
 {
-    ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+constexpr uint32_t kDeviceId = 1; // one device, always present
+
+// XDEVICE_DATA: id, type, then two 64-bit byte counts and a friendly name.
+constexpr uint32_t kDeviceTypeHdd = 1;
+} // namespace
+
+void __imp__XamContentGetDeviceState(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t deviceId = ctx.r3.u32;
+    const uint32_t statePtr = ctx.r4.u32;
+    if (deviceId != kDeviceId && deviceId != 0)
+    {
+        ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+        return;
+    }
+    if (statePtr != 0)
+        *reinterpret_cast<uint32_t*>(base + statePtr) = 0; // no error
+    ctx.r3.u64 = gears::kErrorSuccess;
 }
 
-void __imp__XamContentGetDeviceData(PPCContext& __restrict ctx, uint8_t*)
+void __imp__XamContentGetDeviceData(PPCContext& __restrict ctx, uint8_t* base)
 {
-    ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+    const uint32_t deviceId = ctx.r3.u32;
+    const uint32_t dataPtr = ctx.r4.u32;
+    if ((deviceId != kDeviceId && deviceId != 0) || dataPtr == 0)
+    {
+        ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+        return;
+    }
+
+    // CAPPED TO CONSOLE SCALE, and the cap is the point.
+    //
+    // Reporting the host's real capacity looked more honest and immediately
+    // broke the title: with a PC disk's terabytes in this field it tried to
+    // allocate 0x9f000000 bytes -- 2.6 GB -- and failed, right after mounting
+    // its save. The title sizes something from what the device claims, and a
+    // number no console could ever return is a number it was never written to
+    // handle. 512 MB is the console's own Memory Unit, which is both plausible
+    // and far more space than a save needs.
+    //
+    // Real free space is still consulted, so a genuinely full disk is reported
+    // as full rather than as a cheerful lie.
+    constexpr uint64_t kDeviceBytes = 512ull << 20;
+    std::error_code ec;
+    const std::filesystem::space_info space =
+        std::filesystem::space(gears::Files().SaveDirectory(), ec);
+    const uint64_t total = kDeviceBytes;
+    const uint64_t free = ec ? kDeviceBytes : std::min<uint64_t>(kDeviceBytes, space.available);
+
+    uint8_t* d = base + dataPtr;
+    *reinterpret_cast<uint32_t*>(d + 0) = ByteSwap(kDeviceId);
+    *reinterpret_cast<uint32_t*>(d + 4) = ByteSwap(kDeviceTypeHdd);
+    *reinterpret_cast<uint64_t*>(d + 8) = ByteSwap(total);
+    *reinterpret_cast<uint64_t*>(d + 16) = ByteSwap(free);
+    // A UTF-16 name, which is what the console's dashboard would show.
+    static const char16_t kName[] = u"PC Storage";
+    for (size_t i = 0; i < std::size(kName); ++i)
+        *reinterpret_cast<uint16_t*>(d + 24 + i * 2) = ByteSwap(uint16_t(kName[i]));
+
+    ctx.r3.u64 = gears::kErrorSuccess;
 }
 
 void __imp__XamContentCreateEnumerator(PPCContext& __restrict ctx, uint8_t*)
@@ -283,9 +350,68 @@ void __imp__XamContentCreateEnumerator(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = gears::kErrorDeviceNotConnected;
 }
 
-void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t*)
+// DWORD XamContentCreateEx(DWORD userIndex, LPCSTR rootName,
+//                          const XCONTENT_DATA* data, DWORD flags, ...)
+//
+// The title names a root ("SAVE"), hands over the content it wants, and then
+// opens files as "SAVE:\...". So creating content is, on a PC, making a
+// directory and mounting it under that name -- after which the ordinary file
+// path does the rest.
+void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
 {
-    ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+    const uint32_t rootNamePtr = ctx.r4.u32;
+    const uint32_t contentDataPtr = ctx.r5.u32;
+    const uint32_t flags = ctx.r6.u32;
+
+    if (rootNamePtr == 0)
+    {
+        ctx.r3.u64 = gears::kErrorInvalidParameter;
+        return;
+    }
+    const std::string rootName(reinterpret_cast<const char*>(base + rootNamePtr));
+
+    // XCONTENT_DATA is device id, content type, then a UTF-16 display name and
+    // an ASCII file name. The file name is what distinguishes one save from
+    // another, so it is what the directory is called.
+    std::string fileName = "savedata";
+    if (contentDataPtr != 0)
+    {
+        const char* raw = reinterpret_cast<const char*>(base + contentDataPtr + 8 + 128 * 2);
+        std::string candidate;
+        for (size_t i = 0; i < 42 && raw[i]; ++i)
+        {
+            const unsigned char c = static_cast<unsigned char>(raw[i]);
+            // Anything that is not plainly a filename is dropped rather than
+            // escaped: this string becomes a path on the user's disk.
+            candidate.push_back(std::isalnum(c) || c == '_' || c == '-' ? char(c) : '_');
+        }
+        if (!candidate.empty())
+            fileName = candidate;
+    }
+
+    const std::filesystem::path dir = gears::Files().SaveDirectory() / fileName;
+    const bool existed = std::filesystem::exists(dir);
+
+    // Flag 1 is CREATE_NEW and 2 is OPEN_EXISTING in the console's scheme;
+    // honouring them keeps "load" from silently succeeding on a save that is
+    // not there.
+    constexpr uint32_t kCreateNew = 1, kOpenExisting = 2;
+    if ((flags & 0xF) == kOpenExisting && !existed)
+    {
+        lucent::debug("xam", "XamContentCreateEx('{}') -> no such content", fileName);
+        ctx.r3.u64 = gears::kErrorNotFound;
+        return;
+    }
+    if ((flags & 0xF) == kCreateNew && existed)
+    {
+        ctx.r3.u64 = gears::kErrorAlreadyExists;
+        return;
+    }
+
+    gears::Files().Mount(rootName, dir);
+    lucent::info("xam", "content '{}' mounted as '{}:' ({})", fileName, rootName,
+                 existed ? "existing" : "new");
+    ctx.r3.u64 = gears::kErrorSuccess;
 }
 
 void __imp__XamContentGetCreator(PPCContext& __restrict ctx, uint8_t*)
@@ -298,9 +424,12 @@ void __imp__XamContentDelete(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = gears::kErrorNotFound;
 }
 
-// Closing something that was never opened has nothing to fail at.
-void __imp__XamContentClose(PPCContext& __restrict ctx, uint8_t*)
+// Closing content unmounts its root, so a later open of the same name cannot
+// reach the previous save's directory by accident.
+void __imp__XamContentClose(PPCContext& __restrict ctx, uint8_t* base)
 {
+    if (const uint32_t rootNamePtr = ctx.r3.u32; rootNamePtr != 0)
+        gears::Files().Unmount(reinterpret_cast<const char*>(base + rootNamePtr));
     ctx.r3.u64 = gears::kErrorSuccess;
 }
 

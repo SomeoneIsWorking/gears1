@@ -51,7 +51,7 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | Threads | `guest_thread.*`, `kernel_thread.cpp` | **real** | Per-thread `PPCContext`/KPCR/TLS/stack. `CREATE_SUSPENDED` is a real gate. Affinity deliberately **not** honoured |
 | Sync | `kernel_sync.cpp`, `kernel_spinlock.cpp` | **real** | Critical sections and spin locks are real host locks, correct under real threading |
 | Kernel objects | `kernel_objects.*`, `kernel_events.cpp`, `kernel_object_api.cpp`, `kernel_dispatcher.cpp` | **partial**, tested | Events + semaphores, handle table, and guest-memory dispatcher objects bound lazily from their own header. **`ObDereferenceObject` is a no-op** — objects outlive their refcount |
-| File I/O | `guest_filesystem.*`, `kernel_file.cpp` | **partial** | Real reads from extracted disc files, case-insensitive fallback. No directory enumeration, no writes |
+| File I/O | `guest_filesystem.*`, `kernel_file.cpp`, `xam_user.cpp` | **partial** | Real reads from extracted disc files, case-insensitive fallback. **Writes work on save mounts**: the title reports a storage device, creates content, and gets a writable host directory under `$XDG_DATA_HOME/gears1`. No directory enumeration; no save file has landed on disk yet (catalog #45) |
 | Memory API | `kernel_memory.cpp` | **partial** | Virtual + physical allocation. Page protection recorded, **not enforced** |
 | Time | `kernel_time.cpp` | **real** | 50 MHz Xenon timebase |
 | Config | `kernel_config.cpp` | **partial** | Answers only settings with a defensible value; refuses the rest **by name** |
