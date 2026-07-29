@@ -515,3 +515,36 @@ title expects at that offset, or the archive's position/endianness is off, or
 what we hand back for that file differs from the console's. The next step is to
 dump the 385 bytes and hand-decode the FString/TArray headers the title expects,
 against the deserialise sequence.
+
+### Note (2026-07-29)
+THE CRASH OBJECT IS A FREED HEAP BLOCK. USE-AFTER-FREE, NOT BAD DATA.
+
+Confirmed from the actual core file, independently re-derived on review:
+
+  ctx.r24 = 0x41c84e00 ; ctx.r3 = 0x42babc40 ; ctx.ctr = 0x0
+  -> a NULL indirect call, not a jump to 0xFF as I reported earlier from a
+     live gdb session (that reading was wrong; [0x42babeb4] = 0).
+
+The object at 0x42babc40 is ON A POOL FREE-LIST: length 214, terminator
+00000000, every node's word1 == 1, every node 0x40-aligned, strides
+[192,384,768,2304,4032,8064], span 0x42ba0240..0x42badd40, and the pool
+descriptor at 0x41421750 holds 0x42babc40 as its HEAD. The 'vtable' pointer
+0x42babe80 that I flagged as suspicious is itself a freed block in the same list
+(word0 = 0x42ba0240, word1 = 1).
+
+So the object was FREED and then used. Its slot-0 word is a free-list next
+pointer, which is why the 'vtable' looked like a heap address.
+
+The real class is identifiable: sub_8242C098 installs vtable 0x821047A8 after
+calling the FArchive base constructor at 0x821B5B78; that vtable's slot 13
+(byte +52) is 0x824841A8, which is the call that faults.
+
+THIS SUPERSEDES THE PREVIOUS TWO READINGS IN THIS ENTRY. It is not an empty
+array (my probe was capped and never saw the crash-time state), and it is not a
+corrupt descriptor deserialised from bad bytes (that descriptor is a symptom of
+reading a freed block). It is an object lifetime bug: something frees this
+archive-derived object while the restore path still holds it.
+
+NOTE ON THE CARRIER: the earlier finding stands -- LoadChapter runs and fills
+the carrier with 385 real bytes. That is NOT the problem. The problem is what
+happens to the object built over it.

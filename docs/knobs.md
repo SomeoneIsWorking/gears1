@@ -68,6 +68,21 @@ the same commit that removes it.
 | `GEARS_DRAW_VALIDATE=1` | Vulkan validation layers |
 | `GEARS_SHADER_CAPTURE=1`, `GEARS_CONST_DUMP=1` | Capture bound microcode / the register file |
 
+## Self-validation — proving an instrument can still say "yes"
+
+An instrument whose normal output is nothing cannot be distinguished, from its
+log, from an instrument that is broken. Each of these feeds its detector a case
+that MUST produce a positive; a silent run with one of them set means the
+detector is dead, and every negative that detector has ever printed is worthless.
+
+| Knob | Feeds |
+|---|---|
+| `GEARS_ASAN_SELFTEST=1` | One deliberate out-of-bounds heap read. A sanitizer build that does not report it is not watching the process. Only exists in a sanitizer build (`runtime/main.cpp`) |
+| `GEARS_STALL_SELFTEST=1` | Two synthetic progress channels: `selftest.stopped` ticks once then stops (the stalled branch must fire at 8 s) and `selftest.silent` never ticks (the never-started branch must fire at 40 s). Both lines must appear (`runtime/wait_probe.cpp`) |
+
+Their offline counterparts are `--selftest` subcommands rather than knobs:
+`tools/find_addr_refs.py --selftest` and `tools/atomic_audit.py --selftest`.
+
 ## Control arms — never fixes
 
 Each isolates one cause by comparison against the default.
