@@ -26,6 +26,7 @@
 #include <set>
 #include <unordered_map>
 #include <string>
+#include <vector>
 
 #include <byteswap.h>
 #include <lucent/config.h>
@@ -569,8 +570,32 @@ PPC_FUNC(sub_8221CBA8)
         std::lock_guard<std::mutex> guard(sitesMutex);
         auto& forThread = sites[name];
         if (forThread.insert(from).second && forThread.size() <= 12)
+        {
             lucent::info("ring", "producer '{}' enqueues from {:#x} (distinct"
                 " call site {} for this thread)", name, from, forThread.size());
+
+            // THE ROUTE, for any producer that is not the game thread. A direct
+            // call graph over the whole image finds no path from the drain loop
+            // to this enqueue, so it runs through one of the three indirect
+            // dispatches in sub_82444EF0 -- and only a stack walk can say which.
+            //
+            // The negative is designed: if the walk yields fewer than three
+            // frames it says so, because a short trace and a broken walker look
+            // identical, and this seam is exactly where that matters.
+            if (name != "host")
+            {
+                const std::vector<uint32_t> frames =
+                    gears::GuestBacktrace(ctx.r1.u32, uint32_t(ctx.lr));
+                if (frames.size() < 3)
+                    lucent::error("ring", "  the stack walk yielded only {}"
+                        " frame(s) -- too few to name the route. Treat this as"
+                        " the WALKER failing, not as the route being short",
+                        frames.size());
+                else
+                    lucent::error("ring", "  route from '{}': {}", name,
+                        gears::FormatGuestBacktrace(ctx.r1.u32, uint32_t(ctx.lr)));
+            }
+        }
     }
 
     __imp__sub_8221CBA8(ctx, base);

@@ -30,12 +30,26 @@ updated: 2026-07-29
 > advances `ReadPointer` by whatever the bogus `Execute()` returns, so it never
 > recovers. That is the observed corruption and it explains the intermittency.
 >
-> **NOT established, and it decides the fix:** how the rendering thread reaches
-> that enqueue. A direct call graph over 48,655 functions finds no path (positive
-> control passes), so the route runs through one of three indirect dispatches in
-> the drain loop. And the reason the console survives this is unknown — plausibly
-> Xenon's 6 threads on 3 cores never truly overlap the RMW, where this port runs
-> them in parallel.
+> **The route is now MEASURED** (guest backtrace at the enqueue):
+>
+> ```
+> sub_82444EF0  the drain loop
+>   --direct-->   sub_82444DB0        (bl 0x82444db0, return 0x82445004)
+>     --INDIRECT--> sub_8221B378      <-- the one edge the call graph could not see
+>       --direct--> sub_8221B670
+>         --direct--> sub_8221D3A8
+>           --direct--> sub_82327B60
+>             --direct--> sub_82327BC8   enqueue FlushCommand (0x82327d4c)
+> ```
+>
+> So the drain loop reaches the producer through EXACTLY ONE indirect dispatch,
+> at the top of the chain; every edge below it is a direct call. That is why a
+> whole-image direct graph found no path while the positive control passed — the
+> break was at the first hop, not somewhere deep.
+>
+> **Still not established:** why the console survives this — plausibly Xenon's 6
+> threads on 3 cores never truly overlap the RMW, where this port runs them in
+> parallel.
 >
 > **DO NOT serialise the guest's commit yet.** The race being the title's means
 > there is nothing of ours to stop doing; if the topology explanation holds,
@@ -1005,3 +1019,43 @@ NEXT MEASUREMENT: a guest backtrace at the render thread's enqueue (the
 instrument exists -- guest_backtrace.cpp) plus what host is doing at that
 instant. That closes the indirect-dispatch gap, which is the only thing still
 unknown.
+
+### Note (2026-07-29)
+THE ROUTE IS MEASURED. THE LAST UNKNOWN IS CLOSED.
+
+A guest backtrace taken at the render thread's enqueue (the walk is bounded and
+reports too-few-frames as a WALKER failure rather than as a short route, so a
+silent success means something):
+
+  0x82327d4c <- 0x82327b78 <- 0x8221d8f8 <- 0x8221b960 <- 0x8221b560
+             <- 0x82444ea8 <- 0x82445004 <- 0x82445038 <- 0x8243ae00 <- 0x827a94ac
+
+Resolved to functions, outermost last:
+
+  sub_82444EF0   the drain loop
+    --direct-->  sub_82444DB0     (bl 0x82444db0, returning to 0x82445004)
+      --INDIRECT--> sub_8221B378
+        --direct--> sub_8221B670
+          --direct--> sub_8221D3A8
+            --direct--> sub_82327B60
+              --direct--> sub_82327BC8   enqueue FlushCommand at 0x82327d4c
+
+CHECKED EACH EDGE rather than assuming: only sub_82444DB0 -> sub_8221B378 is
+indirect; the other four are direct calls.
+
+THIS CORRECTS AN EARLIER NOTE. The route was said to run through 'one of the
+three bctrl in sub_82444EF0'. It does not: the drain loop reaches sub_82444DB0
+by a DIRECT bl, and the single indirect hop is one level further down, inside
+sub_82444DB0. The whole-image direct call graph found nothing because the break
+was at the FIRST hop out of that function, not deep in a command's Execute --
+which is also why the closure from the 37 Execute bodies was negative and the
+positive control still passed. The method was sound; the inference about where
+the gap lay was wrong.
+
+WHAT IT MEANS: the rendering thread enqueues onto the ring it is draining, from
+inside its own drain loop, via a callback. The single-producer invariant is
+broken by the title's own control flow, not by anything this port schedules.
+
+The fix question is unchanged and still open: why the console tolerates the
+non-atomic commit under two producers. Serialising the commit remains a PORT
+decision to be justified, not a bandaid to reach for -- see the note above.
