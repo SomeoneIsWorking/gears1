@@ -151,14 +151,28 @@ void DumpContext(GuestMemory& memory, uint32_t index, uint32_t pointer)
 // lives in XmaHwContext (xma_context.cpp); this file only routes register
 // events to it.
 std::mutex g_hwContextMutex;
-std::array<std::unique_ptr<XmaHwContext>, kContextCount> g_hwContexts;
+// SHARED, not unique, and HwContext hands back a shared_ptr rather than a
+// reference -- the same rule the open-file table follows (kernel_file.cpp).
+// The lock is released when HwContext returns, and the caller then spends
+// however long a decode takes inside Work()/Clear(). XMAReleaseContext runs on
+// whatever guest thread the title calls it from (xaudio_null.cpp:532) and used
+// to `.reset()` the slot out from under exactly that call, destroying the
+// XmaHwContext -- and its ffmpeg decoder and output ring -- while another
+// thread was decoding through it. The decode is NOT confined to one thread:
+// kicks arrive from the audio pump's callback and from elsewhere, which is
+// what g_kicksFromPump above exists to count.
+//
+// A shared_ptr keeps the object alive for as long as the caller holds it; the
+// release still clears the slot immediately, so no later kick can find it and
+// a recycled slot still starts with a fresh decoder.
+std::array<std::shared_ptr<XmaHwContext>, kContextCount> g_hwContexts;
 
-XmaHwContext& HwContext(uint32_t index)
+std::shared_ptr<XmaHwContext> HwContext(uint32_t index)
 {
     std::lock_guard<std::mutex> guard(g_hwContextMutex);
     if (!g_hwContexts[index])
-        g_hwContexts[index] = std::make_unique<XmaHwContext>(index);
-    return *g_hwContexts[index];
+        g_hwContexts[index] = std::make_shared<XmaHwContext>(index);
+    return g_hwContexts[index];
 }
 
 void ReportContextBits(const char* what, uint32_t group, uint32_t bits)
@@ -295,7 +309,7 @@ bool OnXmaRegisterStore(uint32_t address, uint32_t value)
             // the same from the pump's rate alone, and only one of them is
             // this code's fault.
             const auto began = std::chrono::steady_clock::now();
-            HwContext(index).Work(*g_memory, pointer);
+            HwContext(index)->Work(*g_memory, pointer);
             const auto took = std::chrono::duration_cast<std::chrono::microseconds>(
                 std::chrono::steady_clock::now() - began).count();
             g_decodeMicroseconds.fetch_add(uint64_t(took));
@@ -331,7 +345,7 @@ bool OnXmaRegisterStore(uint32_t address, uint32_t value)
         {
             const uint32_t index2 = (index - kRegContext0Clear) * 32 +
                 uint32_t(__builtin_ctz(bits));
-            HwContext(index2).Clear(*g_memory,
+            HwContext(index2)->Clear(*g_memory,
                 g_contextArray + index2 * kContextSize);
         }
     }

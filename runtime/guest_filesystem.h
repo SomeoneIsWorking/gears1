@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <string>
 
 namespace gears
@@ -42,6 +43,17 @@ public:
     bool IsWritable(const std::string& guestPath) const;
 
 private:
+    // MOUNTS ARE TOUCHED FROM SEVERAL GUEST THREADS AT ONCE. Mount runs from
+    // XamContentCreateEx and Unmount ERASES from XamContentClose, both guest
+    // imports, while Resolve and IsWritable read the same map from NtCreateFile
+    // and NtOpenFile on other threads. An erase concurrent with a lookup
+    // invalidates the node the reader is walking -- the same class of defect as
+    // the raw pointer FindFile used to hand out, and reachable on the save path
+    // this port now exercises.
+    //
+    // The lazily-derived saveDirectory_ is guarded by the same lock, since it is
+    // computed on first use from any thread that asks.
+    mutable std::mutex mutex_;
     std::filesystem::path gameDirectory_;
     mutable std::filesystem::path saveDirectory_;
     std::map<std::string, std::filesystem::path, std::less<>> mounts_;

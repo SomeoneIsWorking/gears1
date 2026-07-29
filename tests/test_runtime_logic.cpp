@@ -10,7 +10,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <memory>
 #include <thread>
+#include <type_traits>
 
 #include "ppc_config.h"
 #include "ppc_context.h"
@@ -476,6 +478,71 @@ void TestProcessorNumberFromMask()
         "affinity: bits outside the six are ignored, not folded back in");
 }
 
+// A lookup out of a handle table must hand back OWNERSHIP, not a borrowed
+// pointer into the container.
+//
+// This is the rule the open-file table broke: FindFile (kernel_file.cpp) took
+// the table mutex, returned a raw OpenFile*, and released the lock before the
+// caller had finished reading or writing through it -- so a concurrent NtClose
+// erased and destroyed the object mid-use. Every handle table in this runtime
+// has the same shape, and the guest has about twenty threads closing handles
+// on threads other than the one using them, so the rule is a property of the
+// TABLE, not of one call site.
+//
+// Two halves, and both matter:
+//   - the compile-time half fixes the CONTRACT. A future "optimisation" of
+//     Lookup back to `KernelObject*` (no copy, no refcount, looks free) is
+//     exactly how the file-table bug was written, and it compiles and passes
+//     every functional test. A static_assert is the only thing that catches it
+//     before a run does.
+//   - the runtime half fixes the BEHAVIOUR: an object a caller is holding must
+//     survive a close, while the close must still make it unfindable at once.
+void TestHandleLookupOwnsItsResult()
+{
+    // The contract. `auto` at a call site hides which of these two a table
+    // returns; this does not.
+    static_assert(std::is_same_v<decltype(gears::Handles().Lookup(uint32_t(0))),
+                                 std::shared_ptr<gears::KernelObject>>,
+        "HandleTable::Lookup must return an owning shared_ptr: a raw pointer is"
+        " valid only until the next close on any thread");
+    static_assert(std::is_same_v<decltype(gears::LookupByGuestAddress(uint32_t(0))),
+                                 std::shared_ptr<gears::KernelObject>>,
+        "LookupByGuestAddress must return an owning shared_ptr for the same reason");
+
+    auto object = std::make_shared<gears::KernelObject>(
+        gears::KernelObject::Kind::NotificationEvent, false);
+    std::weak_ptr<gears::KernelObject> observer = object;
+    const uint32_t handle = gears::Handles().Insert(object);
+    object.reset(); // the table is now the only owner, as it is in the runtime
+
+    Check(!observer.expired(), "handle lifetime: the table owns the object");
+
+    // What a guest thread does: look the handle up, then work through it.
+    auto held = gears::Handles().Lookup(handle);
+    Check(held != nullptr, "handle lifetime: an open handle resolves");
+
+    // ...and, in between, another thread closes it. This is the exact race.
+    Check(gears::Handles().Close(handle), "handle lifetime: close reports it removed one");
+    Check(gears::Handles().Lookup(handle) == nullptr,
+        "handle lifetime: a closed handle must be unfindable IMMEDIATELY --"
+        " keeping the caller alive must not keep the handle usable");
+
+    // The held reference must still be a live object. With a raw pointer this
+    // is a use-after-free: the Set() below writes through freed memory, and
+    // whether it crashes depends on what the allocator has since put there,
+    // which is why the file-table version surfaced as an unrelated crash.
+    Check(!observer.expired(),
+        "handle lifetime: an object a caller is still holding must OUTLIVE the close");
+    held->Set();
+    Check(held->Wait(0),
+        "handle lifetime: the held object is still functional after the close");
+
+    // And it goes away when the last holder does, not before and not never.
+    held.reset();
+    Check(observer.expired(),
+        "handle lifetime: the object is destroyed once the last holder drops it");
+}
+
 } // namespace
 
 int main()
@@ -491,6 +558,7 @@ int main()
     TestHeapReuse();
     TestHeapRouting();
     TestProcessorNumberFromMask();
+    TestHandleLookupOwnsItsResult();
 
     if (g_failures == 0)
     {
