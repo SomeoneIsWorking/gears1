@@ -19,6 +19,10 @@
 #include <filesystem>
 #include <iterator>
 #include <vector>
+#include "xam_content.h"
+#include <mutex>
+#include <memory>
+#include <map>
 
 #include <byteswap.h>
 #include <lucent/log.h>
@@ -90,6 +94,37 @@ constexpr uint32_t kMaxUsers = 4;
 bool IsLocalUser(uint32_t index)
 {
     return index == kLocalUser;
+}
+
+// A live content enumeration. The console hands back a handle and the title
+// pulls items through it in batches, so the position has to live somewhere
+// across calls.
+struct ContentEnumerator
+{
+    std::vector<gears::ContentEntry> items;
+    size_t next = 0;
+    uint32_t itemsPerCall = 1;
+};
+
+std::mutex g_enumeratorsMutex;
+std::map<uint32_t, std::unique_ptr<ContentEnumerator>> g_enumerators;
+uint32_t g_nextEnumerator = 0xE0000000;
+
+// The file name out of an XCONTENT_DATA, reduced to something that can safely
+// become a path. This string comes from the guest and is about to name a
+// directory on the player's disk, so anything that is not plainly a file name
+// is dropped rather than escaped.
+std::string SafeContentFileName(const uint8_t* base, uint32_t contentDataPtr)
+{
+    const char* raw = reinterpret_cast<const char*>(
+        base + contentDataPtr + 0x108);
+    std::string name;
+    for (size_t i = 0; i < gears::kContentFileNameBytes && raw[i]; ++i)
+    {
+        const unsigned char c = static_cast<unsigned char>(raw[i]);
+        name.push_back(std::isalnum(c) || c == '_' || c == '-' ? char(c) : '_');
+    }
+    return name;
 }
 } // namespace
 
@@ -416,9 +451,48 @@ void __imp__XamContentGetDeviceData(PPCContext& __restrict ctx, uint8_t* base)
     ctx.r3.u64 = gears::kErrorSuccess;
 }
 
-void __imp__XamContentCreateEnumerator(PPCContext& __restrict ctx, uint8_t*)
+// DWORD XamContentCreateEnumerator(DWORD UserIndex, DWORD DeviceId,
+//                                   DWORD ContentType, DWORD ContentFlags,
+//                                   DWORD ItemCount, PDWORD BufferSize,
+//                                   PHANDLE Handle)
+//
+// Walks the player's saves. This used to report no storage device, which meant
+// a title could never discover a save it had written -- the write path existed
+// and nothing could find its results.
+void __imp__XamContentCreateEnumerator(PPCContext& __restrict ctx, uint8_t* base)
 {
-    ctx.r3.u64 = gears::kErrorDeviceNotConnected;
+    const uint32_t contentType = ctx.r5.u32;
+    const uint32_t itemCount = ctx.r7.u32;
+    const uint32_t bufferSizePtr = ctx.r8.u32;
+    const uint32_t handlePtr = ctx.r9.u32;
+
+    if (handlePtr == 0 || itemCount == 0)
+    {
+        ctx.r3.u64 = gears::kErrorInvalidParameter;
+        return;
+    }
+
+    auto enumerator = std::make_unique<ContentEnumerator>();
+    enumerator->items = gears::EnumerateContent(gears::Files().SaveDirectory(),
+                                                contentType);
+    enumerator->itemsPerCall = itemCount;
+
+    // The caller sizes its buffer from this, so it must be what a single call
+    // can return -- not the whole enumeration.
+    Store32(base, bufferSizePtr, itemCount * gears::kContentDataSize);
+
+    uint32_t handle;
+    {
+        std::lock_guard<std::mutex> guard(g_enumeratorsMutex);
+        handle = g_nextEnumerator;
+        g_nextEnumerator += 4;
+        g_enumerators[handle] = std::move(enumerator);
+    }
+    Store32(base, handlePtr, handle);
+
+    lucent::debug("xam", "content enumerator {:#x}: {} item(s) of type {:#x}",
+                  handle, g_enumerators[handle]->items.size(), contentType);
+    ctx.r3.u64 = gears::kErrorSuccess;
 }
 
 // DWORD XamContentCreateEx(DWORD userIndex, LPCSTR rootName,
@@ -462,25 +536,10 @@ void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
 
     const std::filesystem::path dir = gears::Files().SaveDirectory() / fileName;
 
-    // CONTENT EXISTS WHEN IT HOLDS A SAVE, not when its directory is present.
-    // The directory is created by the runtime itself the first time the title
-    // opens a file for writing under the mount, so testing for the directory
-    // makes every later OPEN_EXISTING succeed against an EMPTY save -- the
-    // title is told its checkpoint is there, deserialises a buffer nothing
-    // filled, and reads a garbage length out of it.
-    bool existed = false;
-    std::error_code ec;
-    if (std::filesystem::is_directory(dir, ec))
-    {
-        for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
-        {
-            if (entry.is_regular_file(ec) && entry.file_size(ec) > 0)
-            {
-                existed = true;
-                break;
-            }
-        }
-    }
+    // Content exists when it HOLDS a save -- see xam_content.cpp. Testing for
+    // the directory is wrong, because the runtime creates it itself on the
+    // first write under the mount.
+    const bool existed = gears::ContentExists(dir);
 
     // Flag 1 is CREATE_NEW and 2 is OPEN_EXISTING in the console's scheme;
     // honouring them keeps "load" from silently succeeding on a save that is
@@ -504,14 +563,59 @@ void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
     ctx.r3.u64 = gears::kErrorSuccess;
 }
 
-void __imp__XamContentGetCreator(PPCContext& __restrict ctx, uint8_t*)
+// DWORD XamContentGetCreator(DWORD UserIndex, const XCONTENT_DATA* Data,
+//                            PBOOL IsCreator, PXUID Creator, PVOID Overlapped)
+//
+// Everything on this machine was created by its one local profile, so the
+// player always owns their own saves -- which is what lets a title offer to
+// overwrite or delete them.
+void __imp__XamContentGetCreator(PPCContext& __restrict ctx, uint8_t* base)
 {
-    ctx.r3.u64 = gears::kErrorNotFound;
+    Store32(base, ctx.r5.u32, 1); // the local user is the creator
+    Store64(base, ctx.r6.u32, kOfflineXuid);
+    ctx.r3.u64 = gears::kErrorSuccess;
 }
 
-void __imp__XamContentDelete(PPCContext& __restrict ctx, uint8_t*)
+// DWORD XamContentDelete(DWORD UserIndex, const XCONTENT_DATA* Data,
+//                        PVOID Overlapped)
+//
+// A player deleting a save from inside the game. This removes the directory
+// the content lives in, which is the same thing the console does to a package.
+void __imp__XamContentDelete(PPCContext& __restrict ctx, uint8_t* base)
 {
-    ctx.r3.u64 = gears::kErrorNotFound;
+    const uint32_t contentDataPtr = ctx.r4.u32;
+    if (contentDataPtr == 0)
+    {
+        ctx.r3.u64 = gears::kErrorInvalidParameter;
+        return;
+    }
+
+    const std::string fileName = SafeContentFileName(base, contentDataPtr);
+    if (fileName.empty())
+    {
+        ctx.r3.u64 = gears::kErrorInvalidParameter;
+        return;
+    }
+
+    const std::filesystem::path dir = gears::Files().SaveDirectory() / fileName;
+    if (!gears::ContentExists(dir))
+    {
+        ctx.r3.u64 = gears::kErrorNotFound;
+        return;
+    }
+
+    std::error_code ec;
+    const auto removed = std::filesystem::remove_all(dir, ec);
+    if (ec)
+    {
+        lucent::warn("xam", "could not delete content '{}': {}", fileName,
+                     ec.message());
+        ctx.r3.u64 = gears::kErrorAccessDenied;
+        return;
+    }
+
+    lucent::info("xam", "deleted content '{}' ({} file(s))", fileName, removed);
+    ctx.r3.u64 = gears::kErrorSuccess;
 }
 
 // Closing content unmounts its root, so a later open of the same name cannot
@@ -558,6 +662,44 @@ GEARS_XAM_NO_UI(XamShowSigninUI)
 // check for.
 void __imp__XamEnumerate(PPCContext& __restrict ctx, uint8_t* base)
 {
-    Store32(base, ctx.r7.u32, 0); // items returned
-    ctx.r3.u64 = gears::kErrorNoMoreFiles;
+    const uint32_t handle = ctx.r3.u32;
+    const uint32_t buffer = ctx.r5.u32;
+    const uint32_t length = ctx.r6.u32;
+    const uint32_t itemsReturnedPtr = ctx.r7.u32;
+
+    std::lock_guard<std::mutex> guard(g_enumeratorsMutex);
+    const auto it = g_enumerators.find(handle);
+    if (it == g_enumerators.end())
+    {
+        Store32(base, itemsReturnedPtr, 0);
+        ctx.r3.u64 = gears::kErrorInvalidHandle;
+        return;
+    }
+
+    ContentEnumerator& enumerator = *it->second;
+
+    // "No more items" is how an exhausted enumeration ends normally, so a
+    // caller looping until it sees this terminates rather than treating the end
+    // as an error.
+    if (enumerator.next >= enumerator.items.size())
+    {
+        Store32(base, itemsReturnedPtr, 0);
+        ctx.r3.u64 = gears::kErrorNoMoreFiles;
+        return;
+    }
+
+    uint32_t written = 0;
+    while (written < enumerator.itemsPerCall &&
+           enumerator.next < enumerator.items.size() &&
+           (written + 1) * gears::kContentDataSize <= length)
+    {
+        gears::WriteContentData(base, buffer + written * gears::kContentDataSize,
+                                enumerator.items[enumerator.next]);
+        ++enumerator.next;
+        ++written;
+    }
+
+    Store32(base, itemsReturnedPtr, written);
+    lucent::debug("xam", "enumerator {:#x} returned {} item(s)", handle, written);
+    ctx.r3.u64 = written != 0 ? gears::kErrorSuccess : gears::kErrorNoMoreFiles;
 }
