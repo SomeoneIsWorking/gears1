@@ -18,6 +18,7 @@ constexpr uint32_t kStatusNotFound = 0xC0000225;
 // Xam returns Win32-style error codes rather than NTSTATUS.
 constexpr uint32_t kErrorSuccess = 0x00000000;
 constexpr uint32_t kErrorNotFound = 0x00000490;
+constexpr uint32_t kErrorPathNotFound = 0x00000003;
 constexpr uint32_t kErrorAccessDenied = 0x00000005;
 constexpr uint32_t kErrorInvalidParameter = 0x00000057;
 constexpr uint32_t kErrorAlreadyExists = 0x000000B7;

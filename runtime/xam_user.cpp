@@ -513,6 +513,9 @@ void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
     const uint32_t rootNamePtr = ctx.r4.u32;
     const uint32_t contentDataPtr = ctx.r5.u32;
     const uint32_t flags = ctx.r6.u32;
+    // XamContentCreateEx(user, root, data, flags, disposition, licenseMask,
+    //                    overlapped) -- the async block is the last argument.
+    const uint32_t overlapped = ctx.r9.u32;
 
     if (rootNamePtr == 0)
     {
@@ -547,26 +550,50 @@ void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
     // first write under the mount.
     const bool existed = gears::ContentExists(dir);
 
-    // Flag 1 is CREATE_NEW and 2 is OPEN_EXISTING in the console's scheme;
-    // honouring them keeps "load" from silently succeeding on a save that is
-    // not there.
-    constexpr uint32_t kCreateNew = 1, kOpenExisting = 2;
-    if ((flags & 0xF) == kOpenExisting && !existed)
+    // THE DISPOSITION IS THE CONSOLE'S, not ours -- see xam_content.h. The title
+    // passes flags 0x13, whose low nibble is 3 (OPEN_EXISTING); the previous
+    // table called 2 OPEN_EXISTING, so that request matched nothing and was
+    // answered as a creation.
+    const gears::ContentDecision decision =
+        gears::DecideContentCreate(flags, existed);
+    lucent::info("xam", "XamContentCreateEx('{}') flags {:#x} (disposition {}),"
+        " content {} -> {}", fileName, flags, flags & 0xF,
+        existed ? "exists" : "absent",
+        decision == gears::ContentDecision::Open ? "open"
+        : decision == gears::ContentDecision::Create ? "create"
+        : decision == gears::ContentDecision::NotFound ? "NOT FOUND"
+        : decision == gears::ContentDecision::AlreadyExists ? "already exists"
+        : "invalid");
+
+    uint32_t status = gears::kErrorSuccess;
+    switch (decision)
     {
+    case gears::ContentDecision::NotFound:
         lucent::debug("xam", "XamContentCreateEx('{}') -> no such content", fileName);
-        ctx.r3.u64 = gears::kErrorNotFound;
-        return;
-    }
-    if ((flags & 0xF) == kCreateNew && existed)
-    {
-        ctx.r3.u64 = gears::kErrorAlreadyExists;
-        return;
+        status = gears::kErrorPathNotFound;
+        break;
+    case gears::ContentDecision::AlreadyExists:
+        status = gears::kErrorAlreadyExists;
+        break;
+    case gears::ContentDecision::Invalid:
+        status = gears::kErrorInvalidParameter;
+        break;
+    case gears::ContentDecision::Open:
+    case gears::ContentDecision::Create:
+        gears::Files().Mount(rootName, dir);
+        lucent::info("xam", "content '{}' mounted as '{}:' ({})", fileName, rootName,
+                     decision == gears::ContentDecision::Open ? "existing" : "new");
+        break;
     }
 
-    gears::Files().Mount(rootName, dir);
-    lucent::info("xam", "content '{}' mounted as '{}:' ({})", fileName, rootName,
-                 existed ? "existing" : "new");
-    ctx.r3.u64 = gears::kErrorSuccess;
+    // THE CALLER WAITS ON THE OVERLAPPED, AND CHECKS FOR IO_PENDING FIRST.
+    // Measured at the call site (ppc_recomp.6.cpp around 0x821B6884):
+    //     bl XamContentCreateEx ; cmplwi cr6,r30,997 ; bne cr6,<skip everything>
+    // The title proceeds ONLY when this returns ERROR_IO_PENDING, then reads the
+    // real result out of the overlapped. Returning plain success made it branch
+    // away and skip the entire load, which is why a save was never read back.
+    gears::CompleteOverlapped(base, overlapped, status);
+    ctx.r3.u64 = overlapped != 0 ? gears::kErrorIoPending : status;
 }
 
 // DWORD XamContentGetCreator(DWORD UserIndex, const XCONTENT_DATA* Data,
