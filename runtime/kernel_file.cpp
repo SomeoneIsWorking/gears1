@@ -216,7 +216,21 @@ void __imp__NtReadFile(PPCContext& __restrict ctx, uint8_t* base)
         fseek(file->handle, long(offset), SEEK_SET);
     }
 
+    const long position = ftell(file->handle);
     const size_t read = fread(base + buffer, 1, length, file->handle);
+
+    // Reads were the one file operation with no diagnostic at all, which meant a
+    // title deserialising nonsense could not be told from a title being fed
+    // nonsense. The first bytes are what a bad length or a bad offset shows up
+    // in, so they are worth the line.
+    lucent::Line line;
+    line.add("read {} bytes at {} from '{}' ->", length, position,
+             file->guestPath);
+    for (size_t i = 0; i < read && i < 8; ++i)
+        line.add(" {:02x}", *(base + buffer + i));
+    if (read != length)
+        line.add(" (SHORT: {} of {})", read, length);
+    line.flush_debug("fs");
 
     StoreU32(base, ioStatusBlock, read == 0 && length != 0
         ? kStatusEndOfFile : gears::kStatusSuccess);
