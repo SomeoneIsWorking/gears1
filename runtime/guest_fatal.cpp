@@ -126,5 +126,28 @@ PPC_FUNC(sub_828D0790)
     lucent::error("fatal", "the title began shutting down (sub_828D0790) from"
         " {:#x}: r3={:#x} r4={:#x} r5={:#x} r6={:#x}", uint32_t(ctx.lr),
         ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32);
+
+    // The one caller seen so far, 0x82444f7c, is a VIRTUAL CALL out of a
+    // per-frame object walk: `vtable = load(this); target = load(vtable + 4);
+    // bctrl`. So either slot 1 of that object's vtable legitimately is a
+    // shutdown method, or the object is not what the caller thinks it is and
+    // the dispatch landed here by accident. Those want completely different
+    // fixes, and one word of guest memory tells them apart.
+    if (ctx.r3.u32 != 0)
+    {
+        const uint32_t vtable = ByteSwap(*gears::Memory().Translate<uint32_t>(ctx.r3.u32));
+        const bool plausible = vtable >= PPC_IMAGE_BASE &&
+                               vtable < PPC_IMAGE_BASE + PPC_IMAGE_SIZE;
+        uint32_t slot1 = 0;
+        if (plausible)
+            slot1 = ByteSwap(*gears::Memory().Translate<uint32_t>(vtable + 4));
+        lucent::error("fatal", "  the object it was called on ({:#x}) has vtable"
+            " {:#x} ({}), slot 1 = {:#x}", ctx.r3.u32, vtable,
+            plausible ? "in the image, so a real vtable"
+                      : "NOT in the image -- this object is corrupt or was never"
+                        " constructed, and the virtual call landed here by"
+                        " accident",
+            slot1);
+    }
     __imp__sub_828D0790(ctx, base);
 }
