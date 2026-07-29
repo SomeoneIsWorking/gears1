@@ -10,6 +10,10 @@ constexpr uint32_t kStatusSuccess = 0x00000000;
 constexpr uint32_t kStatusUnsuccessful = 0xC0000001;
 constexpr uint32_t kStatusTimeout = 0x00000102;
 constexpr uint32_t kStatusInvalidHandle = 0xC0000008;
+// What NtFreeVirtualMemory answers for a base address that was never allocated
+// (Xenia xbox.h X_STATUS_MEMORY_NOT_ALLOCATED, used by its
+// NtFreeVirtualMemory_entry for a zero base).
+constexpr uint32_t kStatusMemoryNotAllocated = 0xC00000A0;
 constexpr uint32_t kStatusInvalidParameter = 0xC000000D;
 constexpr uint32_t kStatusNoMemory = 0xC0000017;
 constexpr uint32_t kStatusMutantNotOwned = 0xC0000046;

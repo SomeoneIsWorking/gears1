@@ -267,10 +267,18 @@ namespace
 {
 std::mutex g_guestObjectMutex;
 std::unordered_map<uint32_t, std::shared_ptr<KernelObject>> g_byGuestAddress;
-std::unordered_map<uint32_t, uint32_t> g_handleToGuestAddress;
+// The reverse of g_byGuestAddress, keyed by the OBJECT rather than by the handle
+// it was first asked for through. It used to be keyed by handle, and that is
+// wrong: NtDuplicateObject gives the title a second handle onto the SAME object,
+// and a per-handle map then minted a second guest pointer for it. The title
+// therefore held two different addresses for one object, and anything that
+// recognised one of them did not recognise the other -- which is how one
+// thread's KeSetAffinityThread went unrecognised in every run (catalog #42).
+// The console has one object pointer per object, whatever handle you name it by.
+std::unordered_map<const KernelObject*, uint32_t> g_addressByObject;
 
 std::mutex g_resumeMutex;
-std::unordered_map<uint32_t, std::shared_ptr<KernelObject>> g_resumeGates;
+std::unordered_map<const KernelObject*, std::shared_ptr<KernelObject>> g_resumeGates;
 } // namespace
 
 uint32_t GuestAddressForHandle(uint32_t handle)
@@ -280,8 +288,8 @@ uint32_t GuestAddressForHandle(uint32_t handle)
         return 0;
 
     std::lock_guard<std::mutex> guard(g_guestObjectMutex);
-    auto existing = g_handleToGuestAddress.find(handle);
-    if (existing != g_handleToGuestAddress.end())
+    auto existing = g_addressByObject.find(object.get());
+    if (existing != g_addressByObject.end())
         return existing->second;
 
     // A dispatcher header the guest can hold a pointer to. Its contents are not
@@ -292,20 +300,9 @@ uint32_t GuestAddressForHandle(uint32_t handle)
     if (address == 0)
         return 0;
 
-    g_handleToGuestAddress[handle] = address;
+    g_addressByObject[object.get()] = address;
     g_byGuestAddress[address] = std::move(object);
     return address;
-}
-
-uint32_t HandleForGuestAddress(uint32_t address)
-{
-    std::lock_guard<std::mutex> guard(g_guestObjectMutex);
-    for (const auto& [handle, guestAddress] : g_handleToGuestAddress)
-    {
-        if (guestAddress == address)
-            return handle;
-    }
-    return 0;
 }
 
 std::shared_ptr<KernelObject> LookupByGuestAddress(uint32_t address)
@@ -372,54 +369,42 @@ std::shared_ptr<KernelObject> BindGuestDispatcherObject(uint32_t address)
     return slot;
 }
 
-void RegisterThreadResume(uint32_t handle, std::shared_ptr<KernelObject> resumed)
+void RegisterThreadResume(const std::shared_ptr<KernelObject>& threadObject,
+                          std::shared_ptr<KernelObject> resumed)
 {
-    if (!resumed)
+    if (!threadObject || !resumed)
         return;
 
     std::lock_guard<std::mutex> guard(g_resumeMutex);
-    g_resumeGates[handle] = std::move(resumed);
+    g_resumeGates[threadObject.get()] = std::move(resumed);
 }
 
 void ResumeThread(uint32_t handleOrObject)
 {
     // NtResumeThread is given a handle, KeResumeThread a pointer to the thread
-    // object itself, and titles use both against the same thread. The guest
-    // address is allocated lazily on the first ObReferenceObjectByHandle, so it
-    // cannot be registered up front; instead an unrecognised key is treated as
-    // an object address and mapped back to its handle.
-    uint32_t key = handleOrObject;
+    // object itself, and titles use both against the same thread -- so both are
+    // resolved to the OBJECT, which is the one identity both name and which
+    // survives NtDuplicateObject. This used to key the gate by handle and, when
+    // that missed, scan the address map backwards for a handle; a duplicated
+    // handle defeated both halves of that.
+    auto object = Handles().Lookup(handleOrObject);
+    if (!object)
+        object = LookupByGuestAddress(handleOrObject);
+    if (!object)
+    {
+        lucent::debug("thread", "resume of {:#x}: names no kernel object", handleOrObject);
+        return;
+    }
 
     std::shared_ptr<KernelObject> gate;
     {
         std::lock_guard<std::mutex> guard(g_resumeMutex);
-        auto it = g_resumeGates.find(key);
+        auto it = g_resumeGates.find(object.get());
         if (it == g_resumeGates.end())
         {
-            uint32_t handle = 0;
-            {
-                std::lock_guard<std::mutex> objectGuard(g_guestObjectMutex);
-                for (const auto& [candidate, address] : g_handleToGuestAddress)
-                {
-                    if (address == handleOrObject)
-                    {
-                        handle = candidate;
-                        break;
-                    }
-                }
-            }
-
-            if (handle == 0)
-            {
-                lucent::debug("thread", "resume of {:#x}: not a suspended thread",
-                    handleOrObject);
-                return; // never suspended, so nothing to release
-            }
-
-            key = handle;
-            it = g_resumeGates.find(key);
-            if (it == g_resumeGates.end())
-                return;
+            lucent::debug("thread", "resume of {:#x}: not a suspended thread",
+                handleOrObject);
+            return; // never suspended, so nothing to release
         }
 
         gate = it->second;

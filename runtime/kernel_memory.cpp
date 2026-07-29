@@ -83,12 +83,50 @@ void __imp__NtFreeVirtualMemory(PPCContext& __restrict ctx, uint8_t* base)
     }
 
     const uint32_t address = GuestLoad32(base, baseAddressPtr);
+
+    // A NULL base is answered here, before any heap is consulted. It is not a
+    // runtime bug: the title's own VirtualFree wrapper (sub_82612658) forwards
+    // its argument with no NULL check, and D3D's resource destructor
+    // (sub_82214C70) calls it on a resource whose data pointer it never filled
+    // in, so a free of 0 is normal traffic from the guest. Sending it to the
+    // allocator instead is what produced the "free of unknown address 0x0"
+    // warning on every run. The console answers the same way: Xenia
+    // xboxkrnl_memory.cc NtFreeVirtualMemory_entry returns
+    // X_STATUS_MEMORY_NOT_ALLOCATED for a zero base without touching a heap,
+    // and the wrapper turns that negative status into a FALSE return.
+    if (address == 0)
+    {
+        ctx.r3.u64 = gears::kStatusMemoryNotAllocated;
+        return;
+    }
+
+    // Which heap owns a pointer is decided by its ADDRESS, not by the export
+    // the guest happened to call -- the D3D destructor above picks between the
+    // physical and virtual free wrappers from a flag on the resource. Xenia
+    // looks the heap up the same way and REFUSES this call when the heap is
+    // not the guest-virtual one, rather than releasing from it.
+    if (gears::HeapForAddress(address) != &gears::TitleHeap())
+    {
+        lucent::warn("kernel", "NtFreeVirtualMemory({:#x}) from {:#x}: not a title-heap address",
+            address, uint32_t(ctx.lr));
+        ctx.r3.u64 = gears::kStatusInvalidParameter;
+        return;
+    }
+
     if ((freeType & kMemRelease) != 0 || freeType == 0)
     {
         // A FreeType of 0 is not a documented value; treating it as a release
         // matches what this import did before FreeType was honoured at all, so
         // an unexpected caller does not silently start leaking.
-        gears::TitleHeap().Free(address);
+        //
+        // A failed release is reported rather than swallowed: this used to
+        // return SUCCESS unconditionally, which told the title's VirtualFree
+        // that a free it never performed had worked.
+        if (!gears::TitleHeap().Free(address))
+        {
+            ctx.r3.u64 = gears::kStatusUnsuccessful;
+            return;
+        }
     }
     else
     {
@@ -130,9 +168,40 @@ void __imp__MmAllocatePhysicalMemory(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = gears::PhysicalHeap().Allocate(0, size, gears::kMemCommit | gears::kMemLargePages);
 }
 
+// VOID MmFreePhysicalMemory(ULONG Type, PVOID BaseAddress)
+//
+// The argument order is the console's: Xenia's MmFreePhysicalMemory_entry takes
+// (type, base_address), and the title's XPhysicalFree wrapper (sub_82612758)
+// moves its pointer argument into r4 and sets r3 to 0 before tail-calling here.
 void __imp__MmFreePhysicalMemory(PPCContext& __restrict ctx, uint8_t*)
 {
-    gears::PhysicalHeap().Free(ctx.r4.u32);
+    const uint32_t address = ctx.r4.u32;
+
+    // XPhysicalFree has no NULL guard, and D3D's resource destructor
+    // (sub_82214C70) frees a resource whose data pointer is still 0, so this
+    // arrives on a normal run. Nothing was ever allocated at 0, so there is
+    // nothing to release and no heap to consult -- Xenia reaches the same
+    // outcome by looking the heap up by address, landing outside the physical
+    // window, and failing the release there.
+    if (address == 0)
+    {
+        lucent::debug("kernel", "MmFreePhysicalMemory(0) from {:#x} -- nothing allocated there",
+            uint32_t(ctx.lr));
+        return;
+    }
+
+    // Routed by address rather than assumed physical: a title-heap pointer
+    // arriving here is a real bug and has to stay visible, not be handed to the
+    // physical heap where it can only report as unknown.
+    gears::GuestHeap* heap = gears::HeapForAddress(address);
+    if (heap != &gears::PhysicalHeap())
+    {
+        lucent::warn("kernel", "MmFreePhysicalMemory({:#x}) from {:#x}: not a physical-window address",
+            address, uint32_t(ctx.lr));
+        return;
+    }
+
+    heap->Free(address);
 }
 
 // PVOID MmGetPhysicalAddress(PVOID Address)

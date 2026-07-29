@@ -48,6 +48,17 @@ public:
     bool Free(uint32_t address);
 
     uint32_t Size() const { return size_; }
+    uint32_t Base() const { return base_; }
+
+    // Whether `address` falls inside this heap's span. The console decides
+    // which heap a free belongs to from the ADDRESS, not from which export the
+    // guest called -- Xenia does the same in memory.cc Memory::LookupHeap,
+    // which dispatches on the top nibble alone and is what both
+    // NtFreeVirtualMemory and MmFreePhysicalMemory go through.
+    bool Contains(uint32_t address) const
+    {
+        return address >= base_ && uint64_t(address) < uint64_t(base_) + size_;
+    }
 
     struct Usage
     {
@@ -110,6 +121,17 @@ GuestHeap& TitleHeap();
 // the graphics path allocates from. Kept separate from the title heap because
 // the guest distinguishes the two and passes physical addresses to the GPU.
 GuestHeap& PhysicalHeap();
+
+// The heap that owns `address`, or nullptr when no heap does. Frees must be
+// routed through this rather than sent to whichever heap the calling export is
+// associated with: the guest's D3D resource destructor (sub_82214C70) picks
+// between its physical and virtual free wrappers from a flag on the resource,
+// so an address CAN arrive at the export that does not match the heap it came
+// from, and handing it to that heap can only report it as unknown.
+//
+// Address 0 deliberately belongs to no heap: nothing is ever allocated there,
+// so a free of it has nothing to release.
+GuestHeap* HeapForAddress(uint32_t address);
 
 void InitialiseHeaps(GuestMemory& memory);
 

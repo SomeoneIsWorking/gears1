@@ -375,7 +375,11 @@ bool GuestHeap::Free(uint32_t address)
     auto it = regions_.find(address);
     if (it == regions_.end())
     {
-        lucent::warn("heap", "free of unknown address {:#x}", address);
+        // The heap is named because there are two of them and the message was
+        // useless without it: the same warning could mean a title-heap pointer
+        // freed through the physical export or the other way round, and there
+        // was no way to tell which from the log.
+        lucent::warn("heap", "free of unknown address {:#x} in the heap at {:#x}", address, base_);
         return false;
     }
 
@@ -413,6 +417,18 @@ GuestHeap& TitleHeap()
 GuestHeap& PhysicalHeap()
 {
     return *g_physicalHeap;
+}
+
+GuestHeap* HeapForAddress(uint32_t address)
+{
+    if (g_titleHeap != nullptr && g_titleHeap->Contains(address))
+        return g_titleHeap;
+    if (g_physicalHeap != nullptr && g_physicalHeap->Contains(address))
+        return g_physicalHeap;
+    // Everything else -- the loaded image, the stacks, the import variables,
+    // and address 0 -- was never handed out by an allocator, so no heap can
+    // release it.
+    return nullptr;
 }
 
 void InitialiseHeaps(GuestMemory& memory)

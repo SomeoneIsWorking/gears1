@@ -36,11 +36,31 @@ bool CreateGuestThreadBlock(GuestMemory& memory, uint32_t stackSize, GuestThread
 void SetGuestThreadProcessor(GuestMemory& memory, uint32_t pcrAddress,
                              uint32_t threadObject, uint8_t cpu);
 
+// The console has six hardware threads, so a legal processor number is 0..5.
+// Callers check against this to tell a processor from the sentinels below.
+constexpr uint8_t kHardwareThreadCount = 6;
+
+// Answers ProcessorNumberFromMask cannot express as a processor. Both are out
+// of the console's 0..5 range so neither can be mistaken for one, and they are
+// distinct because the callers must do different things with them.
+//
+// kProcessorInherit: the mask is EMPTY, which the console reads as "wherever my
+// creator runs" -- only the caller knows who that is.
+constexpr uint8_t kProcessorInherit = 0xFF;
+// kProcessorNone: the mask names no hardware thread this console has. Nothing
+// can be inferred from it, so the thread must be left where it was.
+constexpr uint8_t kProcessorNone = 0xFE;
+
 // The console's mapping from an affinity/processor MASK to a processor number:
-// one bit set selects that processor. A mask of 0 means "wherever the parent
-// runs", which the caller resolves, so this reports 0xFF for it rather than
-// inventing a number.
-uint8_t ProcessorNumberFromMask(uint8_t mask);
+// the index of the set bit IS the processor. Both places the title names a
+// processor -- the top byte of ExCreateThread's creation flags and
+// KeSetAffinityThread's affinity argument -- come through here, so the two
+// cannot drift apart.
+//
+// Ground truth is Xenia's GetFakeCpuNumber (xenia/kernel/xthread.cc:157), which
+// asserts a well-formed mask names exactly one of six processors and nothing
+// above bit 5.
+uint8_t ProcessorNumberFromMask(uint32_t mask);
 
 // The processor number of the thread calling this, for the parent-inheritance
 // rule above.

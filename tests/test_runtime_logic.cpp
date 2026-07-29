@@ -18,6 +18,7 @@
 #include "kernel_objects.h"
 #include "guest_filesystem.h"
 #include "guest_heap.h"
+#include "guest_thread.h"
 #include "guest_memory.h"
 
 // The runtime's guest_memory.cpp references the generated function-mapping
@@ -343,6 +344,138 @@ void TestHeapReuse()
     memory.Release();
 }
 
+// Frees are routed to a heap by ADDRESS, because the guest picks the free
+// export from a flag on the object rather than from where the memory came
+// from. The console does the same: Xenia's Memory::LookupHeap (memory.cc)
+// selects the heap purely from the address, and NtFreeVirtualMemory then
+// REFUSES a heap that is not the guest-virtual one instead of releasing from
+// it (xboxkrnl_memory.cc NtFreeVirtualMemory_entry).
+//
+// The addresses here are the runtime's real windows, pinned to names, because
+// the point of the test is which window an address belongs to: getting the
+// physical window's base wrong would route every GPU buffer's free to the
+// title heap and every one of them would report as "unknown".
+void TestHeapRouting()
+{
+    gears::GuestMemory memory;
+    Check(memory.Reserve(), "routing: guest memory reserves");
+    gears::InitialiseHeaps(memory);
+
+    gears::GuestHeap& title = gears::TitleHeap();
+    gears::GuestHeap& physical = gears::PhysicalHeap();
+    Check(title.Base() == 0x40000000, "routing: the title heap is the 0x40000000 window");
+    Check(physical.Base() == 0xA0000000, "routing: the physical heap is the 0xA0000000 window");
+
+    // Address 0 is the one this test exists for. The guest's D3D resource
+    // destructor frees a resource whose data pointer it never filled in, and
+    // the title's own free wrappers (sub_82612758 XPhysicalFree,
+    // sub_82612658 VirtualFree) pass NULL straight to the kernel with no
+    // guard, so a free of 0 is normal traffic. It belongs to no heap.
+    Check(gears::HeapForAddress(0) == nullptr, "routing: address 0 belongs to no heap");
+    Check(!title.Contains(0), "routing: 0 is not in the title heap");
+    Check(!physical.Contains(0), "routing: 0 is not in the physical heap");
+
+    Check(gears::HeapForAddress(0x40000000) == &title,
+        "routing: the first byte of the title window routes to the title heap");
+    Check(gears::HeapForAddress(0x5FFFFFFF) == &title,
+        "routing: the last byte of the title window routes to the title heap");
+    Check(gears::HeapForAddress(0x60000000) == nullptr,
+        "routing: one byte past the title window belongs to no heap");
+
+    Check(gears::HeapForAddress(0xA0000000) == &physical,
+        "routing: the first byte of the physical window routes to the physical heap");
+    Check(gears::HeapForAddress(0xBFFFFFFF) == &physical,
+        "routing: the last byte of the physical window routes to the physical heap");
+    Check(gears::HeapForAddress(0xC0000000) == nullptr,
+        "routing: one byte past the physical window belongs to no heap");
+
+    // The image, the stack and the import variables live below the title heap
+    // and are not the allocator's to release.
+    Check(gears::HeapForAddress(0x82000000) == nullptr,
+        "routing: the loaded image belongs to no heap");
+
+    // An address really handed out by one heap must not resolve to the other,
+    // which is the case that produced frees reported as unknown.
+    uint32_t size = 0x10000;
+    const uint32_t gpuBuffer = physical.Allocate(0, size, gears::kMemCommit | gears::kMemLargePages);
+    Check(gpuBuffer != 0, "routing: a physical allocation succeeds");
+    Check(gears::HeapForAddress(gpuBuffer) == &physical,
+        "routing: a physical allocation routes back to the physical heap");
+    Check(!title.Contains(gpuBuffer), "routing: a physical allocation is not in the title heap");
+    Check(physical.Free(gpuBuffer), "routing: the physical allocation frees from its own heap");
+
+    memory.Release();
+}
+
+// The console names a processor by a one-hot MASK, in the top byte of
+// ExCreateThread's creation flags and again in KeSetAffinityThread's affinity
+// argument. Both go through one conversion, because two copies is how the two
+// paths end up disagreeing about which of the six hardware threads a title
+// asked for -- and the number is guest-visible, indexed into per-CPU tables.
+//
+// Ground truth is Xenia's GetFakeCpuNumber (xenia/kernel/xthread.cc:157): an
+// empty mask means "wherever the parent runs"; otherwise the bit index IS the
+// processor number; masks are asserted to name exactly one of six processors
+// (`assert_false(proc_mask & 0xC0)`, `assert_true(cpu_number < 6)`).
+void TestProcessorNumberFromMask()
+{
+    // The six the console has, each by name, so a shifted conversion cannot
+    // pass: every legal mask must give back its own bit index.
+    Check(gears::ProcessorNumberFromMask(0x01) == 0, "affinity: mask 0x01 is processor 0");
+    Check(gears::ProcessorNumberFromMask(0x02) == 1, "affinity: mask 0x02 is processor 1");
+    Check(gears::ProcessorNumberFromMask(0x04) == 2, "affinity: mask 0x04 is processor 2");
+    Check(gears::ProcessorNumberFromMask(0x08) == 3, "affinity: mask 0x08 is processor 3");
+    Check(gears::ProcessorNumberFromMask(0x10) == 4, "affinity: mask 0x10 is processor 4");
+    Check(gears::ProcessorNumberFromMask(0x20) == 5, "affinity: mask 0x20 is processor 5");
+
+    // An empty mask is not a processor and must not be reported as one. It is
+    // the console's "inherit my creator's", which only the caller can resolve;
+    // a conversion that answered 0 here would silently pin every such thread to
+    // hardware thread 0.
+    Check(gears::ProcessorNumberFromMask(0x00) == gears::kProcessorInherit,
+        "affinity: an empty mask means inherit, not processor 0");
+
+    // Bits above the console's six name no hardware thread that exists. The
+    // previous conversion reduced them modulo six -- 0x40 became processor 0,
+    // 0x100 became processor 2 -- which invents a processor the title never
+    // asked for, and per-CPU tables then disagree without saying so.
+    Check(gears::ProcessorNumberFromMask(0x40) == gears::kProcessorNone,
+        "affinity: mask 0x40 names no hardware thread of the six");
+    Check(gears::ProcessorNumberFromMask(0x80) == gears::kProcessorNone,
+        "affinity: mask 0x80 names no hardware thread of the six");
+    Check(gears::ProcessorNumberFromMask(0x100) == gears::kProcessorNone,
+        "affinity: mask 0x100 names no hardware thread of the six");
+    Check(gears::ProcessorNumberFromMask(0xFFFFFFC0) == gears::kProcessorNone,
+        "affinity: a mask entirely outside the six names no hardware thread");
+
+    // The two sentinels have to be distinguishable from each other and from
+    // every legal processor, because the callers do different things with them:
+    // inherit resolves to the creator's processor, no-processor leaves the
+    // thread where it was.
+    Check(gears::kProcessorInherit != gears::kProcessorNone,
+        "affinity: inherit and no-processor are distinct answers");
+    Check(gears::kProcessorInherit >= 6 && gears::kProcessorNone >= 6,
+        "affinity: neither sentinel can be mistaken for a processor");
+
+    // A mask naming several processors resolves to the HIGHEST named one. That
+    // is the console's rule, not a choice made here, and it comes from two
+    // independent places: Xenia's GetFakeCpuNumber (`7 - lzcnt`), and the
+    // title's own inverse decoder for the previous-affinity mask the kernel
+    // writes back (guest 0x82613970: `cntlzw` then `subfic ...,31`).
+    //
+    // Every mask this title actually sends is one-hot, so the lowest-bit rule
+    // would pass every observed case -- which is precisely why it had to be
+    // settled against the console instead of against what currently works. An
+    // invisible wrong table that satisfies every lookup is the failure mode
+    // this project keeps hitting.
+    Check(gears::ProcessorNumberFromMask(0x30) == 5,
+        "affinity: a multi-processor mask answers with the HIGHEST it names");
+    // 0x144 names bits 8, 6 and 2; only bit 2 is a processor this console has,
+    // and the bits above it must be dropped rather than folded back into range.
+    Check(gears::ProcessorNumberFromMask(0x144) == 2,
+        "affinity: bits outside the six are ignored, not folded back in");
+}
+
 } // namespace
 
 int main()
@@ -356,6 +489,8 @@ int main()
     TestTimeoutUnits();
     TestPathResolution();
     TestHeapReuse();
+    TestHeapRouting();
+    TestProcessorNumberFromMask();
 
     if (g_failures == 0)
     {
