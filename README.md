@@ -51,7 +51,10 @@ approximate, `docs/codemap.md` says where each subsystem lives, and
   streaming are ported from the reference but no stream has used them yet, and
   the pump falls behind its 187.5 Hz under a CPU-bound guest.
 - **No networking, no user/content services.** Those imports abort on first call.
-- **File I/O is read-only**, with no directory enumeration.
+- **Saves do not complete yet.** The title now sees a storage device and creates
+  its save content, which mounts a writable directory under the user's data
+  path, but it asks for 2.6 GB on that path and is refused, and no save file
+  has appeared on disk (catalog #45). Directory enumeration is still missing.
 
 ## You must supply the game
 

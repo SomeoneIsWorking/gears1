@@ -1,6 +1,10 @@
 #include "guest_filesystem.h"
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
+
+#include <lucent/config.h>
 
 #include <lucent/log.h>
 
@@ -42,8 +46,107 @@ void FileSystem::SetGameDirectory(const std::filesystem::path& directory)
     lucent::info("fs", "game directory: {}", gameDirectory_.string());
 }
 
+const std::filesystem::path& FileSystem::SaveDirectory() const
+{
+    if (!saveDirectory_.empty())
+        return saveDirectory_;
+
+    if (const std::string& configured = lucent::config::text("SAVE_DIR");
+        !configured.empty())
+    {
+        saveDirectory_ = configured;
+    }
+    else if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
+    {
+        // Where a Linux game is expected to keep user data. A console port
+        // that scatters saves next to the executable is a port that has not
+        // finished arriving.
+        saveDirectory_ = std::filesystem::path(xdg) / "gears1";
+    }
+    else if (const char* home = std::getenv("HOME"); home && *home)
+    {
+        saveDirectory_ = std::filesystem::path(home) / ".local/share/gears1";
+    }
+    else
+    {
+        saveDirectory_ = "saves";
+    }
+
+    std::error_code ec;
+    std::filesystem::create_directories(saveDirectory_, ec);
+    lucent::info("fs", "save directory: {}", saveDirectory_.string());
+    return saveDirectory_;
+}
+
+void FileSystem::Mount(const std::string& rootName, const std::filesystem::path& hostDirectory)
+{
+    std::error_code ec;
+    std::filesystem::create_directories(hostDirectory, ec);
+    std::string key = rootName;
+    std::transform(key.begin(), key.end(), key.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    mounts_[key] = hostDirectory;
+    lucent::info("fs", "mounted '{}:' -> {} (writable)", rootName, hostDirectory.string());
+}
+
+void FileSystem::Unmount(const std::string& rootName)
+{
+    std::string key = rootName;
+    std::transform(key.begin(), key.end(), key.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    if (mounts_.erase(key))
+        lucent::info("fs", "unmounted '{}:'", rootName);
+}
+
+namespace
+{
+// "SAVE:\slot0" or "\Device\SAVE\slot0" -> ("save", "slot0").
+bool SplitMountPath(const std::string& guestPath, std::string& root, std::string& rest)
+{
+    std::string path = guestPath;
+    constexpr const char* kDevice = "\\Device\\";
+    if (path.compare(0, std::char_traits<char>::length(kDevice), kDevice) == 0)
+        path = path.substr(std::char_traits<char>::length(kDevice));
+
+    const size_t colon = path.find(':');
+    const size_t slash = path.find('\\');
+    const size_t split = colon != std::string::npos ? colon : slash;
+    if (split == std::string::npos || split == 0)
+        return false;
+
+    root = path.substr(0, split);
+    std::transform(root.begin(), root.end(), root.begin(),
+                   [](unsigned char c) { return char(std::tolower(c)); });
+    rest = path.substr(split + 1);
+    while (!rest.empty() && (rest.front() == '\\' || rest.front() == '/'))
+        rest.erase(rest.begin());
+    return true;
+}
+} // namespace
+
+bool FileSystem::IsWritable(const std::string& guestPath) const
+{
+    std::string root, rest;
+    return SplitMountPath(guestPath, root, rest) && mounts_.find(root) != mounts_.end();
+}
+
 std::filesystem::path FileSystem::Resolve(const std::string& guestPath) const
 {
+    // A writable mount wins over the disc: the title asks for the same shape of
+    // path either way, and only the mount table says which is which.
+    {
+        std::string root, rest;
+        if (SplitMountPath(guestPath, root, rest))
+        {
+            if (auto it = mounts_.find(root); it != mounts_.end())
+            {
+                std::string hostRelative = rest;
+                std::replace(hostRelative.begin(), hostRelative.end(), '\\', '/');
+                return hostRelative.empty() ? it->second : it->second / hostRelative;
+            }
+        }
+    }
+
     if (gameDirectory_.empty())
         return {};
 

@@ -126,6 +126,7 @@
 #define GEARS_IMPORT_IMPLEMENTED_XAudioGetVoiceCategoryVolumeChangeMask
 #define GEARS_IMPORT_IMPLEMENTED_NtQueryFullAttributesFile
 #define GEARS_IMPORT_IMPLEMENTED_NtCreateFile
+#define GEARS_IMPORT_IMPLEMENTED_NtWriteFile
 #define GEARS_IMPORT_IMPLEMENTED_NtOpenFile
 #define GEARS_IMPORT_IMPLEMENTED_NtReadFile
 #define GEARS_IMPORT_IMPLEMENTED_NtQueryInformationFile
