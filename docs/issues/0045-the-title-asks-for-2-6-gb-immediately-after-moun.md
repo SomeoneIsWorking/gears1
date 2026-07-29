@@ -5,7 +5,7 @@ status: open
 symptom: deterministic SIGSEGV at ~1560 frames on the checkpoint restore path, calling virtual slot 13 of a freed pool block; earlier and now superseded: a 2.6 GB allocation after the save content mount
 tags: saves,content,memory,port
 created: 2026-07-29
-updated: 2026-07-29
+updated: 2026-07-30
 ---
 
 > ## STATE AS OF THE LATEST NOTE — READ THIS FIRST
@@ -856,3 +856,43 @@ that is the same code with the same absence of a fence -- so either
 
 (a) is checkable and should be checked first: find the enqueue site for the
 deleting command and look for a store of 0 to +1376 near it.
+
+### Note (2026-07-30)
+THE DELETING COMMAND IS FDrawSceneCommand, AND THE DELETE GOES THROUGH THE CONTAINER HELPER.
+
+Resolving the deleter's stack to functions (each address decoded, not guessed):
+
+  0x822158e4  the locked allocator wrapper
+  0x82170470  sub_82170408   the container size helper (size = count x element)
+  0x8232ae10  sub_8232AE10
+  0x825552a4  sub_82555230
+  0x82551240  sub_825511D8
+  0x825552fc  sub_825552C8
+  0x8250b284  sub_8250B228
+  0x825550f4  sub_825550A8   <- FDrawSceneCommand::Execute
+  0x82444f7c  the drain loop's Execute call site
+
+So the renderer, executing FDrawSceneCommand, ends up calling the container
+helper with size 0 -- i.e. emptying a container -- and that releases the block
+the game thread has cached at holder+1376.
+
+That is the same sub_82170408 this entry probed much earlier, when it was
+computing  and producing 0x9f000000. It is the engine's single
+array-storage sizing routine; a size of 0 through it is a clear, not a growth.
+
+WHAT IT MEANS FOR OPTION (a): the game thread does not merely enqueue 'delete
+this object' -- it enqueues a DRAW, and the draw's own execution clears a
+container as part of its work. So there is no obvious 'delete' call site next to
+which a null-the-cache store would sit. That makes (a) much less likely than it
+looked: the cache is invalidated, if at all, by whatever normally re-populates
+that container, not by the enqueue.
+
+WHICH LEAVES (b) AS THE LEADING EXPLANATION, and it now has company: this is the
+same shape as catalog #44 -- title code that is racy in principle, survives on
+hardware, and is exposed by a port that runs the game and render threads with
+real parallelism where Xenon interleaved them on shared cores. Both would be
+addressed by the same port-level decision rather than by separate patches.
+
+BEFORE ACTING ON (b), the thing to establish is the one #44 also needs: why the
+console tolerates it. Guessing at thread topology and then serialising things is
+how a port acquires permanent unexplained locks.
