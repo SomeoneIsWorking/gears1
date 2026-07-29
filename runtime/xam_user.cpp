@@ -20,6 +20,7 @@
 #include <iterator>
 #include <vector>
 #include "xam_content.h"
+#include "xam_overlapped.h"
 #include <mutex>
 #include <memory>
 #include <map>
@@ -637,8 +638,41 @@ void __imp__XamContentClose(PPCContext& __restrict ctx, uint8_t* base)
         ctx.r3.u64 = gears::kErrorAccessDenied;                  \
     }
 
+// DWORD XamShowDeviceSelectorUI(DWORD UserIndex, DWORD ContentType,
+//                                DWORD ContentFlags, ULONGLONG TotalRequested,
+//                                PDWORD DeviceId, PXOVERLAPPED Overlapped)
+//
+// The one system dialog this runtime CAN answer, and the one it must. Asking a
+// player which storage device to use is a question a PC does not have: there is
+// exactly one place saves go. So the selector selects it and completes, rather
+// than being refused like the dialogs that genuinely have no answer here.
+//
+// Refusing it was not harmless. A title that cannot obtain a device has no
+// destination for a save, and carries on with a save context it never
+// established.
+void __imp__XamShowDeviceSelectorUI(PPCContext& __restrict ctx, uint8_t* base)
+{
+    const uint32_t deviceIdPtr = ctx.r7.u32;
+    const uint32_t overlapped = ctx.r8.u32;
+
+    if (deviceIdPtr == 0)
+    {
+        gears::CompleteOverlapped(base, overlapped, gears::kErrorInvalidParameter);
+        ctx.r3.u64 = gears::kErrorInvalidParameter;
+        return;
+    }
+
+    Store32(base, deviceIdPtr, gears::kContentDeviceId);
+    lucent::info("xam", "storage device selected automatically: this machine has"
+        " one place for saves, so there is nothing to ask");
+
+    // Asynchronous on the console: a caller waiting on the overlapped learns
+    // the outcome only through it.
+    gears::CompleteOverlapped(base, overlapped, gears::kErrorSuccess);
+    ctx.r3.u64 = overlapped != 0 ? gears::kErrorIoPending : gears::kErrorSuccess;
+}
+
 GEARS_XAM_NO_UI(XamShowAchievementsUI)
-GEARS_XAM_NO_UI(XamShowDeviceSelectorUI)
 GEARS_XAM_NO_UI(XamShowDirtyDiscErrorUI)
 GEARS_XAM_NO_UI(XamShowFriendRequestUI)
 GEARS_XAM_NO_UI(XamShowFriendsUI)

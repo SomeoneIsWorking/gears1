@@ -1,7 +1,7 @@
 ---
 id: 45
 title: The title asks for 2.6 GB immediately after mounting its save content
-status: open
+status: resolved
 symptom: out of guest heap 0x40000000: wanted 0x9f000000 bytes, right after 'content default_checkpoint_sav mounted as save:'; the allocation fails and the title carries on
 tags: saves,content,memory,port
 created: 2026-07-29
@@ -320,3 +320,23 @@ XLiveBase startup and its enumerate, 0x000B0006 is XGIUserSetContext. All are
 either fire-and-forget or write a small status into their own buffer; none of
 them populates a deserialisation blob. They are still worth implementing as
 real services, but not as a fix for this.
+
+### Resolution (2026-07-29)
+FIXED by porting the storage-device selector (XamShowDeviceSelectorUI), not by anything in the allocator chain.
+
+THE MECHANISM, end to end:
+  the title asks the player which storage device to save to
+    -> the runtime REFUSED the dialog (it sat in the no-system-UI list)
+    -> the title never obtained a device, so it never established a save destination
+    -> its deferred handler still ran, deserialising an FString from an archive whose byte array was EMPTY (data pointer 0, count 0)
+    -> Serialize has no bounds check, so that read went to LOW GUEST MEMORY, which is mapped because kPhysicalAliases includes the raw physical window at 0x00000000
+    -> address 4 held 0xb0800000; abs() and 2 bytes per character give 0x9f000000
+    -> the 2.6 GB allocation is refused and the title dereferences the null
+
+VERIFIED BY A SINGLE-VARIABLE A/B, both directions:
+  selector refused  : exit 139 (SIGSEGV, core dumped), the 2.6 GB request present, ~1800 frames
+  selector answered : exit 124 (survived the full 400 s timeout), NO oversized request, 11640 frames at 29.8 fps
+
+WHY IT WAS MISSED: every step of the allocator chain was measured correctly and none of them was the cause. The cause was a dialog refused sixty seconds earlier and four subsystems away. Refusing the selector looked locally safe -- it sits with the other system dialogs, which genuinely have no answer here -- but it is the ONE dialog a PC port can always answer, because a PC has exactly one place saves go.
+
+THE LESSON, and the reason this entry ran for several sessions: the bug was not in the chain that produced the number. It was a service that was never implemented, and it only became reachable once the surrounding chain was ported far enough for the title to get there. Chasing the symptom down four levels could not have found it; porting the chain did.
