@@ -22,9 +22,11 @@
 
 #include <atomic>
 #include <mutex>
+#include <unordered_map>
 #include <string>
 
 #include <byteswap.h>
+#include <lucent/config.h>
 #include <lucent/log.h>
 
 #include "guest_backtrace.h"
@@ -430,6 +432,24 @@ PPC_FUNC(sub_82214F50)
     static std::atomic<uint64_t> seen{0};
     // Only the outsized requests: this is a pool allocator on a normal path and
     // a line per call would bury the one that matters.
+    // The allocator's own vtable, once. Slot +4 is allocate (this function) and
+    // slot +12 is FREE -- the realloc path calls it as `lwz r11,0(this); lwz
+    // r11,12(r11); bctrl`. Naming that address is what makes it possible to
+    // probe the free, which is the open question for the use-after-free in
+    // catalog #45: the constructor/destructor seam is blind because the compiler
+    // inlines them.
+    static std::atomic<bool> namedVtable{false};
+    if (!namedVtable.exchange(true) && ctx.r3.u32 != 0)
+    {
+        const uint32_t vt = ByteSwap(*gears::Memory().Translate<uint32_t>(ctx.r3.u32));
+        lucent::Line line;
+        line.add("pool allocator {:#x} vtable {:#x} slots:", ctx.r3.u32, vt);
+        for (uint32_t i = 0; i < 6; ++i)
+            line.add(" +{}={:08x}", i * 4,
+                ByteSwap(*gears::Memory().Translate<uint32_t>(vt + i * 4)));
+        line.flush(lucent::Level::Info, "probe");
+    }
+
     if (ctx.r4.u32 >= (64u << 20) && seen.fetch_add(1) < 8)
         lucent::error("probe", "pool allocation of {:#x} bytes ({} MB) requested"
             " from {:#x}: r3={:#x} r5={:#x} r6={:#x} r7={:#x}", ctx.r4.u32,
@@ -587,4 +607,177 @@ PPC_FUNC(sub_82207E98)
     __imp__sub_82207E98(ctx, base);
     if (n < 4)
         ReportCarrier("THE LoadChapter OP RAN -- after");
+}
+
+// ---------------------------------------------------------------------------
+// Lifetime of the archive-derived object the checkpoint restore crashes on
+// (catalog #45).
+//
+// The core file settled what the crash IS: the object at the fault is on a pool
+// FREE-LIST (214 nodes, the pool descriptor at 0x41421750 holds it as head), and
+// its slot-0 word -- read as a vtable -- is really the free-list's next pointer.
+// So this is a use-after-free, not bad data.
+//
+// sub_8242C098 constructs the class (it installs vtable 0x821047A8 after calling
+// the FArchive base constructor), and that vtable's slot 0 is sub_8242C180, the
+// destructor. Probing both and remembering the last destruction per address
+// turns "the object was freed" into "the object was freed HERE, by this caller".
+extern "C" PPC_FUNC(__imp__sub_8242C098);
+extern "C" PPC_FUNC(__imp__sub_8242C180);
+
+namespace
+{
+// Small and fixed: the question is which site destroyed ONE object, so a ring
+// of the most recent destructions is enough and cannot grow without bound.
+struct Destruction
+{
+    uint32_t object = 0;
+    uint32_t from = 0;
+    uint64_t ordinal = 0;
+};
+constexpr size_t kDestructionSlots = 64;
+std::mutex g_lifetimeMutex;
+Destruction g_destructions[kDestructionSlots];
+size_t g_destructionCursor = 0;
+uint64_t g_constructed = 0;
+uint64_t g_destroyed = 0;
+} // namespace
+
+namespace gears { void ReportArchiveLifetime(uint32_t object); }
+
+namespace gears
+{
+// Reports whether this object was destroyed, and by whom. Called from the fault
+// path, where the answer is the whole question.
+void ReportArchiveLifetime(uint32_t object)
+{
+    std::lock_guard<std::mutex> guard(g_lifetimeMutex);
+    // THESE COUNTS CAN BOTH BE ZERO WITHOUT MEANING THE CLASS IS UNUSED. The
+    // compiler inlines these constructors and destructors at their call sites
+    // -- the render-command analysis found exactly that pattern -- so the
+    // out-of-line bodies these probes attach to may never be called even while
+    // objects of the class are created and destroyed constantly. Zero here is
+    // "this seam saw nothing", not "nothing happened".
+    lucent::error("lifetime", "{} constructions and {} destructions seen through"
+        " the out-of-line bodies. If both are zero the compiler has inlined them"
+        " and this seam cannot see the class at all -- that is a blind probe,"
+        " not evidence of absence", g_constructed, g_destroyed);
+    for (const Destruction& d : g_destructions)
+    {
+        if (d.object == object)
+        {
+            lucent::error("lifetime", "  THE CRASHING OBJECT {:#x} WAS DESTROYED"
+                " (destruction #{}) from {:#x} -- use after free, and that is the"
+                " caller that freed it", object, d.ordinal, d.from);
+            return;
+        }
+    }
+    lucent::error("lifetime", "  object {:#x} is not among the last {}"
+        " destructions of this class -- either it was freed longer ago than the"
+        " ring remembers, or it was freed by some other path", object,
+        kDestructionSlots);
+}
+} // namespace gears
+
+PPC_FUNC(sub_8242C098)
+{
+    {
+        std::lock_guard<std::mutex> guard(g_lifetimeMutex);
+        ++g_constructed;
+    }
+    __imp__sub_8242C098(ctx, base);
+}
+
+PPC_FUNC(sub_8242C180)
+{
+    const uint32_t object = ctx.r3.u32;
+    const uint32_t from = uint32_t(ctx.lr);
+    {
+        std::lock_guard<std::mutex> guard(g_lifetimeMutex);
+        Destruction& slot = g_destructions[g_destructionCursor % kDestructionSlots];
+        slot.object = object;
+        slot.from = from;
+        slot.ordinal = g_destroyed;
+        ++g_destructionCursor;
+        ++g_destroyed;
+    }
+    __imp__sub_8242C180(ctx, base);
+}
+
+// WHY THERE IS NO PROBE ON THE FAULTING CALL ITSELF.
+//
+// The obvious one -- a strong sub_824961D0 that reads the object from r24+1376
+// on entry -- IS WRONG AND WAS REMOVED. r24 is set up INSIDE that function, so
+// on entry it still holds the caller's value and the read returns nonsense
+// (0x470075 on the run that exposed this, with a "vtable" of 0). A probe can
+// only see a guest function's arguments and its callee-saved registers AFTER
+// the prologue, and there is no seam for mid-function state.
+//
+// The core file is the right instrument for this one: gdb on the dump gives
+// r24, r3 and the memory behind them at the exact fault. That is how the object
+// was identified as a pool free-list node in the first place.
+
+// THE POOL'S FREE, identified from the allocator's own vtable at runtime:
+// slot +4 is allocate (sub_82214F50), +8 is realloc (sub_822151F8) and
+// +12 is sub_822153F0. Probing it is the only seam that can name who releases
+// the object the checkpoint restore later calls through -- the class's
+// constructor and destructor are inlined, so that seam sees nothing.
+extern "C" PPC_FUNC(__imp__sub_822153F0);
+
+namespace
+{
+// Every free, keyed by address, keeping only the most recent site per address.
+// Bounded by the number of distinct addresses the title frees, which is what
+// makes this affordable; the value is one word.
+std::mutex g_freeMutex;
+std::unordered_map<uint32_t, uint32_t> g_lastFreeSite;
+std::atomic<uint64_t> g_frees{0};
+} // namespace
+
+namespace gears
+{
+void ReportLastFree(uint32_t address)
+{
+    std::lock_guard<std::mutex> guard(g_freeMutex);
+    const auto it = g_lastFreeSite.find(address);
+    if (it == g_lastFreeSite.end())
+    {
+        lucent::error("lifetime", "  {:#x} was never freed through the pool"
+            " ({} frees seen). If that seems wrong, check this seam fires at"
+            " all before concluding anything from it", address,
+            g_frees.load());
+        return;
+    }
+    lucent::error("lifetime", "  {:#x} WAS FREED, most recently from {:#x}."
+        " That is the caller to look at", address, it->second);
+}
+} // namespace gears
+
+PPC_FUNC(sub_822153F0)
+{
+    const uint32_t address = ctx.r4.u32;
+    const uint32_t from = uint32_t(ctx.lr);
+    if (address != 0)
+    {
+        std::lock_guard<std::mutex> guard(g_freeMutex);
+        g_lastFreeSite[address] = from;
+    }
+    g_frees.fetch_add(1);
+
+    // GEARS_WATCH_FREE=<guest address> reports the moment that address is
+    // released, with the caller that did it. The crash this exists for is a
+    // use-after-free whose object address is known from the core file, and a
+    // raw SIGSEGV leaves no clean exit to dump a table at -- so the report has
+    // to happen live, when the free occurs.
+    static const uint32_t watched = [] {
+        const uint32_t value = lucent::config::number("WATCH_FREE", 0);
+        if (value != 0)
+            lucent::info("lifetime", "watching for the release of {:#x}", value);
+        return value;
+    }();
+    if (watched != 0 && address == watched)
+        lucent::error("lifetime", "WATCHED ADDRESS {:#x} FREED from {:#x}"
+            " (free #{})", address, from, g_frees.load());
+
+    __imp__sub_822153F0(ctx, base);
 }
