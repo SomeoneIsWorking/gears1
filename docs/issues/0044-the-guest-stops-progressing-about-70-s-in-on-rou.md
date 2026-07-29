@@ -552,3 +552,46 @@ sub_8221BD60 and sub_8221C1B8 -- the two vtable methods that touch the container
 They are the class's own interface to the list it lives in, so what they do to it
 (insert? remove? mark?) says what the lifetime contract is, and therefore what
 breaking it looks like.
+
+### Note (2026-07-29)
+THE CLASS IS IDENTIFIED: IT IS THE MOVIE PLAYER. THE TIMING FITS EXACTLY.
+
+Reading the wide strings around the failing object's vtable (0x820bc818) settles
+what it belongs to. Immediately before it, in address order:
+
+    0x820bc578  'Startup.bik'      0x820bc590  'MGSLogo.bik'
+    0x820bc5a8  'EpicLogo.bik'     0x820bc5fc..'ESRB_*.bik' (7 languages)
+    0x820bc6e8  'Movies\\'          0x820bc718  'Subtitles'
+    0x820bc740  'nomovie'          0x820bc758  'HOSOutro'
+    0x820bc788  'PlayGearsMovieCommand'
+    0x820bc7b4  'StopGearsMovieCommand'
+    0x820bc7e0  'MovieEffects'     0x820bc7fc  'MovieVoice'
+    0x820bc818  <-- the vtable the failing object carries
+
+The vtable directly follows 'MovieVoice', in a block that is nothing but Bink
+movie filenames, the Movies path, subtitle and audio-channel names, and the
+Play/Stop console commands. The class is the title's full-screen movie player.
+
+AND THAT EXPLAINS THE TIMING. The failure lands around 70 s, which is the
+campaign-start transition -- exactly when a loading movie starts or stops. It
+also explains what the log looks like just before: unbroken 3-draw frames, which
+is what a movie or loading screen renders.
+
+So the mechanism, now with every piece measured rather than assumed: the
+per-frame walk dispatches a virtual on the movie player through a secondary base
+interface, in a window where the object's vtable is the abstract base's --
+during construction or destruction, which is to say at a movie start or stop.
+
+A CLEAN FALSIFIABLE TEST EXISTS AND THE TITLE PROVIDES IT. 'nomovie' and
+'NOMOVIE' are command-line switches this very code reads. If movies are
+disabled and the panic stops, the movie player is confirmed; if it still fires,
+this identification is wrong and should be discarded.
+
+The runtime does not pass a command line to the guest today (main.cpp takes only
+the XEX path and game directory), so the test needs that first. It is a small
+addition and it is worth having anyway -- the title reads a dozen switches here
+(ONETHREAD, NOSOUND, BENCHMARK, DUMPMOVIE, NOINI, SECONDS=, EXEC=) that are all
+useful for bringing a port up.
+
+NOTE ON WHAT THIS IS NOT: disabling movies would not be a fix. It would be the
+experiment that confirms where the bug lives.
