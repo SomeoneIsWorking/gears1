@@ -25,5 +25,6 @@ constexpr uint32_t kErrorInsufficientBuffer = 0x0000007A;
 constexpr uint32_t kErrorDeviceNotConnected = 0x0000048F;
 constexpr uint32_t kErrorNoSuchUser = 0x00000525;
 constexpr uint32_t kErrorNoMoreFiles = 0x00000012;
+constexpr uint32_t kErrorInvalidHandle = 0x00000006;
 
 } // namespace gears
