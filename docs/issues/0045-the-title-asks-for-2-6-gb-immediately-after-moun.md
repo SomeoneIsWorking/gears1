@@ -588,3 +588,49 @@ constructor/destructor probe pair that reported '0 constructed, 0 destroyed' --
 those bodies are inlined at their call sites, so that seam is blind and its zero
 means nothing. Both are now documented in the source so the next reader does not
 repeat them.
+
+### Note (2026-07-29)
+THE CACHE AND THE USE ARE IN THE SAME FUNCTION, AND THE USE IS GUARDED.
+
+sub_824961D0 -- the function that faults -- both CREATES the object and CACHES
+it. At ppc_recomp.68.cpp:5531:
+
+    bl 0x8242c098        ; construct (this is the class the core file named,
+                         ;  vtable 0x821047A8, installed after the FArchive base
+                         ;  constructor at 0x821B5B78)
+    mr r3,r19
+    stw r3,1376(r24)     ; cache the pointer in the holder
+
+There are SIX stores to r24+1376 in this one function, so the field is a cache
+that is reassigned along different paths.
+
+The faulting read, at ppc_recomp.68.cpp:6271, is GUARDED:
+
+    lwz  r11,1396(r24)
+    cmpwi cr6,r11,0
+    bne  cr6,<skip>      ; only use the cache when +1396 is ZERO
+    lwz  r3,1376(r24)
+    lwz  r11,0(r3)
+    lwz  r11,52(r11)     ; slot 13
+    bctrl                ; <-- faults
+
+So the title is not blindly dereferencing a cache; it consults +1396 first. At
+the crash +1396 must therefore be zero while the object at +1376 is dead.
+
+WHAT +1396 IS, honestly: NOT yet established. The only writer of that offset on
+what looks like this object type (sub_82496AE0, ppc_recomp.68.cpp:7040) stores a
+POINTER (r24) rather than a flag, which suggests +1396 is a SELECTOR -- 'use the
+object here if present, otherwise the cache at +1376' -- rather than a validity
+bit. The other two writers of +1396 in the image (sub_822396A8) are reached
+through a float conversion on a different structure and are almost certainly a
+different field of a different class. I am not claiming +1396's meaning.
+
+COMBINED WITH THE MEASURED FREE: the block at +1376 is released by the guest's
+OWN pool realloc (sub_822151F8, free site 0x822153E4), and the pool is guest
+code we do not implement -- so it behaves as it does on console GIVEN THE SAME
+SIZES. That is the thread worth pulling: if the title reallocs where the console
+would not, the difference is in a SIZE we supply, not in the allocator.
+
+NEXT: dump +1376 and +1396 from the core at the fault to confirm the guard state
+directly rather than by inference, and find which of the six stores put the dead
+pointer there.
