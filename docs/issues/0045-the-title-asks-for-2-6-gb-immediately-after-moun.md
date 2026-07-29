@@ -782,3 +782,42 @@ generic deallocator, so the interesting caller is one level further out. If the
 title's own delete does clear the field, then something about OUR ordering lets
 step 3 happen before the clear; if it never clears it, the guard must be
 something other than non-null and the +1396 selector needs identifying.
+
+### Note (2026-07-29)
+CROSS-THREAD USE-AFTER-FREE. MEASURED ON BOTH SIDES, AND IT LINKS #45 TO #44.
+
+  the USER of the cache, sub_824961D0, runs on guest thread 'host'  (game thread)
+  the DELETER runs on 'guest-7'                                     (render thread)
+
+The deleter's stack, from a walk at the orphaning realloc:
+
+  0x822158e4 <- 0x82170470 <- 0x8232ae10 <- 0x825552a4 <- 0x82551240
+    <- 0x825552fc <- 0x8250b284 <- 0x825550f4 <- 0x82444f7c
+    <- 0x82445038 <- 0x8243ae00 <- 0x827a94ac
+
+0x82444F7C is the render loop's Execute() call site -- the same address catalog
+#44 identifies as its faulting call. So the object is destroyed from INSIDE a
+render command, on the rendering thread, while the game thread still holds it
+cached at holder+1376.
+
+So the sequence is:
+  game thread    caches the object at holder+1376
+  render thread  executes a command that DELETES it (realloc to 0 bytes)
+  game thread    calls sub_824961D0, whose prologue takes the cache because it
+                 is merely non-null, and calls a virtual on freed memory
+
+THIS IS THE SHAPE UE3 HAS A MECHANISM FOR, and that is the next thing to check.
+The game thread is supposed to hand ownership to the rendering thread and then
+WAIT on a fence before touching the object again. FenceCommand exists in this
+image (vtable 0x82106D58, Describe returns the literal 'FenceCommand'; its
+Execute is lwsync + InterlockedDecrement on [this+4], returning 8). If the game
+thread's wait for that fence does not actually block in this port -- a stubbed
+kernel wait, a counter that never reaches the value it spins for, a completion
+signalled too early -- then the game thread proceeds while the render thread
+still owns the object, and this is OURS.
+
+That is now the single highest-value question for this entry: find the game
+thread's fence WAIT and prove it actually waits. Note the earlier finding that
+lwsync is translated faithfully and the guest loads are volatile, so the memory
+model is not the suspect -- the suspect is a kernel primitive or a completion we
+signal.
