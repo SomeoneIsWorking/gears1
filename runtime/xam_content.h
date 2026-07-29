@@ -30,6 +30,37 @@ constexpr uint32_t kContentFileNameBytes = 42;
 // device and then opens it on another finds nothing.
 constexpr uint32_t kContentDeviceId = 1;
 
+// XCONTENTFLAG creation dispositions, as the console numbers them (transcribed
+// in extern/xenia/src/xenia/vfs/devices/stfs_xbox.h). These were previously
+// written as kCreateNew=1, kOpenExisting=2 -- and the title passes flags 0x13,
+// whose low nibble is 3. So every OPEN_EXISTING request fell through the test
+// for it and was answered as though it were a creation, which is why a save
+// that does not exist was reported "mounted (new)" to a caller that had asked
+// to open an existing one.
+enum ContentCreateDisposition : uint32_t
+{
+    kContentCreateNew = 1,
+    kContentCreateAlways = 2,
+    kContentOpenExisting = 3,
+    kContentOpenAlways = 4,
+    kContentTruncateExisting = 5,
+};
+
+// What a create/open request should answer, given whether the content is there.
+// Separated from the guest seam so the disposition table can be tested: the
+// numbers are the console's and nothing else in the runtime can catch them
+// being wrong.
+enum class ContentDecision
+{
+    Open,          // use what is there
+    Create,        // make it
+    NotFound,      // asked to open something that does not exist
+    AlreadyExists, // asked to create something that does
+    Invalid,
+};
+
+ContentDecision DecideContentCreate(uint32_t flags, bool existed);
+
 struct ContentEntry
 {
     uint32_t deviceId = kContentDeviceId;

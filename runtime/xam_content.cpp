@@ -24,6 +24,26 @@ void StoreBE16(uint8_t* p, uint16_t v)
 
 } // namespace
 
+ContentDecision DecideContentCreate(uint32_t flags, bool existed)
+{
+    switch (flags & 0xF)
+    {
+    case kContentCreateNew:
+        return existed ? ContentDecision::AlreadyExists : ContentDecision::Create;
+    case kContentCreateAlways:
+        // "Always" means always: an existing one is replaced, not rejected.
+        return ContentDecision::Create;
+    case kContentOpenExisting:
+        return existed ? ContentDecision::Open : ContentDecision::NotFound;
+    case kContentOpenAlways:
+        return existed ? ContentDecision::Open : ContentDecision::Create;
+    case kContentTruncateExisting:
+        return existed ? ContentDecision::Create : ContentDecision::NotFound;
+    default:
+        return ContentDecision::Invalid;
+    }
+}
+
 bool ContentExists(const std::filesystem::path& directory)
 {
     std::error_code ec;

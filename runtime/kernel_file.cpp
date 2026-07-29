@@ -27,6 +27,9 @@ constexpr uint32_t kStatusAccessDenied = 0xC0000022;
 constexpr uint32_t kStatusNoSuchFile = 0xC000000F;
 constexpr uint32_t kStatusNoMoreFiles = 0x80000006;
 constexpr uint32_t kStatusInfoLengthMismatch = 0xC0000004;
+// What the console answers when an operation makes no sense for the object: a
+// byte transfer on a directory handle, for instance.
+constexpr uint32_t kStatusInvalidDeviceRequest = 0xC0000010;
 
 constexpr uint32_t kFileAttributeDirectory = 0x10;
 constexpr uint32_t kFileAttributeNormal = 0x80;
@@ -240,6 +243,16 @@ void __imp__NtReadFile(PPCContext& __restrict ctx, uint8_t* base)
         return;
     }
 
+    // A DIRECTORY HANDLE HAS NO FILE*. Directory handles were added so the
+    // title could open the root of its save mount, and every byte-transfer path
+    // here would otherwise dereference a null FILE* -- the console answers this
+    // with a status, not a crash.
+    if (file->isDirectory)
+    {
+        ctx.r3.u64 = kStatusInvalidDeviceRequest;
+        return;
+    }
+
     if (byteOffsetPtr != 0)
     {
         const uint64_t offset = ByteSwap(*reinterpret_cast<uint64_t*>(base + byteOffsetPtr));
@@ -292,6 +305,16 @@ void __imp__NtWriteFile(PPCContext& __restrict ctx, uint8_t* base)
         ctx.r3.u64 = gears::kStatusInvalidHandle;
         return;
     }
+
+    // A DIRECTORY HANDLE HAS NO FILE*. Directory handles were added so the
+    // title could open the root of its save mount, and every byte-transfer path
+    // here would otherwise dereference a null FILE* -- the console answers this
+    // with a status, not a crash.
+    if (file->isDirectory)
+    {
+        ctx.r3.u64 = kStatusInvalidDeviceRequest;
+        return;
+    }
     if (!file->writable)
     {
         lucent::warn("fs", "refused a write to '{}', which is not on a writable"
@@ -341,25 +364,35 @@ void __imp__NtQueryInformationFile(PPCContext& __restrict ctx, uint8_t* base)
     switch (infoClass)
     {
     case 5: // FileStandardInformation
-        StoreU64(base, info + 0x00, file->size); // allocation size
-        StoreU64(base, info + 0x08, file->size); // end of file
-        StoreU32(base, info + 0x10, 1);          // number of links
-        StoreU32(base, info + 0x14, 0);          // delete pending / directory
+        StoreU64(base, info + 0x00, file->isDirectory ? 0 : file->size);
+        StoreU64(base, info + 0x08, file->isDirectory ? 0 : file->size);
+        StoreU32(base, info + 0x10, 1); // number of links
+        // +0x14 is delete-pending then the DIRECTORY flag. A title that opened
+        // the root of its save mount asks exactly this to find out what it got,
+        // and answering "not a directory" for a directory sends it down the
+        // file path.
+        StoreU32(base, info + 0x14, file->isDirectory ? 0x00000100u : 0u);
         break;
 
     case 14: // FilePositionInformation
+        if (file->isDirectory)
+        {
+            ctx.r3.u64 = kStatusInvalidDeviceRequest;
+            return;
+        }
         StoreU64(base, info + 0x00, uint64_t(ftell(file->handle)));
         break;
 
     case 34: // FileNetworkOpenInformation
+        StoreU32(base, info + 0x30, file->isDirectory ? kFileAttributeDirectory
+                                                      : kFileAttributeNormal);
         // Same layout NtQueryFullAttributesFile fills, and timestamps are left
         // zero for the same reason: an obviously-unset value beats a plausible
         // invented one. Only the sizes are actually read here -- the title
         // sizes an allocation from this reply, so leaving the class unhandled
         // made it allocate from uninitialised memory.
-        StoreU64(base, info + 0x20, file->size); // allocation size
-        StoreU64(base, info + 0x28, file->size); // end of file
-        StoreU32(base, info + 0x30, kFileAttributeNormal);
+        StoreU64(base, info + 0x20, file->isDirectory ? 0 : file->size);
+        StoreU64(base, info + 0x28, file->isDirectory ? 0 : file->size);
         break;
 
     default:
@@ -386,6 +419,14 @@ void __imp__NtSetInformationFile(PPCContext& __restrict ctx, uint8_t* base)
         return;
     }
 
+    if (file->isDirectory)
+    {
+        // Nothing that can be set on this handle applies to a directory, and
+        // every path below it assumes a FILE*.
+        ctx.r3.u64 = kStatusInvalidDeviceRequest;
+        return;
+    }
+
     if (infoClass == 14) // FilePositionInformation
     {
         const uint64_t position = ByteSwap(*reinterpret_cast<uint64_t*>(base + info));
@@ -406,7 +447,12 @@ bool CloseGuestFile(uint32_t handle)
     if (it == g_openFiles.end())
         return false;
 
-    fclose(it->second->handle);
+    // A DIRECTORY HANDLE HAS NO FILE*. Directory handles carry a host path and
+    // a listing instead, so closing one must not reach fclose -- fclose(nullptr)
+    // is a crash, and it was one: the title opens the root of its save mount and
+    // then closes it.
+    if (it->second->handle != nullptr)
+        fclose(it->second->handle);
     g_openFiles.erase(it);
     return true;
 }

@@ -174,10 +174,44 @@ void TestEnumeration()
     std::filesystem::remove_all(root);
 }
 
+// THE DISPOSITION TABLE. These numbers are the console's, and getting them
+// wrong is invisible: every request still gets an answer, just the answer to a
+// different question. The table previously had kOpenExisting = 2, while the
+// console uses 3 -- and the title passes 0x13.
+void TestCreateDispositions()
+{
+    // The exact value the title sends, which is the case that was broken.
+    Check(gears::DecideContentCreate(0x13, false) == gears::ContentDecision::NotFound,
+        "flags: 0x13 is OPEN_EXISTING, and missing content is not found");
+    Check(gears::DecideContentCreate(0x13, true) == gears::ContentDecision::Open,
+        "flags: 0x13 opens content that is there");
+
+    Check(gears::DecideContentCreate(gears::kContentCreateNew, false) ==
+          gears::ContentDecision::Create, "flags: CREATE_NEW creates");
+    Check(gears::DecideContentCreate(gears::kContentCreateNew, true) ==
+          gears::ContentDecision::AlreadyExists,
+        "flags: CREATE_NEW refuses existing content");
+
+    // CREATE_ALWAYS must NOT be rejected as already-existing: that is the case
+    // the old off-by-one table silently mislabelled.
+    Check(gears::DecideContentCreate(gears::kContentCreateAlways, true) ==
+          gears::ContentDecision::Create,
+        "flags: CREATE_ALWAYS replaces existing content rather than refusing");
+
+    Check(gears::DecideContentCreate(gears::kContentOpenAlways, false) ==
+          gears::ContentDecision::Create, "flags: OPEN_ALWAYS creates when absent");
+    Check(gears::DecideContentCreate(gears::kContentOpenAlways, true) ==
+          gears::ContentDecision::Open, "flags: OPEN_ALWAYS opens when present");
+
+    Check(gears::DecideContentCreate(0, false) == gears::ContentDecision::Invalid,
+        "flags: a disposition of 0 is invalid");
+}
+
 } // namespace
 
 int main()
 {
+    TestCreateDispositions();
     TestContentDataLayout();
     TestOverlongNamesAreTruncated();
     TestExistenceMeansContent();
