@@ -822,3 +822,20 @@ TO PROMOTE IT TO A CAUSE, one of these is needed:
 
 The instruments stay in the tree; they cost nothing and #44 is intermittent, so
 the next occurrence will now carry its own diagnosis.
+
+### Note (2026-07-29)
+THE ATOMICS ARE RULED OUT FOR THIS BUG, BY MEASUREMENT.
+
+sub_8221CBA8 (the ring allocator) and sub_82444EF0 (the drain loop) contain
+ZERO lwarx / stwcx. / ldarx / stdcx. / lwsync / sync / eieio. Verified twice,
+independently, by scanning the recompiled function extents. They use plain
+loads and stores on the ring fields only.
+
+That is safe under this port because PPC_LOAD_U32 / PPC_STORE_U32 are volatile
+(ppc_context.h), so the producer's spin genuinely re-reads, and x86-64 TSO
+supplies the ordering PowerPC would need lwsync for.
+
+So whatever moves ReadPointer off a command boundary, it is NOT the atomic
+translation. The place that remains is the drain loop itself: Execute()'s return
+value is added straight to ReadPointer (lwz r11,20(r31); add r11,r11,r29; stw
+r11,20(r31)), with the wrap handling against +12.
