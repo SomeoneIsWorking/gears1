@@ -249,12 +249,72 @@ PPC_FUNC(sub_82170408)
             // The archive is a MEMORY reader -- no file read happens between
             // the mount and the failure -- so its buffer pointer and position
             // are in this object, and they say what it is actually chewing on.
+            // 128 bytes, not 64: the archive is built inline on its caller's
+            // stack and keeps a pointer to its data source at +112, which the
+            // first version of this dump stopped just short of.
             lucent::Line dump;
             dump.add("  archive {:#x}:", t_serialisingArchive);
-            for (uint32_t i = 0; i < 64; i += 4)
+            for (uint32_t i = 0; i < 128; i += 4)
                 dump.add(" {:08x}", ByteSwap(*gears::Memory().Translate<uint32_t>(
                     t_serialisingArchive + i)));
             dump.flush(lucent::Level::Error, "probe");
+
+            // Slot 1 of the vtable is Archive::Serialize -- the function that
+            // actually produced the bad length. Naming it turns "the bytes are
+            // wrong" into a specific reader to go and read.
+            const uint32_t vtable = ByteSwap(
+                *gears::Memory().Translate<uint32_t>(t_serialisingArchive));
+            lucent::Line slots;
+            slots.add("  archive vtable {:#x} slots:", vtable);
+            for (uint32_t i = 0; i < 8; ++i)
+                slots.add(" {:08x}", ByteSwap(
+                    *gears::Memory().Translate<uint32_t>(vtable + i * 4)));
+            slots.flush(lucent::Level::Error, "probe");
+
+            // Serialize (vtable slot 1, sub_821B5C28) is a MEMORY reader with
+            // no bounds check whatsoever:
+            //   buffer = *(uint32*)(this + 112) -> +0
+            //   memcpy(dest, buffer + this->offset(+108), length)
+            // So the bad length came out of this buffer, and dumping it is the
+            // "which bytes" question answered directly.
+            const uint32_t sourceObject = ByteSwap(
+                *gears::Memory().Translate<uint32_t>(t_serialisingArchive + 112));
+            const uint32_t position = ByteSwap(
+                *gears::Memory().Translate<uint32_t>(t_serialisingArchive + 108));
+            if (sourceObject != 0)
+            {
+                const uint32_t buffer = ByteSwap(
+                    *gears::Memory().Translate<uint32_t>(sourceObject));
+                const uint32_t count = ByteSwap(
+                    *gears::Memory().Translate<uint32_t>(sourceObject + 4));
+                lucent::error("probe", "  reading at offset {} from a {}-byte"
+                    " array at {:#x} (holder {:#x})", position, count, buffer,
+                    sourceObject);
+                if (buffer == 0)
+                {
+                    // The buffer is NULL and Serialize does not bounds-check, so
+                    // the read was memcpy(dest, 0 + offset, n) -- it read LOW
+                    // GUEST MEMORY. If those bytes were zero the length would be
+                    // zero and nothing would go wrong, so what is actually down
+                    // there decides whether this is fatal.
+                    lucent::Line low;
+                    low.add("  buffer is NULL, so it read guest address {}."
+                            " Low memory holds:", position);
+                    for (uint32_t i = 0; i < 32; i += 4)
+                        low.add(" {:08x}",
+                            ByteSwap(*gears::Memory().Translate<uint32_t>(i)));
+                    low.flush(lucent::Level::Error, "probe");
+                }
+                if (buffer != 0)
+                {
+                    lucent::Line bytes;
+                    bytes.add("  first bytes:");
+                    for (uint32_t i = 0; i < 48; ++i)
+                        bytes.add(" {:02x}",
+                            *gears::Memory().Translate<uint8_t>(buffer + i));
+                    bytes.flush(lucent::Level::Error, "probe");
+                }
+            }
         }
         if (t_serialisingArchive != 0)
             lucent::error("probe", "  inside FString serialisation on a {}"
