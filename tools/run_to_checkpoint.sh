@@ -59,3 +59,27 @@ while [ "$waited" -lt 300 ]; do
 done
 kill -9 "$pid" 2>/dev/null || true
 wait "$pid" 2>/dev/null || true
+
+# DID IT ACTUALLY GET THERE? This script drives the title with a TIMED button
+# script, and a timed script silently stops working the moment the menus change
+# -- which is exactly what happened when the storage-device dialog stopped
+# appearing: two runs were spent before anyone noticed the title was sitting in
+# a menu rather than reaching the campaign. A run that did not reach the level
+# is not a run with an interesting result; it is a broken instrument, and it has
+# to say so rather than producing a quiet log that looks like evidence.
+# The marker is the CONTENT MOUNT, not package opens: CookedXenon packages are
+# loaded during boot as well, so a run that never left the menu still shows
+# dozens of them (25 in the run that exposed this). The mount is the milestone
+# this script exists to reach, it is logged at info so no debug channel is
+# needed, and it is absent from every menu-only run.
+reached=0
+grep -q "mounted as" "$log" 2>/dev/null && reached=1
+if [ "$reached" -eq 0 ]; then
+    echo "run_to_checkpoint: THE TITLE NEVER REACHED THE LEVEL LOAD." >&2
+    echo "  No save content was mounted, so the scripted input did not" >&2
+    echo "  navigate the menus. Do NOT read this log as evidence about the" >&2
+    echo "  campaign -- recalibrate GEARS_INPUT_SCRIPT first (the button" >&2
+    echo "  sequence is timed, and it breaks whenever the menu flow changes)." >&2
+    exit 3
+fi
+echo "run_to_checkpoint: reached the checkpoint ($(grep -c 'mounted as' "$log") content mount(s))" >&2
