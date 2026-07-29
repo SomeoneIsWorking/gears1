@@ -26,6 +26,8 @@
 #include <byteswap.h>
 #include <lucent/log.h>
 
+#include "guest_backtrace.h"
+#include "guest_thread.h"
 #include "guest_memory.h"
 
 // TWO ENTRY POINTS, EIGHT BYTES APART, into the same body -- and the caller
@@ -144,6 +146,13 @@ PPC_FUNC(sub_828D0790)
         " already destroyed", uint32_t(ctx.lr),
         ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32);
 
+    // WHO was walking the object. The pure-virtual stub is reached through a
+    // vtable slot, so the link register alone names one anonymous dispatch; the
+    // frames above it are the subsystem doing the walking, which is the thing
+    // that has to be identified to explain the lifetime violation.
+    lucent::error("fatal", "  guest stack: {}",
+        gears::FormatGuestBacktrace(ctx.r1.u32, uint32_t(ctx.lr)));
+
     // Which vtable the object actually carries is the whole question now: it
     // will be some abstract base's, and WHICH one names the class whose
     // lifetime is being violated.
@@ -174,6 +183,93 @@ PPC_FUNC(sub_828D0790)
 // to a 64 KB boundary and passes it straight through, so the number is decided
 // ABOVE here. Walking further by reading costs a hop per attempt; logging the
 // arguments and the caller answers it in one run.
+// WHERE THE SIZE IS COMPUTED, at last: sub_82170408 is a container growth
+// helper that does `size = this->elementCount(at +8) * r4`, and its caller
+// sub_8232B548 fills that count in from `abs(load32(object + 80))`. So the whole
+// 2.6 GB is `2 * abs(field80)`, and every function below this one is a
+// pass-through. Reporting both factors says WHICH of them is wrong, which is
+// the only remaining question.
+// The string serialiser above it. sub_8232B548 takes (archive, string) and
+// writes UE3's FString form: an int32 length, NEGATIVE when the text needs
+// UTF-16, then abs(length) characters. The 2.6 GB is that length times two, so
+// the string it was handed has a corrupt length field -- and WHICH string names
+// the subsystem that produced it. Guessing from what appears nearby in the log
+// is how the last three explanations here died.
+extern "C" PPC_FUNC(__imp__sub_8232B548);
+
+namespace
+{
+thread_local uint32_t t_serialisingArchive = 0;
+thread_local uint32_t t_archiveIsSaving = 0;
+} // namespace
+
+PPC_FUNC(sub_8232B548)
+{
+    static std::atomic<uint64_t> seen{0};
+    // The length lives in this function's own frame, at r1-128+80. On a SAVING
+    // archive it is computed from the string; on a LOADING one the store is
+    // skipped and Archive::Serialize reads it out of the file. So the value has
+    // to be read AFTER the call -- reading the argument at entry, as the first
+    // version of this probe did, sees nothing on the loading path and reports
+    // silence as if there were no problem.
+    (void)seen;
+    const uint32_t archive = ctx.r3.u32;
+    // Recorded at ENTRY and read back by the growth probe below, because the
+    // oversized allocation -- and the segfault that follows it -- happen INSIDE
+    // this call. Anything logged after it may never be reached.
+    t_serialisingArchive = archive;
+    t_archiveIsSaving = ByteSwap(*gears::Memory().Translate<uint32_t>(archive + 20));
+
+    __imp__sub_8232B548(ctx, base);
+
+    t_serialisingArchive = 0;
+}
+
+extern "C" PPC_FUNC(__imp__sub_82170408);
+
+PPC_FUNC(sub_82170408)
+{
+    static std::atomic<uint64_t> seen{0};
+    const uint32_t count = ByteSwap(*gears::Memory().Translate<uint32_t>(ctx.r3.u32 + 8));
+    const uint64_t size = uint64_t(count) * ctx.r4.u32;
+    if (size >= (64u << 20) && seen.fetch_add(1) < 8)
+    {
+        lucent::error("probe", "container growth to {} elements x {} bytes ="
+            " {:#x}: the count came from a field holding {:#x} ({} as a signed"
+            " integer, {} as a float)", count, ctx.r4.u32, size, count,
+            int32_t(count), *reinterpret_cast<const float*>(&count));
+        // WHICH THREAD, because the only reason this is filed under saves is
+        // that it appears next to the content mount in the log -- and adjacency
+        // is not ownership.
+        lucent::error("probe", "  on guest thread '{}', stack: {}",
+            gears::GuestThreadName() ? gears::GuestThreadName() : "?",
+            gears::FormatGuestBacktrace(ctx.r1.u32, uint32_t(ctx.lr)));
+        if (t_serialisingArchive != 0)
+        {
+            // The archive is a MEMORY reader -- no file read happens between
+            // the mount and the failure -- so its buffer pointer and position
+            // are in this object, and they say what it is actually chewing on.
+            lucent::Line dump;
+            dump.add("  archive {:#x}:", t_serialisingArchive);
+            for (uint32_t i = 0; i < 64; i += 4)
+                dump.add(" {:08x}", ByteSwap(*gears::Memory().Translate<uint32_t>(
+                    t_serialisingArchive + i)));
+            dump.flush(lucent::Level::Error, "probe");
+        }
+        if (t_serialisingArchive != 0)
+            lucent::error("probe", "  inside FString serialisation on a {}"
+                " archive ({:#x}). {}",
+                t_archiveIsSaving ? "SAVING" : "LOADING", t_serialisingArchive,
+                t_archiveIsSaving
+                    ? "Saving: the length was computed from the string, so the"
+                      " string itself is corrupt."
+                    : "LOADING: the length was READ OUT OF THE ARCHIVE, so the"
+                      " bytes fed to it are wrong -- a file-reading bug on our"
+                      " side, not a title one.");
+    }
+    __imp__sub_82170408(ctx, base);
+}
+
 extern "C" PPC_FUNC(__imp__sub_82214F50);
 extern "C" PPC_FUNC(__imp__sub_822151F8);
 
@@ -190,15 +286,26 @@ PPC_FUNC(sub_82214F50)
     __imp__sub_82214F50(ctx, base);
 }
 
-// One level up: the size arrives here as an argument and is passed on through
-// a vtable slot, so this is where it is still traceable to a caller.
+// One level up, and it is a REALLOC, not an alloc: the prologue keeps r4 as the
+// existing pointer and r5 as the new size, and a null pointer falls through to
+// the plain-allocate path that calls sub_82214F50 with the size in r4. Filtering
+// on r4 here therefore tests a POINTER against a size threshold, which is why
+// the first version of this probe never fired while the allocation it was meant
+// to catch happened on every run. THE SIZE IS r5.
 PPC_FUNC(sub_822151F8)
 {
     static std::atomic<uint64_t> seen{0};
-    if (ctx.r4.u32 >= (64u << 20) && seen.fetch_add(1) < 8)
-        lucent::error("probe", "sub_822151F8 asked for {:#x} bytes ({} MB) from"
-            " {:#x}: r3={:#x} r5={:#x} r6={:#x} r7={:#x}", ctx.r4.u32,
-            ctx.r4.u32 >> 20, uint32_t(ctx.lr), ctx.r3.u32, ctx.r5.u32,
-            ctx.r6.u32, ctx.r7.u32);
+    if (ctx.r5.u32 >= (64u << 20) && seen.fetch_add(1) < 8)
+    {
+        lucent::error("probe", "engine realloc of {:#x} bytes ({} MB) requested"
+            " from {:#x}: allocator={:#x} existing pointer={:#x} r6={:#x}"
+            " r7={:#x}", ctx.r5.u32, ctx.r5.u32 >> 20, uint32_t(ctx.lr),
+            ctx.r3.u32, ctx.r4.u32, ctx.r6.u32, ctx.r7.u32);
+        // Every level at once. The size arrives here as an argument and each
+        // frame above is another chance to see where it was computed; probing
+        // them one at a time costs a run each.
+        lucent::error("probe", "  guest stack: {}",
+            gears::FormatGuestBacktrace(ctx.r1.u32, uint32_t(ctx.lr)));
+    }
     __imp__sub_822151F8(ctx, base);
 }

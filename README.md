@@ -106,8 +106,14 @@ Then build and run the runtime against the generated code:
 cmake -S . -B scratch/build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
       -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
 cmake --build scratch/build
-./scratch/build/runtime/gears1 scratch/bin/default.xex
+./scratch/build/runtime/gears1 scratch/game/default.xex scratch/game
 ```
+
+The second argument is the directory holding the title's data files, extracted
+from the disc; `GEARS_GAME_DIR` sets the same thing. **It is not optional in
+practice** — without it the runtime warns once and then every file open fails,
+and the title runs just far enough to call `XamLoaderLaunchTitle` and quit,
+which looks like a crash rather than a missing argument.
 
 Set `GEARS_LUCENT_DEBUG=heap,loader,kernel,thread,mem` for per-subsystem
 tracing (`all` for everything).

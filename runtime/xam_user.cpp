@@ -390,7 +390,26 @@ void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
     }
 
     const std::filesystem::path dir = gears::Files().SaveDirectory() / fileName;
-    const bool existed = std::filesystem::exists(dir);
+
+    // CONTENT EXISTS WHEN IT HOLDS A SAVE, not when its directory is present.
+    // The directory is created by the runtime itself the first time the title
+    // opens a file for writing under the mount, so testing for the directory
+    // makes every later OPEN_EXISTING succeed against an EMPTY save -- the
+    // title is told its checkpoint is there, deserialises a buffer nothing
+    // filled, and reads a garbage length out of it.
+    bool existed = false;
+    std::error_code ec;
+    if (std::filesystem::is_directory(dir, ec))
+    {
+        for (const auto& entry : std::filesystem::directory_iterator(dir, ec))
+        {
+            if (entry.is_regular_file(ec) && entry.file_size(ec) > 0)
+            {
+                existed = true;
+                break;
+            }
+        }
+    }
 
     // Flag 1 is CREATE_NEW and 2 is OPEN_EXISTING in the console's scheme;
     // honouring them keeps "load" from silently succeeding on a save that is

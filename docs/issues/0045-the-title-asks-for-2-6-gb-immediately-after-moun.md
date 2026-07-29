@@ -152,3 +152,118 @@ underneath it all -- that this allocation is why no save file appears -- has
 never been tested. The cheaper question is what the title does between mounting
 the content and giving up, and whether it ever opens a file at all. Test that
 before descending another level.
+
+### Note (2026-07-29)
+THE SIZE IS FULLY TRACED, THE ASSUMPTION IS TESTED, AND TWO OF MY OWN CLAIMS
+WERE WRONG.
+
+THE ASSUMPTION FIRST, because it was the thing the last note said to test.
+"Is this allocation why no save file appears?" YES, and harder than believed:
+the title SEGFAULTS. Run to completion without a watchdog and the process exits
+139 (SIGSEGV) within a second of the failed allocation. It asks for 2.6 GB, is
+told no, and dereferences the null.
+
+  CORRECTION: an earlier note in this entry says "The title does not treat the
+  refusal as fatal -- the run continues at 29.4 fps". That is FALSE. It came
+  from logs that were cut short by a watchdog a few seconds after the mount, so
+  the frames still in flight looked like the title carrying on. Watching 90 s
+  past the mount shows the guest stop dead: no VdSwap, no audio counters,
+  nothing.
+
+THE FULL CHAIN, every level measured rather than inferred:
+
+  sub_8232B548   r11 = abs(load32(object + 80)); object2->count = r11
+       |         r4 = 2 (element size), r5 = 8
+  sub_82170408   size = load32(this + 8) * r4      <-- THE MULTIPLY
+       |
+  sub_82215898   takes a critical section, forwards the size unchanged
+  sub_822151F8   the engine REALLOC; null pointer falls through to allocate
+  sub_82214F50   the pool allocator
+  sub_82214B58 -> sub_82612770 -> NtAllocateVirtualMemory -> refused
+
+Measured at the multiply: 1,333,788,672 elements x 2 bytes = 0x9f000000.
+
+THE COUNT IS A FLOAT BEING READ AS AN INTEGER. The field holds 0x4F800000,
+which is not a plausible count in any base -- but as IEEE-754 it is EXACTLY
+4294967296.0, that is 2^32. An integer field holding the bit pattern of a float
+is the signature of a value that was never converted, and 2^32 specifically is
+what a saturating or wrapping conversion of an unsigned produces.
+
+  CORRECTION: a previous note reads r7=0xb0800000 at the allocator as "a guest
+  PHYSICAL address, not a size -- so the request is parameterised by a region".
+  Wrong. 0xB0800000 is simply -0x4F800000 in two's complement: it is the raw
+  field value BEFORE sub_8232B548 takes its absolute value, left in a register.
+  There is no region and nothing is parameterised.
+
+  This also finally explains the arithmetic coincidence that sent the last
+  session after MmGetPhysicalAddress: 0x4F800000 and 0xB0800000 are not two
+  addresses that happen to differ by the size. They are the same number, one
+  negated, and the size is just twice it.
+
+WHAT IS STILL OPEN: what writes 2^32-as-a-float into an integer field at
+object+80. Two shapes fit and they have very different owners -- the title
+storing a float where an int belongs (its bug, and it would have to be a
+value we fed it), or a float-to-int conversion that the RECOMPILER emitted as
+a raw bit copy (our bug, and a much more serious one, since it would be wrong
+everywhere and not just here). Check the recompiled conversion first: it is
+cheap and it is the one that would be ours.
+
+THE INSTRUMENT THAT DID THIS: runtime/guest_backtrace.cpp, new. Walking the
+guest stack turned a chain that had been costing ONE FULL RUN PER LEVEL into a
+single line naming twelve frames at once. Validated three ways before being
+believed -- frame 0 matched a link register known independently, frame 1 is a
+real return address after a vtable dispatch whose shape matches the callee, and
+the outermost frame (0x82612d88) sits just past the image entry point
+0x82612bf0, which is where a thread genuinely begins.
+
+ALSO FOUND, unrelated but worth having: the title queries XConfig category 3
+setting 2 with a FOUR-BYTE buffer. The previous note guesses this is
+XCONFIG_USER_TIME_ZONE_STD_NAME, which is a string -- so either that
+identification or the numbering behind it is wrong. Do not implement it from
+the guess.
+
+### Note (2026-07-29)
+IT IS NOT THE SAVE PATH. THE TITLE OF THIS ENTRY IS WRONG.
+
+The archive doing the serialisation was dumped: at +4 it holds 0x176 (=374,
+a UE3 package FILE VERSION) and its +20 "is saving" flag is 0. This is UE3
+PACKAGE deserialisation reading an FString, on a LOADING archive -- not a save
+being written. The only thing tying it to saves was that the content mount is
+the previous line in the log, and adjacency is not ownership. That is the SAME
+mistake this project already made once, identifying a movie by what sat next to
+it in the log.
+
+What is genuinely established, and it is a lot:
+  - the length is READ OUT OF the archive, so the bytes we feed it are wrong.
+    This is ours, not the title's.
+  - the title SEGFAULTS on the failed allocation (exit 139), so this is fatal,
+    not cosmetic.
+  - no NtReadFile happens between the mount and the failure, so the archive is
+    reading memory that was filled earlier, not streaming from a file.
+
+TWO MORE EXPLANATIONS ELIMINATED THIS SESSION, both tested rather than argued:
+
+  - "We tell the title a save exists when the directory is empty, so it
+    deserialises a buffer nothing filled." XamContentCreateEx did have exactly
+    that bug -- `existed` tested for the DIRECTORY, which the runtime itself
+    creates on the first write, so every later OPEN_EXISTING succeeded against
+    an empty save. FIXED (content now exists only if it holds a non-empty file,
+    and the mount correctly reports "new" twice). The 2.6 GB request is
+    UNCHANGED. Kept because it is right, not because it helped.
+
+  - "WarGame_p.xxx is truncated -- 32768 bytes exactly, and the read was SHORT
+    (32768 of 131072 requested)." The header parses cleanly: tag 0x9E2A83C1,
+    version 374, FolderName "None", NameCount 183 at offset 97, imports at 5656
+    and exports at 6552 -- all well inside 32768. Every .xxx in the extraction
+    is a multiple of 32768, so the extractor pads rather than truncates and the
+    short read is just the file ending. Not it.
+
+WHERE TO GO NEXT, and NOT one level deeper on the same thread: the archive
+object at +0 carries vtable 0x8209e110 and has no buffer pointer in its first
+64 bytes, so it is a wrapper and the real reader is the object behind it.
+Identify the class from that vtable and find its buffer; the question "which
+bytes, from which file, at which offset" is still unanswered and is the only
+one that matters. Everything above it in the chain is now known.
+
+RENAME THIS ENTRY when the owner is confirmed. Leaving "on the save path" in the
+title would send the next session down the same wrong road this one started on.
