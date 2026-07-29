@@ -420,3 +420,52 @@ and its 'LoadChapter=%i' parse succeeds, (3) the return of the virtual at
 
 DO NOT add a 'skip the deserialise if the array is empty' guard. That is a
 bandaid over an unexplained state, and the state is now nearly explained.
+
+### Note (2026-07-29)
+THE CHAIN IS COMPLETE. THE BLOB IS EMPTY BECAUSE ITS SOURCE IS EMPTY.
+
+Measured this run, not inferred:
+
+  [probe] FString deserialise #1: archive array is EMPTY (0 bytes at 0x0)
+  [probe]   the global carrier at 0x82bfb36c is EMPTY (0 bytes at 0x0)
+          -- this is what gets copied into the object before the read
+
+THE MECHANISM, end to end, every step read from the recompiled code:
+
+  1. sub_82207CC8 (a Kismet SequenceOp) sets the pending flag at 0x82BFAD3C on
+     its FIRST TICK, unconditionally, with no check that any data exists.
+  2. The deferred dispatcher sub_821B43F8 sees the flag on message 48 and calls
+     sub_821B4620.
+  3. sub_821B4620 calls a virtual; if it returns ZERO (guest 0x821B4928:
+     ) it copies the GLOBAL TArray at 0x82BFB36C into
+     object+420 via sub_821B5C90.
+  4. That global is EMPTY, so the copy faithfully produces an empty array.
+  5. The archive then reads through a null data pointer into low guest memory,
+     which is mapped (the raw physical alias), and gets whatever is there.
+
+So nothing is corrupt anywhere. Each step does exactly what it should with the
+input it is given, and the input is empty.
+
+RULED OUT BY MEASUREMENT: sub_821BA838, which builds a SAVING archive over the
+same object+420 and was the obvious candidate for the filler, IS NEVER CALLED.
+A probe on it produced no output across a full run while a sibling probe on the
+same path fired four times, so the seam works and the absence is real. It has no
+code references in the image (find_addr_refs) and appears as a data word in a
+vtable at 0x8209F6A8 -- a virtual that is simply never invoked here.
+
+WHAT FILLS THE CARRIER: sub_82207E98, the Kismet op that parses
+'LoadChapter=%i', copies object+420 INTO the global (guest 0x82208034:
+). So the carrier is
+written when a chapter load is requested and read back after the map change.
+
+THE OPEN QUESTION, and it is now a sharp one: on this run the title reaches the
+restore with an EMPTY carrier, which means the chapter-load op never ran, or ran
+without state to carry. Two candidates worth one run each:
+  (a) the title expects a 'LoadChapter=N' option in its launch data / URL and we
+      supply none (GEARS_CMDLINE exists and is handed over as launch data);
+  (b) the scripted input reaches the level by a route that skips the op.
+Probe sub_82207E98 for entry and for its parse result to tell these apart.
+
+DO NOT add a guard that skips the deserialise when the array is empty. The array
+being empty is not the defect -- it is the faithful consequence of a carrier
+that was never filled, and guarding it would hide which of (a) or (b) is true.
