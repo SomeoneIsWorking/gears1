@@ -1,7 +1,7 @@
 ---
 id: 45
 title: The title asks for 2.6 GB immediately after mounting its save content
-status: resolved
+status: open
 symptom: out of guest heap 0x40000000: wanted 0x9f000000 bytes, right after 'content default_checkpoint_sav mounted as save:'; the allocation fails and the title carries on
 tags: saves,content,memory,port
 created: 2026-07-29
@@ -340,3 +340,43 @@ VERIFIED BY A SINGLE-VARIABLE A/B, both directions:
 WHY IT WAS MISSED: every step of the allocator chain was measured correctly and none of them was the cause. The cause was a dialog refused sixty seconds earlier and four subsystems away. Refusing the selector looked locally safe -- it sits with the other system dialogs, which genuinely have no answer here -- but it is the ONE dialog a PC port can always answer, because a PC has exactly one place saves go.
 
 THE LESSON, and the reason this entry ran for several sessions: the bug was not in the chain that produced the number. It was a service that was never implemented, and it only became reachable once the surrounding chain was ported far enough for the title to get there. Chasing the symptom down four levels could not have found it; porting the chain did.
+
+### Reopened (2026-07-29)
+CORRECTION TO THE RESOLUTION ABOVE. I OVERSTATED IT.
+
+The claim was 'verified by a single-variable A/B, both directions'. That A/B was CONFOUNDED and I should not have called it single-variable.
+
+Answering the device selector CHANGES THE MENU FLOW: the 'no storage device' dialog stops appearing, so the timed input script that walked the title into the campaign no longer matches the menus. In the selector-ON arm the title never reached the campaign at all -- it idled in a menu. 'Survived 400 s and rendered 11640 frames' was therefore measuring a title sitting still, not a bug that was fixed. Re-running with a script corrected for the new flow made the title reach the checkpoint again, and it SEGFAULTS THERE.
+
+A timed script cannot produce a clean A/B for this change at all, because the change alters the navigation the script depends on. That is a property of the instrument, not of the fix.
+
+WHAT SURVIVES THE CORRECTION, stated at the strength the evidence actually supports:
+  - on a run that DOES reach the checkpoint mount, the 2.6 GB request is now ABSENT (0 occurrences) where it was previously present every time. Same milestone reached, allocation gone. That is real evidence the device selector removed this specific failure.
+  - it is NOT proof, because the two runs differ in more than one way.
+
+WHAT IS DEFINITELY NOT FIXED: the title still segfaults at the checkpoint, now WITHOUT the oversized allocation. So this entry's symptom is gone and a different failure at the same point is not. Leaving this open until the remaining crash at the checkpoint is identified, because closing it would tell the next session the save path works when it does not.
+
+The device selector implementation stays regardless: refusing a dialog a PC can always answer was wrong on its own merits.
+
+### Note (2026-07-29)
+SECOND CORRECTION, AND THE IMPORTANT ONE: THE DEVICE SELECTOR DID NOT FIX THIS.
+
+Measured directly rather than inferred. At the deserialisation the archive's byte array is STILL EMPTY -- 0 bytes, data pointer 0 -- on every single call, exactly as before. Nothing filled it. What changed is what LOW GUEST MEMORY happens to contain:
+
+  before the selector: guest address 4 held 0xb0800000  -> abs, x2 -> 0x9f000000 -> 2.6 GB -> refused -> segfault
+  after  the selector: guest address 4 holds 0x00000000 -> a zero length -> an empty string -> no allocation at all
+
+So the oversized request vanished because the garbage became benign, not because the data arrived. Answering the selector changes the title's allocation pattern, which changes what lands in physical page 0, which is what the null read returns. That is luck, and it is exactly the kind of change that makes a symptom disappear without touching its cause.
+
+THE ROOT CAUSE IS UNCHANGED AND STILL THE SAME ONE:
+  an FArchive over an EMPTY byte array, read by a Serialize with no bounds
+  check, through a null pointer, into a null page that is MAPPED (because
+  kPhysicalAliases includes the raw physical window at 0x00000000).
+
+On the console that read would fault, which means the array is NEVER empty there -- so the real defect is that this runtime drives the title into deserialising data it was never given.
+
+The title still segfaults at the checkpoint, now in sub_824961D0: an indirect call through vtable slot 52 of an object at r24+1376 whose 'vtable' pointer is a HEAP address (0x42babe80), not an image one. Same object graph, half-built from the same empty deserialisation.
+
+WHAT I GOT WRONG AND WHY IT MATTERS: I claimed a single-variable A/B proved the fix. It did not -- answering the selector changes the menu flow, so the timed input script no longer navigates the same path, and the two arms were never running the same code. Then even the weaker claim ('same milestone reached, allocation gone') turned out to be measuring memory luck. Two levels of over-claiming on the same change.
+
+THE NEXT STEP IS UNCHANGED FROM BEFORE THE DETOUR: find what sets the pending-data flag at 0x82BFAD3C+0 (it is +44 of the struct at 0x82BFAD10, filled at 0x821FB4D8) while the buffer behind it is empty. That is the service that is missing.

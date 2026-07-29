@@ -390,7 +390,11 @@ void __imp__XamInputSetState(PPCContext& __restrict ctx, uint8_t*)
 // describing a machine this port does not run on.
 namespace
 {
-constexpr uint32_t kDeviceId = 1; // one device, always present
+// ONE source of truth for which device this is. It was duplicated here and in
+// xam_content.h, both spelling 1 -- and a title that enumerates content on one
+// device then opens it on another finds nothing, so the two drifting apart
+// would be a silent and very confusing failure.
+constexpr uint32_t kDeviceId = gears::kContentDeviceId;
 
 // XDEVICE_DATA: id, type, then two 64-bit byte counts and a friendly name.
 constexpr uint32_t kDeviceTypeHdd = 1;
