@@ -12,6 +12,7 @@
 #include "guest_filesystem.h"
 #include "user_profile.h"
 #include "guest_thread.h"
+#include "fatal_exit.h"
 
 namespace gears { bool CommitDeviceWindow(GuestMemory& memory); }
 #include "wait_probe.h"
@@ -180,6 +181,34 @@ int main(int argc, char* argv[])
     _xstart(ctx, memory.Base());
     lucent::info("boot", "guest entry point returned");
 
-    memory.Release();
-    return EXIT_SUCCESS;
+    // NOT `memory.Release(); return EXIT_SUCCESS;`, which is what stood here.
+    //
+    // The guest's entry point returning does not mean the process is quiet.
+    // Every thread ExCreateThread made is DETACHED (kernel_thread.cpp), and so
+    // are the three the runtime drives itself: the tick publisher
+    // (guest_thread.cpp, which writes into guest memory every millisecond), the
+    // timer scheduler (kernel_timer.cpp) and the stall detector
+    // (wait_probe.cpp). Nothing joins any of them. So the old ending did two
+    // things underneath about twenty live threads:
+    //
+    //   - munmap'd the whole guest address space (GuestMemory::Release), after
+    //     which the tick publisher's next store, and any guest code still
+    //     running, writes to unmapped memory;
+    //   - returned from main, which destroys `memory` -- a LOCAL that
+    //     gears::Memory() hands out by reference -- and then runs every
+    //     function-local and namespace-scope static: the two heaps
+    //     (guest_heap.cpp InitialiseHeaps), the critical-section and spin-lock
+    //     tables, the handle table, the open-file table.
+    //
+    // That second half is precisely the failure fatal_exit.h was written for --
+    // ASan caught a heap-use-after-free in HostLockFor on the audio pump,
+    // freed by ~unordered_map from __run_exit_handlers -- except that file only
+    // fixed the KeBugCheck path. This one is the normal way a run ends, so it
+    // is the more reachable of the two.
+    //
+    // There is no correct teardown to write instead: a detached thread executing
+    // recompiled guest code cannot be asked to stop, and the console's own
+    // behaviour when the entry point returns is that the process ends. So it
+    // ends here, the same way, running no destructors.
+    gears::FatalExit(EXIT_SUCCESS);
 }
