@@ -469,3 +469,49 @@ Probe sub_82207E98 for entry and for its parse result to tell these apart.
 DO NOT add a guard that skips the deserialise when the array is empty. The array
 being empty is not the defect -- it is the faithful consequence of a carrier
 that was never filled, and guarding it would hide which of (a) or (b) is true.
+
+### Note (2026-07-29)
+CORRECTION, AND IT INVALIDATES THE PREVIOUS NOTE. THE ARRAY IS NOT EMPTY AT THE CRASH -- MY PROBE WAS CAPPED AND NEVER LOOKED.
+
+The deserialise probe reported only its first FOUR calls. There are 78,278 in a
+run. So every 'the archive array is EMPTY' line in this entry describes the
+first four calls, which happen early, before anything fills the carrier, and are
+harmless. The instrument had stopped looking long before the interesting one.
+
+That is the same blind-detector failure this session has now hit four times, and
+this one was in code I wrote, in the probe I was using to reason about this very
+bug. 'No populated arrays observed' was a conclusion the instrument could not
+have contradicted.
+
+WITH THE CAP REMOVED, the state AT THE CRASH is:
+
+    FString deserialise #78278: archive array is POPULATED
+        (2147483648 bytes at 0x900006b0);
+        guest address 4 currently holds 0xb0800000
+
+2147483648 is 0x80000000 -- not a plausible byte count, and 0x900006b0 is not a
+valid guest heap or physical address. So the array DESCRIPTOR is corrupt, not
+absent, and the title is looping over it: 78,278 deserialises in one run is a
+runaway, not a single failed read.
+
+ALSO CORRECTED: the earlier claim that the carrier at 0x82BFB36C is empty and
+the LoadChapter op never runs. Both are false. Measured ordering in one run:
+
+    line  63-69   four deserialises, carrier EMPTY, harmless
+    line 201-203  THE LoadChapter OP RUNS: carrier EMPTY -> POPULATED,
+                  385 bytes at 0x434f1f80
+    line 206      content mounted 'new' (the save is created)
+    line 269-270  the startup Kismet op runs; carrier is POPULATED
+    line 273      content mounted 'existing' -- the restore path
+    line 274      core dump
+
+385 bytes is exactly the size of D:\WarGame\Checkpoints\chapter37.sav, which
+the runtime reads earlier. So the carrier holds real checkpoint bytes.
+
+THE QUESTION IS NOW A DATA-INTERPRETATION ONE, which is much better than
+'why is it empty': 385 valid bytes go in, and a descriptor claiming 2^31
+elements at an impossible address comes out. Either those bytes are not what the
+title expects at that offset, or the archive's position/endianness is off, or
+what we hand back for that file differs from the console's. The next step is to
+dump the 385 bytes and hand-decode the FString/TArray headers the title expects,
+against the deserialise sequence.
