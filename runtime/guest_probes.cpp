@@ -21,7 +21,9 @@
 #include "import_stub.h"
 
 #include <atomic>
+#include <map>
 #include <mutex>
+#include <set>
 #include <unordered_map>
 #include <string>
 
@@ -541,6 +543,24 @@ void NoteRingThread(const char* which, std::string& slot, std::atomic<uint32_t>&
 PPC_FUNC(sub_8221CBA8)
 {
     NoteRingThread("the render-ring allocator", g_producerThreadName, g_producerThreads);
+
+    // WHICH CALL SITE, per thread. Two producers on a ring with a non-atomic
+    // commit is a lost-update race; whether it is OUR bug depends on whether the
+    // rendering thread is SUPPOSED to enqueue here, and the caller identifies
+    // that. Recorded as a set so a hot path cannot flood the log.
+    {
+        const char* rawName = gears::GuestThreadName();
+        const std::string name = rawName ? rawName : "?";
+        const uint32_t from = uint32_t(ctx.lr);
+        static std::mutex sitesMutex;
+        static std::map<std::string, std::set<uint32_t>> sites;
+        std::lock_guard<std::mutex> guard(sitesMutex);
+        auto& forThread = sites[name];
+        if (forThread.insert(from).second && forThread.size() <= 12)
+            lucent::info("ring", "producer '{}' enqueues from {:#x} (distinct"
+                " call site {} for this thread)", name, from, forThread.size());
+    }
+
     __imp__sub_8221CBA8(ctx, base);
 }
 

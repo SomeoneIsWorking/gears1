@@ -879,3 +879,29 @@ enqueue from its own thread.
 
 Do NOT add locking around the guest's commit. If the second producer is ours,
 the fix is to stop producing from that thread.
+
+### Note (2026-07-29)
+THE RENDERING THREAD HAS EXACTLY ONE PRODUCER CALL SITE.
+
+Measured by logging the link register at the allocator per thread, as a set:
+
+    producer 'host'    -- 12+ distinct call sites (0x824452cc, 0x8221bf94,
+                          0x8257a5e0, 0x82453ff4, 0x8241c5d4, 0x8257a820,
+                          0x82445454, 0x82546448, 0x82546648, 0x8221c1f8,
+                          0x8258a798, 0x824a40f4, ...)
+    producer 'guest-7' -- EXACTLY ONE: 0x82327d4c
+
+That asymmetry is the useful part. The game thread enqueues from everywhere, as
+expected; the rendering thread enqueues from a single place, inside
+sub_82327BC8, reserving 112 bytes from the ring (li r5,112, base 0x82C0CB24),
+behind the usual GIsThreadedRendering test.
+
+sub_82327BC8 has three direct callers -- sub_82181F28, sub_821836E8,
+sub_8218A008 -- and appears once as a data word at 0x82142A00, i.e. in a table,
+so it is also reachable indirectly.
+
+WHAT THIS DOES NOT YET SETTLE: whether those callers legitimately run on the
+rendering thread (UE3 does enqueue from render commands in places) or whether
+this port runs that code on the wrong thread. One call site is a small enough
+target to answer by reading the three callers' call graphs, which is in
+progress.

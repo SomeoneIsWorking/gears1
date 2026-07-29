@@ -634,3 +634,23 @@ would not, the difference is in a SIZE we supply, not in the allocator.
 NEXT: dump +1376 and +1396 from the core at the fault to confirm the guard state
 directly rather than by inference, and find which of the six stores put the dead
 pointer there.
+
+### Note (2026-07-29)
+THE GUARD STATE IS NOW MEASURED, NOT INFERRED.
+
+From the core at the fault:
+
+    holder      = 0x41c94e00
+    cache +1376 = 42babc40      <- the freed pool block
+    guard +1396 = 00000000      <- zero, which is the 'use the cache' branch
+
+So the title takes the cached path because +1396 is zero, and the cached pointer
+is dead. Nothing invalidated it. That is the defect in one line: a cache whose
+invalidator either does not exist on this path or did not run.
+
+The next question is narrow and answerable: does anything ever write a non-zero
++1396 on THIS object, and is it supposed to run before the free? The only
+candidate writer found so far (sub_82496AE0) stores a POINTER there rather than
+a flag, so +1396 may be a selector rather than a validity bit -- in which case
+the invalidation lives elsewhere and the search is for whoever should clear
++1376 when the block is released.
