@@ -30,8 +30,28 @@ updated: 2026-07-29
 > - The `LoadChapter` op DOES run and DOES fill the carrier with 385 real bytes.
 >   The carrier was never the problem.
 >
-> **So: a stale cache that nothing invalidates.** The open question is who should
-> clear `+1376` when the block is released, or what `+1396` really selects.
+> **So: a stale cache that nothing invalidates — and it is now measured end to
+> end.** A probe over the pool's free, checking every live holder's cache, finds
+> the object is released WHILE STILL CACHED **156 times in a single run**, and
+> the last one is the crash:
+>
+> ```
+> FREEING 0x42babc40 WHILE IT IS STILL CACHED at holder 0x41c94e00+1376
+>   (occurrence 156)
+> ```
+>
+> — exactly the object and holder gdb reports at the fault. The title survives
+> the first 155 because the freed block usually still *looks* like the old
+> object; it dies when the block has been reused and its first word is no longer
+> a vtable.
+>
+> `sub_824961D0` takes the holder in **r3** (`mr r24,r3`), and its prologue is
+> `lwz r11,1376(r24) ; cmplwi 0 ; bne` — the cache is used whenever it is merely
+> NON-NULL. There is no validity check, and nothing nulls the field on free.
+>
+> The open question is now narrow: is that free legitimate? The pool is guest
+> code, so it behaves as on console GIVEN THE SAME SIZES — which points at a size
+> we supply rather than at the allocator.
 >
 > **Everything below is the investigation trail, oldest first, and several early
 > notes are FALSE.** They are kept because the dead ends are worth knowing, not
@@ -689,3 +709,41 @@ candidate writer found so far (sub_82496AE0) stores a POINTER there rather than
 a flag, so +1396 may be a selector rather than a validity bit -- in which case
 the invalidation lives elsewhere and the search is for whoever should clear
 +1376 when the block is released.
+
+### Note (2026-07-29)
+MEASURED END TO END: THE OBJECT IS FREED WHILE STILL CACHED, 156 TIMES A RUN.
+
+A probe on the pool's free (sub_822153F0) that checks every live holder's
++1376 against the address being released:
+
+  FREEING 0x42bad200 ... at holder 0x41727800+1376 (occurrence 155)
+  FREEING 0x42babc40 ... at holder 0x41c94e00+1376 (occurrence 156)
+
+Occurrence 156 is exactly the object and exactly the holder that gdb reports at
+the fault. So the crash is the 156th instance of a thing that happens all run:
+the title caches an object at holder+1376, the pool releases it, and NOTHING
+nulls the field.
+
+WHY THE FIRST 155 ARE SURVIVED: a freed pool block usually still contains the
+old object's bytes, so the vtable read happens to work. The run dies when the
+block has been REUSED and its first word is a free-list next pointer instead --
+which is precisely the state the core file showed (head of a 214-node list).
+
+HOW THE HOLDER IS OBTAINED, since an earlier probe got this wrong: sub_824961D0
+takes the holder in r3 and does  immediately. r24 at ENTRY is still
+the caller's value -- reading it there produced 0x470075 and a null vtable,
+which was nonsense. r3 at entry is correct.
+
+AND THE PROLOGUE SHOWS THERE IS NO VALIDITY CHECK:
+    lwz r11,1376(r24) ; cmplwi cr6,r11,0 ; bne cr6,<use it>
+The cache is used whenever it is merely NON-NULL.
+
+INSTRUMENT NOTE, and it is the reason this was found at all: the first version
+of this probe capped at 'first 6 occurrences' and reported events 1-6 -- all
+early, all survived, none the crash. Capping the BORING case hid the only one
+that mattered. It now counts every occurrence and reports by novelty, and the
+occurrence number goes out with each line so elision is visible.
+
+REMAINING QUESTION, now narrow: is that free legitimate? The pool is guest code
+and behaves as on console given the same inputs, so if the title releases this
+block where the console would not, the difference is in a SIZE we supply.
