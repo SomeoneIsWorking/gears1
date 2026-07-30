@@ -1004,3 +1004,40 @@ gamertag truncation) is doing its job.
 WHAT IT DOES NOT ESTABLISH: that a save can be LOADED. No save has ever been read
 back into the title, because the restore path is where this entry's crash lives.
 Writing is verified; reading is untested and blocked.
+
+### Note (2026-07-30)
+TWO NATIVE FIXES ATTEMPTED, BOTH FAILED, AND THE SECOND FAILURE POINTS SOMEWHERE NEW.
+
+The framing is right and stays: this is a PORT, so 'the title's code races' is not
+an end state -- we own the behaviour. What was wrong was WHICH invariant to own.
+
+ATTEMPT 1 -- clear the reference. On the pool free, null any holder+1376 that
+points at the block being released. The stated reasoning was that freeing must
+clear references to it, and that the title would then take a create-a-new-one
+path. IT DOES NOT. Measured: the crash moved one instruction earlier with r3 = 0.
+The prologue's non-null test is a DIFFERENT decision point; the site that faults
+reads +1376 and dereferences it unconditionally, guarded only by the +1396
+selector. I asserted the create-path without checking for it -- a use-after-free
+became a null dereference, which is not progress.
+
+ATTEMPT 2 -- keep the block alive. Skip the free when the block is still cached,
+accepting a bounded leak (156 per run) against a guaranteed crash. The hook
+engages and blocks are kept, and the crash is UNCHANGED at the same frame count.
+
+WHY ATTEMPT 2 PROBABLY FAILED, from the fault state: the HOLDER is 0x42b40940 --
+itself in the pool's 0x42b range, alongside the freed objects, and it differs on
+every run. So the holder is a POOL ALLOCATION too, and the dangling pointer may be
+the holder rather than the object it caches. If holder+1376 is being read out of
+memory that has been recycled, then protecting the cached object cannot possibly
+help, and every measurement built on 'the object at +1376 is stale' has been
+looking one level too deep.
+
+STATE OF THE TREE: both interventions are REVERTED. The detection stays, and the
+source carries the reasons so neither is rebuilt. Leaving a leak in place for no
+measured benefit would be worse than the crash.
+
+NEXT, and it is a different question from the last several: establish whether the
+HOLDER is freed while still in use, using the same technique that worked for the
+object -- watch the holder address across the pool free. If it is, this entry has
+been chasing the wrong pointer since the core-file analysis, and that analysis
+needs re-reading with the holder as the suspect.
