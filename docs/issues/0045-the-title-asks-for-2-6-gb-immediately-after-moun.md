@@ -1349,3 +1349,158 @@ where hardware could -- a platform contract, not a sleep.
 ALSO STILL UNMEASURED: the dynamic history of the guard at +1396. The 11 writers
 of +1376 were classified; the writers of +1396 never were. That is the one word
 in this mechanism whose behaviour nobody has observed.
+
+### Note (2026-07-30)
+ROOT CAUSE FOUND, END TO END, AND IT IS NOT A RACE. THE OBJECT IS CREATED, DELETED AND USED INSIDE ONE CALL ON ONE THREAD.
+
+THE CLASSES, read from the image, not inferred from the crash:
+  sub_824961D0 = ULinkerLoad::CreateLoader().  r3/r24 = the ULinkerLoad.
+    +0x0cc/+0x0d0  ULinker::Filename (FString)
+    +0x14c         ULinker::LoadFlags (bit0 = LOAD_SeekFree)
+    +0x0e4/+0x0ec  FArchive::ArVer / ArLicenseeVer (0x82496a20 stores 374)
+    +0x560 (1376)  ULinkerLoad::Loader (FArchive*)  -- THE MEMO
+    +0x574 (1396)  bHasSerializedPackageFileSummary -- THE GUARD
+    +0x584/+0x588  bTimeLimitExceeded / IsTimeLimitExceededCallCount
+  sub_82496AE0 = ULinkerLoad::SerializePackageFileSummary().
+  sub_8242C098 = FArchiveAsync::FArchiveAsync(const TCHAR*).
+  FArchive vtable slots: 1 Serialize, 12 Tell, 13 TotalSize (+0x34), 15 Seek,
+  18 Precache (+0x48), 19 SetCompressionMap. Derived from sub_82496AE0's own
+  use of them (Tell -> delete -> new FArchiveAsync -> Seek(Tell) ->
+  SetCompressionMap is verbatim UE3's PKG_StoreCompressed fallback).
+
+WHAT +1396 IS (the question this entry asked): bHasSerializedPackageFileSummary,
+a BOOL. It is written in ONE place, 0x82496fbc `stw r24,0x574(r31)`, at the very
+end of sub_82496AE0, and r24 there is the CONSTANT 1 (`li r24,1` at 0x82496cbc,
+never reassigned). It is the early-out at the top of that same function
+(0x82496afc). Meaning: "the package header has already been read through this
+Loader". While it is 0, CreateLoader precaches the first 128 KB:
+    82496a4c lwz r11,0x574(r24) ; bne -> skip
+    82496a58 lwz r3,0x560(r24)  ; 82496a60 lwz r11,0x34(r11) ; TotalSize
+    82496a6c cmpw r3,0x20000 / clamp ; 82496a88 lwz r11,0x48(r11) ; Precache(0,n)
+CORRECTION TO AN EARLIER NOTE IN THIS ENTRY: "sub_82496AE0 stores a POINTER
+(r24) rather than a flag, which suggests +1396 is a SELECTOR" is FALSE. r24 is
+the literal 1. +1396 is not a validity bit, not an in-flight flag, and the port
+is not missing any path that sets it -- in the crashing case the summary
+genuinely has not been read yet, which is correct.
+
+THE MECHANISM, every step measured or read:
+
+ 1. The checkpoint restore hands UGameEngine::PrepareMapChange (sub_82426D98)
+    a one-element FName list whose entry is index 0 number 0 -- NAME_None.
+      [linker] PrepareMapChange #1: 1 level name(s) at 0x42ee4880
+      [linker]   level[0] FName index 0 number 0
+ 2. PrepareMapChange does FName::ToString (0x82426fa0) and at 0x82426fd4 calls
+    UObject::LoadPackageAsync with it. There is NO FindPackageFile check on this
+    path; the one at 0x82426f18 guards only the "<name>_LOC" companion load.
+      [linker] LoadPackageAsync #1: ... len 5 -> 'None'
+ 3. In the async tick, sub_8242A830 asks the package cache and IGNORES THE
+    ANSWER:
+      8242a8c0 lwz r3,-0x7e20(r11)   ; GPackageFileCache (0x82BE81E0)
+      8242a8c8 lwz r11,8(r11)        ; slot 2 = FindPackageFile
+      8242a8d0 bctrl                 ; RESULT NEVER TESTED
+      8242a8d8 lwz r10,0x54(r1)      ; out FString length
+      8242a8e0 cmpwi cr6,r10,0
+      8242a8f0 andi. r5,r11,0x81     ; LoadFlags = 0x81
+      8242a8f4 bne cr6,0x8242a8fc
+      8242a8f8 mr r4,r29             ; <- the EMPTY-STRING constant
+      8242a900 bl 0x82495ea0         ; CreateLinkerAsync(parent, "", 0x81)
+ 4. So ULinkerLoad::Filename is "" and LoadFlags is 0x81 (LOAD_SeekFree set):
+      [linker] ULinkerLoad 0x41c84e00: Filename '<empty>' (0 chars),
+               LoadFlags 0x81, Loader(+1376) 0x42ba0cc0, +1396 0x0, ArVer 374
+ 5. CreateLoader's seek-free branch news an FArchiveAsync(""). Its ctor tail:
+      8242c144 lwz r3,-0x7e44(r11)  ; GFileManager
+      8242c14c lwz r11,0xc(r10)     ; slot 3 = FileSize
+      8242c15c stw r3,0x78(r31)     ; FileSize
+      8242c164 blt cr6,0x8242c174
+      8242c168 stw r30,0x2c(r31)    ; r30=0 : ArIsError = FALSE
+      8242c174 stw r28,0x2c(r31)    ; r28=1 : ArIsError = TRUE
+    FileSize("") is -1, so ArIsError is set. MEASURED:
+      [linker] FArchiveAsync #3 at 0x42ba0cc0 FAILED TO OPEN '' (FileSize -1)
+      3 constructed, 1 with ArIsError.
+ 6. AND THE TITLE'S ERROR PATH IS ITSELF A USE-AFTER-FREE:
+      82496520 bl 0x8242c098     ; new FArchiveAsync
+      82496538 stw r3,0x560(r24) ; MEMOISED BEFORE THE ERROR IS CHECKED
+      8249653c lwz r11,0x2c(r3)  ; ArIsError
+      82496544 beq -> 0x824967e4 ; clean: carry on
+      82496550 lwz r11,0(r3) ; li r4,1 ; 82496560 bctrl   ; DELETE IT
+      82496564 ...Localize("Errors","OpenFailed")... report...
+      82496620 b 0x824967e4      ; AND FALL THROUGH to the shared tail
+    which is the tail at step 1 above: +1396 is 0, so it calls TotalSize()
+    through the pointer it just deleted. MEASURED, same object, same run:
+      THE CRASHING OBJECT 0x42ba0cc0 WAS DESTROYED with lr 0x82496564
+      the memoised Loader: its most recent pool event was a FREE
+      it entered CreateLoader 1 time(s); Loader was 0x0 at entry (CREATE path)
+    0x82496564 is the return address of the bctrl at 0x82496560 -- CreateLoader's
+    own open-failed branch. One call, one thread, no race.
+
+WHY THE FAKE VTABLE LOOKS LIKE A LIST NODE. The pool writes its freelist link
+into WORD 0 of the block it frees:
+      82215480 stw r10,4(r4)     ; word1 := run length (1 for a single free)
+      82215488 stw r10,0(r4)     ; word0 := old freelist head  <- THE LINK
+      82215490 stw r4,0x10(r11)  ; head := this block (LIFO)
+A 0xac request lands in the 192-byte size class (42 classes, "smallest >= n",
+via the byte-granular table at pool+0x1138 built in sub_82215648), and
+0x10000/192 = 341 blocks per page at stride 0xC0 -- which is exactly the
+0x42ba0fc0 -> 0x42ba1080 -> 0x42ba1140 chain in the fault dump. So the "vtable"
+was the freelist next pointer and slot 13 of it was another block's run counter.
+
+WHY THIS IS SAFE ON THE CONSOLE: the branch is DEAD THERE. It runs only when a
+package cannot be opened, and on a console with its disc the map is found. The
+use-after-free is a real bug in the retail title's error path -- memoise, delete,
+fall through -- that no console execution ever reaches. NOTHING IS MISSING FROM
+THIS PORT'S SYNCHRONISATION. The port reaches it because the port drives the
+title into async-loading NAME_None.
+
+FIVE THINGS THIS RETIRES, so nobody re-walks them:
+  - The cross-thread reading. The free is on the MAIN thread inside
+    sub_824961D0. The render-thread FDrawSceneCommand chain is unrelated: it
+    tears down FSceneRenderer and its view arrays unconditionally
+    (0x825550f0 `bl 0x8250b228` is not guarded by anything), constantly
+    recycling 192-byte-class blocks, which is why its addresses kept matching.
+  - "156/179 frees of a still-cached block per run": mostly coincidental
+    address matches from that recycling. The crash's own pair is the LAST
+    occurrence and its holder matches r24 exactly; the rest do not.
+  - The GPU/ring-latency hypothesis. All 12 frames of the render free chain were
+    read: not one loads a value the host writes. The only cross-thread compare
+    is the render-command ring at 0x82C0CB24, whose write pointer is advanced by
+    the GAME thread under lwsync (0x824452f4, 0x82445470); the runtime's ring
+    read-pointer writeback (vd_null_gpu.cpp) is a different object that no frame
+    in the chain reads. The only external-global load in the chain, 0x82BECBA0
+    at 0x825550c8, is a pointer stored into scene+0x98 and never compared.
+  - "The cached value is a live block at ENTRY every time" was uninformative,
+    not reassuring: a block re-issued to a different owner also has an
+    allocation as its last event -- and in the crashing case Loader was 0 at
+    entry, so that check never looked at the crashing pointer at all.
+  - Option A from the decision note (port-level mutual exclusion around render
+    Execute and the restore path) would have been wrong and would have hidden
+    this. It is off the table.
+
+THE CORRECT FIX IS UPSTREAM AND HAS NOTHING TO DO WITH LIFETIMES: make the
+checkpoint restore produce the real map name so PrepareMapChange receives a
+valid FName instead of None. SP_Prison_P.xxx IS PRESENT in the extraction
+(scratch/game/WarGame/CookedXenon/SP_Prison_P.xxx), and chapter37.sav decodes to
+"sp_prison_p", so the content is there and the name is simply never arriving.
+That points straight back at this entry's own unresolved deserialisation: the
+same runs still print
+  FString deserialise #78278: archive array is populated
+      (2147483648 bytes at 0x900006b0)
+-- an impossible descriptor (0x80000000 elements at a non-guest address). The
+FName comes out None because the FString it is built from comes out of that.
+That is the next step, and it is a data-interpretation question, not a lifetime
+one. DO NOT patch +1376, do not suppress the free, do not add a lock.
+
+INSTRUMENTS ADDED (runtime/guest_probes.cpp, runtime/guest_indirect_call.cpp):
+  - sub_8242C098 now reports ArIsError and FileSize per FArchiveAsync, with the
+    construction count as its denominator and the stated blind spot that only
+    LOAD_SeekFree packages reach that constructor.
+  - sub_824961D0 records, per ULinkerLoad, the memo value AT ENTRY -- the single
+    datum that separates "died between calls" from "died inside this call".
+  - the bad-indirect-call reporter now dumps the ULinkerLoad behind the crash
+    (Filename, LoadFlags, +1376, +1396, ArVer) when lr is inside sub_824961D0.
+  - sub_8242C180's destruction ring gained a per-address map, so the destroying
+    lr is found however long ago it happened.
+  - sub_82426D98 / sub_8242AC78 report the level-name list and the async load
+    request, which is what named NAME_None.
+  Three previously DEAD instruments (ReportArchiveLifetime, ReportLastFree,
+  ReportHolderSeam were defined and never called) are now wired to the abort
+  path, which is the only exit this repro reaches.
