@@ -1504,3 +1504,66 @@ INSTRUMENTS ADDED (runtime/guest_probes.cpp, runtime/guest_indirect_call.cpp):
   Three previously DEAD instruments (ReportArchiveLifetime, ReportLastFree,
   ReportHolderSeam were defined and never called) are now wired to the abort
   path, which is the only exit this repro reaches.
+
+### Note (2026-07-30)
+THE WHOLE CHAIN, END TO END, AND IT STARTS AT THE FSTRING DESERIALISE.
+
+Traced from the crash back to the data. Every link measured or read out of the
+guest code, not inferred.
+
+  1. FString deserialise from the checkpoint archive returns EMPTY.
+     sub_8232B548 is FArchive& operator<<(FArchive&, FString&): r28 is the
+     archive (the load/save flag is at +20), the length is negated for UTF-16,
+     and there is a scan for characters above 255 to choose the encoding. It is
+     called three times in a row in sub_821B4620 filling FStrings at r1+200,
+     r1+184 and r1+136.
+
+  2. sub_821B4620 then picks a literal because the FString is empty:
+       lwz r11,140(r1)   ; the FString length -- ZERO
+       lwz r30,136(r1)   ; its data pointer -- also zero
+       mr  r4,r30 / mr r4,r28    ; empty length selects the constant instead
+     Nothing writes 136(r1) or 140(r1) between the zero-init block at line 655
+     and the read, except that deserialise. So the emptiness comes from step 1.
+
+  3. FName construction gets the empty string. MEASURED, with its denominator:
+       FName for the map change #1: string at 0x820e417c = '' (0 chars, EMPTY
+       STRING), find-mode r5=128 r7=1 -> INDEX 0x0  <- NAME_None
+       map-name probe: 1 FName construction(s) from the map-change site out of
+       60608 in the whole run
+     0x820e417c is in the IMAGE, so it is the empty-string literal, which
+     confirms the branch taken in step 2 rather than merely being consistent
+     with it. The 1-of-60608 is what makes the single line trustworthy: the
+     return-address filter caught exactly one call and reported the total it
+     filtered against.
+
+  4. PrepareMapChange receives that: 'level[0] FName index 0 number 0'.
+
+  5. LoadPackageAsync requests 'None' (len 5). The package cache cannot find it,
+     the result is discarded, and an empty filename reaches CreateLinkerAsync.
+
+  6. FArchiveAsync('') -> GFileManager->FileSize returns -1 -> ArIsError set.
+
+  7. ULinkerLoad::CreateLoader (sub_824961D0) has ALREADY memoised the loader at
+     +1376 before testing ArIsError, deletes it on the error branch, falls
+     through to the shared tail, and calls slot 13 (TotalSize) through the
+     deleted pointer. That is a genuine retail bug on a path a console with its
+     disc never executes.
+
+SO THE FIX IS AT STEP 1, and nowhere else. Everything from step 2 down is the
+title behaving exactly as it would on hardware given an empty name. There is
+nothing to fix in the lifetime, the pool, the threading or the GPU pipeline --
+all four of which this entry has chased at length.
+
+THIS ALSO EXPLAINS THE OLD ANOMALY nobody could place: the runs print 'FString
+deserialise #78278: archive array is populated (2147483648 bytes at 0x900006b0)'.
+2147483648 is 0x80000000 -- an int32 sign bit, i.e. a length field read as
+INT_MIN. A negative length means UTF-16 in this format, so a garbage length is
+read as an enormous wide string. That is the same deserialise, and it is the next
+thing to fix.
+
+WHAT WAS WRONG BEFORE, recorded so it is not re-derived: the cross-thread race
+reading, the GPU-latency reading, the 'holder is freed' reading and the 'safe by
+allocator timing' reading were all wrong. The 156 freed-while-cached events were
+mostly coincidental address matches, because the pool recycles 192-byte-class
+blocks constantly and word 0 of a freed block holds the freelist link -- which is
+also why the 'vtable chain' at stride 0xC0 looked like a vtable and was not.

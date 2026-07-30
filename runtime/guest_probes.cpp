@@ -1770,3 +1770,104 @@ PPC_FUNC(sub_8242AC78)
                   : "");
     __imp__sub_8242AC78(ctx, base);
 }
+
+// WHERE THE MAP NAME IS LOST.
+//
+// #45's crash is a retail bug on the package-open-failed path, and we reach it
+// because UGameEngine::PrepareMapChange receives a single level name whose FName
+// index is 0 -- NAME_None. The array it receives is built in sub_821B4620:
+//
+//   lwz  r11,140(r1)        ; pick which string to use
+//   cmpwi cr6,r11,0
+//   bne  cr6,0x821b4b64
+//   mr   r4,r28             ; ... or r30 on the other branch
+//   li   r7,1 ; li r6,1 ; li r5,0
+//   addi r3,r1,128          ; out FName
+//   bl   0x82364678         ; FName::FName(out, string, ...)
+//   ...
+//   ld   r11,128(r1)
+//   std  r11,0(r22)         ; the FName becomes element 0 of the array
+//
+// So either the string handed to the constructor is empty, or the constructor is
+// being asked to FIND rather than ADD and the name is not in the table yet. This
+// probe reads the string and the resulting index, which separates those two.
+//
+// FILTERED BY RETURN ADDRESS, because FName construction is one of the hottest
+// paths in the engine and an unfiltered log is useless. The filter is also the
+// thing most likely to make this print nothing, so the count of calls seen from
+// ANYWHERE is reported too: "0 from the map-change site, N from elsewhere" is a
+// measurement, while a bare silence would be indistinguishable from a probe that
+// never ran.
+extern "C" PPC_FUNC(__imp__sub_82364678);
+
+namespace
+{
+std::atomic<uint64_t> g_fnameCalls{0};
+std::atomic<uint64_t> g_fnameFromMapChange{0};
+} // namespace
+
+PPC_FUNC(sub_82364678)
+{
+    g_fnameCalls.fetch_add(1);
+
+    const uint32_t lr = uint32_t(ctx.lr);
+    const bool fromMapChange = lr >= 0x821B4620 && lr < 0x821B5000;
+    const uint32_t out = ctx.r3.u32;
+    const uint32_t stringAddress = ctx.r4.u32;
+
+    if (!fromMapChange)
+    {
+        __imp__sub_82364678(ctx, base);
+        return;
+    }
+
+    // Read the string the title is naming. TCHAR is UTF-16 on this console, so
+    // the characters are two bytes big-endian; a narrow string would show as
+    // interleaved NULs and is worth seeing rather than guessing about.
+    std::string text;
+    bool readable = uint64_t(stringAddress) + 2 < PPC_MEMORY_SIZE;
+    if (stringAddress != 0 && readable)
+    {
+        for (uint32_t i = 0; i < 64; ++i)
+        {
+            const uint32_t at = stringAddress + i * 2;
+            if (uint64_t(at) + 2 >= PPC_MEMORY_SIZE)
+                break;
+            const uint16_t unit = ByteSwap(*gears::Memory().Translate<uint16_t>(at));
+            if (unit == 0)
+                break;
+            text.push_back(unit < 0x80 ? char(unit) : '?');
+        }
+    }
+
+    __imp__sub_82364678(ctx, base);
+
+    const uint32_t index =
+        (out != 0 && uint64_t(out) + 4 < PPC_MEMORY_SIZE)
+            ? ByteSwap(*gears::Memory().Translate<uint32_t>(out))
+            : 0xFFFFFFFFu;
+
+    const uint64_t n = g_fnameFromMapChange.fetch_add(1) + 1;
+    lucent::error("linker", "FName for the map change #{}: string at {:#x} = '{}'"
+        " ({} chars{}), find-mode r5={} r6={} r7={} -> INDEX {:#x}{}",
+        n, stringAddress, text, text.size(),
+        stringAddress == 0 ? ", NULL POINTER"
+        : !readable       ? ", UNREADABLE ADDRESS"
+        : text.empty()    ? ", EMPTY STRING -- this is why the name is None"
+                          : "",
+        ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, index,
+        index == 0 ? "  <- NAME_None, so the package request will be 'None'" : "");
+}
+
+namespace gears
+{
+// Reported at the abort, so the zero case is never silent.
+void ReportMapNameProbe()
+{
+    lucent::error("linker", "map-name probe: {} FName construction(s) seen from"
+        " the map-change site out of {} in the whole run. A zero on the left with"
+        " a non-zero on the right means the return-address filter"
+        " (0x821B4620..0x821B5000) is wrong, NOT that the name is fine",
+        g_fnameFromMapChange.load(), g_fnameCalls.load());
+}
+} // namespace gears
