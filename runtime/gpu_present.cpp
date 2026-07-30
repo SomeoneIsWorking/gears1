@@ -136,6 +136,10 @@ struct Presenter
     // than assumed: if it is false the capture is simply unavailable, and a request
     // for one has to say so instead of writing nothing and looking like it worked.
     bool canCapturePresented = false;
+    // The last drawn frame blitted, so the same one is not blitted twice, and a
+    // one-shot note so the fast path announces itself once rather than every frame.
+    uint64_t lastBlittedFrame = 0;
+    bool announcedBlit = false;
     VkBuffer presentCapture = VK_NULL_HANDLE;
     VkDeviceMemory presentCaptureMem = VK_NULL_HANDLE;
     void* presentCaptureMapped = nullptr;
@@ -737,11 +741,54 @@ bool Presenter::PresentOne(uint32_t sequence)
     // frame is R8G8B8A8; the swapchain image is B8G8R8A8, so swap R/B on the way
     // in. When there is no guest frame, fall back to the synthetic hue sweep so
     // the present path is still exercised.
+    bool uploadedGuest = false;
+
+    // PREFER A BLIT FROM THE DRAWN IMAGE. When the draw path adopted this device it
+    // publishes the image it rendered into, already in TRANSFER_SRC_OPTIMAL and
+    // already waited on, so the frame can go straight to the swapchain -- no readback
+    // to host memory, no staging buffer, no per-pixel copy on the CPU.
+    //
+    // The red/blue swap the upload path below performs is NOT needed here: that swap
+    // exists because a CPU memcpy into a BGRA image is byte-order sensitive, whereas
+    // vkCmdBlitImage converts between formats component by component. If the colours
+    // come out swapped, this comment is wrong and GEARS_PRESENT_DUMP will show it.
+    {
+        gears::SharedFrameImage drawn;
+        if (gears::AcquireSharedFrameImage(drawn) &&
+            drawn.sequence != lastBlittedFrame &&
+            drawn.width == extent.width && drawn.height == extent.height)
+        {
+            VkImageBlit blit{};
+            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            blit.srcOffsets[1] = {int32_t(drawn.width), int32_t(drawn.height), 1};
+            blit.dstOffsets[1] = {int32_t(extent.width), int32_t(extent.height), 1};
+            vkCmdBlitImage(commands[slot],
+                drawn.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                images[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                1, &blit, VK_FILTER_NEAREST);
+            lastBlittedFrame = drawn.sequence;
+            uploadedGuest = true;
+            if (!announcedBlit)
+            {
+                announcedBlit = true;
+                // Precisely what is bypassed, and what is not. The staging
+                // buffer, the per-pixel CPU red/blue swap and the buffer-to-image
+                // upload are gone. The DRAW side still copies the frame into its own
+                // readback buffer, which now feeds only its diagnostics -- claiming
+                // otherwise would credit this change with a cost it has not removed.
+                lucent::info("present", "presenting the drawn image by BLIT on the"
+                    " shared device: the staging buffer, the CPU red/blue swap and"
+                    " the buffer-to-image upload are all bypassed (the draw side's"
+                    " own readback still runs, feeding its diagnostics)");
+            }
+        }
+    }
+
     const std::vector<uint8_t>& guest = gears::GuestFramePixels();
     const uint32_t gw = gears::GuestFrameWidth();
     const uint32_t gh = gears::GuestFrameHeight();
-    bool uploadedGuest = false;
-    if (!guest.empty() && gw == extent.width && gh == extent.height &&
+    if (!uploadedGuest && !guest.empty() && gw == extent.width && gh == extent.height &&
         EnsureGuestStaging(VkDeviceSize(guest.size())))
     {
         uint8_t* dst = static_cast<uint8_t*>(guestStagingMapped);
