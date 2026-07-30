@@ -1846,3 +1846,57 @@ has been removed now that it has named its target, as its own comment promised. 
 did two useful things before going: it identified sub_821B94D8, and it revealed
 that it fired ONCE while the gate ran TWICE, which is how the two-call-sites fact
 was found. Both are recorded above, so the hook has no reason to stay.
+
+### Note (2026-07-30)
+NtCreateFile IGNORED CreateDisposition. FIXED, AND IT IS NOT THIS BUG.
+
+A reasoning pass pointed at the host shim, and one of its claims is true and
+independently serious: __imp__NtCreateFile read r3, r5 and r6 and NEVER read r10,
+so CreateDisposition was ignored entirely. Its whole rule was "if the file is
+missing and the mount is writable, make it" -- right for a save being written,
+wrong for every read. A caller asking to OPEN AN EXISTING file for reading was
+answered with a newly created empty one and STATUS_SUCCESS: an honest failure
+turned into a success carrying no data, which is the most expensive shape a host
+shim can have, and precisely the class of defect this whole issue is made of.
+
+Fixed properly rather than at the call site: runtime/file_disposition.{h,cpp}
+implements the six NT dispositions as a pure function of (disposition, exists,
+writable), with 20 assertions written before the implementation. NtOpenFile now
+passes kFileOpen explicitly instead of delegating to NtCreateFile, because it has
+NO disposition argument -- its parameters are (handle, access, attributes, status,
+ShareAccess, OpenOptions) -- so reading r10 for it would have been reading rubbish.
+The Information field now reports FILE_CREATED / FILE_OVERWRITTEN / FILE_OPENED
+rather than always FILE_OPENED.
+
+MEASURED EFFECT ON THIS BUG: NONE, and the negative is trustworthy this time. The
+run logs the disposition on every open, so there is a denominator: 36 opens with
+FILE_OPEN, 2 with FILE_OPEN_IF, 1 with FILE_OVERWRITE_IF, and ZERO refusals. So
+the new rule was exercised 39 times and changed no outcome; the create-on-read lie
+was not being hit on this path. The save is still written (385 bytes) so nothing
+regressed. 16 test suites green.
+
+TWO INSTRUMENT FAILURES OF MINE, STACKED, and both worth recording:
+
+  1. My probe on the path builder sub_821B5DD8 reported "was NOT REACHED". IT IS
+     BLIND. sub_821B6800 and sub_821B5DD8 are in the SAME translation unit
+     (ppc_recomp.6.cpp) and clang folds intra-TU calls through the weak alias, so
+     the override is never entered. This project already documents that trap --
+     catalog #16, and the codemap entry "Why is my native override never entered?"
+     -- and I walked into it anyway. tools/prepare_overrides.py exists for it.
+     Nothing may be concluded about whether the builder ran.
+
+  2. An awk window I used to check for file opens near the gate silently matched
+     nothing, because I wrote the anchor with unescaped dots. Re-read raw, the
+     window genuinely holds no [fs] lines -- but I would have believed the empty
+     output either way.
+
+WHERE THAT LEAVES THE ANALYSIS, honestly. Read in full, sub_821B6800 can only
+return 0 by reaching li r30,0 at 0x821b6930, which is downstream of ReadFile
+succeeding, which requires CreateFile succeeding, which WOULD have logged an [fs]
+line. It returned 0 and nothing was logged. Those cannot both be true, so one of
+my premises is still wrong. The candidates: the CreateFile thunk at 0x82611e90
+fails inside the guest without ever reaching a syscall (a bogus path would do
+that), and GetLastError at 0x826124f8 then returns a stale 0 because nothing set
+it -- which would make a failed open return SUCCESS. That is testable and is the
+next step, with the override built through prepare_overrides.py so the probe can
+actually fire.

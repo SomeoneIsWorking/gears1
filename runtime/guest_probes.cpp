@@ -2113,3 +2113,78 @@ PPC_FUNC(sub_821B94D8)
         : "zero, so the caller should copy the carrier; if the array is still"
           " empty later, the COPY is what failed");
 }
+
+// WHERE THE SAVE-DEVICE CHECKPOINT LOAD GIVES UP.
+//
+// sub_821B6800 is the save-device loader that sub_821B5F30 calls, and whose
+// result becomes sub_821B94D8's return value on the literal path. Reading it
+// (guest 0x821B6800) it is a syscall sequence: XamContentCreateEx with the
+// overlapped form, XamGetOverlappedResult, then sub_821B5DD8 to BUILD THE PATH,
+// then CreateFile / GetFileSize / ReadFile. On failure of the open it returns
+// GetLastError; on a GetFileSize of -1 it returns a stale register.
+//
+// The measured behaviour is that it returns 0 -- success -- having populated
+// nothing, and that NO FILE IS EVER OPENED between the content mount and the
+// gate returning (verified with the fs debug channel ON, against hundreds of
+// logged opens elsewhere including "not found" ones). So it gives up, or
+// succeeds vacuously, BEFORE reaching CreateFile.
+//
+// This reports the return value and the path the builder produced. An empty path
+// would mean the builder is the problem; a good path with no open attempt would
+// mean it returned before getting there.
+extern "C" PPC_FUNC(__imp__sub_821B6800);
+extern "C" PPC_FUNC(__imp__sub_821B5DD8);
+
+namespace
+{
+std::atomic<uint64_t> g_saveLoaderCalls{0};
+uint32_t g_lastBuiltPathAddress = 0;
+} // namespace
+
+// The path builder, shared by the save WRITE and this read -- so whatever it
+// produces here is the same name the checkpoint was written under.
+PPC_FUNC(sub_821B5DD8)
+{
+    __imp__sub_821B5DD8(ctx, base);
+    g_lastBuiltPathAddress = ctx.r3.u32;
+}
+
+PPC_FUNC(sub_821B6800)
+{
+    const uint64_t n = g_saveLoaderCalls.fetch_add(1) + 1;
+    g_lastBuiltPathAddress = 0;
+
+    __imp__sub_821B6800(ctx, base);
+
+    if (n > 4)
+        return;
+
+    const uint32_t result = ctx.r3.u32;
+
+    // The built path, as narrow bytes: this builder writes into a global that
+    // starts life as "save:\" and has a name appended, so it is 8-bit here
+    // rather than UTF-16.
+    std::string path;
+    if (g_lastBuiltPathAddress != 0)
+    {
+        for (uint32_t i = 0; i < 64; ++i)
+        {
+            const uint32_t at = g_lastBuiltPathAddress + i;
+            if (uint64_t(at) + 1 >= PPC_MEMORY_SIZE)
+                break;
+            const char c = char(*gears::Memory().Translate<uint8_t>(at));
+            if (c == 0)
+                break;
+            path.push_back(c);
+        }
+    }
+
+    lucent::error("linker", "save-device checkpoint load #{}: RETURNED {:#x} ({});"
+        " the path builder {}",
+        n, result,
+        result == 0 ? "SUCCESS, so the caller believes a checkpoint was loaded"
+                    : "failure, which is what makes the caller copy the carrier",
+        g_lastBuiltPathAddress == 0
+            ? "was NOT REACHED, so it gave up before building a path at all"
+            : std::string("produced '") + path + "'");
+}

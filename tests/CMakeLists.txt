@@ -236,3 +236,14 @@ target_include_directories(test_guest_indirect_call PRIVATE
     "${THIRDPARTY_ROOT}/simde"
     ../extern/XenonRecomp/XenonUtils)
 add_test(NAME guest_indirect_call COMMAND test_guest_indirect_call)
+
+# NtCreateFile's CreateDisposition, which the runtime ignored entirely -- it never
+# read the argument, and answered a read-only open of a missing file with a newly
+# created empty one and STATUS_SUCCESS. Written before the fix. The dispositions
+# here are NT's, not the console's XCONTENT ones, which use different numbers for
+# different meanings.
+add_executable(test_file_disposition
+    test_file_disposition.cpp
+    ../runtime/file_disposition.cpp)
+target_include_directories(test_file_disposition PRIVATE ../runtime)
+add_test(NAME file_disposition COMMAND test_file_disposition)
