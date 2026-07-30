@@ -926,3 +926,49 @@ absence is real.
 
 CONCLUSION: the title does not suspend rendering around the restore, so there is
 no title-maintained flag to honour here. #45 cannot be closed this way.
+
+### Note (2026-07-30)
+THE DECISION, WRITTEN UP RATHER THAN QUIETLY TAKEN.
+
+Every mechanism with a port-side fix has been eliminated (five of them, each by
+measurement). Both remaining crashes are TITLE races. The engine maintains two
+flags that would have given a legitimate seam -- the ring's bIsWriting and a
+SuspendRendering flag -- and nothing reads either; the suspend commands never
+execute at all. So there is no title protocol left to complete, and that is what
+makes this a decision rather than a bug hunt.
+
+OPTION A -- PORT-LEVEL MUTUAL EXCLUSION.
+Hold a lock across render-command Execute and across the game thread's restore
+path, so the two threads cannot interleave where the title assumes they will not.
+  cost: serialises the two threads at a seam the title does not define, so it is
+        a lock we invent -- the thing this project's rules forbid. Loses real
+        parallelism, changes global timing (the audio pump is already rate
+        sensitive), and risks deadlock against the guest's own spins.
+  buys: probably both crashes, since #44 is plausibly downstream of #45.
+  verdict: NOT recommended as a first move. An invented lock that works is
+        indistinguishable from one that hides something, and we would never learn
+        which.
+
+OPTION B -- ACCEPT AND MOVE ON. (RECOMMENDED.)
+Record both as known title races, keep the instruments in the tree, and spend the
+next effort on subsystems that are missing rather than racy.
+  cost: the checkpoint RESTORE path stays broken, so load-a-save does not work.
+        Save WRITING does.
+  buys: the port keeps moving. Everything up to the restore now works, and the
+        crash is confined to one path reached only when a save already exists.
+  why it is not defeat: the two issues are characterised to the instruction, both
+        have live instruments, and #44 has a cheap test that only becomes
+        available once #45 moves. Nothing is lost by waiting; the evidence is
+        already written down.
+
+WHAT WOULD CHANGE THE ANSWER, so this is falsifiable rather than a shrug:
+  1. Console-side evidence that the pool defers reuse of freed blocks. That would
+     make the crash a consequence of OUR pool timing after all, and give a
+     legitimate fix.
+  2. Finding any reader of bIsWriting or 0x82BFA388 that the scanner missed --
+     that restores a title protocol to honour. The scanner's bound is stated:
+     lis+addi and lis+load/store in code, so a reader obtaining the address
+     another way is not excluded.
+  3. Evidence that the title never reaches the restore on a real console with a
+     fresh profile -- which would mean the port drives it somewhere it should not
+     go, and the fix is upstream in the flow rather than in the race.
