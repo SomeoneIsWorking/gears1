@@ -1076,3 +1076,40 @@ INSTRUMENT NOTE: the first run of this check reported 0 events from a STALE
 BINARY -- the build had failed and the run went ahead anyway because the commands
 were chained with ';' rather than '&&'. The zero looked exactly like a real
 negative. Rebuilt and re-run before anything was concluded.
+
+### Note (2026-07-30)
+TWO MORE ELIMINATIONS, AND AN HONEST STATEMENT OF WHERE THIS IS.
+
+Both with real denominators this time.
+
+1. THE HOLDER IS NOT USED AFTER BEING FREED. Pool allocations and frees are now
+   ordinal-stamped per address, and sub_824961D0's entry asks which came last for
+   the holder in r3. Measured: 18 holders tracked, 6 of them freed by the pool,
+   and ZERO entered the function with a free as their most recent event. Holders
+   are freed but never walked afterwards, so the relocation proposed two notes ago
+   is wrong.
+
+2. THE CACHED VALUE IS A LIVE BLOCK AT ENTRY. The same check applied to
+   holder+1376 reports 'a live block (last event an allocation)' every time. So
+   the pointer is valid when the call begins -- it is not garbage that was never a
+   pointer, and it is not already stale on the way in.
+
+WHICH RETURNS TO THE CROSS-THREAD READING and sharpens it: the block is live at
+entry and destroyed DURING the call by the rendering thread. That is consistent
+with everything measured, and it means the earlier 'keep the block alive' attempt
+should have caught it. It did not, so the fault is in that hook's timing rather
+than in the diagnosis -- the object that crashes is cached by a store INSIDE the
+call, and the hook may be consulting the field before that store lands.
+
+HONEST STATE: five mechanisms eliminated on this entry, two native fixes
+attempted and reverted, and the crash is unchanged. The diagnosis has been stable
+for several rounds -- game thread holds a pointer, render thread destroys the
+object mid-call -- and what is failing is the INTERVENTION, not the
+understanding.
+
+The next intervention worth trying is the one that follows from that: instead of
+consulting the cache at free time, RECORD the object at the moment the call
+stores it (the six stores to +1376 inside sub_824961D0) and protect it for the
+duration of that call. That is a narrower and better-founded hook than either
+previous attempt. If it also fails, this needs a fresh pair of eyes rather than a
+fourth variation from me.
