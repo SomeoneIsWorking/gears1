@@ -799,7 +799,7 @@ uint64_t g_constructed = 0;
 uint64_t g_destroyed = 0;
 } // namespace
 
-namespace gears { void ReportArchiveLifetime(uint32_t object); void CheckFreedWhileCached(uint32_t freed); void ReportReallocOfCached(uint32_t, uint32_t, uint32_t); }
+namespace gears { void ReportArchiveLifetime(uint32_t object); void CheckFreedWhileCached(uint32_t freed); bool BlockIsStillReferenced(uint32_t block); void ReportReallocOfCached(uint32_t, uint32_t, uint32_t); }
 
 namespace gears
 {
@@ -933,6 +933,16 @@ PPC_FUNC(sub_822153F0)
     }();
     gears::CheckFreedWhileCached(address);
 
+    // NO INTERVENTION HERE -- two attempts were made and BOTH FAILED, and the
+    // second one is worth not repeating: see ClearCachesOfFreedBlock's comment
+    // above for why nulling the field merely moved the crash, and why keeping the
+    // block alive did not help either. The reason the second failed is now
+    // suspected: the HOLDER is itself a pool block (0x42b40940 on the run that
+    // exposed it, in the same 0x42b range as the freed objects), so the dangling
+    // thing may be the holder rather than the object it caches -- in which case
+    // holder+1376 is being read out of memory that was recycled, and protecting
+    // the cached object cannot help. Detection stays; intervention waits for that
+    // to be established.
     if (watched != 0 && address == watched)
         lucent::error("lifetime", "WATCHED ADDRESS {:#x} FREED from {:#x}"
             " (free #{})", address, from, g_frees.load());
@@ -967,6 +977,47 @@ std::atomic<uint64_t> g_holderVisits{0};
 namespace gears
 {
 // Called from the pool-free probe: does any live holder still cache this block?
+// NATIVE OWNERSHIP OF THE CACHE INVARIANT.
+//
+// This is a PC port, so "the title's code races" is not an end state -- we own
+// this behaviour and have to make it correct here.
+//
+// THE DEFECT: the game thread caches an object at holder+1376 and uses it
+// whenever it is merely NON-NULL (sub_824961D0's prologue: `lwz r11,1376(r24);
+// cmplwi 0; bne <use it>`). The rendering thread destroys that object as part of
+// executing FDrawSceneCommand, and nothing clears the field. Measured 156 times
+// in a single run; the 156th is the crash, because by then the block has been
+// reused and its first word is a free-list pointer rather than a vtable.
+//
+// FIRST ATTEMPT, AND IT WAS WRONG -- recorded because the reason matters.
+// Nulling the cached field looked like the correct invariant ("freeing a block
+// clears references to it") and I asserted the title would then take a
+// create-a-new-one path. IT DOES NOT. The prologue's non-null test is a
+// different decision point; the site that actually crashes reads +1376 and
+// dereferences it UNCONDITIONALLY, guarded only by the +1396 selector. Nulling
+// turned a use-after-free into a null dereference at the same instruction
+// (measured: r3 = 0x0, faulting one line earlier). A crash moved is not a crash
+// fixed.
+//
+// SO THE INVARIANT TO OWN IS THE OTHER ONE: do not free a block that is still
+// referenced. The title's code requires a live object there and provides no path
+// that copes without one, so the port keeps it alive.
+//
+// The cost is a leaked block per occurrence, and that is a deliberate trade:
+// bounded (156 in a full run, each a small pool allocation), against a
+// guaranteed crash. The guest's pool simply has slightly less memory to reuse --
+// its free-list bookkeeping is untouched because the free never happens.
+bool BlockIsStillReferenced(uint32_t block)
+{
+    std::lock_guard<std::mutex> guard(g_holderMutex);
+    for (const uint32_t holder : g_holders)
+    {
+        if (ByteSwap(*gears::Memory().Translate<uint32_t>(holder + 1376)) == block)
+            return true;
+    }
+    return false;
+}
+
 void CheckFreedWhileCached(uint32_t freed)
 {
     // COUNTED IN FULL, REPORTED BY NOVELTY. A flat "first N" cap reported the
