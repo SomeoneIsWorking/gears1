@@ -107,6 +107,7 @@ add_executable(gears1
     gpu_queue_family.cpp
     gpu_instance.cpp
     gpu_device_features.cpp
+    guest_texture_hash.cpp
     guest_indirect_call.cpp
     user_profile.cpp
     xam_apps.cpp
@@ -141,7 +142,8 @@ endif()
 add_library(gears_draw STATIC gpu_draw.cpp frame_capture.cpp
                               gpu_queue_family.cpp gpu_instance.cpp
                               gpu_shared_device.cpp
-                              gpu_device_features.cpp)
+                              gpu_device_features.cpp
+                              guest_texture_hash.cpp)
 target_include_directories(gears_draw PUBLIC .)
 target_link_libraries(gears_draw PRIVATE lucent::lucent)
 target_link_libraries(gears1 PRIVATE gears_draw)
