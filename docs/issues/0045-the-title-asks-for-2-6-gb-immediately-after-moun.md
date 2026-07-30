@@ -1807,3 +1807,42 @@ SUCCEED on hardware, and the whole question collapses to: what does sub_821B5F30
 read from, and why does it read nothing here?
 
 That last question is the only one left, and it is being worked.
+
+### Note (2026-07-30)
+CORRECTION: THE RETURN VALUE IS sub_821B5F30 OWN RESULT, AND IT CLAIMS SUCCESS.
+
+The previous note floated a reading in which the literal path branches PAST the
+instruction that overwrites the return register, so the function would return the
+object pointer and carry no status. I flagged it as unconfirmed. IT IS WRONG.
+
+Computed the addresses exactly (sub_821B94D8 starts at 0x821B94D8, four bytes per
+instruction):
+
+  0x821b9578 [40] li r31,0
+  0x821b957c [41] b 0x821b958c
+  0x821b9580 [42] addi r3,r31,420
+  0x821b9584 [43] bl 0x8232f010
+  0x821b9588 [44] mr r31,r3        <- the literal path branches HERE
+  0x821b958c [45] addi r3,r1,80
+  0x821b9590 [46] bl 0x821fc470
+  0x821b9594 [47] mr r3,r31
+
+The literal path branch at instruction 18 targets 0x821b9588, which IS the
+overwrite. So r31 does get replaced, and r3 at that moment is whatever
+bl 0x821b5f30 (instruction 17) returned. The three cases are therefore:
+
+  literal path      : return sub_821B5F30(name, object+420)
+  other path, fail  : return 0            (li r31,0 at instruction 40)
+  other path, ok    : return sub_8232F010(object+420)
+
+CONSEQUENCE: sub_821B5F30 RETURNS NON-ZERO WHILE POPULATING NOTHING. That is a
+real claim of success by a real function, not an artefact of register reuse, and it
+is the last unexplained link. There is no longer any reading in which the return
+value is meaningless.
+
+ALSO CLEANED UP: the temporary discovery hook in guest_indirect_call.h -- a compare
+against one return address on the hottest path in the image, 29,190 call sites --
+has been removed now that it has named its target, as its own comment promised. It
+did two useful things before going: it identified sub_821B94D8, and it revealed
+that it fired ONCE while the gate ran TWICE, which is how the two-call-sites fact
+was found. Both are recorded above, so the hook has no reason to stay.
