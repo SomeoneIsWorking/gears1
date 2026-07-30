@@ -1363,9 +1363,6 @@ bool DecodeGuestTexture(const uint32_t* fetch6, const uint8_t* guestBase,
         out.skipReason = hf.unsupportedWhy;
         return true;
     }
-    if (!wantData)
-        return true;
-
     const xe::gpu::FormatInfo* fi = xe::gpu::FormatInfo::Get(baseFormat);
     if (!fi || !fi->bytes_per_block())
     {
@@ -1395,6 +1392,16 @@ bool DecodeGuestTexture(const uint32_t* fetch6, const uint8_t* guestBase,
         out.skipReason = "degenerate guest layout";
         return true;
     }
+
+    // The guest byte extent is arithmetic on the fetch constant -- no data is
+    // read to compute it -- so it is available even to a caller that only wants
+    // the header. The texture cache needs exactly this: it is keyed on the fetch
+    // constant, which does not change when the guest overwrites the pixels at the
+    // same address, so without the extent it cannot hash the bytes to notice.
+    out.guestExtentBytes = layout.base.level_data_extent_bytes;
+
+    if (!wantData)
+        return true;
 
     out.blocksX = (out.width + out.blockWidth - 1) / out.blockWidth;
     out.blocksY = (out.height + out.blockHeight - 1) / out.blockHeight;

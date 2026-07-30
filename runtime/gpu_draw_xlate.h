@@ -248,6 +248,14 @@ struct GuestTexture
     // Values: 0=R 1=G 2=B 3=A 4=zero 5=one. Index is the destination component.
     uint8_t hostSwizzle[4] = {0, 1, 2, 3};
 
+    // The extent of the GUEST bytes this texture is decoded from, which is
+    // Xenia's own upper bound for the base level. Filled even when data was not
+    // asked for, because the texture cache needs it to notice that the guest has
+    // overwritten a texture at an address it is already caching -- the fetch
+    // constant is unchanged in that case, so nothing else distinguishes the new
+    // contents from the old.
+    uint32_t guestExtentBytes = 0;
+
     // --- decoded payload (only when Decode was asked for data) -----------
     uint32_t blockWidth = 1, blockHeight = 1, bytesPerBlock = 4;
     uint32_t blocksX = 0, blocksY = 0; // base level extent in blocks

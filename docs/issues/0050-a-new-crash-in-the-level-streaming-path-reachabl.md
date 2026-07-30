@@ -331,3 +331,34 @@ and the last 33 runs are clean. At 7 percent, 33 consecutive clean runs is about
 candidates are chance, or one of several unrelated code changes shifting timing. I
 am NOT claiming the bug is gone, and I am not claiming a cause. What is certain is
 that it happened three times with full fault reports.
+
+### Note (2026-07-30)
+THE OUT-OF-RANGE INDEX, CAUGHT FOR FREE.
+
+Not chased -- this arrived in a rendering run and resolves the question an earlier
+note left open. The fault-context slot added a few commits ago carried the values
+through the abort:
+
+    context: #50 (object, its first word, table index, table base):
+             0x4529a560 0x404e00e8 0xfa 0x45235cc0
+
+So at the crash the table index is 0xfa = 250. Every clean run measured index 3.
+The object first word is 0x404e00e8, which is not in the image (0x82000000
+upwards), so it is not a vtable -- the corruption, as expected.
+
+WHICH SETTLES THE TWO CANDIDATES the previous note named: it is the ARRAYS BEING
+OUT OF STEP WITH THE TABLE, not the table itself being wrong. The byte array on
+r27 handed out an index of 250 for a table that clean runs index at 3, and the
+guest never bounds-checks it -- every r19 field access in sub_823ED7E0 is +256,
++268, +264 and +208, with no length read anywhere.
+
+It also vindicates the correction two notes ago: the earlier "index 3 of count 108,
+so in range" conclusion compared the index against the size of the byte array it
+came FROM rather than the table it indexes INTO, and 250 is exactly the kind of
+value that comparison could never have flagged.
+
+NOT INVESTIGATED FURTHER, per the standing direction to port rather than chase a
+guest crash. What is now recorded for whoever picks it up: the failing index value,
+that it comes from the byte array at r27+768 rather than from a bad table pointer,
+and that the fault-context mechanism reports it through a SIGSEGV as well as an
+abort so no future occurrence is wasted.
