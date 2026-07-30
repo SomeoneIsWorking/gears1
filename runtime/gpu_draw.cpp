@@ -1677,6 +1677,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // so the rest is measured rather than guessed at -- hoisting the loop's
     // containers out was tried first on a hunch and moved it by 1 ms.
     double msDescAlloc = 0, msDescUpdate = 0, msUniforms = 0, msIndex = 0;
+    // Uniform-cache accounting; see the hit test in the draw loop.
+    uint64_t uboLookups = 0, uboHits = 0, uboMissSnapshot = 0, uboMissShaders = 0;
+    uint64_t uboRecomputes = 0, uboRecomputesIdentical = 0;
     double msState = 0, msRecord = 0;
     double msTranslate = 0, msPipeline = 0, msTexture = 0, msSsboUpload = 0;
     auto accumulate = [](double& into, Clock::time_point from) {
@@ -2961,6 +2964,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     }
     VkDeviceSize arenaCursor = 0;
     uint32_t arenaOverflows = 0;
+    // Bytes that did NOT fit. This is the number the next frame's arena has to be
+    // sized from, and its absence was a self-perpetuating bug: the high-water mark
+    // was taken from arenaCursor, which only advances for allocations that FIT, so it
+    // could never exceed the current arena size -- and the growth test
+    // (arenaHighWater > arenaBytes) could therefore never be true. The arena stayed at
+    // its first size forever while 2618 blocks a frame took the fallback that creates,
+    // maps, copies and unmaps a VkBuffer each, which is where 104 of a 170 ms frame
+    // went. The log even said "next frame will fit" every frame, and it never did.
+    VkDeviceSize arenaWanted = 0;
 
     // Copies `size` bytes into the arena and reports where they landed, or
     // returns false when the arena is full (the caller then falls back).
@@ -2970,7 +2982,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             return false;
         const VkDeviceSize offset = (arenaCursor + alignment - 1) & ~(alignment - 1);
         if (offset + size > P.arenaBytes)
+        {
+            // Remember what was asked for, so next frame's arena can actually hold it.
+            arenaWanted += (size + alignment - 1) & ~(alignment - 1);
             return false;
+        }
         std::memcpy(static_cast<uint8_t*>(P.arenaMapped) + offset, data, size);
         arenaCursor = offset + size;
         outOffset = offset;
@@ -3793,8 +3809,45 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         const bool sameConstants = uboCacheValid &&
                                    uboCacheSnapshot == d.registerFile.get() &&
                                    uboCacheVs == d.vsHash && uboCachePs == d.psHash;
+        // IS THE CACHE ACTUALLY HITTING? Uniforms are 118 ms of a 187 ms frame, and
+        // this cache exists precisely to avoid that work -- so either it misses far
+        // more than expected, or the miss path is much more expensive than it looks.
+        // The comparison is by POINTER on the register snapshot, so a draw carrying
+        // its own copy would never match however identical the contents.
+        ++uboLookups;
+        if (sameConstants)
+            ++uboHits;
+        else if (uboCacheValid)
+        {
+            // Which part of the key differed. A snapshot-pointer miss with equal
+            // shader hashes is the shape that would mean the cache can never work.
+            if (uboCacheSnapshot != d.registerFile.get())
+                ++uboMissSnapshot;
+            else
+                ++uboMissShaders;
+        }
         if (!sameConstants)
         {
+            // MEASURING THE HEADROOM, gated because it costs an extra copy and
+            // compare per miss. Every uniform-cache miss is on the register snapshot
+            // POINTER -- 114 of 114 in a measured frame, none on the shader pair --
+            // and the snapshot is already shared between draws that changed no
+            // register, so those misses mean the guest really did write registers.
+            //
+            // But a register write does not imply the UNIFORM blocks changed: the
+            // guest may have touched a viewport or a state register that feeds none
+            // of them. This counts how often the recomputed blocks come out
+            // byte-identical to the ones already cached, which is exactly the work a
+            // content comparison would let us skip. Without this number, narrowing
+            // the cache key would be a guess at where the time goes.
+            const bool measureHeadroom = lucent::config::flag("DRAW_UBOCHECK");
+            std::vector<uint8_t> prevSysc, prevFvs, prevFps, prevBl, prevFetch;
+            if (measureHeadroom && uboCacheValid)
+            {
+                prevSysc = syscBuf; prevFvs = fVsBuf; prevFps = fPsBuf;
+                prevBl = boolLoopBuf; prevFetch = fetchBuf;
+            }
+
             syscBuf = draw::DeriveSystemConstants(R);
             fVsBuf = PackFloatConstants(R, vsX->floatBitmap, vsX->floatCount, 0x4000);
             fPsBuf = PackFloatConstants(R, psX->floatBitmap, psX->floatCount, 0x4400);
@@ -3809,6 +3862,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 !makeUbo(boolLoopBuf.data(), boolLoopBuf.size(), biBlCache) ||
                 !makeUbo(fetchBuf.data(), fetchBuf.size(), biFetchCache))
             { uboCacheValid = false; ++skipped; ++skipReasons[4]; continue; }
+
+            if (measureHeadroom && !prevSysc.empty())
+            {
+                ++uboRecomputes;
+                if (prevSysc == syscBuf && prevFvs == fVsBuf &&
+                    prevFps == fPsBuf && prevBl == boolLoopBuf &&
+                    prevFetch == fetchBuf)
+                    ++uboRecomputesIdentical;
+            }
 
             uboCacheValid = true;
             uboCacheSnapshot = d.registerFile.get();
@@ -5057,11 +5119,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
     VK_CHECK(vkEndCommandBuffer(cmd));
 
-    P.arenaHighWater = std::max(P.arenaHighWater, arenaCursor);
+    // What this frame NEEDED, not what it managed to fit.
+    P.arenaHighWater = std::max(P.arenaHighWater, arenaCursor + arenaWanted);
     if (arenaOverflows)
-        lucent::info("draw", "per-draw arena overflowed on {} allocations"
-            " ({} KiB in use, {} KiB sized); next frame will fit",
-            arenaOverflows, arenaCursor / 1024, P.arenaBytes / 1024);
+        // Says what it will grow TO, rather than promising a fit. The old wording --
+        // "next frame will fit" -- was printed every frame for thousands of frames
+        // while nothing grew, because the size it would have grown to was measured
+        // from what fit rather than from what was asked for.
+        lucent::info("draw", "per-draw arena overflowed on {} allocation(s):"
+            " {} KiB fitted, {} KiB more was wanted, arena is {} KiB and will be"
+            " sized to {} KiB", arenaOverflows, arenaCursor / 1024,
+            arenaWanted / 1024, P.arenaBytes / 1024,
+            (P.arenaHighWater + P.arenaHighWater / 4 + 0x10000) / 1024);
     msDrawLoop = sinceStartMs() - msSetup;
     const auto tSubmit = Clock::now();
     VkFence& fence = P.fence;
@@ -5306,6 +5375,29 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             texBindsRt + texBindsStub + texBindsGuest, texBindsGuest, texBindsRt,
             texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
             changed, 100.0 * double(changed) / (double(W) * H));
+
+        // WHERE THE UNIFORM TIME GOES. Uniforms are the largest item in the frame
+        // (118 ms of 187), and this cache exists to avoid recomputing blocks that
+        // did not change. Reported with its denominator so a low hit rate is
+        // distinguishable from a cache that is never consulted, and split by WHICH
+        // part of the key differed -- the register snapshot is compared by POINTER,
+        // so a draw carrying its own copy would miss however identical the contents,
+        // and that failure would look exactly like "the constants really do change".
+        lucent::info("draw", "uniform cache: {} lookup(s), {} hit ({:.1f}%);"
+            " misses: {} on the register snapshot, {} on the shader pair",
+            uboLookups, uboHits,
+            uboLookups ? 100.0 * double(uboHits) / double(uboLookups) : 0.0,
+            uboMissSnapshot, uboMissShaders);
+        if (uboRecomputes != 0)
+            lucent::info("draw", "uniform headroom: of {} recompute(s) measured,"
+                " {} produced BYTE-IDENTICAL blocks ({:.1f}%) -- that is the work a"
+                " content comparison would skip", uboRecomputes,
+                uboRecomputesIdentical,
+                100.0 * double(uboRecomputesIdentical) / double(uboRecomputes));
+        else
+            lucent::info("draw", "uniform headroom: not measured (set"
+                " GEARS_DRAW_UBOCHECK=1); a percentage cannot be inferred from the"
+                " hit rate alone");
 
         // WHETHER THE TEXTURE CACHE IS ACTUALLY GOING STALE. The cache is keyed on
         // the fetch constant, which does not change when the guest overwrites the
