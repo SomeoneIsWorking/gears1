@@ -268,3 +268,15 @@ add_executable(test_gpu_instance
     ../runtime/gpu_instance.cpp)
 target_include_directories(test_gpu_instance PRIVATE ../runtime)
 add_test(NAME gpu_instance COMMAND test_gpu_instance)
+
+# Guest-texture change detection. The renderer caches uploads against the fetch
+# constant, which does not change when the guest overwrites the pixels at the same
+# address -- a render target, an animated UI element or a streamed mip all do that.
+# The property under test is COVERAGE: a hash over a few sampled offsets would pass
+# a naive test and silently miss an interior change, leaving a stale texture on
+# screen with no error anywhere, so the test flips every byte position in turn.
+add_executable(test_guest_texture_hash
+    test_guest_texture_hash.cpp
+    ../runtime/guest_texture_hash.cpp)
+target_include_directories(test_guest_texture_hash PRIVATE ../runtime)
+add_test(NAME guest_texture_hash COMMAND test_guest_texture_hash)
