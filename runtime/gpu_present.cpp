@@ -32,6 +32,8 @@
 
 #include <lucent/log.h>
 
+#include "gpu_queue_family.h"
+
 #ifdef GEARS_HAVE_PRESENTER
 
 #include <atomic>
@@ -211,27 +213,36 @@ bool Presenter::CreateInstanceAndDevice()
         std::vector<VkQueueFamilyProperties> families(familyCount);
         vkGetPhysicalDeviceQueueFamilyProperties(candidate, &familyCount, families.data());
 
+        // The policy lives in gpu_queue_family.h, shared with the draw path so the
+        // two cannot drift -- they each had their own loop checking only their own
+        // half of the requirement. It also refuses a family advertising zero
+        // queues, which this loop did not.
+        std::vector<gears::QueueFamily> capabilities(familyCount);
         for (uint32_t i = 0; i < familyCount; i++)
         {
-            if ((families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) == 0)
-                continue;
             VkBool32 supported = VK_FALSE;
             vkGetPhysicalDeviceSurfaceSupportKHR(candidate, i, surface, &supported);
-            if (supported != VK_TRUE)
-                continue;
+            capabilities[i].graphics =
+                (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
+            capabilities[i].present = supported == VK_TRUE;
+            capabilities[i].count = families[i].queueCount;
+        }
 
-            VkPhysicalDeviceProperties props{};
-            vkGetPhysicalDeviceProperties(candidate, &props);
-            const int score =
-                props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2 :
-                props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 1 : 0;
-            if (score > bestScore)
-            {
-                bestScore = score;
-                physical = candidate;
-                queueFamily = i;
-            }
-            break;
+        const uint32_t chosen =
+            gears::ChooseQueueFamily(capabilities, /*needPresent=*/true);
+        if (chosen == gears::kNoQueueFamily)
+            continue;
+
+        VkPhysicalDeviceProperties props{};
+        vkGetPhysicalDeviceProperties(candidate, &props);
+        const int score =
+            props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2 :
+            props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 1 : 0;
+        if (score > bestScore)
+        {
+            bestScore = score;
+            physical = candidate;
+            queueFamily = chosen;
         }
     }
 
