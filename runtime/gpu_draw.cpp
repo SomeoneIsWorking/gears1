@@ -179,10 +179,9 @@ bool Renderer::Init()
             // would have a future reader believe a cost that is still being paid
             // has been removed.
             lucent::info("draw", "adopted the presenter's Vulkan device \"{}\""
-                " (queue family {}); the rendered image and the swapchain are now on"
-                " ONE device, which is the prerequisite for dropping the per-frame"
-                " readback and staging upload -- both of which still run",
-                adoptedProps.deviceName, queueFamily);
+                " (queue family {}); the rendered image and the swapchain are on ONE"
+                " device, so the frame reaches the window by BLIT rather than through"
+                " host memory", adoptedProps.deviceName, queueFamily);
             return true;
         }
     }
@@ -4940,6 +4939,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         havePresent = true;
         break;
     }
+    // The image the frame ends up in, left in TRANSFER_SRC_OPTIMAL. Published to the
+    // presenter when the device is shared, so it can blit rather than receive the
+    // pixels through host memory.
+    VkImage presentableImage = VK_NULL_HANDLE;
     SurfaceTarget* presentTarget = nullptr;
     if (havePresent)
     {
@@ -4954,6 +4957,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // 8888 staging image rather than being reinterpreted, which would read
         // the float bits as bytes.
         VkImage source = presentTarget->color;
+        // Recorded outside this block so the presenter can be handed the same image
+        // the readback is taken from -- see the publish below.
+        presentableImage = source;
         if (presentTarget->hostFormat != VK_FORMAT_R8G8B8A8_UNORM &&
             presentStage != VK_NULL_HANDLE)
         {
@@ -5220,6 +5226,28 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             }
         }
         vkDestroyQueryPool(device, statPool, nullptr);
+    }
+
+    // PUBLISH THE IMAGE, so the presenter can blit it instead of receiving these
+    // pixels through host memory. Only when this renderer ADOPTED the presenter's
+    // device: if it created its own, the image lives on a different device and is
+    // useless to the presenter, which is the headless case.
+    //
+    // `source` is left in TRANSFER_SRC_OPTIMAL above, and the frame's fence has been
+    // waited on by the time this runs, so the contents are complete. A blit between
+    // R8G8B8A8 and the swapchain's B8G8R8A8 is a FORMAT conversion, mapping component
+    // to component, so it does not need the manual red/blue swap the host upload path
+    // does -- that swap exists because a CPU memcpy into a BGRA image is byte-order
+    // sensitive and a GPU blit is not.
+    if (!ownsDevice && presentableImage != VK_NULL_HANDLE)
+    {
+        static uint64_t published = 0;
+        gears::SharedFrameImage frame;
+        frame.image = presentableImage;
+        frame.width = W;
+        frame.height = H;
+        frame.sequence = ++published;
+        gears::PublishSharedFrameImage(frame);
     }
 
     // --- read pixels + coverage numbers ----------------------------------
