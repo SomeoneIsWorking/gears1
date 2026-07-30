@@ -1133,3 +1133,44 @@ void CountRingProducerOverlap() { g_ringProducerOverlaps.fetch_add(1); }
 uint64_t RingProducerEntries() { return g_ringProducerEntries.load(); }
 uint64_t RingProducerOverlaps() { return g_ringProducerOverlaps.load(); }
 } // namespace gears
+
+// ---------------------------------------------------------------------------
+// SuspendRendering / ResumeRendering (catalog #45).
+//
+// The title has four render commands -- SuspendRendering1/2 and
+// ResumeRendering1/2 (identified from their Describe thunks, which return those
+// UTF-16 literals). Their Execute bodies do exactly one thing: set or clear a
+// global flag at 0x82BFA388.
+//
+// AND NOTHING READS THAT FLAG. tools/find_addr_refs.py finds exactly two code
+// references to it, and both are these two setters. So enqueueing a suspend does
+// not actually stop the rendering thread -- same shape as the ring's bIsWriting.
+// (Bound: the scanner covers lis+addi and lis+load/store, so a reader that
+// obtained the address by another route would be missed.)
+//
+// This matters for #45 because the game thread's checkpoint restore races the
+// rendering thread's container clear. If the title suspends rendering around
+// that restore and the suspend is inert, the race is one this port could close
+// honestly by honouring the title's own flag. If the title never suspends there,
+// this is a dead end and should be recorded as one.
+extern "C" PPC_FUNC(__imp__sub_82428FE8);
+extern "C" PPC_FUNC(__imp__sub_82428FA8);
+
+PPC_FUNC(sub_82428FE8)
+{
+    static std::atomic<uint64_t> n{0};
+    const uint64_t i = n.fetch_add(1) + 1;
+    if (i <= 6)
+        lucent::info("suspend", "SuspendRendering executed (#{}) -- sets the flag"
+            " at 0x82BFA388 that nothing reads", i);
+    __imp__sub_82428FE8(ctx, base);
+}
+
+PPC_FUNC(sub_82428FA8)
+{
+    static std::atomic<uint64_t> n{0};
+    const uint64_t i = n.fetch_add(1) + 1;
+    if (i <= 6)
+        lucent::info("suspend", "ResumeRendering executed (#{})", i);
+    __imp__sub_82428FA8(ctx, base);
+}

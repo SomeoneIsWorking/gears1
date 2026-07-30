@@ -896,3 +896,33 @@ addressed by the same port-level decision rather than by separate patches.
 BEFORE ACTING ON (b), the thing to establish is the one #44 also needs: why the
 console tolerates it. Guessing at thread topology and then serialising things is
 how a port acquires permanent unexplained locks.
+
+### Dead end (2026-07-30)
+SUSPEND/RESUME RENDERING IS A DEAD END FOR THIS BUG -- THE TITLE NEVER USES IT.
+
+The lead was good and is worth recording so nobody re-walks it. The title has
+four render commands -- SuspendRendering1/2, ResumeRendering1/2, identified from
+their Describe thunks returning exactly those UTF-16 literals at 0x821044D4,
+0x821044F8, 0x8210451C, 0x82104540. Their Execute bodies do one thing each:
+
+    SuspendRendering:  [0x82BFA388] = 1 ; return 4
+    ResumeRendering:   [0x82BFA388] = 0 ; return 4
+
+AND NOTHING READS THAT FLAG. find_addr_refs finds exactly two code references to
+0x82BFA388 and both are these setters -- the same shape as the ring's bIsWriting.
+(Bound: the scanner covers lis+addi and lis+load/store, so a reader obtaining the
+address another way would be missed.)
+
+If the title had suspended rendering around the checkpoint restore, this port
+could have closed the #45 race honestly by honouring a flag the title already
+maintains. IT DOES NOT. Probes on both Execute bodies report ZERO executions in a
+full run to the crash.
+
+THE ZERO IS VALIDATED, because 'never called' and 'probe broken' are otherwise
+the same output: both addresses are present in the indirect-call mapping table
+(so a vtable dispatch reaches the strong override), and two other overrides in
+the same file demonstrably fired in the same run. So the seam works and the
+absence is real.
+
+CONCLUSION: the title does not suspend rendering around the restore, so there is
+no title-maintained flag to honour here. #45 cannot be closed this way.
