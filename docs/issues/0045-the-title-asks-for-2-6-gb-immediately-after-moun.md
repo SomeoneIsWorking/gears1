@@ -1113,3 +1113,44 @@ stores it (the six stores to +1376 inside sub_824961D0) and protect it for the
 duration of that call. That is a narrower and better-founded hook than either
 previous attempt. If it also fails, this needs a fresh pair of eyes rather than a
 fourth variation from me.
+
+### Note (2026-07-30)
+THE BARRIER MEASURED ZERO, AND THE ZERO IS THE FINDING.
+
+Built a reference barrier (runtime/reference_barrier.{h,cpp}, 8 threaded tests
+written first) that makes the pool's free WAIT until no reader is inside
+sub_824961D0 holding that block. Delay rather than the earlier attempt's skip,
+because suppressing a free leaks the block and desynchronises the pool.
+
+Wired to both seams and run: the barrier engaged ZERO times, while the existing
+probe reported 119 frees of a still-cached block in the same run. Those two
+numbers together are only consistent with one reading, and it is NOT the one this
+entry has carried for several rounds:
+
+  THE OBJECT IS NOT FREED DURING THE CALL. It is freed BETWEEN calls. The stale
+  pointer sits in holder+1376 while nobody is executing the function, and the
+  crash happens on a LATER call that reads the field and uses it because it is
+  non-null.
+
+That explains two things that did not fit before: why the cached value is always
+a live block at ENTRY (the entry that crashes is a later one), and why both
+previous interventions missed -- they guarded the call, and the damage happens
+outside it.
+
+WHAT THIS MAKES THE REAL QUESTION. The field is a cache with no invalidation:
+the prologue is  and a non-null test, and nothing in the image
+nulls it. So the console relied on whoever destroys the object to clear the
+holder's reference to it. That is a concrete mechanism to find, not a race to
+paper over.
+
+NEXT, AND IT IS A MEASUREMENT NOT A GUESS: at free time, scan the block being
+freed for a word equal to the holder's address. If the object carries a back
+pointer to its holder, the destructor is meant to clear holder+1376 through it,
+and that code exists in the image and is not running. If it carries no back
+pointer, the invalidation is someone else's job and the search moves to whoever
+owns both.
+
+The barrier stays: it is correct, tested, and its measured non-engagement is what
+ruled the during-the-call reading out. It should be REMOVED from the free path if
+the next step confirms the between-calls mechanism, since machinery that never
+fires is indistinguishable from machinery that is broken.

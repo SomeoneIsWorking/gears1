@@ -195,3 +195,17 @@ target_include_directories(test_time_fields PRIVATE
     ../extern/XenonRecomp/XenonUtils)
 target_link_libraries(test_time_fields PRIVATE lucent::lucent)
 add_test(NAME time_fields COMMAND test_time_fields)
+
+# The reference barrier that gives the port the object-lifetime guarantee the
+# console got from timing. Written before the implementation, and driven with
+# real threads: a barrier exercised only single-threaded is not tested at all.
+# The starvation and timeout cases matter as much as the happy path -- the two
+# ways this mechanism can fail are hanging the process and silently doing
+# nothing, and both are cases here.
+find_package(Threads REQUIRED)
+add_executable(test_reference_barrier
+    test_reference_barrier.cpp
+    ../runtime/reference_barrier.cpp)
+target_include_directories(test_reference_barrier PRIVATE ../runtime)
+target_link_libraries(test_reference_barrier PRIVATE Threads::Threads)
+add_test(NAME reference_barrier COMMAND test_reference_barrier)

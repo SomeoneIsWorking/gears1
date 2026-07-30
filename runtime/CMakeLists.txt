@@ -90,6 +90,7 @@ add_executable(gears1
     audio_out.cpp
     guest_probes.cpp
     guest_backtrace.cpp
+    reference_barrier.cpp
     user_profile.cpp
     xam_apps.cpp
     xam_content.cpp
