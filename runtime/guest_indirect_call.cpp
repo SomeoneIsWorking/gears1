@@ -6,6 +6,7 @@
 #include <lucent/config.h>
 #include <lucent/log.h>
 
+#include "fault_report.h"
 #include "guest_backtrace.h"
 #include "guest_memory.h"
 #include "guest_thread.h"
@@ -20,67 +21,6 @@ void ReportFStringProbe();
 void ReportLoaderThunks();
 void ReportEarlyThunks();
 
-// See the header. Reports only the ANOMALY -- an index at or past the count --
-// but counts every lookup, so "no out-of-range lookups" comes with the number of
-// lookups it is a statement about. A bare silence here would be worthless.
-void NoteStreamingTableLookup(PPCContext& ctx, uint8_t* base)
-{
-    static std::atomic<uint64_t> seen{0};
-    static std::atomic<uint64_t> outOfRange{0};
-    static std::atomic<uint64_t> shown{0};
-
-    const uint64_t n = seen.fetch_add(1) + 1;
-
-    const auto read32 = [&](uint32_t address) -> uint32_t {
-        if (uint64_t(address) + 4 >= PPC_MEMORY_SIZE)
-            return 0xDEADDEADu;
-        return __builtin_bswap32(
-            *reinterpret_cast<const uint32_t*>(base + address));
-    };
-
-    const uint32_t byteArray = read32(ctx.r27.u32 + 768);
-    const uint32_t count = read32(ctx.r27.u32 + 772);
-    const uint32_t slot = ctx.r23.u32;
-    if (byteArray == 0 || uint64_t(byteArray) + slot >= PPC_MEMORY_SIZE)
-        return;
-    const uint32_t index = *(base + byteArray + slot);
-    if (index == 255)
-        return;                     // the sentinel: no entry, handled by the title
-
-    // THE DENOMINATOR, PERIODICALLY. The first version of this printed only the
-    // anomaly, so a clean run said "0 out-of-range lookups" and nothing about how
-    // many lookups that was a statement about -- the exact bare negative this
-    // project keeps being burned by. The high-water index and low-water count say
-    // how close the title normally runs to the edge, which is what makes a zero
-    // meaningful.
-    {
-        static std::atomic<uint32_t> maxIndex{0};
-        static std::atomic<uint32_t> minCount{0xFFFFFFFFu};
-        uint32_t previous = maxIndex.load();
-        while (index > previous && !maxIndex.compare_exchange_weak(previous, index))
-            ;
-        previous = minCount.load();
-        while (count < previous && !minCount.compare_exchange_weak(previous, count))
-            ;
-        if (n == 1 || n % 5000 == 0)
-            lucent::info("call", "#50 streaming lookups: {} seen, {} out of range;"
-                " highest index {}, lowest count {}", n, outOfRange.load(),
-                maxIndex.load(), minCount.load());
-    }
-
-    if (index < count)
-        return;                     // in range
-
-    const uint64_t bad = outOfRange.fetch_add(1) + 1;
-    if (shown.fetch_add(1) < 6)
-        lucent::error("call", "#50 OUT-OF-RANGE STREAMING LOOKUP #{}: index {} but"
-            " the count is only {} (byteArray {:#x}[{}], table {:#x}) -- the entry"
-            " read is {} past the end, so r22 comes out of whatever follows the"
-            " table. {} of {} lookups so far.", bad, index, count, byteArray, slot,
-            read32(ctx.r19.u32 + 208), index - count + 1, bad, n);
-}
-
-// Printed at the abort so a zero is never bare.
 void ReportBadIndirectCall(uint32_t target, PPCContext& ctx, uint8_t* base)
 {
 

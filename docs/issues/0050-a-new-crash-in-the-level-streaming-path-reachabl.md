@@ -169,3 +169,53 @@ trusted to report an absence.
 STILL OUTSTANDING: a temporary compare against one return address sits in
 CallGuestIndirect, on all 29,190 sites. It has not answered yet, so it stays for
 now, but it is debt and it is recorded here so it is not forgotten.
+
+### Note (2026-07-30)
+THE RATE IS ABOUT ONE IN TEN, AND THE BAD VALUES ARE ALL FLOATS.
+
+FIRST, THE RATE, because my earlier number was wrong. Across one binary lineage:
+2 crashes in the first 7 attempts (which I read as 29 percent), then TWELVE
+consecutive clean runs. Removing the instrumentation did not bring them back
+(0 of 3), so the probe was not perturbing anything -- the true rate is simply
+lower, around 10 percent, and twelve clean runs at that rate is a 26 percent
+event. It read as "the bug is gone" and was nothing of the kind.
+
+BUILT A TOOL FOR THIS: tools/repro_rate.sh runs N instances CONCURRENTLY, each with
+its own XDG_DATA_HOME so their save mounts do not collide, and reports crashed /
+clean / not-observed with the timeout stated. Measuring a one-in-ten crash one run
+at a time is three minutes per sample; eight in parallel is one tool call. It kills
+by PID and never by pattern, because other agents run this same binary.
+
+AND THE TOOL LIED ON ITS FIRST RUN, which is worth recording. It announced "8 of 8
+runs crashed". With errexit on, a non-zero exit from timeout aborted the subshell
+BEFORE the line that records the exit code, so no code was written -- and the
+summary treated a missing code as "not 124", i.e. a crash. The tell was exit=? in
+every row. It now records the code with errexit off around that one line, and a run
+with no exit code is counted as NOT OBSERVED and warned about, never folded into
+either column.
+
+Measured properly: 1 crashed, 7 clean, 0 not observed, at 150s each.
+
+THE FINDING. Three occurrences now, and every bad value decodes as a plausible
+IEEE-754 float:
+
+    crash A  SIGSEGV at guest 0x2ac288ec   = 3.4556331e-13
+    crash B  bad call target 0x3f5718e1    = 0.84022337
+    crash C  SIGSEGV at guest 0x3dcccd25   = 0.10000066
+
+0x3dcccd25 is essentially 0.1 -- exact 0.1 is 0x3dcccccd, so this is 0.1 with a
+few bits of accumulated error, the kind a computed value carries. Together with the
+previous note, where the object first word pointed at rotations and world-space
+translations, the picture is consistent: the pointer chain sub_823ED7E0 walks is
+landing in FLOAT DATA and being dereferenced.
+
+All three crashes are at 3420-3480 frames, so it is the same moment every time, and
+every crashing run restored the checkpoint correctly first -- the #45 fix is not
+implicated.
+
+WHAT IS STILL OPEN: which container holds floats where the code expects pointers.
+The table lookup measured in the previous note is in range (index 3, count 108) on
+every clean run, and I still have no reading of it from a crashing run. The fault
+context slot added this session can carry it -- but nothing writes it now that the
+temporary probe is out, so re-adding a writer is the next step, and with
+repro_rate.sh a crashing sample is one tool call away rather than an hour.
