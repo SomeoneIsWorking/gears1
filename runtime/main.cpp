@@ -7,6 +7,7 @@
 #include <lucent/config.h>
 #include <lucent/log.h>
 
+#include "fault_report.h"
 #include "guest_memory.h"
 #include "guest_heap.h"
 #include "guest_filesystem.h"
@@ -86,6 +87,12 @@ int main(int argc, char* argv[])
 {
     lucent::config::set_prefix("GEARS_");
 
+    // BEFORE ANYTHING ELSE. Six runs of the crash repro dumped core and said
+    // nothing about the fault, so every hypothesis they were meant to test was
+    // judged against a log that merely stopped. The reporter chains to the
+    // previous disposition, so the core and the exit status are unchanged.
+    gears::InstallFaultReporter();
+
     if (argc < 2)
     {
         lucent::error("boot", "usage: {} <path to default.xex> [game data directory]", argv[0]);
@@ -135,6 +142,9 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
 
     gears::SetMemory(memory);
+    // Now the reporter can tell a guest address from a host pointer. It has been
+    // armed since the first line of main; this only sharpens what it prints.
+    gears::SetFaultReportGuestMapping(memory.Base(), memory.ReservedSize());
 
     if (!memory.Commit(uint32_t(image.base), image.size))
         return EXIT_FAILURE;
