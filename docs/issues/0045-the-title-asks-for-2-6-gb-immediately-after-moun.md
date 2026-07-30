@@ -1567,3 +1567,52 @@ allocator timing' reading were all wrong. The 156 freed-while-cached events were
 mostly coincidental address matches, because the pool recycles 192-byte-class
 blocks constantly and word 0 of a freed block holds the freelist link -- which is
 also why the 'vtable chain' at stride 0xC0 looked like a vtable and was not.
+
+### Note (2026-07-30)
+THE ARCHIVE IS EMPTY, AND THE OLD 'IMPOSSIBLE DESCRIPTOR' WAS A MISREAD.
+
+Measured at the map-name deserialise, all in one run:
+
+  the carrier holds 385 bytes at 0x42f501c0   <- correct, this is the save blob
+  the archive's byte array is at 0x41dd0de4: data 0x0, count 0   <- EMPTY
+  archive 0x40102020 fields: +0=0x8209e110 +4=0x176 +8=0x917 +16=0x1 +20=0x0
+    ... +96=0xffffffff +108=0x2775 +112=0x41dd0de4 +116=0xb0800000
+
+  map-name FString deserialise #1: -> length 10089
+  map-name FString deserialise #2: -> length 0
+  map-name FString deserialise #3: -> length 0
+  3 deserialise(s) from the map-change site out of 78281 in the run
+
+SO: the archive is in a valid loading state (+16=1 ArIsLoading, +20=0 not saving,
++4=0x176 = ArVer 374, matching the ULinkerLoad), and its byte array is EMPTY. The
+385-byte carrier never reached it. Every read therefore copies nothing, which is
+why the first read reports a length of 10089 -- that is uninitialised stack
+garbage left in the length variable because Serialize wrote nothing over it -- and
+why the two after it read 0 once ArIsError is set.
+
+A CORRECTION THAT MATTERS. This entry has carried 'FString deserialise #78278:
+archive array is populated (2147483648 bytes at 0x900006b0)' as an unexplained
+anomaly for a long time, and the previous note here treated 0x80000000 as a
+length field read as INT_MIN. BOTH WERE WRONG. +112 is a REFERENCE -- an
+FMemoryReader holds  -- so the descriptor is one
+indirection further out. The old probe read +112 and +116 as data and count when
+they are a reference and an unrelated field, and 0xb0800000 at +116 is the value
+this project already documents as what physical page 0 holds. There was never an
+impossible descriptor. The array is simply empty, and it always was.
+
+That also retires the 'garbage length' reading in the note directly above this
+one. The length is garbage, but as a CONSEQUENCE of an empty array, not as data
+read out of the file.
+
+WHERE THE FIX IS. sub_821B4620 copies the global carrier at 0x82BFB36C into
+object+420 before deserialising (0x821B4938: dest r17+420, src 0x82BFB36C), and
+the archive is constructed over that copy. The carrier is populated AT THE TIME OF
+THE DESERIALISE -- just measured, 385 bytes -- so the copy either never runs, or
+runs EARLIER, while the carrier is still empty. An ordering problem, and a
+testable one.
+
+NEXT: instrument the copy at 0x821B4938 -- does it execute, when, and what is the
+carrier's count at that instant? Three outcomes, all distinguishable: it never
+runs (a branch we do not take), it runs before the Kismet op fills the carrier (an
+ordering bug, ours or the title's), or it runs with a populated carrier and the
+copy itself is wrong.
