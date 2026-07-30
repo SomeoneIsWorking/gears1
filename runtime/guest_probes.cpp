@@ -1139,6 +1139,33 @@ void CheckFreedWhileCached(uint32_t freed)
                 " holder {:#x}+1376 (occurrence {}). Nothing nulls that field,"
                 " and the next call uses it on the strength of it being"
                 " non-null", freed, holder, n);
+
+            // DOES THE OBJECT KNOW ITS HOLDER? The field is a cache with no
+            // invalidation, so the console relied on SOMETHING to clear it when
+            // the object died. If the object carries a pointer back to the
+            // holder, that clearing code exists in the image and is simply not
+            // running -- and the offset names the field to look for. If it
+            // carries none, the invalidation is not the object's job and the
+            // search moves to whoever owns both. The answer decides where this
+            // goes next, so it is worth the scan of one block.
+            bool found = false;
+            for (uint32_t offset = 0; offset + 4 <= 512; offset += 4)
+            {
+                const uint32_t word =
+                    ByteSwap(*gears::Memory().Translate<uint32_t>(freed + offset));
+                if (word != holder)
+                    continue;
+                found = true;
+                lucent::error("lifetime", "  the dying object holds a BACK"
+                    " POINTER to its holder at +{} -- whatever clears"
+                    " holder+1376 can reach it from here, so that code exists"
+                    " and is not running", offset);
+            }
+            if (!found)
+                lucent::error("lifetime", "  the dying object carries NO word"
+                    " equal to the holder in its first 512 bytes, so it cannot"
+                    " clear the reference itself -- invalidation belongs to"
+                    " whoever owns both, and that is where to look");
         }
     }
 }
