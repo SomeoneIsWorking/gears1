@@ -176,3 +176,22 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(instrument_catalog_refuses_empty_corpus
         PROPERTIES WILL_FAIL TRUE)
 endif()
+
+# RtlTimeToTimeFields / RtlTimeFieldsToTime. Verified until now only by "the
+# title reached the campaign after these landed", which shows they do not trap,
+# not that they compute the right date. Anchored on external facts -- the 1601
+# epoch, the 1970 delta, the weekdays of both, and the century leap rule -- so a
+# wrong epoch constant or an off-by-one fails the test rather than merely
+# producing a different plausible date.
+add_executable(test_time_fields
+    test_time_fields.cpp
+    ../runtime/kernel_rtl.cpp
+    ../runtime/guest_heap.cpp
+    ../runtime/guest_memory.cpp)
+target_include_directories(test_time_fields PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}"
+    "${THIRDPARTY_ROOT}/simde"
+    ../extern/XenonRecomp/XenonUtils)
+target_link_libraries(test_time_fields PRIVATE lucent::lucent)
+add_test(NAME time_fields COMMAND test_time_fields)
