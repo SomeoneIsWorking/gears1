@@ -26,6 +26,7 @@
 #include <set>
 #include <unordered_map>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <byteswap.h>
@@ -474,6 +475,15 @@ thread_local uint32_t g_reallocStack = 0;
 thread_local uint32_t g_reallocLr = 0;
 } // namespace
 
+namespace gears
+{
+// Entries and overlaps, so a zero overlap count carries its denominator.
+void CountRingProducerEntry();
+void CountRingProducerOverlap();
+uint64_t RingProducerEntries();
+uint64_t RingProducerOverlaps();
+} // namespace gears
+
 namespace gears { void ReportReallocOfCached(uint32_t block, uint32_t newSize, uint32_t from); }
 
 
@@ -557,8 +567,9 @@ void NoteRingThread(const char* which, std::string& slot, std::atomic<uint32_t>&
         // has no protection against this, and this is exactly the corruption it
         // produces.
         lucent::error("ring", "{} entered by a SECOND guest thread: '{}' after"
-            " '{}'. FRingBuffer assumes one producer and one consumer; this is"
-            " the corruption", which, current, slot);
+            " '{}' (producer entries so far: {}, overlaps caught by the wait: {})."
+            " FRingBuffer assumes one producer and one consumer", which, current,
+            slot, gears::RingProducerEntries(), gears::RingProducerOverlaps());
         count.fetch_add(1);
         slot = current;
     }
@@ -579,7 +590,71 @@ PPC_FUNC(sub_8221CBA8)
         return;
     }
 
+    // A GUARD THAT HAS NEVER NEEDED TO FIRE -- and the count is the point.
+    //
+    // MEASURED: 137,561 producer entries in one run, ZERO overlaps. The two
+    // producers (game thread and rendering thread, ~30 alternations a run) never
+    // overlap the reserve/commit window. So the lost-update hypothesis for
+    // catalog #44 is NOT supported, and this wait is inert in practice. It is
+    // kept as a DETECTOR rather than presented as a fix: if an overlap ever does
+    // happen it is both prevented and reported, and until then the zero carries
+    // its denominator so nobody has to re-derive it.
+    //
+    // HONOURING THE TITLE'S OWN PRODUCER FLAG.
+    //
+    // The ring's +16 (bIsWriting) is set to 1 by this allocator and cleared by
+    // the caller's commit. It is a producer lock -- and image-wide, NOTHING EVER
+    // READS IT (all 43 sites materialising the ring were scanned; the three
+    // candidate loads at +16 were all off a different register). On hardware it
+    // did not need to be read: the commit is three instructions, so two
+    // producers essentially never interleaved.
+    //
+    // Recompiled, that window is tens of host instructions with volatile
+    // accesses, and two producers DO interleave -- measured: the game thread and
+    // the rendering thread both enter here, ~30 alternations per run. The commit
+    // is a non-atomic read-modify-write on WritePointer, so a lost update leaves
+    // it mid-command and the consumer then reads a header that is not one.
+    //
+    // So this waits for the flag the title already maintains. It is not a lock
+    // invented here; it completes a protocol the title defines and hardware made
+    // unnecessary. Bounded, because a producer that reserves and never commits
+    // would otherwise hang the process -- and if that bound is ever hit, it is
+    // reported rather than silently ignored.
+    if (ctx.r4.u32 == kRenderRing)
+    {
+        const uint32_t writingFlag = kRenderRing + 16;
+        constexpr int kMaxSpins = 20000;
+        int spins = 0;
+        while (ByteSwap(*gears::Memory().Translate<uint32_t>(writingFlag)) != 0)
+        {
+            if (++spins > kMaxSpins)
+            {
+                lucent::error("ring", "bIsWriting stayed set for {} spins --"
+                    " proceeding anyway. Either a producer reserved without"
+                    " committing, or this wait is wrong; it must not hang the"
+                    " process either way", kMaxSpins);
+                break;
+            }
+            std::this_thread::yield();
+        }
+        // COUNTED AND REPORTED AT INFO, not debug. The first version of this
+        // logged at debug level, so with the channel off it printed nothing --
+        // and "the wait never engaged" then looked identical to "the report was
+        // switched off". A wait that never engages is a MEANINGFUL result here
+        // (it would mean the two producers never actually overlap, which would
+        // undercut the lost-update hypothesis), so it must not be confusable
+        // with silence.
+        if (spins != 0)
+            gears::CountRingProducerOverlap();
+        static std::atomic<uint64_t> engagements{0};
+        if (spins != 0)
+            lucent::info("ring", "producer wait ENGAGED: {} spin(s) for another"
+                " producer's commit (engagement {})", spins,
+                engagements.fetch_add(1) + 1);
+    }
+
     NoteRingThread("the render-ring allocator", g_producerThreadName, g_producerThreads);
+    gears::CountRingProducerEntry();
 
     // WHICH CALL SITE, per thread. Two producers on a ring with a non-atomic
     // commit is a lost-update race; whether it is OUR bug depends on whether the
@@ -1043,3 +1118,18 @@ PPC_FUNC(sub_824453A0)
             g_fenceBlocked.load(), n);
     __imp__sub_824453A0(ctx, base);
 }
+
+
+namespace
+{
+std::atomic<uint64_t> g_ringProducerEntries{0};
+std::atomic<uint64_t> g_ringProducerOverlaps{0};
+} // namespace
+
+namespace gears
+{
+void CountRingProducerEntry() { g_ringProducerEntries.fetch_add(1); }
+void CountRingProducerOverlap() { g_ringProducerOverlaps.fetch_add(1); }
+uint64_t RingProducerEntries() { return g_ringProducerEntries.load(); }
+uint64_t RingProducerOverlaps() { return g_ringProducerOverlaps.load(); }
+} // namespace gears
