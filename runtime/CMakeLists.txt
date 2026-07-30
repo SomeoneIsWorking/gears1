@@ -105,7 +105,6 @@ add_executable(gears1
     file_disposition.cpp
     guest_stack_argument.cpp
     guest_indirect_call.cpp
-    reference_barrier.cpp
     user_profile.cpp
     xam_apps.cpp
     xam_content.cpp
