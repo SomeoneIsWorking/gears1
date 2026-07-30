@@ -1708,6 +1708,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     uint64_t uboLookups = 0, uboHits = 0, uboMissSnapshot = 0, uboMissShaders = 0;
     uint64_t uboRecomputes = 0, uboRecomputesIdentical = 0;
     double msState = 0, msRecord = 0, msCensus = 0;
+    // Inside the record region, which is the biggest item in a gameplay frame.
+    // msDescWrite is a SUPERSET of msDescUpdate: it is assembling the writes AND
+    // submitting them, and the submit measures at ~0, so the two together say
+    // whether the cost is ours or the driver's.
+    double msDescWrite = 0, msPrepare = 0;
 
     // GEARS_DRAW_AB_CENSUS=1 puts the per-draw viewport census back on alternate
     // frames, so the arm with it and the arm without it are compared inside ONE
@@ -4047,6 +4052,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (allocResult != VK_SUCCESS)
         { ++skipped; ++skipReasons[6]; continue; }
 
+        // Assembling the descriptor writes, as distinct from submitting them.
+        // vkUpdateDescriptorSets itself measures at ~0 ms a frame, so if this
+        // region is expensive the cost is in BUILDING the writes -- deriving a
+        // sampler per binding, looking it up, pushing the structs -- and not in
+        // the driver.
+        // Plain begin/end rather than a ScopedMs: this span has no `continue` in
+        // it (checked), and a scope guard here would run to the end of the draw
+        // body and measure the wrong thing.
+        const double descWriteBegin = sinceStartMs();
+
         // Reused across draws (declared before the loop).
         w.clear();
         imgInfos.clear();
@@ -4105,7 +4120,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (!w.empty())
             vkUpdateDescriptorSets(device, uint32_t(w.size()), w.data(), 0, nullptr);
         msDescUpdate += sinceStartMs() - descUpdateBegin;
+        msDescWrite += sinceStartMs() - descWriteBegin;
 
+        // Building the PreparedDraw and deriving this draw's viewport/scissor.
+        // Runs to the end of the body, which has no further `continue`.
+        const double prepareBegin = sinceStartMs();
         PreparedDraw pd{};
         pd.pipeline = pipe;
         pd.layout = pipeLayout;
@@ -4305,6 +4324,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             dl.flush(lucent::Level::Info, "draw");
         }
         prepared.push_back(pd);
+        msPrepare += sinceStartMs() - prepareBegin;
         ++issued;
     }
 
@@ -5695,21 +5715,33 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // flat list they invite a reader to add them up, and the sum is meaningless.
     // The residual is printed rather than left for the reader to derive, because
     // an unnamed remainder is how 18 ms of a 36 ms draw loop went unnoticed.
-    const double msStateOwn = msState - msTranslate - msPipeline - msTexture;
-    const double msRecordOwn = msRecord - msDescAlloc - msDescUpdate - msCensus;
+    // msTexture is NOT a child of msState. uploadTexture is reached from exactly
+    // one place -- selectTexView, inside the descriptor-write assembly -- so the
+    // 8 ms it costs on a gameplay frame belongs under record, and reporting it
+    // under state+pipeline made state look twice its real size and the
+    // descriptor writes look a third of theirs. Grep confirmed the single call
+    // site rather than assuming it from where the accumulator is declared.
+    const double msStateOwn = msState - msTranslate - msPipeline;
+    // The census is INSIDE the prepare span (the viewport block), and the
+    // descriptor update is inside the descriptor-write span, so neither is
+    // subtracted here -- subtracting a child twice is how a residual goes
+    // negative and gets waved away as a rounding artefact.
+    const double msRecordOwn = msRecord - msDescAlloc - msDescWrite - msPrepare;
     const double msLoopOther =
         msDrawLoop - msState - msUniforms - msIndex - msRecord;
     lucent::info("draw", "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f},"
         " guest-memory upload {:.0f}, submit+wait {:.0f}, readback+report {:.0f}",
         sinceStartMs(), msSetup, msDrawLoop, msSsboUpload, msSubmit, msReadback);
     lucent::info("draw", "  draw loop {:.0f} ms = state+pipeline {:.0f}"
-        " (shader translation {:.0f} + pipeline creation {:.0f} + texture upload"
-        " {:.0f} + own {:.0f}) + uniforms {:.0f} + index prep {:.0f} + record"
-        " {:.0f} (descriptor alloc {:.0f} + descriptor update {:.0f} + viewport"
+        " (shader translation {:.0f} + pipeline creation {:.0f} + own {:.0f})"
+        " + uniforms {:.0f} + index prep {:.0f} + record {:.0f} (descriptor alloc"
+        " {:.0f} + descriptor writes {:.0f} of which texture upload {:.0f} and the"
+        " driver's update {:.0f}, so own {:.0f} + prepare {:.0f} of which viewport"
         " census {:.0f} + own {:.0f}) + unattributed {:.0f}",
-        msDrawLoop, msState, msTranslate, msPipeline, msTexture, msStateOwn,
-        msUniforms, msIndex, msRecord, msDescAlloc, msDescUpdate, msCensus,
-        msRecordOwn, msLoopOther);
+        msDrawLoop, msState, msTranslate, msPipeline, msStateOwn,
+        msUniforms, msIndex, msRecord, msDescAlloc, msDescWrite, msTexture,
+        msDescUpdate, msDescWrite - msTexture - msDescUpdate,
+        msPrepare, msCensus, msRecordOwn, msLoopOther);
 
     // The draw loop rather than the whole frame, and NOT on report frames: a
     // report frame reads the image back and writes a PPM, which costs more than
