@@ -110,3 +110,62 @@ see how r3 is obtained -- whether it is loaded from a container the streaming pa
 mutates, or computed. And record whether the crashing addresses differ between
 occurrences, which they did here (0x453c4a40 versus a SIGSEGV at guest
 0x2ac288ec), suggesting the pointer is garbage rather than consistently stale.
+
+### Note (2026-07-30)
+THE LOOKUP HAPPENS ONCE PER RUN AND IS IN RANGE. HYPOTHESIS NOT SUPPORTED, NOT YET REFUTED.
+
+Traced how the crashing object is obtained. sub_823ED7E0 reaches it through an
+indexed table lookup (guest 0x823edab4..0x823edb4c):
+
+    lwz  r11,772(r27)        ; a count -- checked only for > 0
+    lwz  r11,768(r27)        ; a byte array
+    lbzx r11,r11,r23         ; index = byteArray[r23]
+    cmplwi cr6,r11,255       ; 255 is the "none" sentinel -- the ONLY check
+    beq  cr6,exit
+    lwz  r10,208(r19)        ; table base
+    rlwinm r11,r11,4,0,27    ; index * 16
+    add  r11,r11,r10
+    lwz  r22,8(r11)          ; the object
+    ...
+    lwz  r11,0(r22)          ; its vtable
+    lwz  r11,204(r11)        ; slot 51
+    bctrl                    ; <- the crash
+
+The index is validated against the sentinel and NEVER against the length, which
+looked like the answer: an index past the end reads adjacent memory, and adjacent
+memory is exactly where floats would come from.
+
+MEASURED, and it does not support that. Instrumented the call site to report any
+index at or past the count, with the total number of lookups printed periodically
+so a zero is not bare:
+
+    #50 streaming lookups: 1 seen, 0 out of range; highest index 3, lowest count 108
+
+That line is identical across SIX clean runs. So this site is reached exactly ONCE
+per run, with index 3 against a count of 108 -- nowhere near the edge. There is no
+routine out-of-range lookup to find.
+
+TWO CAVEATS, both mine to own:
+
+  1. I have not captured this state on a CRASHING run. Every crash so far is at the
+     same moment (3420, 3480, 3480 frames) and the same code, so the single lookup
+     must be going wrong there -- but "in range in six clean runs" says nothing
+     about the run that fails. The measurement I actually need is this line from a
+     crashing run, and I do not have it.
+
+  2. THE RATE DROPPED AFTER I ADDED THE PROBE. Tally across one binary lineage: 2
+     crashes in 13 attempts overall, but ZERO in the 6 runs since the probe went
+     in. That may be chance at these numbers, or the probe may be perturbing
+     timing. It is not evidence that the bug is gone and must not be read as such.
+
+ALSO WORTH RECORDING: the probe first reported only the anomaly, so a clean run
+printed "0 out of range" and nothing about how many lookups that covered -- and
+then a version reporting every 20000th lookup printed NOTHING AT ALL, because there
+is only one. Two rounds of the same mistake in one sitting, on a file whose own
+comments warn about it twice. The rule that would have caught both: print the first
+occurrence unconditionally, so the instrument proves it is alive before it is
+trusted to report an absence.
+
+STILL OUTSTANDING: a temporary compare against one return address sits in
+CallGuestIndirect, on all 29,190 sites. It has not answered yet, so it stays for
+now, but it is debt and it is recorded here so it is not forgotten.
