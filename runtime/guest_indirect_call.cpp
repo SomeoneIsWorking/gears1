@@ -18,37 +18,6 @@ void ReportLinkerState(uint32_t holder);
 void ReportMapNameProbe();
 void ReportFStringProbe();
 
-// See the header: this names the target of the one virtual call that decides
-// whether the checkpoint carrier is copied. It reports the resolved address, the
-// object, and the out-parameter BEFORE the call -- the return value and the
-// out-parameter AFTER are reported by the override that replaces this once the
-// target is known, because from here the call has not happened yet.
-void NoteCarrierGateCall(uint32_t target, PPCContext& ctx, uint8_t* base)
-{
-    (void)base;
-    static std::atomic<uint64_t> seen{0};
-    const uint64_t n = seen.fetch_add(1) + 1;
-    if (n > 4)
-        return;
-
-    const auto word = [](uint32_t address) -> uint32_t {
-        if (uint64_t(address) + 4 >= PPC_MEMORY_SIZE)
-            return 0xDEADDEADu;
-        return __builtin_bswap32(
-            *reinterpret_cast<const uint32_t*>(gears::Memory().Base() + address));
-    };
-
-    const uint32_t outParam = ctx.r4.u32;
-    lucent::error("linker", "carrier gate call #{}: slot 164 on object {:#x}"
-        " resolves to {:#x} ({}), out-parameter at {:#x} currently reads"
-        " {:#x} {:#x} {:#x}", n, ctx.r3.u32, target,
-        IsValidGuestCallTarget(target)
-            ? "a recompiled guest function -- so the decision is the TITLE'S and"
-              " the predicate it evaluates is the next question"
-            : "NOT a valid guest function, which would make this our problem",
-        outParam, word(outParam), word(outParam + 4), word(outParam + 8));
-}
-
 void ReportBadIndirectCall(uint32_t target, PPCContext& ctx, uint8_t* base)
 {
 
