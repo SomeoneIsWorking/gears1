@@ -799,7 +799,7 @@ uint64_t g_constructed = 0;
 uint64_t g_destroyed = 0;
 } // namespace
 
-namespace gears { void ReportArchiveLifetime(uint32_t object); void CheckFreedWhileCached(uint32_t freed); bool BlockIsStillReferenced(uint32_t block); void ReportReallocOfCached(uint32_t, uint32_t, uint32_t); }
+namespace gears { void ReportArchiveLifetime(uint32_t object); void CheckFreedWhileCached(uint32_t freed); bool BlockIsStillReferenced(uint32_t block); void CheckHolderFreed(uint32_t freed); void ReportReallocOfCached(uint32_t, uint32_t, uint32_t); }
 
 namespace gears
 {
@@ -932,6 +932,7 @@ PPC_FUNC(sub_822153F0)
         return value;
     }();
     gears::CheckFreedWhileCached(address);
+    gears::CheckHolderFreed(address);
 
     // NO INTERVENTION HERE -- two attempts were made and BOTH FAILED, and the
     // second one is worth not repeating: see ClearCachesOfFreedBlock's comment
@@ -1007,6 +1008,37 @@ namespace gears
 // bounded (156 in a full run, each a small pool allocation), against a
 // guaranteed crash. The guest's pool simply has slightly less memory to reuse --
 // its free-list bookkeeping is untouched because the free never happens.
+// IS THE HOLDER ITSELF BEING FREED? The holder arrives as r3 to sub_824961D0 and
+// at the fault it sits at 0x42b40940 -- inside the pool's own range, alongside the
+// objects it caches, and different on every run. So it is a pool allocation, and
+// if it is released while the title still walks it then holder+1376 is being read
+// out of recycled memory and every fix aimed at the CACHED object was aimed one
+// level too deep.
+//
+// The negative is designed: the holder count goes out with the report, so "no
+// holder was ever freed" cannot be confused with "no holder was ever tracked".
+void CheckHolderFreed(uint32_t freed)
+{
+    static std::atomic<uint64_t> total{0};
+    static std::atomic<uint64_t> shown{0};
+    size_t tracked = 0;
+    bool isHolder = false;
+    {
+        std::lock_guard<std::mutex> guard(g_holderMutex);
+        tracked = g_holders.size();
+        isHolder = g_holders.count(freed) != 0;
+    }
+    if (!isHolder)
+        return;
+    const uint64_t n = total.fetch_add(1) + 1;
+    if (shown.fetch_add(1) < 6)
+        lucent::error("lifetime", "THE HOLDER ITSELF IS BEING FREED: {:#x} is a"
+            " holder the title passed to sub_824961D0, and the pool is releasing"
+            " it (occurrence {} of {} tracked holders). Anything read at"
+            " holder+1376 after this comes out of recycled memory", freed, n,
+            tracked);
+}
+
 bool BlockIsStillReferenced(uint32_t block)
 {
     std::lock_guard<std::mutex> guard(g_holderMutex);

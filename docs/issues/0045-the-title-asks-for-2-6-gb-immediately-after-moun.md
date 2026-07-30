@@ -1041,3 +1041,38 @@ HOLDER is freed while still in use, using the same technique that worked for the
 object -- watch the holder address across the pool free. If it is, this entry has
 been chasing the wrong pointer since the core-file analysis, and that analysis
 needs re-reading with the holder as the suspect.
+
+### Note (2026-07-30)
+MEASURED: THE HOLDER ITSELF IS FREED BY THE POOL. SUGGESTIVE, NOT YET CONCLUSIVE.
+
+Following the relocation from the last note -- that the holder sits in the pool's
+own address range -- a check on the pool free against the set of holders the title
+has passed to sub_824961D0:
+
+  THE HOLDER ITSELF IS BEING FREED: 0x41727800 ... (occurrence 1 of 18 tracked)
+  THE HOLDER ITSELF IS BEING FREED: 0x41727200 ... (occurrence 2 of 18 tracked)
+  THE HOLDER ITSELF IS BEING FREED: 0x48f16000 ... (occurrence 3 of 18 tracked)
+  ... 6 occurrences, 18 holders tracked ...
+
+So holders are pool allocations and the pool does release them. That is the level
+the last two failed fixes were missing: anything read at holder+1376 after its
+holder is freed comes out of recycled memory, which is why protecting the CACHED
+object could not help.
+
+WHAT THIS DOES NOT ESTABLISH, stated because it would be easy to bank it as a
+result: a holder being freed is entirely normal once the title has finished with
+it. The tracking set never removes entries, so a later free of a RECYCLED address
+at the same location also matches. What is needed is narrower -- was the CRASHING
+holder freed BEFORE the crashing call, and not legitimately reallocated to a new
+object in between.
+
+THE NEXT CHECK IS PRECISE, and is the last one this line of enquiry needs: record
+a free ordinal per holder address and an allocation ordinal alongside it, then at
+the fault report whether the crashing holder's most recent event was a FREE rather
+than an allocation. Free-then-used is the bug; free-then-reallocated-then-used is
+the title behaving correctly and means the crash is elsewhere again.
+
+INSTRUMENT NOTE: the first run of this check reported 0 events from a STALE
+BINARY -- the build had failed and the run went ahead anyway because the commands
+were chained with ';' rather than '&&'. The zero looked exactly like a real
+negative. Rebuilt and re-run before anything was concluded.
