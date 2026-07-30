@@ -219,3 +219,62 @@ every clean run, and I still have no reading of it from a crashing run. The faul
 context slot added this session can carry it -- but nothing writes it now that the
 temporary probe is out, so re-adding a writer is the next step, and with
 repro_rate.sh a crashing sample is one tool call away rather than an hour.
+
+### Note (2026-07-30)
+PORTING TOWARD IT: THE CLEAN BASELINE, THE SUBSYSTEM, AND TWO DEAD ENDS.
+
+TWO DEAD ENDS FIRST, so they are not re-walked.
+
+  1. TRUNCATED GAME DATA: NO. 364 files in the extraction are exactly 32768 bytes,
+     including Core.xxx and GameFramework.xxx, which looked like a truncated
+     extraction and would explain garbage in every deserialised structure. All 364
+     have DISTINCT md5s, so they are not stubs -- 32768 is simply the Xbox 360 disc
+     padding floor for a small package. Checked before acting on it.
+
+  2. SHORT READS: LEGITIMATE. The fs log shows 22 reads returning less than asked,
+     e.g. "read 131072 bytes at 0 from Core.xxx (SHORT: 32768 of 131072)". That is
+     the title asking for 128 KB of a 32 KB file and correctly getting all of it.
+     Not a defect.
+
+THE CRASH CHAIN IS ALL GUEST CODE. Checked every frame -- sub_823ED7E0, sub_823F0520,
+sub_823EC880, sub_823CDF00, sub_823CFEC0, sub_823CEAB8, sub_82428238 -- for named
+imports reached directly. There are none. So the port does not feed this path
+directly, and whatever is wrong arrives as DATA or as state set earlier.
+
+THE CLEAN-RUN BASELINE, which is the thing that was missing. Instrumented the call
+site to record the object and its first word, and it fires once per run in all 8
+runs of a batch:
+
+    #50 streaming object #1: 0x43513200, first word 0x820981e8 (in the image, so a
+    plausible vtable), slot-51 target 0x8219e5f0. 0 of 1 seen were not vtables.
+
+The object address varies per run (it is heap) but the vtable is ALWAYS 0x820981e8
+and slot 51 is ALWAYS sub_8219E5F0. So on a good run this is a well-formed
+polymorphic object of one specific class, and on a bad run r22 points at float data
+instead. That gives a discriminator that does not depend on catching a crash.
+
+WHAT THE SUBSYSTEM IS. sub_8219E5F0, the slot-51 implementation, is 16 instructions:
+
+    mr    r11,r3            ; the object
+    stw   r4,124(r1)        ; save the index argument
+    lwz   r11,264(r11)      ; flags at object+264
+    rlwinm r11,r11,0,2,2    ; test one bit
+    beq   -> return         ; clear: contribute nothing
+    addi  r4,r1,124         ; &the saved index
+    mr    r3,r6             ; the output collection passed by the caller
+    bl    0x822c7780        ; append
+
+A conditional COLLECTOR. Together with the caller -- a byte-indexed walk over a
+16-byte-stride table, a float at object+68 compared against a threshold, flags at
+object+88, and an output buffer built on the stack -- this is a visibility or
+streaming GATHER over components during the level tick. That is consistent with the
+float payload found earlier being rotations and world-space translations.
+
+RATE, updated: 3 crashes in 35 attempts, about 8.6 percent. The 29 percent in an
+earlier note was a small-sample artefact and is withdrawn.
+
+STILL OWED: the same probe line from a CRASHING run, which would show what r22 and
+its first word are when it fails. tools/repro_rate.sh makes that eight samples per
+tool call, and the fault-context slot carries the values through a SIGSEGV as well
+as an abort, so the next occurrence will be readable whichever way it lands. The
+one-compare probe in CallGuestIndirect remains debt until then.
