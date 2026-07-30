@@ -1758,3 +1758,52 @@ NEXT, in this order:
   2. Find who fills the out-parameter for gate #1 and why it is empty for gate #2.
   3. Only then decide whether save:\\Pla is the wrong write name. Fixing the name
      first would be a guess that might paper over the real ordering problem.
+
+### Note (2026-07-30)
+THE NAMES, AND A METHOD ERROR OF MINE.
+
+MEASURED, both gates, with the out-parameter contents rather than just its count:
+
+  carrier gate #1: out-param data 0x433f35c0 count 14 = "chapter37.sav"
+                   (other path) -> object+420 gets 385 bytes, RETURNED 1
+  carrier gate #2: out-param data 0x0 count 0 = "" (literal path)
+                   -> object+420 stays empty, RETURNED 1
+
+And with the fs debug channel enabled, gate #1s data source is named:
+
+  [fs] open "D:\\WarGame\\Checkpoints\\chapter37.sav" -> handle 0xf4000080
+  [fs] read 385 bytes at 0 -> 00 00 00 02 00 00 00 25
+
+So the 385 bytes are the games own BUNDLED DEFAULT CHECKPOINT off the disc, not a
+user save. The file on disk after a run confirms the content is right: 385 bytes,
+version 2, chapter 0x25, FString length 12 "sp_prison_p".
+
+A METHOD ERROR TO RECORD, because it is the same one this project keeps making.
+The previous note asserted "the literal path performs NO FILE I/O WHATSOEVER --
+there is not a single [fs] line". That was true of the log and NOT evidence,
+because failed opens are logged at kernel_file.cpp:151 through
+lucent::debug("fs", ...) -- a channel that is OFF by default. The absence I
+reasoned from was an absence of LOGGING. Re-run with GEARS_LUCENT_DEBUG=fs and a
+positive control (40 opens logged, including "not found" ones for the startup
+movies), and the conclusion does hold -- default_checkpoint.sav is attempted
+nowhere, its only 10 mentions being my own probe lines -- but I reached a right
+answer by an unsound route and would not have noticed had it been wrong.
+
+A STRUCTURAL FACT I HAD WRONG: the discovery hook keyed on lr == 0x821B4928 fired
+ONCE while the gate ran TWICE. So gate #1 is called from a DIFFERENT call site
+entirely, and only gate #2 is the one inside sub_821B4620. They are not two
+iterations of one loop; they are two different callers, on two different objects,
+and only one of them ever supplies a name.
+
+AND A CANDIDATE READING OF THE RETURN VALUE, not yet confirmed. In the tail, r31
+holds the object pointer from "mr r31,r3" at entry. The non-literal path
+overwrites it with the result of sub_8232F010; the literal path branches to
+0x821b9588, which appears to be PAST that overwrite, so it would return the OBJECT
+POINTER -- non-zero by construction, regardless of whether anything loaded. If
+that is right, "returns 1" on the literal path carries no information at all and
+the caller is not being lied to so much as reading a value that was never a status.
+It also means the console behaves identically here, so the literal load must
+SUCCEED on hardware, and the whole question collapses to: what does sub_821B5F30
+read from, and why does it read nothing here?
+
+That last question is the only one left, and it is being worked.
