@@ -57,6 +57,19 @@ void SetFaultReportGuestMapping(void* guestBase, uint64_t guestSize);
 // this reporter exists to prevent. Guest threads call this as they start.
 void InstallSignalStackForThisThread();
 
+// Leaves four values and a label for the fault handler to print if the process
+// dies. This exists because a crash can arrive as a SIGSEGV, where no guest
+// registers are reachable, or as an abort from the checked indirect call, where
+// they are -- and an investigation that only gets its data from one of those is
+// hostage to which way the crash happens to land. #50 is exactly that: two
+// occurrences, one of each kind, and the useful detail only came from the abort.
+//
+// The values are plain words written without a lock, because the handler must not
+// take one. A torn read is possible in principle and harmless in practice: this is
+// a diagnostic of last resort, and stale-but-printed beats correct-but-absent.
+void SetFaultContext(const char* label, uint32_t a, uint32_t b, uint32_t c,
+                     uint32_t d);
+
 // Reports, once, if something has replaced the SIGSEGV handler since install.
 // Called from a per-frame path: a displaced reporter is invisible otherwise,
 // and it is the difference between a crash that explains itself and six runs

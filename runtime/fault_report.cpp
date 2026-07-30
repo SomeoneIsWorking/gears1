@@ -54,6 +54,10 @@ std::string DescribeFaultAddress(uintptr_t guestBase, uint64_t guestSize,
 uintptr_t g_guestBase = 0;
 uint64_t g_guestSize = 0;
 
+// The fault-context slot. See the header.
+const char* volatile g_contextLabel = nullptr;
+volatile uint32_t g_contextValues[4] = {0, 0, 0, 0};
+
 #ifndef _WIN32
 namespace
 {
@@ -66,6 +70,27 @@ volatile sig_atomic_t g_reporting = 0;
 // Written with write(2) rather than the logger: the process is already broken,
 // and a logger that takes a mutex can deadlock against the thread that faulted
 // while holding it. A report that hangs is worse than no report.
+// Async-signal-safe hex, because std::snprintf is not. Writes "0x" then the
+// value, no padding.
+void EmitHex(uint32_t value)
+{
+    char buffer[11];
+    buffer[0] = '0';
+    buffer[1] = 'x';
+    int at = 2;
+    bool leading = true;
+    for (int shift = 28; shift >= 0; shift -= 4)
+    {
+        const unsigned digit = (value >> shift) & 0xF;
+        if (digit == 0 && leading && shift != 0)
+            continue;
+        leading = false;
+        buffer[at++] = char(digit < 10 ? '0' + digit : 'a' + digit - 10);
+    }
+    const ssize_t ignored = write(STDERR_FILENO, buffer, size_t(at));
+    (void)ignored;
+}
+
 void Emit(const char* text)
 {
     const ssize_t ignored = write(STDERR_FILENO, text, std::strlen(text));
@@ -104,6 +129,18 @@ void OnFatalMemorySignal(int signal, siginfo_t* info, void* context)
         Emit("host backtrace (recompiled frames are named for their guest"
              " addresses):\n");
         backtrace_symbols_fd(frames, count, STDERR_FILENO);
+        if (g_contextLabel != nullptr)
+        {
+            Emit("context: ");
+            Emit(g_contextLabel);
+            for (int i = 0; i < 4; ++i)
+            {
+                Emit(" ");
+                EmitHex(g_contextValues[i]);
+            }
+            Emit("\n");
+        }
+
         Emit("=== END FAULT ===\n");
     }
 
@@ -189,6 +226,16 @@ void InstallSignalStackForThisThread()
     stack.ss_flags = 0;
     sigaltstack(&stack, nullptr);
 #endif
+}
+
+void SetFaultContext(const char* label, uint32_t a, uint32_t b, uint32_t c,
+                     uint32_t d)
+{
+    g_contextValues[0] = a;
+    g_contextValues[1] = b;
+    g_contextValues[2] = c;
+    g_contextValues[3] = d;
+    g_contextLabel = label;     // published last, so a set label implies set values
 }
 
 void SetFaultReportGuestMapping(void* guestBase, uint64_t guestSize)
