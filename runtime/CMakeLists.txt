@@ -138,7 +138,8 @@ endif()
 # about a second, with no guest, no menu walk and no 200-second boot; see
 # frame_capture.h. gears1 links it exactly as before.
 add_library(gears_draw STATIC gpu_draw.cpp frame_capture.cpp
-                              gpu_queue_family.cpp gpu_instance.cpp)
+                              gpu_queue_family.cpp gpu_instance.cpp
+                              gpu_shared_device.cpp)
 target_include_directories(gears_draw PUBLIC .)
 target_link_libraries(gears_draw PRIVATE lucent::lucent)
 target_link_libraries(gears1 PRIVATE gears_draw)
