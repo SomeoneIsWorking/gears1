@@ -1154,3 +1154,37 @@ The barrier stays: it is correct, tested, and its measured non-engagement is wha
 ruled the during-the-call reading out. It should be REMOVED from the free path if
 the next step confirms the between-calls mechanism, since machinery that never
 fires is indistinguishable from machinery that is broken.
+
+### Note (2026-07-30)
+THE OBJECT CANNOT INVALIDATE ITSELF, AND NOTHING ELSE NULLS THE FIELD EITHER.
+
+Two measurements, both clean.
+
+1. NO BACK POINTER. At every free of a still-cached block the first 512 bytes of
+   the dying object were scanned for a word equal to its holder's address. 24
+   occurrences, ZERO hits. The object does not know its holder, so it cannot
+   clear the reference on the way out. The 'the destructor should be nulling it'
+   reading is dead.
+
+2. NO INVALIDATING STORE EXISTS IN THE IMAGE. All 11 stores to +1376 across the
+   whole recompiled image were classified. Six are inside sub_824961D0 itself;
+   the others are sub_822396A8, sub_82496AE0, sub_824993A0, sub_82550460 and one
+   stack-relative store that is unrelated. NOT ONE of them stores an immediate
+   zero. There is no invalidation path to find because the title never wrote one.
+
+WHICH MAKES THE FIELD A MEMO, NOT A CACHE-WITH-INVALIDATION. sub_824961D0's
+prologue reads it and uses it when non-null, and the same function writes it six
+times. The shape is 'if I already have one, use it; otherwise make one'. So the
+title's invariant is that THE MEMOISED OBJECT OUTLIVES THE HOLDER'S USE OF IT,
+and it holds that invariant by construction rather than by checking.
+
+SO THE ANOMALY IS THE FREE, NOT THE READ. The correct question is no longer 'why
+is the stale pointer not cleared' -- nothing was ever going to clear it -- but
+'why is the rendering thread destroying an object the game thread has memoised'.
+That is where this goes next, and it points back at the FDrawSceneCommand
+realloc-to-zero already recorded on this entry, now with a reason to treat the
+free as the wrong end rather than the read.
+
+The 'nothing nulls that field' remark in the probe text was right about the fact
+and wrong about its significance: it read as a missing mechanism, and it is
+actually the design.
