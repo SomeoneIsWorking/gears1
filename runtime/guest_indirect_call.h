@@ -57,26 +57,8 @@ inline bool IsValidGuestCallTarget(uint32_t target)
 // compile definition and a forced include, so the generated code does not have
 // to be touched -- it is regenerated from the image and any edit to it would be
 // lost.
-// DISCOVERY HOOK for one call site. The checkpoint carrier is copied into the
-// object the archive reads from only when the virtual call at guest 0x821B4924
-// returns zero, and it is returning non-zero, so the copy never happens and the
-// archive is empty. That call is a bctrl through slot 164 and cannot be hooked
-// like a named function -- but every indirect call comes through here, and the
-// recompiled code sets ctx.lr to the return address first, which identifies it
-// exactly.
-//
-// This costs one compare against a constant on the hot path and exists only to
-// LEARN the target. Once the target is named it gets a normal override and this
-// goes away: a permanent hot-path check for one address is not something to leave
-// behind.
-void NoteCarrierGateCall(uint32_t target, PPCContext& ctx, uint8_t* base);
-constexpr uint32_t kCarrierGateReturnAddress = 0x821B4928;
-
 inline void CallGuestIndirect(PPCContext& ctx, uint8_t* base, uint32_t target)
 {
-    if (uint32_t(ctx.lr) == kCarrierGateReturnAddress) [[unlikely]]
-        NoteCarrierGateCall(target, ctx, base);
-
     if (!IsValidGuestCallTarget(target)) [[unlikely]]
         ReportBadIndirectCall(target, ctx, base);
 
