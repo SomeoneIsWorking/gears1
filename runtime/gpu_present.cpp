@@ -778,9 +778,10 @@ bool Presenter::PresentOne(uint32_t sequence)
                 // readback buffer, which now feeds only its diagnostics -- claiming
                 // otherwise would credit this change with a cost it has not removed.
                 lucent::info("present", "presenting the drawn image by BLIT on the"
-                    " shared device: the staging buffer, the CPU red/blue swap and"
-                    " the buffer-to-image upload are all bypassed (the draw side's"
-                    " own readback still runs, feeding its diagnostics)");
+                    " shared device: the staging buffer, the CPU red/blue swap, the"
+                    " buffer-to-image upload and the draw side's frame readback are"
+                    " all bypassed (the readback still runs on reported frames, where"
+                    " its diagnostics need the pixels)");
             }
         }
     }

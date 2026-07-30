@@ -4943,6 +4943,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // presenter when the device is shared, so it can blit rather than receive the
     // pixels through host memory.
     VkImage presentableImage = VK_NULL_HANDLE;
+
+    // WHETHER THE PIXELS ARE STILL NEEDED ON THE HOST. Since the presenter blits the
+    // published image directly, the readback only serves this frame's own diagnostics
+    // -- EXCEPT when this renderer owns its device, because then the presenter (if any)
+    // cannot blit from an image on a different device and falls back to the host
+    // upload, which reads exactly these pixels. Dropping the readback in that case
+    // would present nothing at all, so the condition is deliberately generous.
+    const bool needHostPixels = in.report || ownsDevice;
+
     SurfaceTarget* presentTarget = nullptr;
     if (havePresent)
     {
@@ -4989,11 +4998,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &r);
             source = presentStage;
         }
-        VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        region.imageExtent = {W, H, 1};
-        vkCmdCopyImageToBuffer(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            readback, 1, &region);
+        if (needHostPixels)
+        {
+            VkBufferImageCopy region{};
+            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            region.imageExtent = {W, H, 1};
+            vkCmdCopyImageToBuffer(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                readback, 1, &region);
+        }
     }
     // GEARS_DRAW_RESOLVE_DUMP=1: copy every resolve target out so it can be
     // written to a PPM after the frame. These images are what the guest's post
@@ -5251,8 +5263,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     }
 
     // --- read pixels + coverage numbers ----------------------------------
-    g_frame.resize(rbBytes);
-    std::memcpy(g_frame.data(), P.readbackMapped, rbBytes);
+    // Only when they are still wanted: on the shared-device path the presenter blits
+    // the image and never looks at these bytes, so copying a whole frame out of the
+    // GPU every frame would be pure cost. g_frame is left holding the previous
+    // frame's contents in that case, which nothing reads -- and if that ever changes,
+    // this is where it would go stale.
+    if (needHostPixels)
+    {
+        g_frame.resize(rbBytes);
+        std::memcpy(g_frame.data(), P.readbackMapped, rbBytes);
+    }
     // The per-frame census -- a full per-pixel scan, a dozen summary lines and a
     // PPM write -- costs ~40 ms, which is most of a warm frame. It answers
     // "what did this frame do", so it belongs to a CAPTURE, not to every frame
