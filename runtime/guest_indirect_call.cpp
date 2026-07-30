@@ -34,8 +34,36 @@ void NoteStreamingObject(PPCContext& ctx, uint8_t* base)
     const bool plausible = firstWord >= PPC_IMAGE_BASE &&
                            firstWord < PPC_IMAGE_BASE + PPC_IMAGE_SIZE;
 
-    SetFaultContext("#50 (object, its first word, ctr target, lr):", object,
-                    firstWord, ctx.ctr.u32, uint32_t(ctx.lr));
+    // THE INDEX AND THE TABLE, not the call target -- the target is already in the
+    // abort report and the lr is the filter that got us here, so both were wasted
+    // slots. The index is the value that matters: the guest NEVER bounds-checks it.
+    // sub_823ED7E0 reads the table at r19+208 and no length field anywhere, so the
+    // invariant is that the byte array on r27 holds indices valid for that table.
+    // A large index at a crash means the two are out of step.
+    //
+    // Note what this corrects: an earlier note claimed the index was "in range,
+    // 3 of 108". The 108 came from r27+772, which is the COUNT OF THE BYTE ARRAY
+    // itself -- 768/772 is a TArray<BYTE> descriptor -- not the length of the
+    // table being indexed. The index was compared against the wrong bound, so that
+    // hypothesis was never actually tested.
+    const uint32_t indexArray =
+        (uint64_t(ctx.r27.u32) + 772 < PPC_MEMORY_SIZE)
+            ? __builtin_bswap32(
+                  *reinterpret_cast<const uint32_t*>(base + ctx.r27.u32 + 768))
+            : 0;
+    const uint32_t index =
+        (indexArray != 0 &&
+         uint64_t(indexArray) + ctx.r23.u32 < PPC_MEMORY_SIZE)
+            ? *(base + indexArray + ctx.r23.u32)
+            : 0xFFu;
+    const uint32_t table =
+        (uint64_t(ctx.r19.u32) + 212 < PPC_MEMORY_SIZE)
+            ? __builtin_bswap32(
+                  *reinterpret_cast<const uint32_t*>(base + ctx.r19.u32 + 208))
+            : 0;
+
+    SetFaultContext("#50 (object, its first word, table index, table base):",
+                    object, firstWord, index, table);
 
     // FIRST OCCURRENCE ALWAYS, so the probe proves it is alive before any absence
     // is read as information -- two earlier versions of this printed nothing at
@@ -46,11 +74,11 @@ void NoteStreamingObject(PPCContext& ctx, uint8_t* base)
     const uint64_t bad = plausible ? implausible.load() : implausible.fetch_add(1) + 1;
     if (n == 1 || !plausible)
         lucent::info("call", "#50 streaming object #{}: {:#x}, first word {:#x}"
-            " ({}), slot-51 target {:#x}. {} of {} seen were not vtables.",
-            n, object, firstWord,
+            " ({}); table {:#x} index {} -> entry {:#x}. {} of {} seen were not"
+            " vtables.", n, object, firstWord,
             plausible ? "in the image, so a plausible vtable"
                       : "NOT in the image -- this is the corruption",
-            ctx.ctr.u32, bad, n);
+            table, index, table + index * 16, bad, n);
 }
 
 void ReportBadIndirectCall(uint32_t target, PPCContext& ctx, uint8_t* base)

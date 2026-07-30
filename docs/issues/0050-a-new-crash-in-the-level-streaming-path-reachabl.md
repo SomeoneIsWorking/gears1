@@ -278,3 +278,56 @@ its first word are when it fails. tools/repro_rate.sh makes that eight samples p
 tool call, and the fault-context slot carries the values through a SIGSEGV as well
 as an abort, so the next occurrence will be readable whichever way it lands. The
 one-compare probe in CallGuestIndirect remains debt until then.
+
+### Note (2026-07-30)
+CORRECTION: I CHECKED THE INDEX AGAINST THE WRONG BOUND.
+
+An earlier note here concluded the table index was "in range -- index 3, count 108"
+across six clean runs, and treated the unbounded-index hypothesis as unsupported.
+THAT CONCLUSION WAS INVALID. The 108 came from r27+772, and 768/772 is a
+TArray<BYTE> DESCRIPTOR: +768 is the data pointer and +772 is the count OF THE BYTE
+ARRAY ITSELF. It is not the length of the table at r19+208 that the index is used
+against. I compared the index to the size of the array the index came FROM, which
+says nothing about whether it is valid for the table it indexes INTO.
+
+So the hypothesis was never tested. It is back open.
+
+AND THE GUEST NEVER BOUNDS-CHECKS IT EITHER. Every access to r19 fields in
+sub_823ED7E0 is: +256, +268, +264, and +208. There is no length field read anywhere.
+So the title relies on an invariant -- that the byte array on r27 holds indices
+valid for the table on r19 -- rather than checking it.
+
+THE STRUCTURE, now fully traced:
+
+    r27 = arg1                      ; the primary object
+    r17 = arg3                      ; a TArray<BYTE> (data at 0, count at 4)
+    r19 = sub_823F6618(r27+632)     ; the table owner, or NULL
+    r23 = r17.data[r18]             ; iterate arg3 -> a byte
+    idx = r27.data768[r23]          ; map it through a second byte array
+    if (idx == 255) skip            ; the only check
+    r22 = *(r19+208 + idx*16 + 8)   ; the object
+    call slot 51 of r22 vtable      ; the crash
+
+sub_823F6618 is a validity GATE, not a lookup: 32 instructions that return their
+argument only if its +52 field matches a global obtained from sub_82262B28,
+otherwise NULL -- and the caller checks for NULL at 0x823ed8f4. So r19 is either the
+right object or absent. That leaves the two byte arrays being out of step with the
+table as the live candidate.
+
+CLEAN BASELINE, stable across three batches of eight:
+
+    #50 streaming object #1: 0x42f13200, first word 0x820981e8 (a plausible
+    vtable); table 0x43327f80 index 3 -> entry 0x43327fb0
+
+Index is always 3, the entry is always table+48, and the vtable is always
+0x820981e8. So a crashing run will distinguish the two candidates immediately: a
+DIFFERENT index means the arrays are out of step, while index 3 with a bad entry
+means the table itself is wrong. The fault-context slot now carries the index and
+table base, so this survives a SIGSEGV as well as an abort.
+
+RATE, and an honest gap. 3 crashes in 43 attempts overall, but all three were early
+and the last 33 runs are clean. At 7 percent, 33 consecutive clean runs is about a
+9 percent event -- unlikely but not remarkable. I cannot attribute the change:
+candidates are chance, or one of several unrelated code changes shifting timing. I
+am NOT claiming the bug is gone, and I am not claiming a cause. What is certain is
+that it happened three times with full fault reports.
