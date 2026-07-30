@@ -43,6 +43,27 @@ bool AdoptSharedGpu(SharedGpu& out)
     return true;
 }
 
+namespace
+{
+std::mutex g_frameMutex;
+SharedFrameImage g_frame;
+} // namespace
+
+void PublishSharedFrameImage(const SharedFrameImage& frame)
+{
+    std::lock_guard<std::mutex> guard(g_frameMutex);
+    g_frame = frame;
+}
+
+bool AcquireSharedFrameImage(SharedFrameImage& out)
+{
+    std::lock_guard<std::mutex> guard(g_frameMutex);
+    if (g_frame.image == VK_NULL_HANDLE)
+        return false;
+    out = g_frame;
+    return true;
+}
+
 bool SharedGpuPublished()
 {
     std::lock_guard<std::mutex> guard(g_mutex);
