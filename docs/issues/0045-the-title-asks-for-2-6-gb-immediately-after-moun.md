@@ -1718,3 +1718,43 @@ exactly the class of defect worth fixing properly.
 NEXT: read sub_821B5F30 and find what path it actually opens, then compare against
 what guest_filesystem exposes. Report the attempted path verbatim -- not "the open
 failed", which does not say which name was tried.
+
+### Note (2026-07-30)
+THE LITERAL PATH NEVER TOUCHES THE FILESYSTEM, AND THE WRITE/READ NAMES DISAGREE.
+
+Sequence around gate #2, from one run, in order:
+
+  [xam] XamContentCreateEx("default_checkpoint_sav") disposition 3, content
+        exists -> open
+  [fs]  mounted "save:" -> .../default_checkpoint_sav (writable)
+  [xam] content "default_checkpoint_sav" mounted as "save:" (existing)
+  carrier gate #2 ... literal "default_checkpoint.sav"
+    object+420 before: data 0x0 count 0 -> after: data 0x0 count 0; RETURNED 0x1
+
+So the content mount SUCCEEDS immediately before the gate, and then the literal
+load performs NO FILE I/O WHATSOEVER -- there is not a single [fs] line between
+the mount and the gate returning. It fails before reaching the filesystem, so
+this is not an open that returned an error; nothing was ever opened.
+
+AND THE TWO NAMES DISAGREE. The title WRITES its checkpoint to save:\\Pla -- a
+name derived from the gamertag, truncated to four bytes including the terminator
+by CopyGamertag, and that file is the 385-byte blob that decodes byte-identically
+to chapter37.sav. The loader is looking for "default_checkpoint.sav". One of those
+two is wrong and they cannot both be right, but WHICH is wrong is not established
+and I am not guessing: it could be that the write name should be the literal, or
+that the literal path is a fallback that is never meant to succeed and the real
+failure is the empty out-parameter that sent it down there.
+
+THAT EMPTY OUT-PARAMETER IS THE BETTER SUSPECT. Gate #1 succeeds with an
+out-parameter count of 14 and loads 385 bytes; gate #2 fails with a count of 0.
+The paths differ only in that. So the question worth asking first is not "why did
+the literal load fail" but "why did the caller supply no name the second time,
+when it supplied a 14-character one the first time". A 14-character name is about
+the length of a checkpoint filename.
+
+NEXT, in this order:
+  1. Read sub_821B5F30 and establish what it reads FROM -- it is not a file open,
+     so it is either a content/device API or a memory source.
+  2. Find who fills the out-parameter for gate #1 and why it is empty for gate #2.
+  3. Only then decide whether save:\\Pla is the wrong write name. Fixing the name
+     first would be a guess that might paper over the real ordering problem.
