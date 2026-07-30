@@ -37,6 +37,14 @@
 #include "guest_thread.h"
 #include "guest_memory.h"
 
+// Pool allocation/free bookkeeping, defined further down but used by the
+// allocator probe above its definition.
+namespace gears
+{
+void NotePoolEvent(uint32_t address, bool freed);
+bool LastPoolEventWasFree(uint32_t address, uint64_t& ordinal, bool& known);
+} // namespace gears
+
 // TWO ENTRY POINTS, EIGHT BYTES APART, into the same body -- and the caller
 // uses the SECOND. Overriding only sub_828D2FB0 caught nothing while the panic
 // fired anyway, which is what exposed this: both sites that reach KeBugCheck(0)
@@ -460,6 +468,7 @@ PPC_FUNC(sub_82214F50)
             ctx.r4.u32 >> 20, uint32_t(ctx.lr), ctx.r3.u32, ctx.r5.u32,
             ctx.r6.u32, ctx.r7.u32);
     __imp__sub_82214F50(ctx, base);
+    gears::NotePoolEvent(ctx.r3.u32, false);
 }
 
 // One level up, and it is a REALLOC, not an alloc: the prologue keeps r4 as the
@@ -799,7 +808,7 @@ uint64_t g_constructed = 0;
 uint64_t g_destroyed = 0;
 } // namespace
 
-namespace gears { void ReportArchiveLifetime(uint32_t object); void CheckFreedWhileCached(uint32_t freed); bool BlockIsStillReferenced(uint32_t block); void CheckHolderFreed(uint32_t freed); void ReportReallocOfCached(uint32_t, uint32_t, uint32_t); }
+namespace gears { void ReportArchiveLifetime(uint32_t object); void CheckFreedWhileCached(uint32_t freed); bool BlockIsStillReferenced(uint32_t block); void CheckHolderFreed(uint32_t freed); void NotePoolEvent(uint32_t, bool); bool LastPoolEventWasFree(uint32_t, uint64_t&, bool&); void ReportReallocOfCached(uint32_t, uint32_t, uint32_t); }
 
 namespace gears
 {
@@ -933,6 +942,7 @@ PPC_FUNC(sub_822153F0)
     }();
     gears::CheckFreedWhileCached(address);
     gears::CheckHolderFreed(address);
+    gears::NotePoolEvent(address, true);
 
     // NO INTERVENTION HERE -- two attempts were made and BOTH FAILED, and the
     // second one is worth not repeating: see ClearCachesOfFreedBlock's comment
@@ -1008,6 +1018,39 @@ namespace gears
 // bounded (156 in a full run, each a small pool allocation), against a
 // guaranteed crash. The guest's pool simply has slightly less memory to reuse --
 // its free-list bookkeeping is untouched because the free never happens.
+// THE PRECISE QUESTION, and the last one this line of enquiry needs.
+//
+// A holder being freed is normal once the title has finished with it, so the free
+// alone proves nothing. What matters is the ORDER: if a holder's most recent pool
+// event was a FREE, the title is walking a dead object; if it was an ALLOCATION,
+// the address was legitimately recycled and the crash is elsewhere again.
+namespace
+{
+struct PoolEvent { uint64_t ordinal = 0; bool freed = false; };
+std::mutex g_poolEventMutex;
+std::unordered_map<uint32_t, PoolEvent> g_poolEvents;
+std::atomic<uint64_t> g_poolOrdinal{0};
+} // namespace
+
+void NotePoolEvent(uint32_t address, bool freed)
+{
+    if (address == 0)
+        return;
+    std::lock_guard<std::mutex> guard(g_poolEventMutex);
+    g_poolEvents[address] = PoolEvent{g_poolOrdinal.fetch_add(1) + 1, freed};
+}
+
+bool LastPoolEventWasFree(uint32_t address, uint64_t& ordinal, bool& known)
+{
+    std::lock_guard<std::mutex> guard(g_poolEventMutex);
+    const auto it = g_poolEvents.find(address);
+    known = it != g_poolEvents.end();
+    if (!known)
+        return false;
+    ordinal = it->second.ordinal;
+    return it->second.freed;
+}
+
 // IS THE HOLDER ITSELF BEING FREED? The holder arrives as r3 to sub_824961D0 and
 // at the fault it sits at 0x42b40940 -- inside the pool's own range, alongside the
 // objects it caches, and different on every run. So it is a pool allocation, and
@@ -1136,6 +1179,51 @@ PPC_FUNC(sub_824961D0)
     {
         std::lock_guard<std::mutex> guard(g_holderMutex);
         g_holders.insert(ctx.r3.u32);
+    }
+
+    {
+        uint64_t ordinal = 0;
+        bool known = false;
+        const bool dead = gears::LastPoolEventWasFree(ctx.r3.u32, ordinal, known);
+        static std::atomic<uint64_t> reported{0};
+        if (dead && reported.fetch_add(1) < 8)
+            lucent::error("lifetime", "USE OF A FREED HOLDER: {:#x} enters"
+                " sub_824961D0 but its most recent pool event was the FREE at"
+                " ordinal {} -- everything it reads at +1376 comes from recycled"
+                " memory", ctx.r3.u32, ordinal);
+        // AND IS THE CACHED VALUE A KNOWN ALLOCATION AT ALL? "A stale pointer to
+        // a freed block" and "a word that was never a pointer" look identical at
+        // the fault, and they have different causes: the first is a lifetime bug,
+        // the second means something wrote garbage into the field.
+        {
+            const uint32_t cached =
+                ByteSwap(*gears::Memory().Translate<uint32_t>(ctx.r3.u32 + 1376));
+            if (cached != 0)
+            {
+                uint64_t cachedOrdinal = 0;
+                bool cachedKnown = false;
+                const bool cachedFreed =
+                    gears::LastPoolEventWasFree(cached, cachedOrdinal, cachedKnown);
+                static std::atomic<uint64_t> shown{0};
+                if (shown.fetch_add(1) < 6)
+                    lucent::info("lifetime", "holder {:#x} caches {:#x}: {}",
+                        ctx.r3.u32, cached,
+                        !cachedKnown ? "NEVER SEEN as a pool allocation -- this is"
+                                       " not a stale pointer, it is a word that was"
+                                       " never a valid block"
+                        : cachedFreed ? "a block whose last event was a FREE"
+                                      : "a live block (last event an allocation)");
+            }
+        }
+
+        if (!known)
+        {
+            static std::atomic<bool> once{false};
+            if (!once.exchange(true))
+                lucent::info("lifetime", "holder {:#x} has no recorded pool event:"
+                    " allocated before this probe was watching, so the ABSENCE of"
+                    " a freed-holder report is not yet evidence", ctx.r3.u32);
+        }
     }
     // WHICH THREAD USES THE CACHE. The deleter runs on the rendering thread
     // (its stack ends at the drain loop's Execute call, 0x82444f7c). If the
