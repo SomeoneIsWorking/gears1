@@ -2072,8 +2072,32 @@ PPC_FUNC(sub_821B94D8)
     }
 
     constexpr uint32_t kCarrier = 0x82BFB36C;
+    // THE OUT-PARAMETER'S CONTENTS, not just its count. Gate #1 succeeds with a
+    // count of 14 and gate #2 fails with 0, and the two paths differ ONLY in
+    // that -- so what the caller supplied is the question, and "count 14" alone
+    // does not answer it. Read as UTF-16, which is what TCHAR is here; a narrow
+    // string would show as interleaved NULs and is worth seeing rather than
+    // assuming.
+    std::string supplied;
+    const uint32_t suppliedData = word(param);
+    if (suppliedData != 0 && uint64_t(suppliedData) + 2 < PPC_MEMORY_SIZE)
+    {
+        for (uint32_t i = 0; i < 64; ++i)
+        {
+            const uint32_t at = suppliedData + i * 2;
+            if (uint64_t(at) + 2 >= PPC_MEMORY_SIZE)
+                break;
+            const uint16_t unit =
+                ByteSwap(*gears::Memory().Translate<uint16_t>(at));
+            if (unit == 0)
+                break;
+            supplied.push_back(unit < 0x80 ? char(unit) : '?');
+        }
+    }
+
     lucent::error("linker", "carrier gate #{}: object {:#x}, out-param {:#x}"
-        " count {} ({} path), literal '{}'", n, object, param, paramCount,
+        " data {:#x} count {} = '{}' ({} path), fallback literal '{}'",
+        n, object, param, suppliedData, paramCount, supplied,
         paramCount <= 1 ? "literal" : "other", literal);
     lucent::error("linker", "  object+420 before: data {:#x} count {} -> after:"
         " data {:#x} count {}; RETURNED {:#x}", beforeData, int32_t(beforeCount),
