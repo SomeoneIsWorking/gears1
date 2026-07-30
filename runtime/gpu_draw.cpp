@@ -10,6 +10,7 @@
 // explicitly allows -- the pixel shader samples a render target that does not
 // exist yet.
 #include "gpu_draw.h"
+#include "frame_ab.h"
 #include "gpu_device_features.h"
 #include "guest_texture_hash.h"
 #include "gpu_shared_device.h"
@@ -45,6 +46,32 @@ namespace
 
 constexpr uint32_t kWidth = 1280;
 constexpr uint32_t kHeight = 720;
+
+// Accumulates the time a scope took into `sink`, HOWEVER the scope is left.
+//
+// The draw loop's per-draw body has several `continue` paths after the point
+// where recording begins -- a failed descriptor allocation, an index buffer that
+// would not fit. A plain "end minus begin" written at the bottom of the body
+// drops every draw that took one of them, and those are exactly the draws an
+// unexplained cost would be hiding in. The destructor cannot be skipped, so the
+// measurement cannot quietly lose a case.
+class ScopedMs
+{
+public:
+    explicit ScopedMs(double& sink)
+        : sink_(sink), begin_(std::chrono::steady_clock::now()) {}
+    ~ScopedMs()
+    {
+        sink_ += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - begin_).count();
+    }
+    ScopedMs(const ScopedMs&) = delete;
+    ScopedMs& operator=(const ScopedMs&) = delete;
+
+private:
+    double& sink_;
+    std::chrono::steady_clock::time_point begin_;
+};
 
 std::vector<uint8_t> g_frame; // last rendered R8G8B8A8 frame
 
@@ -1680,7 +1707,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Uniform-cache accounting; see the hit test in the draw loop.
     uint64_t uboLookups = 0, uboHits = 0, uboMissSnapshot = 0, uboMissShaders = 0;
     uint64_t uboRecomputes = 0, uboRecomputesIdentical = 0;
-    double msState = 0, msRecord = 0;
+    double msState = 0, msRecord = 0, msCensus = 0;
+
+    // GEARS_DRAW_AB_CENSUS=1 puts the per-draw viewport census back on alternate
+    // frames, so the arm with it and the arm without it are compared inside ONE
+    // run. Separate runs cannot answer this: three of them at an identical 743
+    // draws a frame gave 39.4, 47.2 and 42.7 ms draw loops, and the two slower
+    // ones were the runs with the census already removed. See runtime/frame_ab.h.
+    static AbTest ab(lucent::config::flag("DRAW_AB_CENSUS"));
+    ab.BeginFrame();
     double msTranslate = 0, msPipeline = 0, msTexture = 0, msSsboUpload = 0;
     auto accumulate = [](double& into, Clock::time_point from) {
         into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
@@ -3989,7 +4024,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
 
         msIndex += sinceStartMs() - indexBegin;
-        const double recordBegin = sinceStartMs();
+
+        // Everything from here to the end of the draw's body: descriptor
+        // allocation and update, the PreparedDraw itself, the viewport
+        // derivation and the census. It was declared and never accumulated, so
+        // the breakdown reported ~2 ms of a ~36 ms draw loop and the remaining
+        // 18 ms had no name at all -- which reads as "the loop is cheap" rather
+        // than "the loop is unmeasured". msDescAlloc/msDescUpdate are inside it.
+        ScopedMs recordTime(msRecord);
 
         // Descriptor sets for this draw. Sets 2/3 use this shader pair's own
         // texture layouts, so their binding counts match the SPIR-V exactly.
@@ -4059,12 +4101,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         };
         writeTextures(*vsX, sets[2]);
         writeTextures(*psX, sets[3]);
-        if (!w.empty())
-            const double descUpdateBegin = sinceStartMs();
         const double descUpdateBegin = sinceStartMs();
-        vkUpdateDescriptorSets(device, uint32_t(w.size()), w.data(), 0, nullptr);
+        if (!w.empty())
+            vkUpdateDescriptorSets(device, uint32_t(w.size()), w.data(), 0, nullptr);
         msDescUpdate += sinceStartMs() - descUpdateBegin;
-    msDescUpdate += sinceStartMs() - descUpdateBegin;
 
         PreparedDraw pd{};
         pd.pipeline = pipe;
@@ -4110,9 +4150,23 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 gv.w = gv.scissorW = W; gv.h = gv.scissorH = H;
                 gv.zMin = 0.0f; gv.zMax = 1.0f;
             }
-            ++viewportCensus[std::format("{},{} {}x{} scissor {},{} {}x{}",
-                gv.x, gv.y, gv.w, gv.h, gv.scissorX, gv.scissorY,
-                gv.scissorW, gv.scissorH)];
+            // A std::format plus a map insert PER DRAW, feeding a census that is
+            // only ever printed under `in.report` -- so on the 59 frames out of
+            // 60 that print nothing it was building strings for nobody. Measured
+            // at 3.6 ms of a 39.4 ms draw loop on gameplay frames, which is 9%
+            // of the render spent on a diagnostic that produced no output.
+            //
+            // Gated on the same flag that prints it, so the report frames are
+            // byte-for-byte what they were and only the silent frames get
+            // cheaper. Still measured, because a diagnostic whose cost is
+            // assumed is how this one survived.
+            if (in.report || ab.Arm())
+            {
+                ScopedMs censusTime(msCensus);
+                ++viewportCensus[std::format("{},{} {}x{} scissor {},{} {}x{}",
+                    gv.x, gv.y, gv.w, gv.h, gv.scissorX, gv.scissorY,
+                    gv.scissorW, gv.scissorH)];
+            }
             pd.viewport.x = float(std::min(gv.x, W));
             pd.viewport.y = float(std::min(gv.y, H));
             pd.viewport.width = float(std::min(gv.w, W - std::min(gv.x, W)));
@@ -5635,15 +5689,62 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
     }
     msReadback = sinceStartMs() - msSetup - msDrawLoop - msSubmit;
-    lucent::info("draw", "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f}"
-        " (of which shader translation {:.0f}, pipeline creation {:.0f},"
-        " texture upload {:.0f}, state+pipeline {:.0f}, uniforms {:.0f}, index prep {:.0f},"
-        " descriptor alloc {:.0f}, descriptor update {:.0f}),"
-        " guest-memory upload {:.0f}, submit+wait {:.0f},"
-        " readback+report {:.0f}",
-        sinceStartMs(), msSetup, msDrawLoop, msTranslate, msPipeline, msTexture,
-        msState, msUniforms, msIndex, msDescAlloc, msDescUpdate, msSsboUpload, msSubmit,
-        msReadback);
+    // TWO OF THESE ARE SUPERSETS AND THE LINE SAYS SO. state+pipeline contains
+    // shader translation, pipeline creation and texture upload; record contains
+    // descriptor alloc, descriptor update and the viewport census. Printed as a
+    // flat list they invite a reader to add them up, and the sum is meaningless.
+    // The residual is printed rather than left for the reader to derive, because
+    // an unnamed remainder is how 18 ms of a 36 ms draw loop went unnoticed.
+    const double msStateOwn = msState - msTranslate - msPipeline - msTexture;
+    const double msRecordOwn = msRecord - msDescAlloc - msDescUpdate - msCensus;
+    const double msLoopOther =
+        msDrawLoop - msState - msUniforms - msIndex - msRecord;
+    lucent::info("draw", "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f},"
+        " guest-memory upload {:.0f}, submit+wait {:.0f}, readback+report {:.0f}",
+        sinceStartMs(), msSetup, msDrawLoop, msSsboUpload, msSubmit, msReadback);
+    lucent::info("draw", "  draw loop {:.0f} ms = state+pipeline {:.0f}"
+        " (shader translation {:.0f} + pipeline creation {:.0f} + texture upload"
+        " {:.0f} + own {:.0f}) + uniforms {:.0f} + index prep {:.0f} + record"
+        " {:.0f} (descriptor alloc {:.0f} + descriptor update {:.0f} + viewport"
+        " census {:.0f} + own {:.0f}) + unattributed {:.0f}",
+        msDrawLoop, msState, msTranslate, msPipeline, msTexture, msStateOwn,
+        msUniforms, msIndex, msRecord, msDescAlloc, msDescUpdate, msCensus,
+        msRecordOwn, msLoopOther);
+
+    // The draw loop rather than the whole frame, and NOT on report frames: a
+    // report frame reads the image back and writes a PPM, which costs more than
+    // anything being compared and would land on whichever arm it fell on.
+    if (ab.Enabled() && !in.report)
+        ab.RecordFrame(msDrawLoop);
+    if (ab.Enabled() && in.report)
+    {
+        AbSummary s;
+        if (!ab.Summarise(s))
+        {
+            lucent::info("draw", "A/B: nothing recorded yet -- every frame so far"
+                " was a report frame, which is excluded");
+        }
+        else if (s.resolved)
+        {
+            lucent::info("draw", "A/B: the experimental arm is {:+.2f} ms"
+                " ({:.2f} vs {:.2f} ms over {} and {} frames), and that is"
+                " larger than the {:.2f} ms this run can resolve",
+                s.differenceMs, s.armMs, s.baselineMs, s.armFrames,
+                s.baselineFrames, s.noiseMs);
+        }
+        else
+        {
+            // THE NEGATIVE, WITH ITS DENOMINATOR. "No difference" from a run that
+            // could not have seen one is not a measurement, so the resolution is
+            // printed next to the difference every time.
+            lucent::info("draw", "A/B: NOT RESOLVED. The arms differ by {:+.2f} ms"
+                " ({:.2f} vs {:.2f} over {} and {} frames) but this run can only"
+                " resolve {:.2f} ms, so that number is noise -- do not read it as"
+                " a small effect in either direction",
+                s.differenceMs, s.armMs, s.baselineMs, s.armFrames,
+                s.baselineFrames, s.noiseMs);
+        }
+    }
     // Checkpoint images, each labelled with how many draws had run.
     const std::string& checkpointDirStr = lucent::config::text("DRAW_DIR");
     const char* checkpointDir = checkpointDirStr.empty() ? nullptr

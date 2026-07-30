@@ -96,6 +96,7 @@ Each isolates one cause by comparison against the default.
 | `GEARS_DRAW_NODEPTH=1` | Depth rejection |
 | `GEARS_DRAW_NOCULL=1`, `GEARS_DRAW_CULL_INVERT=1` | Culling, and the winding convention |
 | `GEARS_DRAW_FIXEDVP=1` | The guest's viewport/scissor |
+| `GEARS_DRAW_AB_CENSUS=1` | The per-draw viewport census, run on **alternate frames** so both arms share one run. Separate runs cannot resolve anything below ~10 ms a frame here — see `runtime/frame_ab.h` |
 | `GEARS_DRAW_DEPTH_CLEAR=<float>` | The depth clear value (the guest's own is used by default) |
 | `GEARS_DRAW_SLATE_CLEAR=1` | Restores the diagnostic slate clear. **It is not the guest's colour** — it lifted the HDR surface off zero and hazed the whole frame (catalog #37) |
 | `GEARS_DRAW_DEPTHONLY_PS=1` | Runs the pixel shader on depth-only draws, against the hardware contract |
