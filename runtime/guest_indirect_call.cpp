@@ -11,6 +11,9 @@
 namespace gears
 {
 
+// Defined in guest_probes.cpp: dumps the ULinkerLoad behind the crashing memo.
+void ReportLinkerState(uint32_t holder);
+
 void ReportBadIndirectCall(uint32_t target, PPCContext& ctx, uint8_t* base)
 {
 
@@ -85,6 +88,15 @@ void ReportBadIndirectCall(uint32_t target, PPCContext& ctx, uint8_t* base)
         }
         row.flush(lucent::Level::Error, "call");
     };
+
+    // THE OWNER OF THE POINTER, not just the pointer. A bad vtable read names
+    // the victim; the object that HELD the stale pointer names the mechanism.
+    // For the one call site this repro always dies at -- ULinkerLoad::CreateLoader
+    // calling FArchive::TotalSize through its memoised Loader -- the ULinkerLoad
+    // is still in r24 and still intact, so its Filename, LoadFlags and guard
+    // field can be read here and nowhere else.
+    if (ctx.lr >= 0x824961D0 && ctx.lr < 0x82496AE0)
+        ReportLinkerState(ctx.r24.u32);
 
     dump("object r3", ctx.r3.u32);
     if (readable(ctx.r3.u32))

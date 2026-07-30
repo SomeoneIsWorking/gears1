@@ -44,6 +44,9 @@ namespace gears
 {
 void NotePoolEvent(uint32_t address, bool freed);
 bool LastPoolEventWasFree(uint32_t address, uint64_t& ordinal, bool& known);
+// ULinkerLoad bookkeeping, defined at the bottom of this file.
+void NoteLinkerEntry(uint32_t holder);
+void ReportMapChangeSeams();
 } // namespace gears
 
 // TWO ENTRY POINTS, EIGHT BYTES APART, into the same body -- and the caller
@@ -804,6 +807,12 @@ struct Destruction
 constexpr size_t kDestructionSlots = 64;
 std::mutex g_lifetimeMutex;
 Destruction g_destructions[kDestructionSlots];
+// AND THE SAME THING WITHOUT THE RING'S BLIND SPOT. A 64-slot ring answers
+// "who destroyed this" only if the destruction is recent; the crashing object's
+// might be thousands of destructions back. One entry per address, most recent
+// wins, bounded by the number of distinct FArchiveAsync addresses the title
+// ever uses -- which is small, because the pool recycles them.
+std::unordered_map<uint32_t, Destruction> g_lastDestruction;
 size_t g_destructionCursor = 0;
 uint64_t g_constructed = 0;
 uint64_t g_destroyed = 0;
@@ -828,30 +837,37 @@ void ReportArchiveLifetime(uint32_t object)
         " the out-of-line bodies. If both are zero the compiler has inlined them"
         " and this seam cannot see the class at all -- that is a blind probe,"
         " not evidence of absence", g_constructed, g_destroyed);
-    for (const Destruction& d : g_destructions)
+    const auto it = g_lastDestruction.find(object);
+    if (it != g_lastDestruction.end())
     {
-        if (d.object == object)
-        {
-            lucent::error("lifetime", "  THE CRASHING OBJECT {:#x} WAS DESTROYED"
-                " (destruction #{}) from {:#x} -- use after free, and that is the"
-                " caller that freed it", object, d.ordinal, d.from);
-            return;
-        }
+        lucent::error("lifetime", "  THE CRASHING OBJECT {:#x} WAS DESTROYED"
+            " (destruction #{} of {}) with lr {:#x} -- use after free, and that"
+            " return address names the caller that deleted it", object,
+            it->second.ordinal, g_destroyed, it->second.from);
+        return;
     }
-    lucent::error("lifetime", "  object {:#x} is not among the last {}"
-        " destructions of this class -- either it was freed longer ago than the"
-        " ring remembers, or it was freed by some other path", object,
-        kDestructionSlots);
+    lucent::error("lifetime", "  object {:#x} appears in NONE of the {}"
+        " destructions this seam recorded ({} distinct addresses), so this class"
+        " never destroyed it -- either it is not an FArchiveAsync at all, or it"
+        " died through a path that does not run this destructor", object,
+        g_destroyed, g_lastDestruction.size());
 }
 } // namespace gears
 
+// FArchiveAsync::FArchiveAsync(const TCHAR*). See NoteArchiveAsync at the bottom
+// of this file for why ArIsError is the whole question.
+namespace gears { void NoteArchiveAsync(uint32_t self, uint32_t name); }
+
 PPC_FUNC(sub_8242C098)
 {
+    const uint32_t self = ctx.r3.u32;
+    const uint32_t name = ctx.r4.u32;
     {
         std::lock_guard<std::mutex> guard(g_lifetimeMutex);
         ++g_constructed;
     }
     __imp__sub_8242C098(ctx, base);
+    gears::NoteArchiveAsync(self, name);
 }
 
 PPC_FUNC(sub_8242C180)
@@ -866,6 +882,7 @@ PPC_FUNC(sub_8242C180)
         slot.ordinal = g_destroyed;
         ++g_destructionCursor;
         ++g_destroyed;
+        g_lastDestruction[object] = slot;
     }
     __imp__sub_8242C180(ctx, base);
 }
@@ -1219,6 +1236,9 @@ void ReportHolderSeam()
 PPC_FUNC(sub_824961D0)
 {
     g_holderVisits.fetch_add(1);
+    // THE ONE DATUM THAT SEPARATES THE TWO CANDIDATE MECHANISMS: whether the
+    // memo at +1376 was already set when this call began. See NoteLinkerEntry.
+    gears::NoteLinkerEntry(ctx.r3.u32);
     {
         std::lock_guard<std::mutex> guard(g_holderMutex);
         g_holders.insert(ctx.r3.u32);
@@ -1401,4 +1421,352 @@ PPC_FUNC(sub_82428FA8)
     if (i <= 6)
         lucent::info("suspend", "ResumeRendering executed (#{})", i);
     __imp__sub_82428FA8(ctx, base);
+}
+
+// ---------------------------------------------------------------------------
+// ULinkerLoad::CreateLoader, its memo, and the ONE branch that leaves the memo
+// dangling (catalog #45).
+//
+// THE CLASSES ARE NOW NAMED, from the code rather than from the shape of the
+// crash. sub_824961D0 is ULinkerLoad::CreateLoader; its r3/r24 is the
+// ULinkerLoad. The fields the crash turns on:
+//
+//   +0x0cc/+0x0d0  ULinker::Filename        (FString: data pointer, ArrayNum)
+//   +0x14c         ULinker::LoadFlags       (bit 0 = LOAD_SeekFree, bit 16 used)
+//   +0x0e4/+0x0ec  FArchive::ArVer / ArLicenseeVer (set to 374 at 0x82496a20)
+//   +0x560 (1376)  ULinkerLoad::Loader      (FArchive*) -- THE MEMO
+//   +0x574 (1396)  bHasSerializedPackageFileSummary -- THE GUARD
+//   +0x584/+0x588  bTimeLimitExceeded / IsTimeLimitExceededCallCount
+//
+// sub_8242C098 is FArchiveAsync::FArchiveAsync(const TCHAR*). Its tail is the
+// whole reason this probe exists:
+//
+//   8242c144  lwz   r3,-0x7e44(r11)   ; GFileManager
+//   8242c14c  lwz   r11,0xc(r10)      ; vtable slot 3 = FileSize
+//   8242c154  bctrl
+//   8242c15c  stw   r3,0x78(r31)      ; FileSize = GFileManager->FileSize(name)
+//   8242c164  blt   cr6,0x8242c174
+//   8242c168  stw   r30,0x2c(r31)     ; r30 = 0 : ArIsError = FALSE
+//   8242c174  stw   r28,0x2c(r31)     ; r28 = 1 : ArIsError = TRUE
+//
+// So ArIsError is set for exactly one reason: FileSize came back NEGATIVE, i.e.
+// the file could not be found. And CreateLoader's seek-free branch is
+//
+//   82496520  bl    0x8242c098        ; Loader = new FArchiveAsync(Filename)
+//   82496538  stw   r3,0x560(r24)     ; MEMOISED BEFORE THE ERROR IS CHECKED
+//   8249653c  lwz   r11,0x2c(r3)      ; ArIsError
+//   82496544  beq   cr6,0x824967e4    ; clean -> carry on
+//   82496550  lwz   r11,0(r3) ; li r4,1 ; bctrl   ; DELETE the loader
+//   82496564  ... Localize("Errors","OpenFailed") ... report ...
+//   82496620  b     0x824967e4        ; and FALL THROUGH to the shared tail
+//   ...
+//   82496a4c  lwz   r11,0x574(r24)    ; bHasSerializedPackageFileSummary
+//   82496a54  bne   cr6,0x82496a9c
+//   82496a58  lwz   r3,0x560(r24)     ; THE DELETED LOADER
+//   82496a60  lwz   r11,0x34(r11)     ; slot 13 = TotalSize
+//   82496a68  bctrl                   ; <- the crash, lr 0x82496a6c
+//
+// If that branch runs, the crash needs no second thread and no race: the object
+// is created, memoised, deleted and called through inside a single call, and the
+// block is still on the pool's free list when it is used -- which is exactly
+// what the fault dump shows (word0 = the block 0xC0 further on, word1 = 1).
+//
+// THE NEGATIVE IS THE POINT OF THIS PROBE. If no FArchiveAsync is ever
+// constructed with ArIsError set, that branch never runs and this whole reading
+// is dead -- and the report says so, with the number of constructions as its
+// denominator, plus the blind spot that only LOAD_SeekFree packages reach this
+// constructor at all.
+namespace
+{
+// A guest UTF-16 (big-endian) string, as much of it as is worth printing.
+std::string GuestWideString(uint32_t address, uint32_t maxChars = 160)
+{
+    std::string out;
+    if (address == 0 || uint64_t(address) + 2 >= PPC_MEMORY_SIZE)
+        return "<null>";
+    for (uint32_t i = 0; i < maxChars; ++i)
+    {
+        const uint32_t at = address + i * 2;
+        if (uint64_t(at) + 2 >= PPC_MEMORY_SIZE)
+            break;
+        const uint16_t unit = __builtin_bswap16(
+            *gears::Memory().Translate<uint16_t>(at));
+        if (unit == 0)
+            break;
+        out.push_back(unit < 0x80 ? char(unit) : '?');
+    }
+    return out;
+}
+
+std::mutex g_archiveMutex;
+std::atomic<uint64_t> g_archiveAsyncBuilt{0};
+std::atomic<uint64_t> g_archiveAsyncFailed{0};
+std::set<std::string> g_archiveAsyncFailedNames;
+
+// Per-ULinkerLoad entry history for sub_824961D0. The one datum that separates
+// the two candidate mechanisms is the value of the memo AT ENTRY on the call
+// that crashes: non-zero means the create block was skipped and the object died
+// between calls (an external deleter); zero means this very call built it, and
+// the only thing that can have destroyed it is CreateLoader's own error branch.
+struct LinkerVisit
+{
+    uint64_t visits = 0;
+    uint32_t loaderAtEntry = 0;
+    std::string filename;
+};
+std::mutex g_linkerMutex;
+std::unordered_map<uint32_t, LinkerVisit> g_linkerVisits;
+} // namespace
+
+namespace gears
+{
+void NoteLinkerEntry(uint32_t holder)
+{
+    if (holder == 0 || uint64_t(holder) + 1400 >= PPC_MEMORY_SIZE)
+        return;
+    const uint32_t loader =
+        ByteSwap(*gears::Memory().Translate<uint32_t>(holder + 0x560));
+    const uint32_t nameData =
+        ByteSwap(*gears::Memory().Translate<uint32_t>(holder + 0xcc));
+    const uint32_t nameLen =
+        ByteSwap(*gears::Memory().Translate<uint32_t>(holder + 0xd0));
+    std::lock_guard<std::mutex> guard(g_linkerMutex);
+    LinkerVisit& visit = g_linkerVisits[holder];
+    visit.visits += 1;
+    visit.loaderAtEntry = loader;
+    if (nameLen != 0)
+        visit.filename = GuestWideString(nameData);
+}
+
+// Called from the bad-indirect-call reporter, which is where every run of this
+// repro ends, so it is the only exit that is guaranteed to be reached.
+void ReportLinkerState(uint32_t holder)
+{
+    const uint64_t built = g_archiveAsyncBuilt.load();
+    const uint64_t failed = g_archiveAsyncFailed.load();
+    if (built == 0)
+        lucent::error("linker", "FArchiveAsync seam NEVER FIRED (0 constructions"
+            " through sub_8242C098), so nothing below about ArIsError is"
+            " evidence either way -- check the seam before reading on");
+    else if (failed == 0)
+        lucent::error("linker", "FArchiveAsync: {} constructed, ZERO with"
+            " ArIsError. CreateLoader's open-failed branch therefore never ran,"
+            " and the create-delete-use-in-one-call reading is DEAD. Blind spot:"
+            " only LOAD_SeekFree packages reach this constructor; the plain"
+            " CreateFileReader path at 0x82496638 does not", built);
+    else
+    {
+        lucent::error("linker", "FArchiveAsync: {} constructed, {} of them with"
+            " ArIsError set -- i.e. GFileManager->FileSize() returned negative"
+            " and the file was NOT FOUND", built, failed);
+        std::lock_guard<std::mutex> guard(g_archiveMutex);
+        for (const std::string& name : g_archiveAsyncFailedNames)
+            lucent::error("linker", "  could not open: '{}'", name);
+    }
+
+    if (holder == 0 || uint64_t(holder) + 1400 >= PPC_MEMORY_SIZE)
+    {
+        lucent::error("linker", "r24 {:#x} is not a readable guest pointer, so"
+            " the ULinkerLoad cannot be dumped", holder);
+        return;
+    }
+    const auto word = [&](uint32_t offset) {
+        return ByteSwap(*gears::Memory().Translate<uint32_t>(holder + offset));
+    };
+    const uint32_t nameData = word(0xcc);
+    const uint32_t nameLen = word(0xd0);
+    lucent::error("linker", "ULinkerLoad {:#x}: Filename '{}' ({} chars),"
+        " LoadFlags {:#x}, Loader(+1376) {:#x},"
+        " bHasSerializedPackageFileSummary(+1396) {:#x}, ArVer {}",
+        holder, nameLen ? GuestWideString(nameData) : std::string("<empty>"),
+        nameLen, word(0x14c), word(0x560), word(0x574), word(0xe4));
+
+    {
+        std::lock_guard<std::mutex> guard(g_linkerMutex);
+        const auto it = g_linkerVisits.find(holder);
+        if (it == g_linkerVisits.end())
+            lucent::error("linker", "  this ULinkerLoad never entered"
+                " sub_824961D0 through the probe ({} distinct linkers were"
+                " recorded), so the entry state below is unknown -- treat that"
+                " as the PROBE failing, not as a finding",
+                g_linkerVisits.size());
+        else
+            lucent::error("linker", "  it entered CreateLoader {} time(s); on the"
+                " most recent entry Loader was {:#x}, which is the {} path. {}",
+                it->second.visits, it->second.loaderAtEntry,
+                it->second.loaderAtEntry ? "MEMO-HIT (creation skipped)"
+                                         : "CREATE",
+                it->second.loaderAtEntry
+                    ? "So the object was destroyed BETWEEN calls and the deleter"
+                      " is outside this function."
+                    : "So this same call created the loader, and the only code"
+                      " that can have destroyed it before 0x82496a58 is"
+                      " CreateLoader's own open-failed branch at 0x82496550.");
+    }
+
+    const uint32_t loader = word(0x560);
+    if (loader != 0)
+    {
+        uint64_t ordinal = 0;
+        bool known = false;
+        const bool freed = LastPoolEventWasFree(loader, ordinal, known);
+        lucent::error("linker", "  the memoised Loader {:#x}: {}", loader,
+            !known ? "was never seen by the pool probe at all -- so either it did"
+                     " not come from this allocator or the probe missed it"
+            : freed ? "its most recent pool event was a FREE"
+                    : "its most recent pool event was an ALLOCATION (which is"
+                      " also what a block RE-ISSUED to a different owner looks"
+                      " like, so this does not mean it is still the archive)");
+        ReportLastFree(loader);
+        // AND WHO DELETED IT. The destructor probe on sub_8242C180 records the
+        // return address of every FArchiveAsync destruction; if the crashing
+        // loader is in there, the lr names the exact site. 0x82496564 would be
+        // CreateLoader's own open-failed branch.
+        ReportArchiveLifetime(loader);
+    }
+    ReportMapChangeSeams();
+    ReportHolderSeam();
+}
+} // namespace gears
+
+void gears::NoteArchiveAsync(uint32_t self, uint32_t nameAddress)
+{
+    const std::string name = GuestWideString(nameAddress);
+    const uint64_t n = g_archiveAsyncBuilt.fetch_add(1) + 1;
+    const uint32_t isError =
+        ByteSwap(*gears::Memory().Translate<uint32_t>(self + 0x2c));
+    const int32_t fileSize = int32_t(
+        ByteSwap(*gears::Memory().Translate<uint32_t>(self + 0x78)));
+    if (isError == 0)
+    {
+        // A handful of successes, to prove the seam reads the right fields
+        // before any conclusion is drawn from a zero failure count.
+        if (n <= 4)
+            lucent::info("linker", "FArchiveAsync #{} at {:#x} opened '{}'"
+                " ({} bytes)", n, self, name, fileSize);
+        return;
+    }
+
+    const uint64_t bad = g_archiveAsyncFailed.fetch_add(1) + 1;
+    bool novel = false;
+    {
+        std::lock_guard<std::mutex> guard(g_archiveMutex);
+        novel = g_archiveAsyncFailedNames.insert(name).second;
+    }
+    // Every NEW name, plus the first few, plus every hundredth: the interesting
+    // case is the one that is never elided.
+    if (novel || bad <= 4 || bad % 100 == 0)
+        lucent::error("linker", "FArchiveAsync #{} at {:#x} FAILED TO OPEN '{}'"
+            " (FileSize {} -> ArIsError). CreateLoader has already memoised it"
+            " at ULinkerLoad+1376 and is about to delete it and carry on"
+            " (failure {} of {} constructions)", n, self, name, fileSize, bad,
+            n);
+}
+
+// ---------------------------------------------------------------------------
+// WHERE THE EMPTY PACKAGE NAME COMES FROM (catalog #45).
+//
+// Measured: the ULinkerLoad that crashes has Filename "" (0 chars), LoadFlags
+// 0x81, and its FArchiveAsync failed because GFileManager->FileSize("") is -1.
+// So the crash is downstream of a package load REQUESTED WITH AN EMPTY NAME,
+// and the two functions above it in the guest stack are:
+//
+//   sub_82426D98  UGameEngine::PrepareMapChange(TArray<FName>& LevelNames)
+//                 -- r3 = engine, r4 = the FName array. At 0x82426fa0 it does
+//                    FName::ToString into a stack FString and at 0x82426fd4
+//                    passes it to LoadPackageAsync WITHOUT a FindPackageFile
+//                    check (the only FindPackageFile, at 0x82426f18, guards the
+//                    "<name>_LOC" companion load, not the map itself).
+//   sub_8242AC78  UObject::LoadPackageAsync(const FString& Name, cb, userdata)
+//                 -- appends an FAsyncPackage carrying that string to the global
+//                    array at 0x82BFC5D4. Nothing in it validates the name.
+//
+// So the name that ends up in ULinkerLoad::Filename is whatever the caller
+// computed, and the caller is sub_821B4620 -- the deferred checkpoint handler
+// that deserialises the map name out of the checkpoint blob (0x821b4f14 calls
+// PrepareMapChange, 0x821b4f30 then pumps ProcessAsyncLoading in a spin).
+//
+// THE NEGATIVE IS DESIGNED. If neither seam fires, the report says so with its
+// own visit count, because "the map load never goes through here" and "the probe
+// is attached to the wrong function" produce identical silence otherwise.
+extern "C" PPC_FUNC(__imp__sub_82426D98);
+extern "C" PPC_FUNC(__imp__sub_8242AC78);
+
+namespace
+{
+std::atomic<uint64_t> g_prepareMapChanges{0};
+std::atomic<uint64_t> g_asyncLoadRequests{0};
+std::atomic<uint64_t> g_emptyAsyncLoadRequests{0};
+} // namespace
+
+namespace gears
+{
+void ReportMapChangeSeams()
+{
+    lucent::error("linker", "PrepareMapChange seam: {} call(s); LoadPackageAsync"
+        " seam: {} request(s), {} of them with an EMPTY name.{}",
+        g_prepareMapChanges.load(), g_asyncLoadRequests.load(),
+        g_emptyAsyncLoadRequests.load(),
+        g_asyncLoadRequests.load() == 0
+            ? " ZERO requests means this seam NEVER FIRED -- the async load is"
+              " started somewhere else and nothing below is evidence."
+            : "");
+}
+} // namespace gears
+
+PPC_FUNC(sub_82426D98)
+{
+    const uint64_t n = g_prepareMapChanges.fetch_add(1) + 1;
+    const uint32_t array = ctx.r4.u32;
+    if (array != 0 && uint64_t(array) + 12 < PPC_MEMORY_SIZE)
+    {
+        const uint32_t data = ByteSwap(*gears::Memory().Translate<uint32_t>(array));
+        const uint32_t count =
+            ByteSwap(*gears::Memory().Translate<uint32_t>(array + 4));
+        lucent::info("linker", "PrepareMapChange #{}: {} level name(s) at {:#x}",
+            n, count, data);
+        // The FNames themselves, raw. Resolving an FName to text needs the
+        // title's name table; the raw pair is enough to tell "index 0 / None"
+        // from a real entry, which is the distinction that matters here.
+        for (uint32_t i = 0; i < count && i < 8; ++i)
+        {
+            const uint32_t at = data + i * 8;
+            if (uint64_t(at) + 8 >= PPC_MEMORY_SIZE)
+                break;
+            lucent::info("linker", "  level[{}] FName index {} number {}", i,
+                ByteSwap(*gears::Memory().Translate<uint32_t>(at)),
+                ByteSwap(*gears::Memory().Translate<uint32_t>(at + 4)));
+        }
+    }
+    else
+        lucent::error("linker", "PrepareMapChange #{}: r4 {:#x} is not a readable"
+            " array pointer, so the level list could not be read", n, array);
+    __imp__sub_82426D98(ctx, base);
+}
+
+PPC_FUNC(sub_8242AC78)
+{
+    const uint64_t n = g_asyncLoadRequests.fetch_add(1) + 1;
+    const uint32_t str = ctx.r3.u32;
+    uint32_t data = 0;
+    int32_t length = -1;
+    if (str != 0 && uint64_t(str) + 8 < PPC_MEMORY_SIZE)
+    {
+        data = ByteSwap(*gears::Memory().Translate<uint32_t>(str));
+        length = int32_t(ByteSwap(*gears::Memory().Translate<uint32_t>(str + 4)));
+    }
+    const bool empty = length <= 0 || data == 0;
+    if (empty)
+        g_emptyAsyncLoadRequests.fetch_add(1);
+    // Every empty request, plus the first few of any kind. An empty one is the
+    // event this seam exists for, so it is never elided.
+    if (empty || n <= 8)
+        lucent::error("linker", "LoadPackageAsync #{}: name FString at {:#x} ="
+            " data {:#x} len {} -> '{}'{}", n, str, data, length,
+            (data && length > 0) ? GuestWideString(data) : std::string(),
+            empty ? "  <-- EMPTY. This request is what produces a ULinkerLoad"
+                    " with no filename, whose FArchiveAsync then fails to open"
+                    " and is used after being deleted at 0x82496550"
+                  : "");
+    __imp__sub_8242AC78(ctx, base);
 }
