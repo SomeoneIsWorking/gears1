@@ -241,10 +241,26 @@ void UpdateScriptedInput()
     const uint64_t elapsed = uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - g_start).count());
 
+    // EVERY DUE STEP IS CONSUMED AND ONLY THE LAST IS APPLIED, so a step whose
+    // successor is already due is SKIPPED -- and it used to be skipped silently.
+    // That matters because this script is the input side of every headless
+    // measurement: the script only advances when the guest POLLS, so a press
+    // between two polls never reaches the title at all. Observed in practice
+    // with "1000:START,1500:LY+&A" -- the guest first polled at 1939 ms and the
+    // START was simply gone, which is indistinguishable from a title that
+    // ignored it unless the skip is reported.
     ScriptStep current;
     bool fired = false;
+    uint64_t skipped = 0;
+    uint64_t firstSkippedAt = 0;
     while (g_scriptCursor < g_script.size() && g_script[g_scriptCursor].atMs <= elapsed)
     {
+        if (fired)
+        {
+            if (skipped == 0)
+                firstSkippedAt = current.atMs;
+            ++skipped;
+        }
         current = g_script[g_scriptCursor];
         ++g_scriptCursor;
         fired = true;
@@ -252,6 +268,12 @@ void UpdateScriptedInput()
     if (!fired)
         return;
     guard.unlock();
+
+    if (skipped != 0)
+        lucent::warn("input", "{} scripted step(s) were SKIPPED: the guest did not"
+            " poll between {} ms and {} ms, so only the {} ms step is applied."
+            " Space the steps further apart -- a press that is never polled never"
+            " reaches the title", skipped, firstSkippedAt, elapsed, current.atMs);
 
     PadState next;
     next.buttons = current.buttons;
