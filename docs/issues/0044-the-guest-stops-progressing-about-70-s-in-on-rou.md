@@ -1180,3 +1180,50 @@ Which leaves the CONSUMER as the remaining candidate: it reads WritePointer,
 WriteEnd and ReadPointer while a producer may be mid-wrap or mid-commit, and it
 is the one participant with no flag of its own and no barrier. That is where to
 look next, and it is the last unexamined part of the protocol.
+
+### Note (2026-07-30)
+THE CONSUMER IS SOUND TOO. ALL FOUR PARTICIPANTS ARE NOW EXAMINED, AND NONE EXPLAINS THE CORRUPTION.
+
+The drain loop's structure, decoded (r10 = WritePointer and r11 = WriteEnd read
+at the loop top, r31 = ring):
+
+    if (WP > WE)                    -> consume
+    RP = [ring+20]
+    if (RP != WE)                   -> consume
+    if (WP >= WE)                   -> idle
+    RP = Data                       ; the reader's wrap
+    if (RP == WP)                   -> idle
+  consume:
+    RP = [ring+20]                  ; RE-READ
+    if (RP == WP)                   -> idle          <- the emptiness check
+    ... call Execute, advance RP by its return ...
+
+There IS an emptiness test and it re-reads ReadPointer, so the earlier worry
+that the consume path might run with no command present is unfounded.
+
+I traced the wrap interleaving through it. Producer sets WriteEnd = W0 then
+WritePointer = Data; consumer sees RP == WE, wraps RP to Data, finds RP == WP,
+idles; producer commits WP = Data + size; the next iteration consumes correctly.
+Under x86-64 TSO, where store-store is ordered, that holds.
+
+SO THE SCORECARD IS NOW: allocator sound (its wrap is a hazard only on PowerPC,
+and this port is stricter), commit sound in the absence of concurrent producers,
+producers never concurrent (137,561 entries, 0 overlaps), consumer sound. Four of
+four, and the ring still ends up holding something that is not a command.
+
+WHICH POINTS OUTSIDE THE RING PROTOCOL ENTIRELY -- and there is an obvious
+candidate sitting in the next entry. Catalog #45 is a USE-AFTER-FREE in which the
+game thread calls a virtual on a pool block that has been freed and reused. A
+stale pointer that is written through, not merely read, corrupts whatever now
+owns that memory -- and the ring's buffer is a 0x40000-byte heap allocation in
+the same address space.
+
+HYPOTHESIS, NOT ESTABLISHED: #44 is a DOWNSTREAM EFFECT of #45 rather than an
+independent ring bug. That would explain the otherwise awkward combination of a
+protocol that reads correctly and contents that are garbage, and it would explain
+why every mechanism proposed inside the ring has failed to survive measurement.
+
+HOW TO TEST IT: #45 is deterministic and #44 is intermittent, so fix or suppress
+#45 first and see whether #44 survives. If it does not, they were one bug. Do NOT
+add validation to the consumer in the meantime -- that would mask the very signal
+this test depends on.
