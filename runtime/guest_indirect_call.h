@@ -57,8 +57,25 @@ inline bool IsValidGuestCallTarget(uint32_t target)
 // compile definition and a forced include, so the generated code does not have
 // to be touched -- it is regenerated from the image and any edit to it would be
 // lost.
+// TEMPORARY, for #50. The object at that crash is reached through a table index
+// that is checked against a 255 sentinel and never against the table's length, so
+// an index past the end reads adjacent memory -- which is how the "vtable" came to
+// hold floats. Both observed crashes are at the same moment (3420 and 3480
+// frames), so the question is not WHEN but whether the index goes out of range.
+//
+// Reported from the call site rather than the abort path because only one of the
+// two crashes aborts; the other is a SIGSEGV, where no registers are reachable.
+// This costs one compare against a constant across all 29,190 sites, which is
+// exactly what I removed a previous probe for -- so it comes out again as soon as
+// it has answered.
+void NoteStreamingTableLookup(PPCContext& ctx, uint8_t* base);
+constexpr uint32_t kStreamingLookupReturn = 0x823EDB50;
+
 inline void CallGuestIndirect(PPCContext& ctx, uint8_t* base, uint32_t target)
 {
+    if (uint32_t(ctx.lr) == kStreamingLookupReturn) [[unlikely]]
+        NoteStreamingTableLookup(ctx, base);
+
     if (!IsValidGuestCallTarget(target)) [[unlikely]]
         ReportBadIndirectCall(target, ctx, base);
 
