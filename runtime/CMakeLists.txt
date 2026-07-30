@@ -25,7 +25,18 @@ target_include_directories(gears_ppc PUBLIC
 # forced include rather than an #include anyone could forget. Eleven sites in
 # the whole image use it, so nothing hot is affected.
 target_include_directories(gears_ppc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_compile_options(gears_ppc PRIVATE -include ppc_mmio.h)
+# And the indirect call, for the same reason and by the same route. It must come
+# AFTER ppc_mmio.h in this list: that header only defines macros, while this one
+# pulls in ppc_context.h, and ppc_context.h must see both sets of definitions
+# already in place. An unchecked indirect call is how a stale guest vtable
+# becomes a jump into host memory with nothing to say which pointer was bad.
+# SHELL: keeps each flag glued to its argument. Without it CMake de-duplicates
+# the repeated `-include` token and the second header arrives as a bare input
+# file, which fails as "cannot specify -o when generating multiple output files"
+# -- an error that says nothing about the actual cause.
+target_compile_options(gears_ppc PRIVATE
+    "SHELL:-include ppc_mmio.h"
+    "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/guest_indirect_call.h")
 
 # 49k functions of straight-line translated code. The optimisation level is a
 # knob because it is a real trade: -O0 keeps the build under a couple of minutes
@@ -91,6 +102,7 @@ add_executable(gears1
     guest_probes.cpp
     guest_backtrace.cpp
     fault_report.cpp
+    guest_indirect_call.cpp
     reference_barrier.cpp
     user_profile.cpp
     xam_apps.cpp
