@@ -1,33 +1,14 @@
-# RE Frontier — the ordered dependency chain toward a working PC Gears of War
+# RE Frontier — the ordered RE dependency chain toward a faithful BL2
 
 Tracked by `tools/re_frontier.py` (consult it FIRST; update it in the SAME commit
 that changes a step). This is the fine-grained companion to `docs/codemap.md`:
-the codemap says *what subsystem exists*, this says *which ordered step is
-genuinely done vs a hack that jumped ahead*.
-
-**NATIVE IMPLEMENTATION IS NOT A HACK.** The goal of this project is a PC game,
-not an emulator, so replacing a guest mechanism with host code is a legitimate
-engineering choice and always available. A native mixer, a native UI, a native
-file layer — none of these are forbidden, and the frontier does not exist to
-push work toward emulation.
-
-What the frontier exists for is to stop a stand-in from MASQUERADING as the real
-thing. The failure it guards against is a tracker that says a step is done while
-something else is quietly producing the output, so nobody can tell what actually
-works. That is a labelling failure, not a question of where the code came from.
-
-So: implement natively whenever it is the better engineering. Record it as such
-in the entry (say plainly that the implementation is native and what it replaces),
-and hold it to the same faithfulness bar below — its OUTPUT has to match the real
-game. A native implementation whose output is verified is a finished step.
+the codemap says *what subsystem exists*, this says *which ordered RE step is
+real reverse-engineering vs a hack that jumped ahead*.
 
 **Hard rule (no hacks / no fallbacks):** a `⛔ hack` status is DEBT, never an
-acceptable resting state. A hack is specifically: something that produces the
-APPEARANCE of a working step without doing the work (advancing offsets while
-decoding nothing, a magic constant that makes one case line up, output faked to
-satisfy a caller), or a substitution that is not declared. It MUST be removed as
-its real mechanism lands. `re_frontier.py hacks` is the debt list;
-`re_frontier.py next` tells you the next ready step.
+acceptable resting state. It marks a shortcut standing in for absent RE and MUST
+be removed as its real mechanism lands. `re_frontier.py hacks` is the debt list;
+`re_frontier.py next` tells you the next RE-ready step.
 
 **`re-verified` MEANS FAITHFUL to the real target — not "the mechanism runs."** A
 step is `re-verified` only when its OUTPUT matches the real game/binary (look /
@@ -206,7 +187,6 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap: Loop playback, true double-buffer streaming and non-44100/24000 rates are ported from the reference but exercised by no stream yet. Mono decodes live (contexts 23-25) but has not been compared against a golden. No output device: nobody has heard this on speakers.
 - notes: Marked hack rather than missing because the context handout LOOKS like support and the title behaves as if decode were coming. Catalog #39.
 
-
 ### saves-content — Saved-game content: profile, content, directory handles
 - status: re-verified
 - deps: rtl-time
@@ -218,7 +198,8 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 ### thread-races — Game/render thread races the console tolerated
 - status: todo
 - deps: saves-content
-- evidence: Two crashes, both characterised to the instruction and both TITLE races rather than port defects. Catalog #45: the game thread caches an object at holder+1376, the rendering thread's FDrawSceneCommand::Execute clears the container holding it (realloc to 0 bytes), and the game thread then calls virtual slot 13 through the stale pointer — measured 156 times a run, with occurrence 156 being the crash, at exactly the object and holder gdb reports. Catalog #44: the render-command ring ends up holding something that is not a command. FIVE mechanisms eliminated by measurement: Xenon topology (measured affinity puts the game thread on cpu 0 and the renderer on cpu 3 — different physical cores, so the console runs them in parallel too), concurrent producers (137,561 allocator entries, 0 overlaps caught by a guard honouring the title's own bIsWriting flag), the atomic translation (neither ring function contains a single lwarx/stwcx./lwsync), the allocator's wrap (a PowerPC store-store hazard that x86 TSO makes stricter), and the consumer (its emptiness check re-reads ReadPointer and the wrap interleaving holds).
+- evidence: #45 IS NOT A RACE, and this entry said it was for weeks. Traced end to end this session: the object is created, memoised, deleted and called through INSIDE A SINGLE CALL on the main thread. ULinkerLoad::CreateLoader (sub_824961D0) stores a new FArchiveAsync at +1376 BEFORE testing ArIsError at +44, deletes it on the error branch, falls through to a shared tail, and calls slot 13 (TotalSize) through the dead pointer. The 156 freed-while-cached events this entry cited were mostly COINCIDENTAL ADDRESS MATCHES: the pool recycles a 192-byte size class constantly and writes its freelist link into word 0, which is also why a stride-0xC0 chain looked like a vtable and was not. #44 is untouched by this and remains open.
 - where: nothing in runtime/ — the racing code is all the title's
-- gap: No mechanism remains that a port-side change could fix honestly. The engine maintains two flags that would have given a legitimate seam — the ring's bIsWriting and a SuspendRendering flag at 0x82BFA388 — and NOTHING READS EITHER; the suspend commands are never even executed (validated: both are in the indirect-call table and sibling overrides fired in the same run). So there is no title protocol left to complete.
-- notes: BLOCKED ON A DECISION, NOT ON EVIDENCE. The two options are written up in the catalog entries. Do not "fix" this by adding validation at a consumer, a null check at a fault site, or a lock the title does not define — each hides the signal the remaining test depends on. The leading hypothesis is that #44 is DOWNSTREAM of #45's use-after-free writing through a stale pointer into memory the ring buffer now owns, which is testable in the cheap direction: resolve #45 and see whether #44 survives.
+- gap: The port hands the title a package name it cannot open, and everything after that is the title behaving as it would on hardware. Chain, all measured: the checkpoint archive is an empty FMemoryReader (data 0, count 0) -> the FString deserialise reads nothing -> the empty-string LITERAL reaches the FName constructor -> NAME_None -> LoadPackageAsync("None") -> cache miss -> FArchiveAsync FileSize -1 -> ArIsError -> the retail use-after-free. The array the archive reads is filled from the global carrier at 0x82BFB36C only when sub_821B94D8 returns zero; it returns sub_821B5F30 result, which is NON-ZERO while populating nothing. That single function is the whole remaining gap.
+- notes: NOT blocked on a decision any more, and NOT a race. The previous note here said no port-side change could fix this honestly and that the leading hypothesis was #44 being downstream of a #45 use-after-free through a stale pointer. Both are withdrawn. Also withdrawn from the notes above: a GPU-latency theory (the deferred-free gate reads nothing the host writes; refuted in the disassembly) and a safe-by-allocator-timing theory (word 0 of a freed block always holds the freelist link, so a stale vtable read would crash on hardware too). The one open question is what sub_821B5F30 reads from and why it reads nothing here, and it is being worked.
+
