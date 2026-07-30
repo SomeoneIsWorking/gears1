@@ -17,6 +17,8 @@ namespace gears
 void ReportLinkerState(uint32_t holder);
 void ReportMapNameProbe();
 void ReportFStringProbe();
+void ReportLoaderThunks();
+void ReportEarlyThunks();
 
 void ReportBadIndirectCall(uint32_t target, PPCContext& ctx, uint8_t* base)
 {
@@ -103,6 +105,8 @@ void ReportBadIndirectCall(uint32_t target, PPCContext& ctx, uint8_t* base)
         ReportLinkerState(ctx.r24.u32);
     ReportMapNameProbe();
     ReportFStringProbe();
+    ReportLoaderThunks();
+    ReportEarlyThunks();
 
     dump("object r3", ctx.r3.u32);
     if (readable(ctx.r3.u32))
