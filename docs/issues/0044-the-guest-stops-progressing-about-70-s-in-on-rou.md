@@ -1099,3 +1099,44 @@ probability the recompilation destroyed, not papering over a bug. It is still a
 decision for the operator, not a bandaid to reach for, and it should be argued
 on that basis. What it is NOT is 'the console serialises this'; that is now known
 to be false.
+
+### Note (2026-07-30)
+THE LOST-UPDATE HYPOTHESIS IS NOT SUPPORTED. 137,561 PRODUCER ENTRIES, ZERO OVERLAPS.
+
+The obvious mitigation was implemented and it turned out to be INERT, which is a
+result rather than a disappointment.
+
+The title's ring carries its own producer flag at +16 (bIsWriting): set to 1 by
+the allocator, cleared by the caller's commit, and -- established image-wide --
+never read by anything. So our allocator wrapper was made to wait on it, which
+completes a protocol the title defines rather than inventing a lock.
+
+It never engages:
+
+  producer entries: 137561
+  overlaps caught by the wait: 0
+
+The check is correct by construction: the flag is set INSIDE the allocator, after
+the wrapper's test, so a second producer entering during the first one's
+reserve/commit window would see 1 and wait. It never sees 1. The two producers
+alternate (~30 times a run) but are never concurrent.
+
+SO TWO PRODUCERS OVERLAPPING IS NOT WHAT CORRUPTS THIS RING. That was the
+leading mechanism in this entry and it is now unsupported by a measurement with a
+real denominator.
+
+AND THE MEASUREMENT ALMOST LIED. The first version of the engagement report used
+lucent::debug, so with the 'ring' channel off it printed nothing -- 'the wait
+never engaged' and 'the report was switched off' were the same output. It was
+moved to info and given the entry count as a denominator before any conclusion
+was drawn from the zero. Without that, this note would have claimed a fix.
+
+WHAT IS STILL TRUE: the commit IS a non-atomic read-modify-write, bIsWriting IS
+never read, and the ring DOES get corrupted. What is no longer believed is that
+concurrent producers are the cause. The next candidate has to explain corruption
+with only ONE producer active at a time -- so look at the consumer side and at
+the wrap handling against WriteEnd (+12), which is the one part of the protocol
+this entry has never examined closely.
+
+The guard stays in the tree as a detector: if an overlap ever occurs it is
+prevented and reported, and the zero now carries its denominator.
