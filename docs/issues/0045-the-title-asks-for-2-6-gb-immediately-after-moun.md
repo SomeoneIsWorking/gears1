@@ -1188,3 +1188,53 @@ free as the wrong end rather than the read.
 The 'nothing nulls that field' remark in the probe text was right about the fact
 and wrong about its significance: it read as a missing mechanism, and it is
 actually the design.
+
+### Note (2026-07-30)
+THE RUNS HAD NO CRASH REPORTER AT ALL, AND THREE OF MINE WERE EMPTY.
+
+WORKFLOW DEFECT FIRST. Six consecutive runs of this repro dumped core and printed
+NOTHING about the fault. Every hypothesis they were meant to test was judged
+against a log that simply stopped, which is indistinguishable from a log with
+nothing to say. Built runtime/fault_report.{h,cpp}: a SIGSEGV/SIGBUS handler that
+names the signal, classifies the address against the guest mapping, and dumps the
+host backtrace -- which IS the guest call chain, because recompiled functions are
+host functions named sub_82xxxxxx. Chains to the previous disposition so the core
+and exit status are unchanged. Six tests, including a FORKED one that faults on
+purpose and asserts the report reaches the pipe, because a crash reporter is
+otherwise only exercised by the crash it is needed for.
+
+AND I WASTED THREE RUNS ON IT. The first version took the mapping as an argument
+and was called with gears::Memory() at the top of main -- before SetMemory().
+That killed the process on its first line. Three 280-second runs produced ONE
+line each and I read conclusions out of them ('the handler is not displaced',
+'the reporter did not fire') that were worth nothing. The log length is now the
+first thing checked after every run. Install is split: armed with no mapping at
+the first line of main, taught the mapping once memory exists.
+
+WITH THE REPORTER WORKING, THE FAULT IS NAMED:
+
+  signal SIGSEGV, address 0x7fbeb1c001fe, guest mapping 4 GiB at 0x7fbf33200000
+
+The address is 2 GiB BELOW the mapping, so it is a HOST pointer, not guest
+memory. That distinction is only trustworthy because the mapping base is printed
+in the same run -- it is ASLR-randomised, and an earlier verdict of 'host
+pointer' read against a different run's base would have been a guess.
+
+The frame is __imp__sub_824961D0+0x14cb, and the chain above it is
+sub_82495FB8 <- sub_8242A510 <- sub_8242B090 <- sub_8242AFF8 <- sub_821B4620 <-
+sub_821B43F8 <- sub_82214480 <- sub_823CEAB8 <- sub_82428238 <- sub_822180F8 <-
+sub_82218E10 <- sub_82218F98 <- _xstart. THE MAIN THREAD, not a render thread.
+
+WHAT A HOST FAULT ADDRESS MEANS HERE. Recompiled code touches exactly two kinds
+of host pointer: the memory base, and the function pointer it fetches from the
+function table for an indirect call. A guest load through a stale pointer would
+fault INSIDE the mapping. So this is an indirect CALL through a garbage guest
+address: the table lookup returns rubbish and the jump lands on it. That is
+consistent with the long-standing reading of a call through a stale vtable, and
+it is the first time the fault itself has said so rather than being inferred.
+
+NEXT: map +0x14cb inside sub_824961D0 back to its guest instruction, which names
+the exact virtual call, and check what the function table does with an
+out-of-range guest address -- if it indexes without a bounds check, that is a
+runtime defect worth fixing on its own account regardless of why the guest
+pointer was stale.

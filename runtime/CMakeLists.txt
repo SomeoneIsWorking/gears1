@@ -90,6 +90,7 @@ add_executable(gears1
     audio_out.cpp
     guest_probes.cpp
     guest_backtrace.cpp
+    fault_report.cpp
     reference_barrier.cpp
     user_profile.cpp
     xam_apps.cpp
@@ -204,3 +205,11 @@ if(GEARS_ASAN)
     target_link_options(gears1 PRIVATE -fsanitize=address)
     message(STATUS "gears1: AddressSanitizer enabled for the runtime (gears_ppc excluded)")
 endif()
+
+# THE FAULT REPORT IS WORTHLESS WITHOUT THIS. backtrace_symbols_fd resolves a
+# frame through the dynamic symbol table, and without -rdynamic the recompiled
+# functions are not in it -- so the crash report degenerates into a column of
+# bare addresses, which is what a reader cannot act on. The whole value of the
+# host backtrace here is that the frames are named `sub_82xxxxxx`, which names
+# guest code directly.
+target_link_options(gears1 PRIVATE -rdynamic)

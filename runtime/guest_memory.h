@@ -20,6 +20,10 @@ public:
 
     uint8_t* Base() const { return base_; }
 
+    // The extent of the mapping, needed by the fault reporter to tell a guest
+    // address apart from a host pointer at the moment of a crash.
+    size_t ReservedSize() const { return reservedSize_; }
+
     // Backs a guest address range with committed pages. Pages that have never
     // been handed out are already zero; a range whose address space is being
     // recycled still holds the previous tenant's bytes, so the caller that

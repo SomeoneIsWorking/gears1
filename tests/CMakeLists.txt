@@ -209,3 +209,17 @@ add_executable(test_reference_barrier
 target_include_directories(test_reference_barrier PRIVATE ../runtime)
 target_link_libraries(test_reference_barrier PRIVATE Threads::Threads)
 add_test(NAME reference_barrier COMMAND test_reference_barrier)
+
+# The fault report's address classifier. The handler itself runs in a process
+# that is already broken and cannot be unit-tested; the classification of the
+# faulting address can be, and it is the part that decides whether the report
+# says anything useful. The low-address case is the one that matters most: this
+# runtime maps guest physical zero as real RAM, so a fault there is NOT a guest
+# null pointer and reporting it as one would send the next session hunting a bug
+# that does not exist.
+add_executable(test_fault_report
+    test_fault_report.cpp
+    ../runtime/fault_report.cpp)
+target_include_directories(test_fault_report PRIVATE ../runtime)
+target_link_libraries(test_fault_report PRIVATE lucent::lucent)
+add_test(NAME fault_report COMMAND test_fault_report)

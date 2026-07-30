@@ -20,6 +20,7 @@
 
 #include "guest_heap.h"
 #include "guest_memory.h"
+#include "fault_report.h"
 #include "guest_thread.h"
 #include "wait_probe.h"
 #include "kernel_objects.h"
@@ -96,6 +97,10 @@ void GuestThreadMain(std::shared_ptr<GuestThreadStart> start)
 
     t_currentThread = start.get();
     gears::SetGuestThreadName("guest-" + std::to_string(start->threadId));
+    // Every guest thread gets its own signal stack, because the faults worth
+    // reporting happen on these threads and a handler with nowhere to run
+    // reports nothing at all.
+    gears::InstallSignalStackForThisThread();
     // So threads this one creates without a processor of their own inherit it,
     // which is what the console does.
     gears::SetCurrentGuestProcessor(start->processor);

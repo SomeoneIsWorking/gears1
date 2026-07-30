@@ -56,6 +56,7 @@
 #include "hle_d3d.h"
 #include "guest_thread.h"
 #include "wait_probe.h"
+#include "fault_report.h"
 #include "guest_memory.h"
 
 PPC_EXTERN_FUNC(__imp__XGetVideoMode);
@@ -2200,6 +2201,9 @@ void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
         const double seconds =
             frame == 1 ? 0.0 : std::chrono::duration<double>(now - last).count();
         last = now;
+        // Cheap, once per sixty frames, and it answers a question that cost six
+        // runs: is the crash reporter still the one installed?
+        gears::VerifyFaultReporterStillInstalled();
         lucent::info("gpu", "VdSwap: {} frames submitted, last 60 in {:.2f}s ({:.2f} fps)",
             frame, seconds, seconds > 0 ? 60.0 / seconds : 0.0);
     }
