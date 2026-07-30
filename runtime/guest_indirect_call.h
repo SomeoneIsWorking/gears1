@@ -57,8 +57,27 @@ inline bool IsValidGuestCallTarget(uint32_t target)
 // compile definition and a forced include, so the generated code does not have
 // to be touched -- it is regenerated from the image and any edit to it would be
 // lost.
+// #50's call site. sub_823ED7E0 loads an object from an indexed table and calls
+// slot 51 of its vtable; on roughly one run in ten the value it dereferences is a
+// FLOAT (0.84022, 0.10000066), so the pointer chain is landing in rotation and
+// translation data.
+//
+// This records the object and its first word into the fault-context slot, so the
+// numbers survive BOTH ways the crash lands -- an abort from the check below, where
+// registers are reachable, and a SIGSEGV, where they are not. Two of the three
+// occurrences so far were segfaults, and only the abort was ever readable.
+//
+// It is one compare against a constant on all 29,190 sites, and it is debt: an
+// earlier probe of exactly this shape was removed for that cost. It comes out
+// again once it has answered, and issue #50 records it so it is not forgotten.
+void NoteStreamingObject(PPCContext& ctx, uint8_t* base);
+constexpr uint32_t kStreamingCallReturn = 0x823EDB50;
+
 inline void CallGuestIndirect(PPCContext& ctx, uint8_t* base, uint32_t target)
 {
+    if (uint32_t(ctx.lr) == kStreamingCallReturn) [[unlikely]]
+        NoteStreamingObject(ctx, base);
+
 
     if (!IsValidGuestCallTarget(target)) [[unlikely]]
         ReportBadIndirectCall(target, ctx, base);

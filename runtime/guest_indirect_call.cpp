@@ -21,6 +21,38 @@ void ReportFStringProbe();
 void ReportLoaderThunks();
 void ReportEarlyThunks();
 
+void NoteStreamingObject(PPCContext& ctx, uint8_t* base)
+{
+    const uint32_t object = ctx.r22.u32;
+    const uint32_t firstWord =
+        (uint64_t(object) + 4 < PPC_MEMORY_SIZE)
+            ? __builtin_bswap32(
+                  *reinterpret_cast<const uint32_t*>(base + object))
+            : 0xDEADDEADu;
+
+    // A real vtable lives in the loaded image. Anything else is the symptom.
+    const bool plausible = firstWord >= PPC_IMAGE_BASE &&
+                           firstWord < PPC_IMAGE_BASE + PPC_IMAGE_SIZE;
+
+    SetFaultContext("#50 (object, its first word, ctr target, lr):", object,
+                    firstWord, ctx.ctr.u32, uint32_t(ctx.lr));
+
+    // FIRST OCCURRENCE ALWAYS, so the probe proves it is alive before any absence
+    // is read as information -- two earlier versions of this printed nothing at
+    // all and I spent a run each time working out why.
+    static std::atomic<uint64_t> seen{0};
+    static std::atomic<uint64_t> implausible{0};
+    const uint64_t n = seen.fetch_add(1) + 1;
+    const uint64_t bad = plausible ? implausible.load() : implausible.fetch_add(1) + 1;
+    if (n == 1 || !plausible)
+        lucent::info("call", "#50 streaming object #{}: {:#x}, first word {:#x}"
+            " ({}), slot-51 target {:#x}. {} of {} seen were not vtables.",
+            n, object, firstWord,
+            plausible ? "in the image, so a plausible vtable"
+                      : "NOT in the image -- this is the corruption",
+            ctx.ctr.u32, bad, n);
+}
+
 void ReportBadIndirectCall(uint32_t target, PPCContext& ctx, uint8_t* base)
 {
 
