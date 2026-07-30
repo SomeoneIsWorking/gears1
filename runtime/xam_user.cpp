@@ -31,6 +31,7 @@
 
 #include "guest_filesystem.h"
 #include "input.h"
+#include "guest_stack_argument.h"
 #include "user_profile.h"
 
 namespace
@@ -541,9 +542,32 @@ void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
     const uint32_t rootNamePtr = ctx.r4.u32;
     const uint32_t contentDataPtr = ctx.r5.u32;
     const uint32_t flags = ctx.r6.u32;
-    // XamContentCreateEx(user, root, data, flags, disposition, licenseMask,
-    //                    overlapped) -- the async block is the last argument.
-    const uint32_t overlapped = ctx.r9.u32;
+
+    // NINE parameters, not seven:
+    //
+    //   (user, root, data, flags, disposition, licenseMask, cacheSize,
+    //    contentSize, overlapped)
+    //
+    // so r9 is cacheSize and r10 is contentSize, and the overlapped block is the
+    // NINTH argument -- on the stack, at r1+84. This used to read r9, and the
+    // title's own wrapper at 0x82611900 makes that maximally misleading: it
+    // spills the caller's overlapped to the stack and then ZEROES r9.
+    //
+    //   stw r9,84(r1)      ; the real overlapped -> the parameter save area
+    //   li  r9,0           ; r9 is cacheSize from here on
+    //
+    // So we saw no overlapped, completed synchronously, and returned plain
+    // success. The title's checkpoint loader at 0x821B6800 requires
+    // ERROR_IO_PENDING to continue -- it compares against 997 and exits
+    // immediately on anything else, returning that value as its own status. Given
+    // success it concluded there was nothing to load and reported SUCCESS having
+    // loaded nothing, so its caller skipped copying the 385-byte checkpoint
+    // carrier, the checkpoint archive was empty, the map name deserialised to
+    // nothing, PrepareMapChange got NAME_None, and the title asked for a package
+    // called "None" -- which is the path its own use-after-free lives on.
+    // Measured: the loader saw 0x0 where it needed 997 (catalog #45).
+    const uint32_t overlapped =
+        gears::GuestStackArgument32(base, ctx.r1.u32, 8);
 
     if (rootNamePtr == 0)
     {

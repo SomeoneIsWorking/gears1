@@ -1,7 +1,7 @@
 ---
 id: 45
 title: Checkpoint restore calls through a freed object (was: the title asks for 2.6 GB after mounting save content)
-status: open
+status: resolved
 symptom: deterministic SIGSEGV at ~1560 frames on the checkpoint restore path, calling virtual slot 13 of a freed pool block; earlier and now superseded: a 2.6 GB allocation after the save content mount
 tags: saves,content,memory,port
 created: 2026-07-29
@@ -1900,3 +1900,63 @@ that), and GetLastError at 0x826124f8 then returns a stale 0 because nothing set
 it -- which would make a failed open return SUCCESS. That is testable and is the
 next step, with the override built through prepare_overrides.py so the probe can
 actually fire.
+
+### Resolution (2026-07-30)
+FIXED: XamContentCreateEx READ THE OVERLAPPED BLOCK OUT OF THE WRONG ARGUMENT.
+
+ROOT CAUSE, one wrong register. XamContentCreateEx takes NINE parameters:
+
+  (user, root, data, flags, disposition, licenseMask, cacheSize, contentSize,
+   overlapped)
+
+Our implementation documented SEVEN and read the overlapped out of r9. r9 is
+cacheSize. The title own wrapper at 0x82611900 makes that maximally misleading --
+it spills the caller overlapped to the stack and then zeroes r9:
+
+    stw r9,84(r1)      ; the real overlapped -> the parameter save area
+    li  r9,0           ; r9 is cacheSize from here on
+
+and sub_826117E8 forwards it the same way (lwz r11,180(r1); stw r11,84(r1)) so at
+our import entry the overlapped is the NINTH argument, on the stack at r1+84.
+Reading r9 we saw zero, completed synchronously, and returned plain success.
+
+WHY THAT PRODUCED A USE-AFTER-FREE FOUR SUBSYSTEMS AWAY. The title checkpoint
+loader at 0x821B6800 REQUIRES ERROR_IO_PENDING: it compares the result against
+997 and exits immediately on anything else, returning that value as its own
+status. Given success it concluded there was nothing to load and reported SUCCESS
+having loaded nothing. Its caller sub_821B4620 then skipped copying the 385-byte
+checkpoint carrier into the array the archive is built over, so the archive was
+empty, the map name deserialised to nothing, the empty-string literal reached the
+FName constructor, PrepareMapChange got NAME_None, LoadPackageAsync asked for a
+package called None, FArchiveAsync got FileSize -1 and set ArIsError, and
+ULinkerLoad::CreateLoader -- which memoises its loader BEFORE testing that flag --
+deleted it and then called TotalSize through the dead pointer. That last part is a
+genuine retail bug on a path a console with its disc never executes.
+
+MEASURED, BEFORE AND AFTER, same repro:
+
+  before: loader XamContentCreateEx returned 0x0 (needed 997), no CreateFile at
+          all, object+420 stayed data 0x0 count 0, FName index 0x0 = NAME_None,
+          LoadPackageAsync None, abort at ~1560 frames (exit 134)
+  after:  returned 0x3e5 = 997; XamGetOverlappedResult 0; CreateFile save:\\Pla ->
+          handle; ReadFile TRUE; object+420 data 0x41dfaf00 count 385; the third
+          FString deserialise reads length 12; FName sp_prison_p -> INDEX 0x775f;
+          LoadPackageAsync sp_prison_p, then SP_Prison_World and SP_Prison_S01;
+          8640 frames and still running when the 300s timeout stopped it, with
+          ZERO faults and ZERO bad indirect calls
+
+FIXED PROPERLY, not at the call site: runtime/guest_stack_argument.{h,cpp} reads
+stack-passed arguments by index from the parameter save area (r1+0x14, eight-byte
+slots, so the ninth is r1+84 -- which the title own stw instruction confirms).
+Tests written first, and the case that matters is the DECOY: a neighbouring slot
+holding a plausible pointer must not be picked up, because reading the wrong slot
+is exactly this bug and it produced an entirely reasonable-looking zero.
+
+NOTE THE PATH BUILDER IS SHARED. The read opens save:\\Pla -- the same name the
+write produced -- so the gamertag-derived filename was never the problem, and the
+default_checkpoint.sav literal is a fallback that is not meant to be reached. Both
+were suspects in earlier notes; both are cleared.
+
+WHAT THIS DID NOT FIX: #44. The render-ring two-producer warnings still occur 421
+times in the fixed run, so the standing hypothesis that #44 was downstream of #45
+is REFUTED. It is its own bug.

@@ -103,6 +103,7 @@ add_executable(gears1
     guest_backtrace.cpp
     fault_report.cpp
     file_disposition.cpp
+    guest_stack_argument.cpp
     guest_indirect_call.cpp
     reference_barrier.cpp
     user_profile.cpp

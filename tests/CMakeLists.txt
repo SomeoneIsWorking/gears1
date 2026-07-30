@@ -137,6 +137,7 @@ add_executable(test_xam_user
     ../runtime/user_profile.cpp
     ../runtime/xam_content.cpp
     ../runtime/xam_overlapped.cpp
+    ../runtime/guest_stack_argument.cpp
     ../runtime/guest_filesystem.cpp
     ../runtime/guest_heap.cpp
     ../runtime/guest_memory.cpp
@@ -247,3 +248,13 @@ add_executable(test_file_disposition
     ../runtime/file_disposition.cpp)
 target_include_directories(test_file_disposition PRIVATE ../runtime)
 add_test(NAME file_disposition COMMAND test_file_disposition)
+
+# Reading guest arguments passed on the STACK. XamContentCreateEx takes nine
+# parameters and our implementation documented seven, reading the overlapped block
+# out of r9 -- which is cacheSize, and which the title's own wrapper zeroes after
+# spilling the real overlapped to r1+84. The decoy case is the point of the file.
+add_executable(test_guest_stack_argument
+    test_guest_stack_argument.cpp
+    ../runtime/guest_stack_argument.cpp)
+target_include_directories(test_guest_stack_argument PRIVATE ../runtime)
+add_test(NAME guest_stack_argument COMMAND test_guest_stack_argument)

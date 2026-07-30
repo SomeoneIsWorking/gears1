@@ -2188,3 +2188,209 @@ PPC_FUNC(sub_821B6800)
             ? "was NOT REACHED, so it gave up before building a path at all"
             : std::string("produced '") + path + "'");
 }
+
+// THE SAVE-DEVICE LOADER'S SYSCALL SEQUENCE, from the thunks.
+//
+// sub_821B6800 returns 0 -- success -- while populating nothing, and the
+// disassembly says the only route to 0 runs through li r30,0 at 0x821b6930,
+// downstream of ReadFile succeeding, which needs CreateFile to have succeeded,
+// which would have logged an [fs] line. It returned 0 and nothing was logged, so
+// a premise is wrong.
+//
+// HOOKED AT THE THUNKS DELIBERATELY. The obvious probe -- an override on the path
+// builder sub_821B5DD8 -- is STRUCTURALLY BLIND: it lives in ppc_recomp.6.cpp
+// alongside its caller, and clang folds intra-TU calls through the weak alias so
+// the override is never entered. It duly reported "not reached" and I believed it
+// for a while. These three thunks are in ppc_recomp.97.cpp, a different
+// translation unit, so their overrides do fire.
+//
+// Every one reports its own denominator: calls seen from inside the loader
+// against calls seen anywhere. A zero on the left with a non-zero on the right is
+// a fact about the return-address filter; two zeros mean the override is not
+// being entered at all, which is the failure this comment exists to avoid
+// repeating.
+extern "C" PPC_FUNC(__imp__sub_82611E90);   // CreateFile
+extern "C" PPC_FUNC(__imp__sub_82612390);   // ReadFile
+extern "C" PPC_FUNC(__imp__sub_826124F8);   // GetLastError
+
+namespace
+{
+constexpr uint32_t kLoaderStart = 0x821B6800;
+constexpr uint32_t kLoaderEnd = 0x821B6980;
+
+struct ThunkCounts { std::atomic<uint64_t> inLoader{0}, anywhere{0}; };
+ThunkCounts g_createFile, g_readFile, g_lastError;
+
+bool FromLoader(const PPCContext& ctx)
+{
+    const uint32_t lr = uint32_t(ctx.lr);
+    return lr >= kLoaderStart && lr < kLoaderEnd;
+}
+
+std::string NarrowGuestString(uint32_t address)
+{
+    std::string text;
+    if (address == 0)
+        return text;
+    for (uint32_t i = 0; i < 96; ++i)
+    {
+        if (uint64_t(address) + i + 1 >= PPC_MEMORY_SIZE)
+            break;
+        const char c = char(*gears::Memory().Translate<uint8_t>(address + i));
+        if (c == 0)
+            break;
+        text.push_back(c);
+    }
+    return text;
+}
+} // namespace
+
+PPC_FUNC(sub_82611E90)
+{
+    g_createFile.anywhere.fetch_add(1);
+    const bool mine = FromLoader(ctx);
+    const std::string path = mine ? NarrowGuestString(ctx.r3.u32) : std::string();
+
+    __imp__sub_82611E90(ctx, base);
+
+    if (!mine)
+        return;
+    const uint64_t n = g_createFile.inLoader.fetch_add(1) + 1;
+    if (n <= 3)
+        lucent::error("linker", "loader CreateFile #{}: path {:#x} = '{}' ->"
+            " handle {:#x}{}", n, ctx.r4.u32, path, ctx.r3.u32,
+            int32_t(ctx.r3.u32) == -1
+                ? "  <- INVALID_HANDLE_VALUE, so the loader takes its"
+                  " GetLastError branch"
+                : "");
+}
+
+PPC_FUNC(sub_82612390)
+{
+    g_readFile.anywhere.fetch_add(1);
+    const bool mine = FromLoader(ctx);
+
+    __imp__sub_82612390(ctx, base);
+
+    if (!mine)
+        return;
+    const uint64_t n = g_readFile.inLoader.fetch_add(1) + 1;
+    if (n <= 3)
+        lucent::error("linker", "loader ReadFile #{}: returned {:#x} ({})", n,
+            ctx.r3.u32, ctx.r3.u32 != 0
+                ? "TRUE, so the loader returns SUCCESS"
+                : "FALSE, so the loader returns GetLastError");
+}
+
+PPC_FUNC(sub_826124F8)
+{
+    g_lastError.anywhere.fetch_add(1);
+    const bool mine = FromLoader(ctx);
+
+    __imp__sub_826124F8(ctx, base);
+
+    if (!mine)
+        return;
+    const uint64_t n = g_lastError.inLoader.fetch_add(1) + 1;
+    if (n <= 3)
+        lucent::error("linker", "loader GetLastError #{}: returned {:#x}{}", n,
+            ctx.r3.u32, ctx.r3.u32 == 0
+                ? "  <- ZERO. The loader returns this as its status, so a FAILED"
+                  " open is reported to the caller as SUCCESS. That is the lie."
+                : "  (non-zero, so the failure propagates honestly)");
+}
+
+namespace gears
+{
+void ReportLoaderThunks()
+{
+    lucent::error("linker", "loader thunks: CreateFile {}/{} ReadFile {}/{}"
+        " GetLastError {}/{} (inside the loader / anywhere). Two zeros in a pair"
+        " means the override never fired at all, not that the call did not happen",
+        g_createFile.inLoader.load(), g_createFile.anywhere.load(),
+        g_readFile.inLoader.load(), g_readFile.anywhere.load(),
+        g_lastError.inLoader.load(), g_lastError.anywhere.load());
+}
+} // namespace gears
+
+// THE LOADER'S EARLY CALLS, to find where it actually leaves.
+//
+// The three thunks I hooked first -- on a labelling I took on trust rather than
+// verifying -- reported 0 calls from inside the loader against 39, 760 and 8340
+// from elsewhere. So those overrides fire and the loader reaches NONE of them,
+// which contradicts the disassembly's only route to returning 0. Either the
+// labelling is wrong or the loader leaves earlier than the code reads.
+//
+// These are the calls the loader makes BEFORE any of that, all in
+// ppc_recomp.97.cpp and so cross-TU from the caller: 0x826121F0 first, then
+// 0x82611900 (the one taking flags 19 and compared against 997), then 0x82612290
+// (compared against 0, and the branch that decides whether the path builder runs
+// at all). Their return values decide everything, and none of them has been
+// observed.
+extern "C" PPC_FUNC(__imp__sub_826121F0);
+extern "C" PPC_FUNC(__imp__sub_82611900);
+extern "C" PPC_FUNC(__imp__sub_82612290);
+
+namespace
+{
+struct EarlyThunk { std::atomic<uint64_t> inLoader{0}, anywhere{0}; };
+EarlyThunk g_first, g_contentCreate, g_overlappedResult;
+
+void ReportEarly(const char* what, EarlyThunk& counts, uint32_t result,
+                 const PPCContext& ctx, const char* meaning)
+{
+    counts.anywhere.fetch_add(1);
+    if (!FromLoader(ctx))
+        return;
+    const uint64_t n = counts.inLoader.fetch_add(1) + 1;
+    if (n <= 3)
+        lucent::error("linker", "loader {} #{}: returned {:#x} ({})", what, n,
+                      result, meaning);
+}
+} // namespace
+
+PPC_FUNC(sub_826121F0)
+{
+    const bool mine = FromLoader(ctx);
+    __imp__sub_826121F0(ctx, base);
+    if (mine || true)
+        ReportEarly("first call (0x826121F0)", g_first, ctx.r3.u32, ctx,
+                    "its result is kept in r25 and closed at the end");
+}
+
+PPC_FUNC(sub_82611900)
+{
+    const bool mine = FromLoader(ctx);
+    __imp__sub_82611900(ctx, base);
+    (void)mine;
+    ReportEarly("XamContentCreateEx (0x82611900)", g_contentCreate, ctx.r3.u32,
+                ctx, ctx.r3.u32 == 997
+                    ? "997 = ERROR_IO_PENDING, which is what the loader requires"
+                      " to continue"
+                    : "NOT 997, so the loader exits immediately and returns this");
+}
+
+PPC_FUNC(sub_82612290)
+{
+    const bool mine = FromLoader(ctx);
+    __imp__sub_82612290(ctx, base);
+    (void)mine;
+    ReportEarly("XamGetOverlappedResult (0x82612290)", g_overlappedResult,
+                ctx.r3.u32, ctx, ctx.r3.u32 == 0
+                    ? "ZERO, so the loader proceeds to build a path and open a file"
+                    : "non-zero, so the loader skips the open and RETURNS THIS as"
+                      " its status");
+}
+
+namespace gears
+{
+void ReportEarlyThunks()
+{
+    lucent::error("linker", "loader early thunks: first {}/{},"
+        " XamContentCreateEx {}/{}, XamGetOverlappedResult {}/{} (inside the"
+        " loader / anywhere). Two zeros in a pair means the override never fired",
+        g_first.inLoader.load(), g_first.anywhere.load(),
+        g_contentCreate.inLoader.load(), g_contentCreate.anywhere.load(),
+        g_overlappedResult.inLoader.load(), g_overlappedResult.anywhere.load());
+}
+} // namespace gears
