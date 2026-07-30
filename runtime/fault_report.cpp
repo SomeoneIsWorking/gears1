@@ -60,6 +60,7 @@ namespace
 
 struct sigaction g_previousSegv{};
 struct sigaction g_previousBus{};
+struct sigaction g_previousAbort{};
 volatile sig_atomic_t g_reporting = 0;
 
 // Written with write(2) rather than the logger: the process is already broken,
@@ -80,7 +81,10 @@ void OnFatalMemorySignal(int signal, siginfo_t* info, void* context)
         g_reporting = 1;
 
         Emit("\n=== FAULT ===\n");
-        Emit(signal == SIGBUS ? "signal: SIGBUS\n" : "signal: SIGSEGV\n");
+        Emit(signal == SIGBUS    ? "signal: SIGBUS\n"
+             : signal == SIGABRT ? "signal: SIGABRT (a deliberate stop -- the"
+                                   " report above it names the cause)\n"
+                                 : "signal: SIGSEGV\n");
 
         const std::string where = DescribeFaultAddress(
             g_guestBase, g_guestSize,
@@ -106,7 +110,9 @@ void OnFatalMemorySignal(int signal, siginfo_t* info, void* context)
     // Chain, so a core is still produced and anything else that wanted this
     // signal still sees it.
     const struct sigaction& previous =
-        signal == SIGBUS ? g_previousBus : g_previousSegv;
+        signal == SIGBUS    ? g_previousBus
+        : signal == SIGABRT ? g_previousAbort
+                            : g_previousSegv;
     if (previous.sa_flags & SA_SIGINFO)
     {
         if (previous.sa_sigaction != nullptr)
@@ -209,6 +215,9 @@ void InstallFaultReporter()
     sigemptyset(&sa.sa_mask);
     sigaction(SIGSEGV, &sa, &g_previousSegv);
     sigaction(SIGBUS, &sa, &g_previousBus);
+    // SIGABRT as well: a checked indirect call reports the bad guest address and
+    // then aborts, and the host backtrace belongs beside that report.
+    sigaction(SIGABRT, &sa, &g_previousAbort);
 
     // AN ALTERNATE SIGNAL STACK, because the fault this reporter most needs to
     // survive is the one it cannot otherwise report. If the guest overflows the

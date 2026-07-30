@@ -1238,3 +1238,56 @@ the exact virtual call, and check what the function table does with an
 out-of-range guest address -- if it indexes without a bounds check, that is a
 runtime defect worth fixing on its own account regardless of why the guest
 pointer was stale.
+
+### Note (2026-07-30)
+ROOT CAUSE PROVEN, WITH THE BYTES.
+
+Every indirect call in the image (29,190 sites) now validates its target, so the
+crash reports itself instead of jumping into host memory. The report:
+
+  INDIRECT CALL TO 0xff, which is not a guest function
+  lr 0x82496a6c, thread 'host' (the MAIN thread)
+  r3=0x42ba0fc0  r24=0x41c84e00  r11=0xff
+  object r3 0x42ba0fc0: 42ba1080 00000001 00000917 00000000 00000001 ...
+  its first word (the vtable pointer) is 0x42ba1080
+  vtable 0x42ba1080: 42ba1140 00000001 00000000 ... 00000001 000000ff ffffffe3
+
+AND THE GUEST CODE AT THE SITE:
+
+  lwz r11,1396(r24)      ; a guard beside the memo
+  cmpwi cr6,r11,0
+  bne cr6,0x82496a9c     ; NON-ZERO skips the call entirely
+  lwz r3,1376(r24)       ; the memoised object
+  lwz r11,0(r3)          ; its vtable
+  lwz r11,52(r11)        ; slot 13
+  bctrl
+
+WHAT THE BYTES SAY. The 'vtable pointer' is 0x42ba1080 -- a HEAP address 0xc0
+bytes past the object itself, not an image address, and what it points at is
+plainly a list node with counters rather than a function table. Slot 13 of it is
+0x000000ff, which is the bad target. So the block at r3 is no longer the object
+the title memoised: it has been freed and REUSED as a different structure.
+
+And 0x42ba0fc0 is verbatim the address the freed-while-cached probe reported in
+an earlier run ('FREEING 0x42ba0fc0 WHILE IT IS STILL CACHED at holder
+0x41cb4e00+1376, occurrence 132'). The same is true of the previous run's pair
+(0x42babc40 at holder 0x41ca4e00). The probe and the fault agree on the address,
+which is the first time these two lines of evidence have met.
+
+SO: use-after-free of the object memoised at holder+1376, used from the MAIN
+thread, freed from the render path, and by the time it is used the memory has
+already been recycled into another data structure. That is no longer inferred
+from a symptom -- the object, its false vtable, and the slot that produced the
+bad target are all printed.
+
+THE GUARD IS THE THING TO UNDERSTAND NEXT. holder+1396 gates this call: non-zero
+means skip. It is written by sub_82496AE0, which also writes the memo at +1376 --
+so one function establishes both, and sub_824961D0 consumes both. Either the port
+fails to set the guard where the title would, or the guard means something other
+than validity. That is the next question, and it is now a narrow one.
+
+ALSO FIXED, AN INSTRUMENT THAT LIED: the first version of the register dump
+bounded itself to the loaded image and reported of an out-of-image address 'that
+alone makes it not an object'. False, and stated with confidence -- heap objects
+live outside the image, and the object in this very crash is one. Bounded to the
+guest mapping now.
