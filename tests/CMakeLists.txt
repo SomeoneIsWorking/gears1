@@ -245,3 +245,15 @@ add_executable(test_guest_stack_argument
     ../runtime/guest_stack_argument.cpp)
 target_include_directories(test_guest_stack_argument PRIVATE ../runtime)
 add_test(NAME guest_stack_argument COMMAND test_guest_stack_argument)
+
+# Vulkan queue-family selection, factored out of gpu_draw.cpp and gpu_present.cpp
+# ahead of unifying their two devices. Each file's inline loop checked only its own
+# half of the requirement -- graphics for one, presentation for the other -- so the
+# case that matters here is a device where the first graphics family cannot present.
+# "None" is a real answer: returning family 0 when nothing qualifies is how a port
+# ends up with a device that silently cannot present.
+add_executable(test_queue_family
+    test_queue_family.cpp
+    ../runtime/gpu_queue_family.cpp)
+target_include_directories(test_queue_family PRIVATE ../runtime)
+add_test(NAME queue_family COMMAND test_queue_family)

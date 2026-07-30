@@ -104,6 +104,7 @@ add_executable(gears1
     fault_report.cpp
     file_disposition.cpp
     guest_stack_argument.cpp
+    gpu_queue_family.cpp
     guest_indirect_call.cpp
     user_profile.cpp
     xam_apps.cpp
@@ -135,7 +136,8 @@ endif()
 # replay possible. tools/frame_replay links this and renders a captured frame in
 # about a second, with no guest, no menu walk and no 200-second boot; see
 # frame_capture.h. gears1 links it exactly as before.
-add_library(gears_draw STATIC gpu_draw.cpp frame_capture.cpp)
+add_library(gears_draw STATIC gpu_draw.cpp frame_capture.cpp
+                              gpu_queue_family.cpp)
 target_include_directories(gears_draw PUBLIC .)
 target_link_libraries(gears_draw PRIVATE lucent::lucent)
 target_link_libraries(gears1 PRIVATE gears_draw)

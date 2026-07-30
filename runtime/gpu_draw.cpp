@@ -10,6 +10,7 @@
 // explicitly allows -- the pixel shader samples a render target that does not
 // exist yet.
 #include "gpu_draw.h"
+#include "gpu_queue_family.h"
 
 #include <lucent/config.h>
 #include <lucent/log.h>
@@ -162,21 +163,33 @@ bool Renderer::Init()
         vkGetPhysicalDeviceQueueFamilyProperties(cand, &fc, nullptr);
         std::vector<VkQueueFamilyProperties> fam(fc);
         vkGetPhysicalDeviceQueueFamilyProperties(cand, &fc, fam.data());
+        // Shared with the present path (gpu_queue_family.h) so the two policies
+        // cannot drift. needPresent is false here because this device draws into an
+        // offscreen target and never touches a surface -- which is exactly the
+        // split that costs a readback and a staging upload per frame today, and is
+        // the next thing to remove.
+        std::vector<gears::QueueFamily> caps(fc);
         for (uint32_t i = 0; i < fc; ++i)
         {
-            if (!(fam[i].queueFlags & VK_QUEUE_GRAPHICS_BIT))
-                continue;
-            VkPhysicalDeviceProperties p{};
-            vkGetPhysicalDeviceProperties(cand, &p);
-            int score = p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2
-                      : p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 1 : 0;
-            if (score > best)
-            {
-                best = score;
-                physical = cand;
-                queueFamily = i;
-            }
-            break;
+            caps[i].graphics = (fam[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
+            caps[i].present = false;
+            caps[i].count = fam[i].queueCount;
+        }
+
+        const uint32_t chosen =
+            gears::ChooseQueueFamily(caps, /*needPresent=*/false);
+        if (chosen == gears::kNoQueueFamily)
+            continue;
+
+        VkPhysicalDeviceProperties p{};
+        vkGetPhysicalDeviceProperties(cand, &p);
+        int score = p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2
+                  : p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 1 : 0;
+        if (score > best)
+        {
+            best = score;
+            physical = cand;
+            queueFamily = chosen;
         }
     }
     if (physical == VK_NULL_HANDLE)
