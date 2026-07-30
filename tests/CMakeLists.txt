@@ -280,3 +280,15 @@ add_executable(test_guest_texture_hash
     ../runtime/guest_texture_hash.cpp)
 target_include_directories(test_guest_texture_hash PRIVATE ../runtime)
 add_test(NAME guest_texture_hash COMMAND test_guest_texture_hash)
+
+# The in-run A/B. Comparing two runs of the title does not resolve anything below
+# ~10 ms a frame: three runs of the same gameplay walk at an identical 743 draws a
+# frame gave 39.4, 47.2 and 42.7 ms draw loops, and the two SLOWER ones were the
+# runs with 3.6 ms of work removed. The arms therefore alternate frame by frame
+# inside one run, and the summary is required to say when it cannot tell them
+# apart -- a bare difference of means reads as a finding however small it is.
+add_executable(test_frame_ab
+    test_frame_ab.cpp
+    ../runtime/frame_ab.cpp)
+target_include_directories(test_frame_ab PRIVATE ../runtime)
+add_test(NAME frame_ab COMMAND test_frame_ab)
