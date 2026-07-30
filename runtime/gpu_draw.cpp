@@ -10,6 +10,7 @@
 // explicitly allows -- the pixel shader samples a render target that does not
 // exist yet.
 #include "gpu_draw.h"
+#include "gpu_device_features.h"
 #include "gpu_queue_family.h"
 
 #include <lucent/config.h>
@@ -209,37 +210,16 @@ bool Renderer::Init()
     qi.queueFamilyIndex = queueFamily;
     qi.queueCount = 1;
     qi.pQueuePriorities = &prio;
-    // The translated shaders read a storage buffer from the vertex stage; the
-    // pixel stage samples. Reads never need the stores/atomics features, but
-    // enable them if present so a driver that treats the SSBO as writable does
-    // not reject the pipeline.
-    VkPhysicalDeviceFeatures avail{};
-    vkGetPhysicalDeviceFeatures(physical, &avail);
+    // The feature set lives in gpu_device_features.h, shared with the present path.
+    // Whichever side ends up creating the single device must enable everything the
+    // other will use, and the reasoning for each feature is recorded there.
     VkPhysicalDeviceFeatures feats{};
-    feats.vertexPipelineStoresAndAtomics = avail.vertexPipelineStoresAndAtomics;
-    feats.fragmentStoresAndAtomics = avail.fragmentStoresAndAtomics;
-    // Pipeline statistics let a draw report how far it actually got -- vertices
-    // in, primitives after clipping, fragment shader invocations. Without it,
-    // "this draw added no pixels" cannot be told apart from "this draw was
-    // clipped away" or "this draw shaded black".
-    feats.pipelineStatisticsQuery = avail.pipelineStatisticsQuery;
-    hasPipelineStats = avail.pipelineStatisticsQuery != VK_FALSE;
-    // A rectangle list gives three vertices and the hardware infers the fourth;
-    // deriving it needs the shaded vertices, so it happens in a geometry shader.
-    feats.geometryShader = avail.geometryShader;
-    hasGeometryShader = avail.geometryShader != VK_FALSE;
-    // The resolve compute pass reads and writes storage images whose format it
-    // does not know at build time: an EDRAM surface may be 8888, 7e3 carried as
-    // half-float, or a two-channel float, and the destination is whatever the
-    // guest asked for. Declaring a format in the shader and binding a different
-    // one is a mismatch that silently returns garbage -- measured, at scale 1.0
-    // it failed to reproduce the blit it replaces on 2762958 of 2764816 bytes.
-    // So the shader declares Unknown and these two features carry it.
-    feats.shaderStorageImageReadWithoutFormat = avail.shaderStorageImageReadWithoutFormat;
-    feats.shaderStorageImageWriteWithoutFormat = avail.shaderStorageImageWriteWithoutFormat;
-    hasStorageImageWithoutFormat =
-        avail.shaderStorageImageReadWithoutFormat != VK_FALSE &&
-        avail.shaderStorageImageWriteWithoutFormat != VK_FALSE;
+    gears::DeviceCapabilities caps{};
+    gears::SelectDeviceFeatures(physical, feats, caps);
+    hasPipelineStats = caps.pipelineStatistics;
+    hasGeometryShader = caps.geometryShader;
+    hasStorageImageWithoutFormat = caps.storageImageWithoutFormat;
+
     VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     di.queueCreateInfoCount = 1;
     di.pQueueCreateInfos = &qi;
