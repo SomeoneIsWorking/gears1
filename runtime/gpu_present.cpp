@@ -30,6 +30,15 @@
 // path deliberately.
 #include "gpu_present.h"
 
+#include <cstdio>
+#include <array>
+#include <filesystem>
+#include <set>
+#include <string>
+#include <format>
+#include <vector>
+
+#include <lucent/config.h>
 #include <lucent/log.h>
 
 #include "gpu_device_features.h"
@@ -123,6 +132,17 @@ struct Presenter
 
     // Staging buffer for uploading a real guest frame (from the guest-draw
     // backend) into the swapchain image instead of the synthetic clear.
+    // Whether the surface permits reading the presented image back. Reported rather
+    // than assumed: if it is false the capture is simply unavailable, and a request
+    // for one has to say so instead of writing nothing and looking like it worked.
+    bool canCapturePresented = false;
+    VkBuffer presentCapture = VK_NULL_HANDLE;
+    VkDeviceMemory presentCaptureMem = VK_NULL_HANDLE;
+    void* presentCaptureMapped = nullptr;
+    VkDeviceSize presentCaptureBytes = 0;
+    uint64_t presentCaptureWanted = 0;   // how many frames still to write
+    uint64_t presentCaptureAfter = 0;    // ...but not before this present
+
     VkBuffer guestStaging = VK_NULL_HANDLE;
     VkDeviceMemory guestStagingMem = VK_NULL_HANDLE;
     void* guestStagingMapped = nullptr;
@@ -159,6 +179,11 @@ struct Presenter
     bool CreateSwapchain();
     void DestroySwapchain();
     bool EnsureGuestStaging(VkDeviceSize size);
+    // The presented-frame capture. Separate from the guest staging buffer because
+    // this one is read by the CPU rather than written by it, and because a
+    // diagnostic must not share a resource with the path it is checking.
+    bool EnsurePresentCapture(VkDeviceSize size);
+    void WritePresentedFrame(uint32_t width, uint32_t height, VkFormat format);
     bool PresentOne(uint32_t sequence);
     void PumpEvents();
 };
@@ -404,9 +429,21 @@ bool Presenter::CreateSwapchain()
     info.imageColorSpace = chosen.colorSpace;
     info.imageExtent = extent;
     info.imageArrayLayers = 1;
-    // TRANSFER_DST because the frame is produced with vkCmdClearColorImage:
-    // no render pass, no pipeline, no shaders -- none of that is in scope here.
+    // TRANSFER_DST because the frame is produced with vkCmdClearColorImage or a
+    // copy from the guest staging buffer: no render pass, no pipeline, no shaders.
     info.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+    // AND TRANSFER_SRC WHEN THE SURFACE ALLOWS IT, so what was actually presented
+    // can be read back and written out. Without this there is no way to check what
+    // reaches the window: the draw path's screenshots come from its own readback,
+    // which proves what it RENDERED, not what the presenter put on screen. The next
+    // change here removes that readback and blits the drawn image straight into the
+    // swapchain, and "it did not crash" is not verification of a change that can go
+    // subtly wrong in colour, orientation or extent.
+    canCapturePresented =
+        (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+    if (canCapturePresented)
+        info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
     info.preTransform = caps.currentTransform;
     info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
@@ -457,6 +494,138 @@ void Presenter::DestroySwapchain()
         vkDestroySwapchainKHR(device, swapchain, nullptr);
         swapchain = VK_NULL_HANDLE;
     }
+}
+
+bool Presenter::EnsurePresentCapture(VkDeviceSize size)
+{
+    if (presentCapture != VK_NULL_HANDLE && presentCaptureBytes >= size)
+        return true;
+    if (presentCapture != VK_NULL_HANDLE)
+    {
+        if (presentCaptureMapped)
+            vkUnmapMemory(device, presentCaptureMem);
+        vkDestroyBuffer(device, presentCapture, nullptr);
+        vkFreeMemory(device, presentCaptureMem, nullptr);
+        presentCapture = VK_NULL_HANDLE;
+        presentCaptureMapped = nullptr;
+    }
+
+    VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bi.size = size;
+    bi.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    bi.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(device, &bi, nullptr, &presentCapture) != VK_SUCCESS)
+        return false;
+
+    VkMemoryRequirements req{};
+    vkGetBufferMemoryRequirements(device, presentCapture, &req);
+    uint32_t type = UINT32_MAX;
+    // HOST_CACHED as well as visible: the CPU READS this one, and an uncached read
+    // of a whole frame is far slower than the copy that filled it.
+    const VkMemoryPropertyFlags want =
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i)
+        if ((req.memoryTypeBits & (1u << i)) &&
+            (memProps.memoryTypes[i].propertyFlags & want) == want)
+        {
+            type = i;
+            break;
+        }
+    if (type == UINT32_MAX)
+    {
+        vkDestroyBuffer(device, presentCapture, nullptr);
+        presentCapture = VK_NULL_HANDLE;
+        lucent::warn("present", "no host-visible memory for a presented-frame"
+            " capture, so none can be written");
+        return false;
+    }
+
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = type;
+    if (vkAllocateMemory(device, &ai, nullptr, &presentCaptureMem) != VK_SUCCESS ||
+        vkBindBufferMemory(device, presentCapture, presentCaptureMem, 0) != VK_SUCCESS ||
+        vkMapMemory(device, presentCaptureMem, 0, req.size, 0,
+                    &presentCaptureMapped) != VK_SUCCESS)
+    {
+        lucent::warn("present", "could not map a presented-frame capture buffer");
+        return false;
+    }
+    presentCaptureBytes = size;
+    return true;
+}
+
+void Presenter::WritePresentedFrame(uint32_t width, uint32_t height,
+                                    VkFormat format)
+{
+    if (presentCaptureMapped == nullptr)
+        return;
+
+    // The swapchain is BGRA on every driver seen here, but the format is passed in
+    // rather than assumed: writing the channels the wrong way round would make a
+    // correct blit look broken, which is worse than not capturing at all.
+    const bool bgr = format == VK_FORMAT_B8G8R8A8_UNORM ||
+                     format == VK_FORMAT_B8G8R8A8_SRGB;
+
+    const std::string& dirText = lucent::config::text("PRESENT_DUMP_DIR");
+    const std::filesystem::path dir =
+        dirText.empty() ? std::filesystem::path("scratch/screenshots")
+                        : std::filesystem::path(dirText);
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const std::filesystem::path out =
+        dir / std::format("presented_{}.ppm", presentCaptureWanted);
+
+    std::FILE* f = std::fopen(out.string().c_str(), "wb");
+    if (f == nullptr)
+    {
+        lucent::warn("present", "could not open {} for the presented frame",
+                     out.string());
+        return;
+    }
+    std::fprintf(f, "P6\n%u %u\n255\n", width, height);
+    const uint8_t* src = static_cast<const uint8_t*>(presentCaptureMapped);
+    uint64_t nonBlack = 0;
+    std::set<std::array<uint8_t, 3>> distinct;
+    std::vector<uint8_t> row(size_t(width) * 3);
+    for (uint32_t y = 0; y < height; ++y)
+    {
+        for (uint32_t x = 0; x < width; ++x)
+        {
+            const uint8_t* p = src + (size_t(y) * width + x) * 4;
+            const uint8_t r = bgr ? p[2] : p[0];
+            const uint8_t g = p[1];
+            const uint8_t b = bgr ? p[0] : p[2];
+            row[size_t(x) * 3 + 0] = r;
+            row[size_t(x) * 3 + 1] = g;
+            row[size_t(x) * 3 + 2] = b;
+            if (r || g || b)
+                ++nonBlack;
+            if (distinct.size() < 4096)
+                distinct.insert({r, g, b});
+        }
+        std::fwrite(row.data(), 1, row.size(), f);
+    }
+    std::fclose(f);
+
+    // DISTINCT COLOURS, not just non-black. The first version reported "921600/921600
+    // px non-black (100.0%)" for a capture that held a single flat red -- the
+    // presenter's clear colour, because the capture fired before the draw path had
+    // produced anything. Non-black is satisfied by any clear, so on its own it says
+    // almost nothing; a count of 1 says the frame is flat, and that is the reading
+    // that matters when checking whether a real rendered frame reached the window.
+    lucent::info("present", "presented frame written to {} -- {}/{} px non-black"
+        " ({:.1f}%), {} distinct colour(s){}", out.string(), nonBlack,
+        uint64_t(width) * height,
+        100.0 * double(nonBlack) / (double(width) * height),
+        // The counter stops at 4096 so a busy frame does not cost a set insertion
+        // per pixel forever; say so, or the number reads as an exact count that
+        // suspiciously lands on a power of two.
+        distinct.size() >= 4096 ? std::string("4096+ (counter capped)")
+                                : std::to_string(distinct.size()),
+        distinct.size() <= 2
+            ? "  <- FLAT, so this is a clear colour and not a rendered frame"
+            : "");
 }
 
 bool Presenter::EnsureGuestStaging(VkDeviceSize size)
@@ -603,10 +772,40 @@ bool Presenter::PresentOne(uint32_t sequence)
             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &colour, 1, &range);
     }
 
+    // CAPTURE WHAT IS ABOUT TO BE PRESENTED, when asked. The image is in
+    // TRANSFER_DST here, so it goes to TRANSFER_SRC for the copy and on to
+    // PRESENT_SRC afterwards. Only when a capture was requested AND the surface
+    // permits TRANSFER_SRC -- otherwise the swapchain was created without it and
+    // the copy would be invalid.
+    const bool capturingThisFrame =
+        presentCaptureWanted > 0 && sequence >= presentCaptureAfter &&
+        canCapturePresented &&
+        EnsurePresentCapture(VkDeviceSize(extent.width) * extent.height * 4);
+    if (capturingThisFrame)
+    {
+        VkImageMemoryBarrier toSrc = toClear;
+        toSrc.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        toSrc.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        vkCmdPipelineBarrier(commands[slot], VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+
+        VkBufferImageCopy grab{};
+        grab.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        grab.imageExtent = {extent.width, extent.height, 1};
+        vkCmdCopyImageToBuffer(commands[slot], images[imageIndex],
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, presentCapture, 1, &grab);
+    }
+
     VkImageMemoryBarrier toPresent = toClear;
     toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     toPresent.dstAccessMask = 0;
-    toPresent.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toPresent.oldLayout = capturingThisFrame
+        ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+        : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toPresent.srcAccessMask = capturingThisFrame ? VK_ACCESS_TRANSFER_READ_BIT
+                                                 : VK_ACCESS_TRANSFER_WRITE_BIT;
     toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     vkCmdPipelineBarrier(commands[slot], VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &toPresent);
@@ -624,6 +823,26 @@ bool Presenter::PresentOne(uint32_t sequence)
     submit.pSignalSemaphores = &presentReady[imageIndex];
     if (vkQueueSubmit(queue, 1, &submit, submitted[slot]) != VK_SUCCESS)
         return false;
+
+    if (capturingThisFrame)
+    {
+        // Wait for THIS frame's submit before reading the buffer. It stalls the
+        // presenter for one frame, which is the right trade for a gated diagnostic
+        // and is why it is not on by default.
+        if (vkWaitForFences(device, 1, &submitted[slot], VK_TRUE,
+                            UINT64_MAX) == VK_SUCCESS)
+        {
+            WritePresentedFrame(extent.width, extent.height, format);
+            --presentCaptureWanted;
+        }
+        else
+        {
+            lucent::warn("present", "a presented-frame capture was requested but"
+                " the fence wait failed, so nothing was written -- do not read the"
+                " absence of a file as an empty frame");
+            presentCaptureWanted = 0;
+        }
+    }
 
     VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
     present.waitSemaphoreCount = 1;
@@ -704,6 +923,34 @@ void Presenter::Thread()
     {
         lucent::warn("present", "no usable Vulkan presentation path -- running headless");
         return;
+    }
+
+    // GEARS_PRESENT_DUMP=N writes the next N presented frames. This is the only way
+    // to see what actually reaches the window: the draw path's screenshots come from
+    // its own readback and prove what it RENDERED, not what the presenter put on
+    // screen. The distinction is about to matter -- the next change removes that
+    // readback and blits the drawn image straight into the swapchain, and a blit can
+    // go wrong in colour, orientation or extent while still "not crashing".
+    presentCaptureWanted = uint64_t(lucent::config::number("PRESENT_DUMP", 0));
+    // GEARS_PRESENT_DUMP_AT delays the capture. Without it the first presents are
+    // captured, which are clear colours -- the draw path has not produced anything
+    // by then -- and a flat frame is not evidence about the render path.
+    presentCaptureAfter = uint64_t(lucent::config::number("PRESENT_DUMP_AT", 0));
+    if (presentCaptureWanted != 0 && !canCapturePresented)
+    {
+        // Refuse loudly rather than writing nothing: an absent file would read as a
+        // capture that came out empty.
+        lucent::warn("present", "{} presented frame(s) were requested but this"
+            " surface does not permit TRANSFER_SRC on its swapchain images, so NONE"
+            " can be captured. This is a refusal, not an empty frame.",
+            presentCaptureWanted);
+        presentCaptureWanted = 0;
+    }
+    else if (presentCaptureWanted != 0)
+    {
+        lucent::info("present", "will write the next {} presented frame(s) to"
+            " scratch/screenshots (override with GEARS_PRESENT_DUMP_DIR)",
+            presentCaptureWanted);
     }
 
     lucent::info("present", "window up; presenting on the guest's VdSwap."
