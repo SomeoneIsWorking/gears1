@@ -13,6 +13,7 @@ namespace gears
 
 // Defined in guest_probes.cpp: dumps the ULinkerLoad behind the crashing memo.
 void ReportLinkerState(uint32_t holder);
+void ReportMapNameProbe();
 
 void ReportBadIndirectCall(uint32_t target, PPCContext& ctx, uint8_t* base)
 {
@@ -97,6 +98,7 @@ void ReportBadIndirectCall(uint32_t target, PPCContext& ctx, uint8_t* base)
     // field can be read here and nowhere else.
     if (ctx.lr >= 0x824961D0 && ctx.lr < 0x82496AE0)
         ReportLinkerState(ctx.r24.u32);
+    ReportMapNameProbe();
 
     dump("object r3", ctx.r3.u32);
     if (readable(ctx.r3.u32))
