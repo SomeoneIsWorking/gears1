@@ -257,3 +257,14 @@ add_executable(test_queue_family
     ../runtime/gpu_queue_family.cpp)
 target_include_directories(test_queue_family PRIVATE ../runtime)
 add_test(NAME queue_family COMMAND test_queue_family)
+
+# The shared-VkInstance extension bookkeeping. Two devices cost a readback and a
+# staging upload of every frame; unifying them starts with the instance, since a
+# surface from one instance cannot be used with a device from another. The guarded
+# failure is the quiet one: handing a later caller an instance lacking what it asked
+# for, so the error surfaces at surface creation instead of at the cause.
+add_executable(test_gpu_instance
+    test_gpu_instance.cpp
+    ../runtime/gpu_instance.cpp)
+target_include_directories(test_gpu_instance PRIVATE ../runtime)
+add_test(NAME gpu_instance COMMAND test_gpu_instance)
