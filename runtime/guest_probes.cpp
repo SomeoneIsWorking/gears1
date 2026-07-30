@@ -36,7 +36,6 @@
 #include "guest_backtrace.h"
 #include "guest_thread.h"
 #include "guest_memory.h"
-#include "reference_barrier.h"
 
 // Pool allocation/free bookkeeping, defined further down but used by the
 // allocator probe above its definition.
@@ -371,7 +370,7 @@ PPC_FUNC(sub_8232B548)
         if (!dumped.exchange(true))
         {
             constexpr uint32_t kCarrier = 0x82BFB36C;
-            lucent::error("linker", "  the carrier holds {} bytes at {:#x}"
+            lucent::debug("linker", "  the carrier holds {} bytes at {:#x}"
                 " -- this is the blob the archive should be reading",
                 ByteSwap(*gears::Memory().Translate<uint32_t>(kCarrier + 4)),
                 ByteSwap(*gears::Memory().Translate<uint32_t>(kCarrier)));
@@ -388,7 +387,7 @@ PPC_FUNC(sub_8232B548)
                     ByteSwap(*gears::Memory().Translate<uint32_t>(arrayRef));
                 const uint32_t count =
                     ByteSwap(*gears::Memory().Translate<uint32_t>(arrayRef + 4));
-                lucent::error("linker", "  the archive's byte array is at {:#x}:"
+                lucent::debug("linker", "  the archive's byte array is at {:#x}:"
                     " data {:#x}, count {}{}", arrayRef, data, int32_t(count),
                     (data == 0 || count == 0)
                         ? "  <- EMPTY, so every read comes back as nothing and the"
@@ -397,7 +396,7 @@ PPC_FUNC(sub_8232B548)
             }
             else
             {
-                lucent::error("linker", "  the archive's byte-array reference"
+                lucent::debug("linker", "  the archive's byte-array reference"
                     " {:#x} is not readable, so the archive was constructed over"
                     " something that is not an array at all", arrayRef);
             }
@@ -415,7 +414,7 @@ PPC_FUNC(sub_8232B548)
         };
         const int32_t length = int32_t(word(stringOut + 4));
         const uint64_t n = g_fstringFromMapChange.fetch_add(1) + 1;
-        lucent::error("linker", "map-name FString deserialise #{}: archive {:#x}"
+        lucent::debug("linker", "map-name FString deserialise #{}: archive {:#x}"
             " (+16={:#x}, +20={:#x}) -> FString at {:#x} data {:#x} length {}{}",
             n, archive, flagAt16, t_archiveIsSaving, stringOut,
             word(stringOut), length,
@@ -594,7 +593,6 @@ uint64_t RingProducerEntries();
 uint64_t RingProducerOverlaps();
 } // namespace gears
 
-namespace gears { void ReportReallocOfCached(uint32_t block, uint32_t newSize, uint32_t from); }
 
 
 // to catch happened on every run. THE SIZE IS r5.
@@ -610,7 +608,6 @@ PPC_FUNC(sub_822151F8)
     {
         g_reallocStack = ctx.r1.u32;
         g_reallocLr = uint32_t(ctx.lr);
-        gears::ReportReallocOfCached(ctx.r4.u32, ctx.r5.u32, uint32_t(ctx.lr));
     }
 
     static std::atomic<uint64_t> seen{0};
@@ -915,7 +912,7 @@ uint64_t g_constructed = 0;
 uint64_t g_destroyed = 0;
 } // namespace
 
-namespace gears { void ReportArchiveLifetime(uint32_t object); void CheckFreedWhileCached(uint32_t freed); bool BlockIsStillReferenced(uint32_t block); void CheckHolderFreed(uint32_t freed); void NotePoolEvent(uint32_t, bool); bool LastPoolEventWasFree(uint32_t, uint64_t&, bool&); void ReportReallocOfCached(uint32_t, uint32_t, uint32_t); }
+namespace gears { void ReportArchiveLifetime(uint32_t object); bool BlockIsStillReferenced(uint32_t block); void NotePoolEvent(uint32_t, bool); bool LastPoolEventWasFree(uint32_t, uint64_t&, bool&); }
 
 namespace gears
 {
@@ -1055,24 +1052,7 @@ PPC_FUNC(sub_822153F0)
             lucent::info("lifetime", "watching for the release of {:#x}", value);
         return value;
     }();
-    gears::CheckFreedWhileCached(address);
-    gears::CheckHolderFreed(address);
     gears::NotePoolEvent(address, true);
-
-    // THE BARRIER, WRITER SIDE. The block being released may be the object a
-    // game-thread call is holding across its body. Measured: it is live when
-    // that call begins and dies during it. Waiting here is the whole fix -- the
-    // free still happens, in order, once no reader can still dereference it.
-    if (gears::ObjectBarrier().WaitUntilUnreferenced(
-            address, std::chrono::milliseconds(250)))
-    {
-        static std::atomic<uint64_t> engaged{0};
-        const uint64_t n = engaged.fetch_add(1) + 1;
-        if (n <= 3 || n % 50 == 0)
-            lucent::info("lifetime", "reference barrier held the free of {:#x}"
-                " until the reader left ({} time(s), {} timed out)",
-                address, n, gears::ObjectBarrier().TimeoutCount());
-    }
 
     // NO INTERVENTION HERE -- two attempts were made and BOTH FAILED, and the
     // second one is worth not repeating: see ClearCachesOfFreedBlock's comment
@@ -1106,7 +1086,6 @@ PPC_FUNC(sub_822153F0)
 // checked against their caches. The negative is designed: if no holder is ever
 // seen, the report says the seam never fired rather than implying the cache was
 // always clean.
-extern "C" PPC_FUNC(__imp__sub_824961D0);
 
 namespace
 {
@@ -1181,37 +1160,6 @@ bool LastPoolEventWasFree(uint32_t address, uint64_t& ordinal, bool& known)
     return it->second.freed;
 }
 
-// IS THE HOLDER ITSELF BEING FREED? The holder arrives as r3 to sub_824961D0 and
-// at the fault it sits at 0x42b40940 -- inside the pool's own range, alongside the
-// objects it caches, and different on every run. So it is a pool allocation, and
-// if it is released while the title still walks it then holder+1376 is being read
-// out of recycled memory and every fix aimed at the CACHED object was aimed one
-// level too deep.
-//
-// The negative is designed: the holder count goes out with the report, so "no
-// holder was ever freed" cannot be confused with "no holder was ever tracked".
-void CheckHolderFreed(uint32_t freed)
-{
-    static std::atomic<uint64_t> total{0};
-    static std::atomic<uint64_t> shown{0};
-    size_t tracked = 0;
-    bool isHolder = false;
-    {
-        std::lock_guard<std::mutex> guard(g_holderMutex);
-        tracked = g_holders.size();
-        isHolder = g_holders.count(freed) != 0;
-    }
-    if (!isHolder)
-        return;
-    const uint64_t n = total.fetch_add(1) + 1;
-    if (shown.fetch_add(1) < 6)
-        lucent::error("lifetime", "THE HOLDER ITSELF IS BEING FREED: {:#x} is a"
-            " holder the title passed to sub_824961D0, and the pool is releasing"
-            " it (occurrence {} of {} tracked holders). Anything read at"
-            " holder+1376 after this comes out of recycled memory", freed, n,
-            tracked);
-}
-
 bool BlockIsStillReferenced(uint32_t block)
 {
     std::lock_guard<std::mutex> guard(g_holderMutex);
@@ -1222,199 +1170,7 @@ bool BlockIsStillReferenced(uint32_t block)
     }
     return false;
 }
-
-void CheckFreedWhileCached(uint32_t freed)
-{
-    // COUNTED IN FULL, REPORTED BY NOVELTY. A flat "first N" cap reported the
-    // first six of these and nothing else -- and the six that matter are the
-    // LAST ones, immediately before the crash. So: every occurrence is counted,
-    // the first three are shown to establish the shape, and after that only a
-    // change of holder is shown. The running total goes out with each line so a
-    // reader can see how much is being elided.
-    static std::atomic<uint64_t> total{0};
-    static std::atomic<uint64_t> shown{0};
-    static uint32_t lastHolder = 0;
-
-    std::lock_guard<std::mutex> guard(g_holderMutex);
-    for (const uint32_t holder : g_holders)
-    {
-        const uint32_t cached =
-            ByteSwap(*gears::Memory().Translate<uint32_t>(holder + 1376));
-        if (cached != freed)
-            continue;
-
-        const uint64_t n = total.fetch_add(1) + 1;
-        const bool novel = holder != lastHolder;
-        lastHolder = holder;
-        if (shown.load() < 3 || novel)
-        {
-            shown.fetch_add(1);
-            lucent::error("lifetime", "FREEING {:#x} WHILE IT IS STILL CACHED at"
-                " holder {:#x}+1376 (occurrence {}). Nothing nulls that field,"
-                " and the next call uses it on the strength of it being"
-                " non-null", freed, holder, n);
-
-            // DOES THE OBJECT KNOW ITS HOLDER? The field is a cache with no
-            // invalidation, so the console relied on SOMETHING to clear it when
-            // the object died. If the object carries a pointer back to the
-            // holder, that clearing code exists in the image and is simply not
-            // running -- and the offset names the field to look for. If it
-            // carries none, the invalidation is not the object's job and the
-            // search moves to whoever owns both. The answer decides where this
-            // goes next, so it is worth the scan of one block.
-            bool found = false;
-            for (uint32_t offset = 0; offset + 4 <= 512; offset += 4)
-            {
-                const uint32_t word =
-                    ByteSwap(*gears::Memory().Translate<uint32_t>(freed + offset));
-                if (word != holder)
-                    continue;
-                found = true;
-                lucent::error("lifetime", "  the dying object holds a BACK"
-                    " POINTER to its holder at +{} -- whatever clears"
-                    " holder+1376 can reach it from here, so that code exists"
-                    " and is not running", offset);
-            }
-            if (!found)
-                lucent::error("lifetime", "  the dying object carries NO word"
-                    " equal to the holder in its first 512 bytes, so it cannot"
-                    " clear the reference itself -- invalidation belongs to"
-                    " whoever owns both, and that is where to look");
-        }
-    }
-}
-
-// Reports only when the block being reallocated is one a holder still caches.
-void ReportReallocOfCached(uint32_t block, uint32_t newSize, uint32_t from)
-{
-    static std::atomic<uint64_t> total{0};
-    static std::atomic<uint64_t> shown{0};
-    std::lock_guard<std::mutex> guard(g_holderMutex);
-    for (const uint32_t holder : g_holders)
-    {
-        if (ByteSwap(*gears::Memory().Translate<uint32_t>(holder + 1376)) != block)
-            continue;
-        const uint64_t n = total.fetch_add(1) + 1;
-        // First few plus every hundredth: enough to see the shape and the tail
-        // without the flat cap that hid the crashing occurrence last time.
-        if (shown.load() < 4 || n % 100 == 0)
-        {
-            shown.fetch_add(1);
-            lucent::error("lifetime", "REALLOC of {:#x} to {} bytes from {:#x}"
-                " -- that block is cached at holder {:#x}+1376, so this call"
-                " orphans it (occurrence {})", block, newSize, from, holder, n);
-            // WHO IS DELETING IT. The link register only names the generic
-            // allocator wrapper, which every delete goes through; the caller
-            // that actually decided to destroy this object is further out, and
-            // only a stack walk reaches it. Reported as a walker failure if the
-            // walk is too short to be an answer.
-            const std::vector<uint32_t> frames =
-                gears::GuestBacktrace(g_reallocStack, g_reallocLr);
-            if (frames.size() < 4)
-                lucent::error("lifetime", "  stack walk gave {} frame(s) --"
-                    " too few to name the deleter; treat as the WALKER failing",
-                    frames.size());
-            else
-                lucent::error("lifetime", "  deleter: {}",
-                    gears::FormatGuestBacktrace(g_reallocStack, g_reallocLr));
-        }
-    }
-}
-
-void ReportHolderSeam()
-{
-    lucent::info("lifetime", "checkpoint holder seam: {} visit(s), {} distinct"
-        " holder(s){}", g_holderVisits.load(), g_holders.size(),
-        g_holders.empty() ? " -- the seam NEVER FIRED, so the free check above"
-                            " proves nothing" : "");
-}
 } // namespace gears
-
-PPC_FUNC(sub_824961D0)
-{
-    g_holderVisits.fetch_add(1);
-    // THE ONE DATUM THAT SEPARATES THE TWO CANDIDATE MECHANISMS: whether the
-    // memo at +1376 was already set when this call began. See NoteLinkerEntry.
-    gears::NoteLinkerEntry(ctx.r3.u32);
-    {
-        std::lock_guard<std::mutex> guard(g_holderMutex);
-        g_holders.insert(ctx.r3.u32);
-    }
-
-    {
-        uint64_t ordinal = 0;
-        bool known = false;
-        const bool dead = gears::LastPoolEventWasFree(ctx.r3.u32, ordinal, known);
-        static std::atomic<uint64_t> reported{0};
-        if (dead && reported.fetch_add(1) < 8)
-            lucent::error("lifetime", "USE OF A FREED HOLDER: {:#x} enters"
-                " sub_824961D0 but its most recent pool event was the FREE at"
-                " ordinal {} -- everything it reads at +1376 comes from recycled"
-                " memory", ctx.r3.u32, ordinal);
-        // AND IS THE CACHED VALUE A KNOWN ALLOCATION AT ALL? "A stale pointer to
-        // a freed block" and "a word that was never a pointer" look identical at
-        // the fault, and they have different causes: the first is a lifetime bug,
-        // the second means something wrote garbage into the field.
-        {
-            const uint32_t cached =
-                ByteSwap(*gears::Memory().Translate<uint32_t>(ctx.r3.u32 + 1376));
-            if (cached != 0)
-            {
-                uint64_t cachedOrdinal = 0;
-                bool cachedKnown = false;
-                const bool cachedFreed =
-                    gears::LastPoolEventWasFree(cached, cachedOrdinal, cachedKnown);
-                static std::atomic<uint64_t> shown{0};
-                if (shown.fetch_add(1) < 6)
-                    lucent::info("lifetime", "holder {:#x} caches {:#x}: {}",
-                        ctx.r3.u32, cached,
-                        !cachedKnown ? "NEVER SEEN as a pool allocation -- this is"
-                                       " not a stale pointer, it is a word that was"
-                                       " never a valid block"
-                        : cachedFreed ? "a block whose last event was a FREE"
-                                      : "a live block (last event an allocation)");
-            }
-        }
-
-        if (!known)
-        {
-            static std::atomic<bool> once{false};
-            if (!once.exchange(true))
-                lucent::info("lifetime", "holder {:#x} has no recorded pool event:"
-                    " allocated before this probe was watching, so the ABSENCE of"
-                    " a freed-holder report is not yet evidence", ctx.r3.u32);
-        }
-    }
-    // WHICH THREAD USES THE CACHE. The deleter runs on the rendering thread
-    // (its stack ends at the drain loop's Execute call, 0x82444f7c). If the
-    // USER is a different thread, this is a cross-thread use-after-free and the
-    // two open issues are the same bug seen from two ends.
-    {
-        static std::mutex m;
-        static std::set<std::string> seen;
-        const char* raw = gears::GuestThreadName();
-        const std::string name = raw ? raw : "?";
-        std::lock_guard<std::mutex> guard(m);
-        if (seen.insert(name).second)
-            lucent::info("lifetime", "the cached-object user sub_824961D0 runs"
-                " on guest thread '{}'", name);
-    }
-    // THE BARRIER, READER SIDE. The object cached at holder+1376 is what this
-    // call dereferences, and the rendering thread destroys it mid-body. Holding
-    // a scope on it for the duration of the call is the guarantee the console's
-    // timing provided by accident. A zero cache is not held: there is nothing
-    // to protect, and taking a scope on address 0 would make every free of a
-    // null-ish block wait.
-    const uint32_t cachedObject =
-        ByteSwap(*gears::Memory().Translate<uint32_t>(ctx.r3.u32 + 1376));
-    if (cachedObject != 0)
-    {
-        gears::ReaderScope scope(gears::ObjectBarrier(), cachedObject);
-        __imp__sub_824961D0(ctx, base);
-        return;
-    }
-    __imp__sub_824961D0(ctx, base);
-}
 
 // ---------------------------------------------------------------------------
 // The render fence WAIT (catalog #45).
@@ -1642,28 +1398,28 @@ void ReportLinkerState(uint32_t holder)
     const uint64_t built = g_archiveAsyncBuilt.load();
     const uint64_t failed = g_archiveAsyncFailed.load();
     if (built == 0)
-        lucent::error("linker", "FArchiveAsync seam NEVER FIRED (0 constructions"
+        lucent::debug("linker", "FArchiveAsync seam NEVER FIRED (0 constructions"
             " through sub_8242C098), so nothing below about ArIsError is"
             " evidence either way -- check the seam before reading on");
     else if (failed == 0)
-        lucent::error("linker", "FArchiveAsync: {} constructed, ZERO with"
+        lucent::debug("linker", "FArchiveAsync: {} constructed, ZERO with"
             " ArIsError. CreateLoader's open-failed branch therefore never ran,"
             " and the create-delete-use-in-one-call reading is DEAD. Blind spot:"
             " only LOAD_SeekFree packages reach this constructor; the plain"
             " CreateFileReader path at 0x82496638 does not", built);
     else
     {
-        lucent::error("linker", "FArchiveAsync: {} constructed, {} of them with"
+        lucent::debug("linker", "FArchiveAsync: {} constructed, {} of them with"
             " ArIsError set -- i.e. GFileManager->FileSize() returned negative"
             " and the file was NOT FOUND", built, failed);
         std::lock_guard<std::mutex> guard(g_archiveMutex);
         for (const std::string& name : g_archiveAsyncFailedNames)
-            lucent::error("linker", "  could not open: '{}'", name);
+            lucent::debug("linker", "  could not open: '{}'", name);
     }
 
     if (holder == 0 || uint64_t(holder) + 1400 >= PPC_MEMORY_SIZE)
     {
-        lucent::error("linker", "r24 {:#x} is not a readable guest pointer, so"
+        lucent::debug("linker", "r24 {:#x} is not a readable guest pointer, so"
             " the ULinkerLoad cannot be dumped", holder);
         return;
     }
@@ -1672,7 +1428,7 @@ void ReportLinkerState(uint32_t holder)
     };
     const uint32_t nameData = word(0xcc);
     const uint32_t nameLen = word(0xd0);
-    lucent::error("linker", "ULinkerLoad {:#x}: Filename '{}' ({} chars),"
+    lucent::debug("linker", "ULinkerLoad {:#x}: Filename '{}' ({} chars),"
         " LoadFlags {:#x}, Loader(+1376) {:#x},"
         " bHasSerializedPackageFileSummary(+1396) {:#x}, ArVer {}",
         holder, nameLen ? GuestWideString(nameData) : std::string("<empty>"),
@@ -1682,13 +1438,13 @@ void ReportLinkerState(uint32_t holder)
         std::lock_guard<std::mutex> guard(g_linkerMutex);
         const auto it = g_linkerVisits.find(holder);
         if (it == g_linkerVisits.end())
-            lucent::error("linker", "  this ULinkerLoad never entered"
+            lucent::debug("linker", "  this ULinkerLoad never entered"
                 " sub_824961D0 through the probe ({} distinct linkers were"
                 " recorded), so the entry state below is unknown -- treat that"
                 " as the PROBE failing, not as a finding",
                 g_linkerVisits.size());
         else
-            lucent::error("linker", "  it entered CreateLoader {} time(s); on the"
+            lucent::debug("linker", "  it entered CreateLoader {} time(s); on the"
                 " most recent entry Loader was {:#x}, which is the {} path. {}",
                 it->second.visits, it->second.loaderAtEntry,
                 it->second.loaderAtEntry ? "MEMO-HIT (creation skipped)"
@@ -1707,7 +1463,7 @@ void ReportLinkerState(uint32_t holder)
         uint64_t ordinal = 0;
         bool known = false;
         const bool freed = LastPoolEventWasFree(loader, ordinal, known);
-        lucent::error("linker", "  the memoised Loader {:#x}: {}", loader,
+        lucent::debug("linker", "  the memoised Loader {:#x}: {}", loader,
             !known ? "was never seen by the pool probe at all -- so either it did"
                      " not come from this allocator or the probe missed it"
             : freed ? "its most recent pool event was a FREE"
@@ -1722,7 +1478,6 @@ void ReportLinkerState(uint32_t holder)
         ReportArchiveLifetime(loader);
     }
     ReportMapChangeSeams();
-    ReportHolderSeam();
 }
 } // namespace gears
 
@@ -1753,7 +1508,7 @@ void gears::NoteArchiveAsync(uint32_t self, uint32_t nameAddress)
     // Every NEW name, plus the first few, plus every hundredth: the interesting
     // case is the one that is never elided.
     if (novel || bad <= 4 || bad % 100 == 0)
-        lucent::error("linker", "FArchiveAsync #{} at {:#x} FAILED TO OPEN '{}'"
+        lucent::debug("linker", "FArchiveAsync #{} at {:#x} FAILED TO OPEN '{}'"
             " (FileSize {} -> ArIsError). CreateLoader has already memoised it"
             " at ULinkerLoad+1376 and is about to delete it and carry on"
             " (failure {} of {} constructions)", n, self, name, fileSize, bad,
@@ -1800,7 +1555,7 @@ namespace gears
 {
 void ReportMapChangeSeams()
 {
-    lucent::error("linker", "PrepareMapChange seam: {} call(s); LoadPackageAsync"
+    lucent::debug("linker", "PrepareMapChange seam: {} call(s); LoadPackageAsync"
         " seam: {} request(s), {} of them with an EMPTY name.{}",
         g_prepareMapChanges.load(), g_asyncLoadRequests.load(),
         g_emptyAsyncLoadRequests.load(),
@@ -1836,7 +1591,7 @@ PPC_FUNC(sub_82426D98)
         }
     }
     else
-        lucent::error("linker", "PrepareMapChange #{}: r4 {:#x} is not a readable"
+        lucent::debug("linker", "PrepareMapChange #{}: r4 {:#x} is not a readable"
             " array pointer, so the level list could not be read", n, array);
     __imp__sub_82426D98(ctx, base);
 }
@@ -1858,7 +1613,7 @@ PPC_FUNC(sub_8242AC78)
     // Every empty request, plus the first few of any kind. An empty one is the
     // event this seam exists for, so it is never elided.
     if (empty || n <= 8)
-        lucent::error("linker", "LoadPackageAsync #{}: name FString at {:#x} ="
+        lucent::debug("linker", "LoadPackageAsync #{}: name FString at {:#x} ="
             " data {:#x} len {} -> '{}'{}", n, str, data, length,
             (data && length > 0) ? GuestWideString(data) : std::string(),
             empty ? "  <-- EMPTY. This request is what produces a ULinkerLoad"
@@ -1945,7 +1700,18 @@ PPC_FUNC(sub_82364678)
             : 0xFFFFFFFFu;
 
     const uint64_t n = g_fnameFromMapChange.fetch_add(1) + 1;
-    lucent::error("linker", "FName for the map change #{}: string at {:#x} = '{}'"
+    // THE ONE LINE A NORMAL RUN SHOULD PRINT. The checkpoint restore is the
+    // milestone this whole investigation was about, and a run that silently stops
+    // restoring it would otherwise look identical to a run that works. An index
+    // of 0 is NAME_None, which is exactly the failure that produced #45.
+    if (n == 1)
+        lucent::info("linker", "checkpoint restore: the map name resolved to '{}'"
+            " (FName index {:#x}){}", text, index,
+            index == 0 ? "  <- NAME_None, so the restore has REGRESSED: the title"
+                         " will ask for a package called 'None' (catalog #45)"
+                       : "");
+
+    lucent::debug("linker", "FName for the map change #{}: string at {:#x} = '{}'"
         " ({} chars{}), find-mode r5={} r6={} r7={} -> INDEX {:#x}{}",
         n, stringAddress, text, text.size(),
         stringAddress == 0 ? ", NULL POINTER"
@@ -1961,7 +1727,7 @@ namespace gears
 // Reported at the abort, so the zero case is never silent.
 void ReportMapNameProbe()
 {
-    lucent::error("linker", "map-name probe: {} FName construction(s) seen from"
+    lucent::debug("linker", "map-name probe: {} FName construction(s) seen from"
         " the map-change site out of {} in the whole run. A zero on the left with"
         " a non-zero on the right means the return-address filter"
         " (0x821B4620..0x821B5000) is wrong, NOT that the name is fine",
@@ -1994,7 +1760,7 @@ namespace gears
 {
 void ReportFStringProbe()
 {
-    lucent::error("linker", "map-name FString probe: {} deserialise(s) seen from"
+    lucent::debug("linker", "map-name FString probe: {} deserialise(s) seen from"
         " the map-change site out of {} in the whole run. Zero on the left with a"
         " non-zero right means the return-address filter is wrong, NOT that the"
         " deserialise is fine", g_fstringFromMapChange.load(),
@@ -2095,16 +1861,16 @@ PPC_FUNC(sub_821B94D8)
         }
     }
 
-    lucent::error("linker", "carrier gate #{}: object {:#x}, out-param {:#x}"
+    lucent::debug("linker", "carrier gate #{}: object {:#x}, out-param {:#x}"
         " data {:#x} count {} = '{}' ({} path), fallback literal '{}'",
         n, object, param, suppliedData, paramCount, supplied,
         paramCount <= 1 ? "literal" : "other", literal);
-    lucent::error("linker", "  object+420 before: data {:#x} count {} -> after:"
+    lucent::debug("linker", "  object+420 before: data {:#x} count {} -> after:"
         " data {:#x} count {}; RETURNED {:#x}", beforeData, int32_t(beforeCount),
         afterData, int32_t(afterCount), result);
-    lucent::error("linker", "  the carrier meanwhile holds {} bytes at {:#x}",
+    lucent::debug("linker", "  the carrier meanwhile holds {} bytes at {:#x}",
         int32_t(word(kCarrier + 4)), word(kCarrier));
-    lucent::error("linker", "  => {}", result != 0
+    lucent::debug("linker", "  => {}", result != 0
         ? (afterCount != 0
             ? "non-zero AND the array is populated, so the skip is correct and the"
               " emptiness measured later means something CLEARS it afterwards"
@@ -2179,7 +1945,7 @@ PPC_FUNC(sub_821B6800)
         }
     }
 
-    lucent::error("linker", "save-device checkpoint load #{}: RETURNED {:#x} ({});"
+    lucent::debug("linker", "save-device checkpoint load #{}: RETURNED {:#x} ({});"
         " the path builder {}",
         n, result,
         result == 0 ? "SUCCESS, so the caller believes a checkpoint was loaded"
@@ -2257,7 +2023,7 @@ PPC_FUNC(sub_82611E90)
         return;
     const uint64_t n = g_createFile.inLoader.fetch_add(1) + 1;
     if (n <= 3)
-        lucent::error("linker", "loader CreateFile #{}: path {:#x} = '{}' ->"
+        lucent::debug("linker", "loader CreateFile #{}: path {:#x} = '{}' ->"
             " handle {:#x}{}", n, ctx.r4.u32, path, ctx.r3.u32,
             int32_t(ctx.r3.u32) == -1
                 ? "  <- INVALID_HANDLE_VALUE, so the loader takes its"
@@ -2276,7 +2042,7 @@ PPC_FUNC(sub_82612390)
         return;
     const uint64_t n = g_readFile.inLoader.fetch_add(1) + 1;
     if (n <= 3)
-        lucent::error("linker", "loader ReadFile #{}: returned {:#x} ({})", n,
+        lucent::debug("linker", "loader ReadFile #{}: returned {:#x} ({})", n,
             ctx.r3.u32, ctx.r3.u32 != 0
                 ? "TRUE, so the loader returns SUCCESS"
                 : "FALSE, so the loader returns GetLastError");
@@ -2293,7 +2059,7 @@ PPC_FUNC(sub_826124F8)
         return;
     const uint64_t n = g_lastError.inLoader.fetch_add(1) + 1;
     if (n <= 3)
-        lucent::error("linker", "loader GetLastError #{}: returned {:#x}{}", n,
+        lucent::debug("linker", "loader GetLastError #{}: returned {:#x}{}", n,
             ctx.r3.u32, ctx.r3.u32 == 0
                 ? "  <- ZERO. The loader returns this as its status, so a FAILED"
                   " open is reported to the caller as SUCCESS. That is the lie."
@@ -2304,7 +2070,7 @@ namespace gears
 {
 void ReportLoaderThunks()
 {
-    lucent::error("linker", "loader thunks: CreateFile {}/{} ReadFile {}/{}"
+    lucent::debug("linker", "loader thunks: CreateFile {}/{} ReadFile {}/{}"
         " GetLastError {}/{} (inside the loader / anywhere). Two zeros in a pair"
         " means the override never fired at all, not that the call did not happen",
         g_createFile.inLoader.load(), g_createFile.anywhere.load(),
@@ -2344,7 +2110,7 @@ void ReportEarly(const char* what, EarlyThunk& counts, uint32_t result,
         return;
     const uint64_t n = counts.inLoader.fetch_add(1) + 1;
     if (n <= 3)
-        lucent::error("linker", "loader {} #{}: returned {:#x} ({})", what, n,
+        lucent::debug("linker", "loader {} #{}: returned {:#x} ({})", what, n,
                       result, meaning);
 }
 } // namespace
@@ -2386,7 +2152,7 @@ namespace gears
 {
 void ReportEarlyThunks()
 {
-    lucent::error("linker", "loader early thunks: first {}/{},"
+    lucent::debug("linker", "loader early thunks: first {}/{},"
         " XamContentCreateEx {}/{}, XamGetOverlappedResult {}/{} (inside the"
         " loader / anywhere). Two zeros in a pair means the override never fired",
         g_first.inLoader.load(), g_first.anywhere.load(),
