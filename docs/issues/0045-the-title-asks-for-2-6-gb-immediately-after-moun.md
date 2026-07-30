@@ -1291,3 +1291,61 @@ bounded itself to the loaded image and reported of an out-of-image address 'that
 alone makes it not an object'. False, and stated with confidence -- heap objects
 live outside the image, and the object in this very crash is one. Bounded to the
 guest mapping now.
+
+### Note (2026-07-30)
+A NAMED PORT-SIDE MECHANISM: THE GPU PIPELINE HAS NO DEPTH.
+
+Reasoning pass (fable) proposed that the title's safety came from LATENCY the
+console guaranteed, not from any invalidation protocol -- and that the port
+collapses it. The port half of that is now CONFIRMED by reading the code, and it
+is written in our own comments.
+
+runtime/vd_null_gpu.cpp, EVENT_WRITE_SHD -- the fence write the guest uses to
+learn that the GPU has retired work:
+
+    // The event pipeline on hardware defers the write until the work retires;
+    // with no work executed there is nothing to defer past, so it completes now.
+    StoreEndian(data[1], data[2]);
+
+And the ring read-pointer writeback, published INSIDE the consume loop, once per
+packet:
+
+    StoreGuest32(g_ringBuffer.readPtrWriteBackAddress, rptr);
+
+So both signals a title can use to ask 'is the GPU past this point yet' are
+answered YES essentially the instant the packet is parsed. On 360 both trail the
+game thread -- typically a frame or two -- because they reflect real work
+retiring.
+
+WHY THAT WOULD PRODUCE EXACTLY THIS BUG. If the render-side deferred destruction
+drain is gated on one of those values, then on console the free always executes
+one or two frames AFTER the game thread enqueued the release and refreshed the
+memo at +1376. Here the gate is satisfied immediately, the drain fires with zero
+pipeline depth, and the free OVERTAKES the refresh it always trailed. That
+predicts every observed fact at once: one identical drain stack ~130x per run, a
+deterministic frame, the render thread freeing, the main thread using, no
+invalidation anywhere in the image (none was ever needed), and the dead
+bIsWriting/SuspendRendering seams (the title never needed them because the
+latency contract did the work).
+
+IT ALSO KILLS THE 'SAFE BY ALLOCATOR TIMING' READING, using bytes already
+captured. The crashing block's word 0 held 0x42ba1080 -- a heap address 0xc0
+further along, which is what a freelist link looks like. If the pool writes its
+link into word 0, a stale vtable read after ANY free would crash on the console
+too, recycling speed irrelevant. That means the console never performed a stale
+read at all, and its ordering was genuinely intact. Being confirmed statically in
+the free at 0x822158e4.
+
+WHAT IS NOT YET ESTABLISHED, AND I AM NOT ACTING UNTIL IT IS. Nobody has shown
+that the guest's free gate actually READS one of these values. Adding latency
+before that is confirmed would be a delay-until-it-works bandaid, and it would
+look like a fix. The outstanding question is which predicate the drain waits on:
+walk up 0x82170470, 0x8232ae10, 0x825552a4, 0x82551240, 0x825552fc, 0x8250b284,
+0x825550f4, 0x82444f7c, 0x82445038, 0x8243ae00 and name what it loads and
+compares. If it reads the writeback address or a fence scratch word, the root
+cause is named and the honest fix is to stop reporting GPU progress ahead of
+where hardware could -- a platform contract, not a sleep.
+
+ALSO STILL UNMEASURED: the dynamic history of the guard at +1396. The 11 writers
+of +1376 were classified; the writers of +1396 never were. That is the one word
+in this mechanism whose behaviour nobody has observed.
