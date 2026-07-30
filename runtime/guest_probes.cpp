@@ -265,6 +265,14 @@ thread_local uint32_t t_serialisingArchive = 0;
 thread_local uint32_t t_archiveIsSaving = 0;
 } // namespace
 
+namespace
+{
+// Counted for every call, reported at the abort, so "the map-name probe printed
+// nothing" is always distinguishable from "the return-address filter is wrong".
+std::atomic<uint64_t> g_fstringLoads{0};
+std::atomic<uint64_t> g_fstringFromMapChange{0};
+} // namespace
+
 PPC_FUNC(sub_8232B548)
 {
     static std::atomic<uint64_t> seen{0};
@@ -330,7 +338,96 @@ PPC_FUNC(sub_8232B548)
         }
     }
 
+    // AND THE THREE CALLS THAT BUILD THE MAP NAME, specifically. The load path
+    // has an early-out that would produce exactly the empty string observed:
+    //
+    //   bctrl                  ; Serialize(&len, 4)
+    //   lwz  r11,16(r28)       ; a flag on the ARCHIVE
+    //   cmpwi cr6,r11,0
+    //   beq  cr6,0x8232b72c    ; ZERO -> skip the whole deserialise
+    //
+    // "the length read was zero or garbage" and "nothing was read at all" have
+    // different causes -- the bytes versus the archive's state -- and telling
+    // them apart by guessing the FArchive member layout is the kind of
+    // assumption that has cost this issue days. So both are read here.
+    g_fstringLoads.fetch_add(1);
+    const uint32_t lr = uint32_t(ctx.lr);
+    const bool forMapName = lr >= 0x821B4620 && lr < 0x821B5000;
+    const uint32_t stringOut = ctx.r4.u32;
+    const uint32_t flagAt16 =
+        ByteSwap(*gears::Memory().Translate<uint32_t>(archive + 16));
+
     __imp__sub_8232B548(ctx, base);
+
+    if (forMapName)
+    {
+        // THE ARCHIVE'S OWN FIELDS, on the first call only. The first read
+        // swallowed 10089 characters out of a 385-byte save, so the cursor or the
+        // byte array is wrong before a single string is parsed -- and which of
+        // those it is cannot be settled by guessing an FArchive subclass layout.
+        // The carrier is printed alongside so the two can be compared: it is
+        // known good (385 bytes, the save file, byte-identical to chapter37.sav).
+        static std::atomic<bool> dumped{false};
+        if (!dumped.exchange(true))
+        {
+            constexpr uint32_t kCarrier = 0x82BFB36C;
+            lucent::error("linker", "  the carrier holds {} bytes at {:#x}"
+                " -- this is the blob the archive should be reading",
+                ByteSwap(*gears::Memory().Translate<uint32_t>(kCarrier + 4)),
+                ByteSwap(*gears::Memory().Translate<uint32_t>(kCarrier)));
+            // +112 IS A REFERENCE, NOT THE ARRAY. FMemoryReader holds
+            // `const TArray<BYTE>& Bytes`, so the descriptor is one indirection
+            // further out. Reading +112/+116 as though they were data/count is
+            // what made an earlier probe report "2147483648 bytes at 0x900006b0"
+            // -- an impossible descriptor that was really two unrelated fields.
+            const uint32_t arrayRef =
+                ByteSwap(*gears::Memory().Translate<uint32_t>(archive + 112));
+            if (uint64_t(arrayRef) + 8 < PPC_MEMORY_SIZE)
+            {
+                const uint32_t data =
+                    ByteSwap(*gears::Memory().Translate<uint32_t>(arrayRef));
+                const uint32_t count =
+                    ByteSwap(*gears::Memory().Translate<uint32_t>(arrayRef + 4));
+                lucent::error("linker", "  the archive's byte array is at {:#x}:"
+                    " data {:#x}, count {}{}", arrayRef, data, int32_t(count),
+                    (data == 0 || count == 0)
+                        ? "  <- EMPTY, so every read comes back as nothing and the"
+                          " carrier never reached this archive"
+                        : "");
+            }
+            else
+            {
+                lucent::error("linker", "  the archive's byte-array reference"
+                    " {:#x} is not readable, so the archive was constructed over"
+                    " something that is not an array at all", arrayRef);
+            }
+
+            lucent::Line row;
+            row.add("  archive {:#x} fields:", archive);
+            for (uint32_t offset = 0; offset < 128; offset += 4)
+                row.add(" +{}={:#x}", offset,
+                    ByteSwap(*gears::Memory().Translate<uint32_t>(archive + offset)));
+            row.flush(lucent::Level::Error, "linker");
+        }
+
+        const auto word = [&](uint32_t address) {
+            return ByteSwap(*gears::Memory().Translate<uint32_t>(address));
+        };
+        const int32_t length = int32_t(word(stringOut + 4));
+        const uint64_t n = g_fstringFromMapChange.fetch_add(1) + 1;
+        lucent::error("linker", "map-name FString deserialise #{}: archive {:#x}"
+            " (+16={:#x}, +20={:#x}) -> FString at {:#x} data {:#x} length {}{}",
+            n, archive, flagAt16, t_archiveIsSaving, stringOut,
+            word(stringOut), length,
+            flagAt16 == 0
+                ? "  <- THE FLAG AT +16 IS ZERO, so the load path skipped the"
+                  " deserialise entirely and left the string untouched: the cause"
+                  " is the ARCHIVE'S STATE, not the bytes in it"
+                : (length == 0
+                    ? "  <- the deserialise RAN and read a length of zero, so the"
+                      " cause is the BYTES, not the archive's state"
+                    : ""));
+    }
 
     t_serialisingArchive = 0;
 }
@@ -1869,5 +1966,38 @@ void ReportMapNameProbe()
         " a non-zero on the right means the return-address filter"
         " (0x821B4620..0x821B5000) is wrong, NOT that the name is fine",
         g_fnameFromMapChange.load(), g_fnameCalls.load());
+}
+} // namespace gears
+
+// WHY THE MAP NAME DESERIALISES EMPTY.
+//
+// sub_8232B548 is FArchive& operator<<(FArchive&, FString&), and its load path
+// has an early-out that would produce exactly the empty string observed:
+//
+//   lwz  r11,0(r28) ; lwz r11,4(r11) ; bctrl   ; Serialize(&len, 4)
+//   lwz  r11,16(r28)                           ; a flag on the ARCHIVE
+//   cmpwi cr6,r11,0
+//   beq  cr6,0x8232b72c                        ; ZERO -> skip the whole thing
+//
+// So either the length read from the archive is zero or garbage, or the archive
+// flag at +16 is zero and nothing is read at all. Those have completely
+// different causes -- a data problem versus an archive that is not in a state to
+// load -- and guessing the FArchive member layout to tell them apart is exactly
+// the kind of assumption that has cost this issue days. Read it instead.
+//
+// FILTERED to the three calls in sub_821B4620 that build the map name, because
+// this function ran 78,278 times in the run that first noticed it. The filter is
+// the most likely reason for this to print nothing, so the unfiltered total is
+// reported alongside: "0 of N" is a measurement about the filter, while silence
+// would be indistinguishable from a probe that never ran.
+namespace gears
+{
+void ReportFStringProbe()
+{
+    lucent::error("linker", "map-name FString probe: {} deserialise(s) seen from"
+        " the map-change site out of {} in the whole run. Zero on the left with a"
+        " non-zero right means the return-address filter is wrong, NOT that the"
+        " deserialise is fine", g_fstringFromMapChange.load(),
+        g_fstringLoads.load());
 }
 } // namespace gears
