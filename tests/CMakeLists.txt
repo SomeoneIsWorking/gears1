@@ -223,3 +223,16 @@ add_executable(test_fault_report
 target_include_directories(test_fault_report PRIVATE ../runtime)
 target_link_libraries(test_fault_report PRIVATE lucent::lucent)
 add_test(NAME fault_report COMMAND test_fault_report)
+
+# The indirect-call target check. The bounds come from the generated ppc_config.h
+# so the test pins the REAL code geometry -- a regenerated image with a different
+# code range must not leave this asserting yesterday's addresses. The garbage
+# cases are the actual values seen in the #45 crash, each of which the unchecked
+# macro would have indexed into the function table and called.
+add_executable(test_guest_indirect_call test_guest_indirect_call.cpp)
+target_include_directories(test_guest_indirect_call PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}"
+    "${THIRDPARTY_ROOT}/simde"
+    ../extern/XenonRecomp/XenonUtils)
+add_test(NAME guest_indirect_call COMMAND test_guest_indirect_call)
