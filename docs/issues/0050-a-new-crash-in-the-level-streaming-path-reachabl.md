@@ -54,3 +54,59 @@ FIRST STEPS, in order:
      counts. Without that denominator nothing else is interpretable.
   2. Check whether the faulting address is stable across occurrences.
   3. Read sub_823ED7E0 around +0x52b3 and see what it dereferences.
+
+### Note (2026-07-30)
+DENOMINATOR, AND BOTH CRASHES ARE THE SAME BUG.
+
+SEVEN attempts on one binary, same repro, each capped at 170 seconds (stated
+because a run that would fail later is counted clean by that cap):
+
+  crashed: 2   (run 5 at 3480 frames, and the original at 3420)
+  clean:   5   (4800-4860 frames each, still running when the cap stopped them)
+
+So roughly 29 percent, n=7. Every run restored the checkpoint correctly, so the
+#45 fix is stable across all seven.
+
+THE TWO FAILURES ARE ONE BUG, not two. The original was a SIGSEGV; run 5 was an
+abort from the checked indirect call. Their guest stacks are the same chain:
+
+  run 5:    0x823edb50 <- 0x823f104c <- 0x823ec9dc <- 0x823ce030 <- 0x823cffe4
+            <- 0x823ced9c <- 0x82428440 <- 0x82218250 <- ...
+  original: sub_823ED7E0 <- sub_823F0520 <- sub_823EC880 <- sub_823CDF00
+            <- sub_823CFEC0 <- sub_823CEAB8 <- sub_82428238 <- ...
+
+Same functions, one frame apart. So the indirect-call check caught the same
+corruption earlier and with far more detail than the segfault did, which is the
+first time that instrument has paid for itself on a bug it was not written for.
+
+WHAT THE MEMORY ACTUALLY CONTAINS. The bad call target was 0x3f5718e1, and the
+object it came through looked polymorphic: r3 = 0x453c4a40 whose first word is
+0x453c8280, read as a vtable. Decoding that "vtable" as IEEE-754 floats:
+
+  0x453c7c20 =    3015.758      0x3f079632 =       0.530
+  0x00000001 =       0.000      0x3f37d8d0 =       0.718
+  0x3ec3ef14 =       0.383      0xbee71b43 =      -0.451
+  0x445c3a3e =     880.910      0x4429740a =     677.813
+  0x3e3d81fc =       0.185      0x3f77c173 =       0.968
+  0x3e807aef =       0.251      0x3d0cab9d =       0.034
+  0x3f733ce1 =       0.950      0x3e7f5e7f =       0.249
+  0x440e0d36 =     568.206      0x438a4a66 =     276.581
+
+and the bad call target itself is 0.84022 as a float.
+
+That is not a vtable and never was. It is normalised values in [-1,1] interleaved
+with magnitudes in the hundreds -- rotations and world-space translations. 0.38268
+is exactly sin(22.5 degrees). So the block behind r3 holds ANIMATION OR TRANSFORM
+DATA, and the code is walking it as an object with virtual functions.
+
+WHICH NARROWS IT TO TWO SHAPES, and the difference is testable rather than
+arguable: either the block was recycled out from under a live pointer (a lifetime
+bug), or a pointer of one type is being used as another (a type confusion, e.g. an
+array index or offset applied with the wrong stride). The float payload does not
+distinguish them by itself.
+
+NEXT: read sub_823ED7E0 around +0x52b3 and +0x5373 (the two faulting offsets) to
+see how r3 is obtained -- whether it is loaded from a container the streaming path
+mutates, or computed. And record whether the crashing addresses differ between
+occurrences, which they did here (0x453c4a40 versus a SIGSEGV at guest
+0x2ac288ec), suggesting the pointer is garbage rather than consistently stale.
