@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <vector>
 #include "directory_info.h"
+#include "file_disposition.h"
 #include <cstdio>
 #include <memory>
 #include <mutex>
@@ -22,6 +23,9 @@ namespace
 {
 
 constexpr uint32_t kStatusObjectNameNotFound = 0xC0000034;
+// FILE_CREATE asked for a file that is already there. Distinct from "not found"
+// because a title can act on the difference.
+constexpr uint32_t kStatusObjectNameCollision = 0xC0000035;
 constexpr uint32_t kStatusEndOfFile = 0xC0000011;
 constexpr uint32_t kStatusAccessDenied = 0xC0000022;
 constexpr uint32_t kStatusNoSuchFile = 0xC000000F;
@@ -132,7 +136,17 @@ void __imp__NtQueryFullAttributesFile(PPCContext& __restrict ctx, uint8_t* base)
 // NTSTATUS NtCreateFile(PHANDLE, ACCESS_MASK, POBJECT_ATTRIBUTES, PIO_STATUS_BLOCK,
 //                       PLARGE_INTEGER AllocationSize, ULONG FileAttributes,
 //                       ULONG ShareAccess, ULONG CreateDisposition, ULONG CreateOptions)
-void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
+//
+// CreateDisposition arrives in r10 and used to be IGNORED. The rule was "if the
+// file is missing and the mount is writable, make it", which is right for a save
+// being written and wrong for every read: a caller asking to open an existing
+// file got a newly created empty one and STATUS_SUCCESS. An honest failure
+// turned into a success carrying no data is the most expensive shape a host shim
+// can have -- the title believes its load worked, continues on empty state, and
+// the eventual crash is nowhere near the lie.
+static void OpenGuestFileWithDisposition(PPCContext& __restrict ctx,
+                                         uint8_t* base,
+                                         gears::FileDisposition disposition)
 {
     const uint32_t handlePtr = ctx.r3.u32;
     const uint32_t objectAttributes = ctx.r5.u32;
@@ -146,11 +160,31 @@ void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
     // player's storage.
     const bool writable = gears::Files().IsWritable(guestPath);
     const bool exists = !host.empty() && std::filesystem::exists(host);
-    if (host.empty() || (!exists && !writable))
+
+    if (host.empty())
     {
-        lucent::debug("fs", "open '{}' -> not found", guestPath);
+        lucent::debug("fs", "open '{}' -> no host path for it", guestPath);
         StoreU32(base, ioStatusBlock, kStatusObjectNameNotFound);
         ctx.r3.u64 = kStatusObjectNameNotFound;
+        return;
+    }
+
+    const gears::FileOpenAction action =
+        gears::DecideFileOpen(disposition, exists, writable);
+    if (action == gears::FileOpenAction::NotFound)
+    {
+        lucent::debug("fs", "open '{}' (disposition {}) -> not found", guestPath,
+                      uint32_t(disposition));
+        StoreU32(base, ioStatusBlock, kStatusObjectNameNotFound);
+        ctx.r3.u64 = kStatusObjectNameNotFound;
+        return;
+    }
+    if (action == gears::FileOpenAction::AlreadyExists)
+    {
+        lucent::debug("fs", "open '{}' (FILE_CREATE) -> already exists",
+                      guestPath);
+        StoreU32(base, ioStatusBlock, kStatusObjectNameCollision);
+        ctx.r3.u64 = kStatusObjectNameCollision;
         return;
     }
 
@@ -192,7 +226,24 @@ void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
     // "r+b" keeps an existing save intact for a partial rewrite; "w+b" makes a
     // new one. Truncating an existing save on open would lose a player's
     // progress the moment the title looked at it.
-    FILE* f = fopen(host.c_str(), writable ? (exists ? "r+b" : "w+b") : "rb");
+    // The mode follows the ACTION, not the mount: truncation is what
+    // FILE_OVERWRITE* and FILE_SUPERSEDE asked for and must never happen on a
+    // plain open, which would silently discard a save the title meant to read.
+    const char* mode = "rb";
+    switch (action)
+    {
+    case gears::FileOpenAction::OpenExisting:
+        mode = writable ? "r+b" : "rb";
+        break;
+    case gears::FileOpenAction::CreateNew:
+    case gears::FileOpenAction::Truncate:
+        mode = "w+b";
+        break;
+    default:
+        break;      // the refusing actions returned above
+    }
+
+    FILE* f = fopen(host.c_str(), mode);
     if (f == nullptr)
     {
         StoreU32(base, ioStatusBlock, kStatusObjectNameNotFound);
@@ -202,7 +253,10 @@ void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
 
     auto file = std::make_shared<OpenFile>();
     file->handle = f;
-    file->size = exists ? std::filesystem::file_size(host, ec) : 0;
+    // A truncated file is empty whatever it held a moment ago.
+    file->size = (action == gears::FileOpenAction::OpenExisting)
+                     ? std::filesystem::file_size(host, ec)
+                     : 0;
     file->guestPath = guestPath;
     file->writable = writable;
     if (writable)
@@ -219,17 +273,34 @@ void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
 
     StoreU32(base, handlePtr, handle);
     StoreU32(base, ioStatusBlock, gears::kStatusSuccess);
-    StoreU32(base, ioStatusBlock + 4, 1); // FILE_OPENED
+    // The Information field distinguishes these, and a title may branch on it.
+    StoreU32(base, ioStatusBlock + 4,
+             action == gears::FileOpenAction::CreateNew  ? 2u   // FILE_CREATED
+             : action == gears::FileOpenAction::Truncate ? 3u   // FILE_OVERWRITTEN
+                                                         : 1u); // FILE_OPENED
 
-    lucent::debug("fs", "open '{}' -> handle {:#x}", guestPath, handle);
+    // The disposition goes in the line so that "no refusals this run" carries a
+    // denominator. Without it, zero refusals is indistinguishable from a rule
+    // that never runs.
+    lucent::debug("fs", "open '{}' (disposition {}) -> handle {:#x}", guestPath,
+                  uint32_t(disposition), handle);
     ctx.r3.u64 = gears::kStatusSuccess;
+}
+
+void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
+{
+    OpenGuestFileWithDisposition(ctx, base,
+                                 gears::FileDisposition(ctx.r10.u32));
 }
 
 void __imp__NtOpenFile(PPCContext& __restrict ctx, uint8_t* base)
 {
-    // NtOpenFile's arguments line up with NtCreateFile's leading ones for the
-    // read-only case, which is all the title uses it for.
-    __imp__NtCreateFile(ctx, base);
+    // NtOpenFile has NO CreateDisposition: its parameters are (handle, access,
+    // attributes, status, ShareAccess, OpenOptions), so r10 holds nothing to do
+    // with one and reading it would be reading rubbish -- which is exactly what
+    // delegating straight to NtCreateFile would now do. Opening an object that
+    // already exists is what NtOpenFile MEANS, and that is FILE_OPEN.
+    OpenGuestFileWithDisposition(ctx, base, gears::kFileOpen);
 }
 
 // NTSTATUS NtReadFile(HANDLE, HANDLE Event, PIO_APC_ROUTINE, PVOID ApcContext,
