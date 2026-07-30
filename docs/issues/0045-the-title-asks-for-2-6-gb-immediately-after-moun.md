@@ -972,3 +972,35 @@ WHAT WOULD CHANGE THE ANSWER, so this is falsifiable rather than a shrug:
   3. Evidence that the title never reaches the restore on a real console with a
      fresh profile -- which would mean the port drives it somewhere it should not
      go, and the fix is upstream in the flow rather than in the race.
+
+### Note (2026-07-30)
+THE SAVE THE TITLE WRITES IS CORRECT. VERIFIED BYTE-FOR-BYTE.
+
+Closing a gap this project had left open: the save file was known to be CREATED
+but its contents had never been checked, which is the difference between 'a file
+appeared' and 'the save path works'.
+
+  written: ~/.local/share/gears1/default_checkpoint_sav/Pla   385 bytes
+  source:  scratch/game/WarGame/Checkpoints/chapter37.sav      385 bytes
+  cmp: BYTE-IDENTICAL
+
+And it decodes as a well-formed UE3 record rather than merely matching:
+
+  +0x00  00000002       version
+  +0x04  00000025       37 -- which is the 37 in chapter37.sav
+  +0x10  0000000c       FString length 12
+  +0x14  "sp_prison_p\0"  the Act 1 prison map, exactly 12 bytes
+
+A positive length is the UE3 convention for an ANSI string, and 12 is the exact
+byte count including the terminator -- so the string encoding is right, not just
+the byte count.
+
+WHAT THIS ESTABLISHES: the whole write pipeline is correct end to end -- the disc
+checkpoint is read, carried through the Kismet LoadChapter op into the global
+carrier, and written to the player's save unchanged. Every layer this port added
+(profile, content dispositions, the overlapped protocol, directory handles,
+gamertag truncation) is doing its job.
+
+WHAT IT DOES NOT ESTABLISH: that a save can be LOADED. No save has ever been read
+back into the title, because the restore path is where this entry's crash lives.
+Writing is verified; reading is untested and blocked.
