@@ -36,6 +36,7 @@
 #include "guest_backtrace.h"
 #include "guest_thread.h"
 #include "guest_memory.h"
+#include "reference_barrier.h"
 
 // Pool allocation/free bookkeeping, defined further down but used by the
 // allocator probe above its definition.
@@ -944,6 +945,21 @@ PPC_FUNC(sub_822153F0)
     gears::CheckHolderFreed(address);
     gears::NotePoolEvent(address, true);
 
+    // THE BARRIER, WRITER SIDE. The block being released may be the object a
+    // game-thread call is holding across its body. Measured: it is live when
+    // that call begins and dies during it. Waiting here is the whole fix -- the
+    // free still happens, in order, once no reader can still dereference it.
+    if (gears::ObjectBarrier().WaitUntilUnreferenced(
+            address, std::chrono::milliseconds(250)))
+    {
+        static std::atomic<uint64_t> engaged{0};
+        const uint64_t n = engaged.fetch_add(1) + 1;
+        if (n <= 3 || n % 50 == 0)
+            lucent::info("lifetime", "reference barrier held the free of {:#x}"
+                " until the reader left ({} time(s), {} timed out)",
+                address, n, gears::ObjectBarrier().TimeoutCount());
+    }
+
     // NO INTERVENTION HERE -- two attempts were made and BOTH FAILED, and the
     // second one is worth not repeating: see ClearCachesOfFreedBlock's comment
     // above for why nulling the field merely moved the crash, and why keeping the
@@ -1238,6 +1254,20 @@ PPC_FUNC(sub_824961D0)
         if (seen.insert(name).second)
             lucent::info("lifetime", "the cached-object user sub_824961D0 runs"
                 " on guest thread '{}'", name);
+    }
+    // THE BARRIER, READER SIDE. The object cached at holder+1376 is what this
+    // call dereferences, and the rendering thread destroys it mid-body. Holding
+    // a scope on it for the duration of the call is the guarantee the console's
+    // timing provided by accident. A zero cache is not held: there is nothing
+    // to protect, and taking a scope on address 0 would make every free of a
+    // null-ish block wait.
+    const uint32_t cachedObject =
+        ByteSwap(*gears::Memory().Translate<uint32_t>(ctx.r3.u32 + 1376));
+    if (cachedObject != 0)
+    {
+        gears::ReaderScope scope(gears::ObjectBarrier(), cachedObject);
+        __imp__sub_824961D0(ctx, base);
+        return;
     }
     __imp__sub_824961D0(ctx, base);
 }
