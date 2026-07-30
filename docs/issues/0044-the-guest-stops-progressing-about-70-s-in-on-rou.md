@@ -1140,3 +1140,43 @@ this entry has never examined closely.
 
 The guard stays in the tree as a detector: if an overlap ever occurs it is
 prevented and reported, and the zero now carries its denominator.
+
+### Note (2026-07-30)
+CORRECTION: THE ALLOCATOR DOES WRITE WritePointer -- ON THE WRAP PATH.
+
+An earlier note in this entry states that 'the allocator never advances
+WritePointer; the reservation lives only in the caller's frame at ctx+4'. That is
+true of the NORMAL path and false of the WRAP path. Decoded from
+sub_8221CBA8 (ppc_recomp.15.cpp):
+
+    lwz r10,0(r11)        ; Data
+    cmplw cr6,r8,r10      ; ReadPointer vs Data
+    beq  cr6,<spin>       ; reader sitting at the start -> retry
+    lwz r10,8(r11)        ; WritePointer
+    stw r10,12(r11)       ; WriteEnd    = WritePointer
+    lwz r11,0(r3) ; lwz r10,0(r11)
+    stw r10,8(r11)        ; WritePointer = Data
+
+So when a request will not fit before DataEnd, the allocator marks the wrap point
+in WriteEnd (+12) and RESETS WritePointer (+8) to Data itself. Two stores to
+shared ring state, and -- consistent with the earlier finding that this function
+contains no barriers at all -- NOTHING between them.
+
+WHY THIS IS NOT THE PORT'S EXTRA CORRUPTION, stated so it is not chased again:
+on PowerPC those two stores may be observed out of order by the consumer, which
+would be a genuine hardware-side hazard. On this port's x86-64 host, store-store
+is ordered by TSO, so the consumer CANNOT see WritePointer = Data before
+WriteEnd = old WritePointer. The port is STRICTER here than the console, so the
+wrap cannot be the thing that made corruption go from rare to one-run-in-three.
+
+WHAT IT DOES MEAN: the wrap is a third writer of WritePointer, alongside the
+caller's commit RMW. So 'who writes WritePointer' is: the caller's commit
+(non-atomic RMW) and the allocator's wrap. Since the producer guard proved the
+two PRODUCERS never overlap (137,561 entries, 0 overlaps), and the wrap is
+inside the same producer's bIsWriting window, neither of those can race with the
+other in this port either.
+
+Which leaves the CONSUMER as the remaining candidate: it reads WritePointer,
+WriteEnd and ReadPointer while a producer may be mid-wrap or mid-commit, and it
+is the one participant with no flag of its own and no barrier. That is where to
+look next, and it is the last unexamined part of the protocol.
