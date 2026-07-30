@@ -1594,7 +1594,7 @@ A CORRECTION THAT MATTERS. This entry has carried 'FString deserialise #78278:
 archive array is populated (2147483648 bytes at 0x900006b0)' as an unexplained
 anomaly for a long time, and the previous note here treated 0x80000000 as a
 length field read as INT_MIN. BOTH WERE WRONG. +112 is a REFERENCE -- an
-FMemoryReader holds  -- so the descriptor is one
+FMemoryReader holds a CONST REFERENCE to a TArray of BYTE -- so the descriptor is one
 indirection further out. The old probe read +112 and +116 as data and count when
 they are a reference and an unrelated field, and 0xb0800000 at +116 is the value
 this project already documents as what physical page 0 holds. There was never an
@@ -1616,3 +1616,51 @@ carrier's count at that instant? Three outcomes, all distinguishable: it never
 runs (a branch we do not take), it runs before the Kismet op fills the carrier (an
 ordering bug, ours or the title's), or it runs with a populated carrier and the
 copy itself is wrong.
+
+### Note (2026-07-30)
+THE CARRIER COPY IS GATED ON A VIRTUAL CALL, AND THE GATE IS TAKEN THE WRONG WAY.
+
+Read out of sub_821B4620 (guest 0x821B4910..0x821B4944):
+
+    lwz   r17,1496(r3)        ; r3 from sub_8218DED8(r30)
+    lwz   r11,0(r17)          ; r17's vtable
+    addi  r4,r1,112           ; an OUT parameter
+    mr    r3,r17
+    lwz   r11,656(r11)        ; SLOT 164
+    mtctr r11
+    bctrl                     ; -> r3
+    lis   r11,-32064
+    cmpwi cr6,r3,0
+    addi  r29,r11,-19604      ; r29 = 0x82BFB36C, the carrier
+    bne   cr6,0x821b4944      ; NON-ZERO -> SKIP the copy
+    addi  r3,r17,420          ; dest = object+420
+    mr    r4,r29              ; src = the carrier
+    bl    0x821b5c90          ; the copy
+
+So object+420 -- the array the checkpoint archive is constructed over -- is filled
+from the global carrier ONLY when that virtual call returns ZERO. Measured
+consequence: the archive's array is data 0x0 count 0 while the carrier holds the
+correct 385 bytes, which means the call returned NON-ZERO and the copy was
+skipped. The call claims to have supplied the data through its out-parameter at
+r1+112 and does not.
+
+This is the first link in the chain that could plausibly be OURS rather than the
+title's. Everything downstream -- empty array, garbage length, empty FString,
+NAME_None, LoadPackageAsync('None'), FArchiveAsync FileSize -1, the retail
+use-after-free in CreateLoader -- follows correctly from an empty object+420.
+
+WHAT IS NOT YET KNOWN, and I am not guessing at it: what class r17 is, what slot
+164 resolves to, whether that target is guest code or one of our native
+overrides, and what it does with the out-parameter. If it is a native override
+returning a success code without filling the buffer, that is the bug and it is a
+one-line class of mistake. If it is guest code, then the predicate it evaluates is
+the next question and the fault is further upstream still.
+
+NEXT: instrument the call. Report the resolved target address, whether it is in
+the recompiled image or an override, the return value, and the out-parameter's
+contents before and after. All four, because 'it returned non-zero' alone does not
+distinguish a wrong override from a correct refusal.
+
+ALSO REPAIRED: the note above this one had a sentence mangled by zsh command
+substitution -- backticks inside a double-quoted argument to catalog.py note ran
+as a command and left a hole. Use single quotes or avoid backticks in note text.
