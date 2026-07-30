@@ -1713,6 +1713,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // submitting them, and the submit measures at ~0, so the two together say
     // whether the cost is ours or the driver's.
     double msDescWrite = 0, msPrepare = 0;
+    // Inside state+pipeline, whose own 13-14 ms is the largest item in a
+    // gameplay frame and the only one still unexplained inside itself.
+    double msModify = 0, msShaderLookup = 0;
 
     // GEARS_DRAW_AB_CENSUS=1 puts the per-draw viewport census back on alternate
     // frames, so the arm with it and the arm without it are compared inside ONE
@@ -3769,23 +3772,38 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // of this draw's VS+PS pair and its own registers, so it is derived
         // here, per draw, before either stage is translated.
         uint64_t vsModification = 0, psModification = 0;
-        if (!draw::DeriveShaderModifications(R, d.vsUcode, d.vsUcodeSize, d.vsHash,
-                d.psUcode, d.psUcodeSize, d.psHash, vsModification, psModification))
-        { ++skipped; ++skipReasons[2]; continue; }
+        {
+            // Derived per draw from this draw's own registers, so unlike the
+            // translation it caches behind it, this runs every time. ScopedMs
+            // because the failure path takes a `continue` -- and a draw whose
+            // modification cannot be derived is exactly the one worth counting.
+            ScopedMs modifyTime(msModify);
+            if (!draw::DeriveShaderModifications(R, d.vsUcode, d.vsUcodeSize,
+                    d.vsHash, d.psUcode, d.psUcodeSize, d.psHash, vsModification,
+                    psModification))
+            { ++skipped; ++skipReasons[2]; continue; }
+        }
         // Set before ANY texture binding of this draw is resolved: selectTexView
         // runs while the descriptor sets are built, which is earlier than the
         // PreparedDraw is filled in. Recording it later attributed every binding
         // to the PREVIOUS draw's shader -- and sent me disassembling a shader
         // with no texture fetch in it at all.
         currentPsHash = d.psHash;
-        if (!getShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification, vsX, vsMod) ||
-            !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification, psX, psMod))
-        { ++skipped; ++skipReasons[2]; continue; }
-
         VkDescriptorSetLayout vsTexLayout = 0, psTexLayout = 0;
         VkPipelineLayout pipeLayout = 0;
-        if (!getPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
-        { ++skipped; ++skipReasons[3]; continue; }
+        {
+            // The cache LOOKUPS, not the translation: msTranslate and msPipeline
+            // already measure the work done on a miss, and both are ~0 once the
+            // frame is warm. What is left here is what a hit costs, times the
+            // number of draws -- which is the quantity a per-draw cache has to
+            // justify and which nothing was measuring.
+            ScopedMs lookupTime(msShaderLookup);
+            if (!getShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification, vsX, vsMod) ||
+                !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification, psX, psMod))
+            { ++skipped; ++skipReasons[2]; continue; }
+            if (!getPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
+            { ++skipped; ++skipReasons[3]; continue; }
+        }
         // GEARS_DRAW_ONLY_BASE=<hex>: render only draws targeting one EDRAM
         // surface. A DIAGNOSTIC control arm -- it isolates one surface's
         // contribution -- never a fix.
@@ -5721,7 +5739,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // under state+pipeline made state look twice its real size and the
     // descriptor writes look a third of theirs. Grep confirmed the single call
     // site rather than assuming it from where the accumulator is declared.
-    const double msStateOwn = msState - msTranslate - msPipeline;
+    // msTranslate is inside msShaderLookup (a cache miss translates) and
+    // msPipeline is inside the pipeline lookup that follows, so neither is
+    // subtracted again.
+    const double msStateOwn = msState - msModify - msShaderLookup - msPipeline;
     // The census is INSIDE the prepare span (the viewport block), and the
     // descriptor update is inside the descriptor-write span, so neither is
     // subtracted here -- subtracting a child twice is how a residual goes
@@ -5733,12 +5754,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         " guest-memory upload {:.0f}, submit+wait {:.0f}, readback+report {:.0f}",
         sinceStartMs(), msSetup, msDrawLoop, msSsboUpload, msSubmit, msReadback);
     lucent::info("draw", "  draw loop {:.0f} ms = state+pipeline {:.0f}"
-        " (shader translation {:.0f} + pipeline creation {:.0f} + own {:.0f})"
+        " (shader translation {:.0f} + pipeline creation {:.0f} + modification"
+        " derivation {:.0f} + shader/layout cache lookups {:.0f} + own {:.0f})"
         " + uniforms {:.0f} + index prep {:.0f} + record {:.0f} (descriptor alloc"
         " {:.0f} + descriptor writes {:.0f} of which texture upload {:.0f} and the"
         " driver's update {:.0f}, so own {:.0f} + prepare {:.0f} of which viewport"
         " census {:.0f} + own {:.0f}) + unattributed {:.0f}",
-        msDrawLoop, msState, msTranslate, msPipeline, msStateOwn,
+        msDrawLoop, msState, msTranslate, msPipeline, msModify, msShaderLookup,
+        msStateOwn,
         msUniforms, msIndex, msRecord, msDescAlloc, msDescWrite, msTexture,
         msDescUpdate, msDescWrite - msTexture - msDescUpdate,
         msPrepare, msCensus, msRecordOwn, msLoopOther);
