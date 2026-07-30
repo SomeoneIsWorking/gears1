@@ -2001,3 +2001,91 @@ void ReportFStringProbe()
         g_fstringLoads.load());
 }
 } // namespace gears
+
+// THE FUNCTION THAT DECIDES WHETHER THE CHECKPOINT CARRIER IS COPIED.
+//
+// sub_821B4620 copies the global carrier at 0x82BFB36C into object+420 -- the
+// array the checkpoint archive is built over -- ONLY when this returns zero. It
+// is returning non-zero, so the copy is skipped and the archive is empty, which
+// is the head of the whole #45 chain.
+//
+// Read from the guest code (53 instructions, all of it):
+//
+//   lwz  r11,4(r4)         ; the out-parameter's count
+//   beq  -> literal path   ; count == 0
+//   addi r11,r11,-1 ; bne -> other path   ; count >= 2
+//   ; literal path (count 0 or 1):
+//   addi r4,r11,-4228      ; a string literal at 0x8209EF7C
+//   bl   0x821704f8        ; FString from that literal
+//   addi r4,r31,420        ; object+420
+//   bl   0x821b5f30        ; try to load it
+//   ; tail, both paths:
+//   addi r3,r31,420
+//   bl   0x8232f010        ; -> the RETURN VALUE, derived from object+420
+//
+// So it attempts to populate object+420 itself and reports whether that worked.
+// Non-zero therefore claims the array is populated -- while the archive built
+// over it measures as data 0, count 0. One of those two readings is wrong, and
+// this probe prints both sides of the same array in the same breath so the
+// contradiction cannot survive.
+extern "C" PPC_FUNC(__imp__sub_821B94D8);
+
+PPC_FUNC(sub_821B94D8)
+{
+    static std::atomic<uint64_t> seen{0};
+    const uint64_t n = seen.fetch_add(1) + 1;
+
+    const uint32_t object = ctx.r3.u32;
+    const uint32_t param = ctx.r4.u32;
+    const uint32_t arrayAddress = object + 420;
+
+    const auto word = [&](uint32_t address) -> uint32_t {
+        if (uint64_t(address) + 4 >= PPC_MEMORY_SIZE)
+            return 0xDEADDEADu;
+        return ByteSwap(*gears::Memory().Translate<uint32_t>(address));
+    };
+
+    const uint32_t paramCount = word(param + 4);
+    const uint32_t beforeData = word(arrayAddress);
+    const uint32_t beforeCount = word(arrayAddress + 4);
+
+    __imp__sub_821B94D8(ctx, base);
+
+    const uint32_t afterData = word(arrayAddress);
+    const uint32_t afterCount = word(arrayAddress + 4);
+    const uint32_t result = ctx.r3.u32;
+
+    if (n > 4)
+        return;
+
+    // The literal it tries to load, read out of the image. This is the name the
+    // title uses when the caller supplied none, and it says what the title
+    // thinks it is loading.
+    std::string literal;
+    for (uint32_t i = 0; i < 48; ++i)
+    {
+        const uint16_t unit = ByteSwap(*gears::Memory().Translate<uint16_t>(
+            0x8209EF7Cu + i * 2));
+        if (unit == 0)
+            break;
+        literal.push_back(unit < 0x80 ? char(unit) : '?');
+    }
+
+    constexpr uint32_t kCarrier = 0x82BFB36C;
+    lucent::error("linker", "carrier gate #{}: object {:#x}, out-param {:#x}"
+        " count {} ({} path), literal '{}'", n, object, param, paramCount,
+        paramCount <= 1 ? "literal" : "other", literal);
+    lucent::error("linker", "  object+420 before: data {:#x} count {} -> after:"
+        " data {:#x} count {}; RETURNED {:#x}", beforeData, int32_t(beforeCount),
+        afterData, int32_t(afterCount), result);
+    lucent::error("linker", "  the carrier meanwhile holds {} bytes at {:#x}",
+        int32_t(word(kCarrier + 4)), word(kCarrier));
+    lucent::error("linker", "  => {}", result != 0
+        ? (afterCount != 0
+            ? "non-zero AND the array is populated, so the skip is correct and the"
+              " emptiness measured later means something CLEARS it afterwards"
+            : "NON-ZERO WHILE THE ARRAY IS EMPTY -- it claims success it did not"
+              " achieve, and that is why the carrier is never copied")
+        : "zero, so the caller should copy the carrier; if the array is still"
+          " empty later, the COPY is what failed");
+}

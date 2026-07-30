@@ -1664,3 +1664,57 @@ distinguish a wrong override from a correct refusal.
 ALSO REPAIRED: the note above this one had a sentence mangled by zsh command
 substitution -- backticks inside a double-quoted argument to catalog.py note ran
 as a command and left a hole. Use single quotes or avoid backticks in note text.
+
+### Note (2026-07-30)
+THE GATE RETURNS SUCCESS HAVING LOADED NOTHING, AND THE LITERAL IS A FILENAME.
+
+Hooked sub_821B94D8 -- the function whose return value decides whether the global
+carrier is copied into the array the checkpoint archive is built over. Two calls
+per run, with opposite outcomes:
+
+  carrier gate #1: object 0x434fc240, out-param count 14 (other path),
+                   literal "default_checkpoint.sav"
+    object+420 before: data 0x0 count 0 -> after: data 0x4120b400 count 385
+    RETURNED 0x1
+    the carrier meanwhile holds 0 bytes at 0x0
+
+  carrier gate #2: object 0x41dd0c40, out-param count 0 (literal path),
+                   literal "default_checkpoint.sav"
+    object+420 before: data 0x0 count 0 -> after: data 0x0 count 0
+    RETURNED 0x1
+    the carrier meanwhile holds 385 bytes at 0x42f51c00
+
+CALL #2 IS THE ONE THAT MATTERS: 0x41dd0c40 + 420 = 0x41dd0de4, which is exactly
+the archive byte-array address measured in the previous run. So the object whose
+array stays empty is the object the checkpoint archive is constructed over.
+
+WHAT THIS ESTABLISHES:
+
+  * The save data loads FINE through the other path -- 385 bytes, the right size,
+    into call #1s object. So reading the save is not broken.
+  * Call #2 takes the LITERAL path because its out-parameter count is 0, meaning
+    the caller supplied no name and the title falls back to a hardcoded
+    "default_checkpoint.sav".
+  * That literal load populates NOTHING, and the function still RETURNS 1.
+  * Because it returns non-zero, sub_821B4620 skips the carrier copy, so the
+    385 bytes sitting in the carrier at that very moment never reach the array.
+
+A CORRECTION TO MY OWN REASONING recorded so it is not repeated: I inferred from
+the disassembly that the return value is derived from object+420 via sub_8232F010
+and therefore reports whether the array is populated. That inference is WRONG --
+it returns 1 with an empty array. Whatever sub_8232F010 computes, it is not
+emptiness. The probes conclusion text for call #1 is also mis-worded for the same
+reason: it says the later emptiness must mean something CLEARS the array, when in
+fact there are simply TWO DIFFERENT OBJECTS and only one of them was ever filled.
+
+THE OPEN QUESTION, and it is now narrow and probably OURS: why does the literal
+load fail? The literal is a FILENAME, and this runtime stores that content as a
+DIRECTORY named default_checkpoint_sav containing a file the title created as
+save:\\Pla. If sub_821B5F30 opens "default_checkpoint.sav" as a path and our
+filesystem exposes it under a different name, the open fails on the port and would
+have succeeded on the console. That is a port-side naming mismatch, which is
+exactly the class of defect worth fixing properly.
+
+NEXT: read sub_821B5F30 and find what path it actually opens, then compare against
+what guest_filesystem exposes. Report the attempted path verbatim -- not "the open
+failed", which does not say which name was tried.
