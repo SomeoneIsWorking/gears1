@@ -5,7 +5,7 @@ status: open
 symptom: the audio pump stops at exactly 11250 callback invocations and VdSwap plateaus at 1860-1920 frames, while the process stays alive and the renderer keeps drawing; other runs sail past the same point
 tags: hang,nondeterministic,guest,audio,blocker
 created: 2026-07-28
-updated: 2026-07-29
+updated: 2026-07-30
 ---
 
 > ## STATE AS OF THE LATEST NOTE — READ THIS FIRST
@@ -1059,3 +1059,43 @@ broken by the title's own control flow, not by anything this port schedules.
 The fix question is unchanged and still open: why the console tolerates the
 non-atomic commit under two producers. Serialising the commit remains a PORT
 decision to be justified, not a bandaid to reach for -- see the note above.
+
+### Note (2026-07-30)
+THE TOPOLOGY EXPLANATION IS ELIMINATED. THE CONSOLE RUNS THESE TWO IN PARALLEL TOO.
+
+Both this entry and #45 had settled on a comfortable hypothesis: that Xenon's six
+hardware threads on three cores kept the game and render threads from truly
+overlapping, so the race existed but never fired. MEASURED AFFINITY KILLS IT.
+
+  guest thread 7 (the render thread, confirmed as the ring's drain thread)
+      KeSetAffinityThread mask 0x8 -> cpu 3
+  the game thread ('host', the one that ran the entry point)
+      never receives an affinity call at all, so it keeps its creation value: cpu 0
+
+On Xenon the six hardware threads are three cores of two SMT threads each --
+0/1, 2/3, 4/5. cpu 0 and cpu 3 are on DIFFERENT PHYSICAL CORES. So the console
+runs the producer and the consumer with real parallelism, and the non-atomic
+commit race is just as available there as here.
+
+ALSO ESTABLISHED IMAGE-WIDE, not just in two functions: bIsWriting is never READ
+anywhere. All 43 code sites that materialise the ring address were scanned for a
+load at +16, three candidates appeared, and all three turned out to be +16 off a
+DIFFERENT register (r30, r30, r11 against a ring in r5). So there is no mutual
+exclusion hiding elsewhere. Bounds of that scan, so the negative is usable: 60
+instructions forward from each materialisation site, opcode 32 only, base
+register verified -- a load further out, through a copied register, or via a
+different opcode would be missed.
+
+WHAT REMAINS AS THE EXPLANATION, and it is inference rather than measurement, so
+it is labelled as such: STATIC RECOMPILATION WIDENS EVERY RACE WINDOW. The
+commit is three PowerPC instructions; recompiled it is tens of host instructions
+with volatile loads and stores around it. A window that is a couple of
+nanoseconds on hardware becomes an order of magnitude wider here, so a race that
+fires once in a very long while on console fires once in three runs in this port.
+
+WHY THAT MATTERS FOR THE FIX: it makes a port-level mitigation defensible on a
+stated rationale rather than on a guess -- we would be restoring an interleaving
+probability the recompilation destroyed, not papering over a bug. It is still a
+decision for the operator, not a bandaid to reach for, and it should be argued
+on that basis. What it is NOT is 'the console serialises this'; that is now known
+to be false.
