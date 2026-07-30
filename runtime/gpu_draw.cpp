@@ -11,6 +11,7 @@
 // exist yet.
 #include "gpu_draw.h"
 #include "gpu_device_features.h"
+#include "gpu_shared_device.h"
 #include "gpu_queue_family.h"
 
 #include <lucent/config.h>
@@ -104,6 +105,10 @@ struct Renderer
     VkQueue queue = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
     VkPhysicalDeviceMemoryProperties memProps{};
+    // Whether this renderer CREATED the device or adopted the presenter's. An
+    // adopter must not destroy what it does not own, and destroying a device the
+    // presenter is still drawing to would take the window down with it.
+    bool ownsDevice = true;
     bool hasPipelineStats = false; // pipelineStatisticsQuery feature enabled
     bool hasGeometryShader = false;
     bool hasStorageImageWithoutFormat = false;
@@ -127,6 +132,60 @@ struct Renderer
 
 bool Renderer::Init()
 {
+    // ADOPT THE PRESENTER'S DEVICE WHEN THERE IS ONE, rather than creating a second.
+    // Two devices is what forces every rendered frame to be read back to host memory
+    // and uploaded again through a staging buffer: the drawn image would live on one
+    // device and the swapchain on the other, and nothing can be shared between them.
+    //
+    // The presenter is the side that publishes, because it comes up first in a
+    // windowed run -- its thread starts at the first guest swap, this initialises at
+    // GEARS_DRAW_FRAME_AT -- and because only it has a surface, so only it can pick a
+    // queue family verified to present. It creates the device with this renderer's
+    // features (gpu_device_features.h), which is what makes the device adoptable at
+    // all.
+    //
+    // Headless there is no presenter and nothing to adopt, so the code below runs
+    // exactly as before. The capability flags are derived from the physical device
+    // rather than passed across, so both sides reach the same answers independently.
+    {
+        gears::SharedGpu shared;
+        if (gears::AdoptSharedGpu(shared))
+        {
+            instance = shared.instance;
+            physical = shared.physical;
+            device = shared.device;
+            queue = shared.queue;
+            queueFamily = shared.queueFamily;
+            ownsDevice = false;
+
+            vkGetPhysicalDeviceMemoryProperties(physical, &memProps);
+            VkPhysicalDeviceProperties adoptedProps{};
+            vkGetPhysicalDeviceProperties(physical, &adoptedProps);
+            uniformOffsetAlignment = std::max<VkDeviceSize>(
+                adoptedProps.limits.minUniformBufferOffsetAlignment, 4);
+
+            VkPhysicalDeviceFeatures adoptedFeats{};
+            gears::DeviceCapabilities adoptedCaps{};
+            gears::SelectDeviceFeatures(physical, adoptedFeats, adoptedCaps);
+            hasPipelineStats = adoptedCaps.pipelineStatistics;
+            hasGeometryShader = adoptedCaps.geometryShader;
+            hasStorageImageWithoutFormat = adoptedCaps.storageImageWithoutFormat;
+
+            // Says only what is true. Sharing the device makes it POSSIBLE to
+            // stop reading the frame back and re-uploading it, because the image
+            // and the swapchain can now be the same object -- but that path is
+            // still in place and still runs. Claiming the readback is gone here
+            // would have a future reader believe a cost that is still being paid
+            // has been removed.
+            lucent::info("draw", "adopted the presenter's Vulkan device \"{}\""
+                " (queue family {}); the rendered image and the swapchain are now on"
+                " ONE device, which is the prerequisite for dropping the per-frame"
+                " readback and staging upload -- both of which still run",
+                adoptedProps.deviceName, queueFamily);
+            return true;
+        }
+    }
+
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     app.pApplicationName = "gears1-draw";
     app.apiVersion = VK_API_VERSION_1_2;
@@ -231,6 +290,22 @@ bool Renderer::Init()
         return false;
     }
     vkGetDeviceQueue(device, queueFamily, 0, &queue);
+
+    // Publish ours in turn. Headless nothing adopts it, but a presenter starting
+    // afterwards must find this device rather than create a second one.
+    // checkedForPresent is false: this family was chosen with no surface to consult,
+    // so its presentation support is unverified and the presenter must check.
+    {
+        gears::SharedGpu shared;
+        shared.instance = instance;
+        shared.physical = physical;
+        shared.device = device;
+        shared.queue = queue;
+        shared.queueFamily = queueFamily;
+        shared.checkedForPresent = false;
+        gears::PublishSharedGpu(shared);
+    }
+
     if (lucent::config::flag("DRAW_VALIDATE"))
     {
         auto create = (PFN_vkCreateDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
@@ -263,7 +338,18 @@ void Renderer::Shutdown()
     {
         vkDeviceWaitIdle(device);
         ReleasePersistent();
-        vkDestroyDevice(device, nullptr);
+        // Only if it is ours. Destroying the presenter's device here would take the
+        // window down with it, and the presenter would go on using freed handles.
+        if (ownsDevice)
+            vkDestroyDevice(device, nullptr);
+    }
+    if (!ownsDevice)
+    {
+        // Nothing else below is ours either: the messenger belongs to whoever
+        // created the instance, and so does the instance.
+        device = VK_NULL_HANDLE;
+        instance = VK_NULL_HANDLE;
+        return;
     }
     if (messenger)
     {

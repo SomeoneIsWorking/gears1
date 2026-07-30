@@ -32,6 +32,8 @@
 
 #include <lucent/log.h>
 
+#include "gpu_device_features.h"
+#include "gpu_shared_device.h"
 #include "gpu_queue_family.h"
 
 #ifdef GEARS_HAVE_PRESENTER
@@ -263,11 +265,24 @@ bool Presenter::CreateInstanceAndDevice()
     queueInfo.pQueuePriorities = &priority;
 
     const char* deviceExtensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
+    // THE RENDERER'S FEATURES TOO, because this is the device the draw path adopts
+    // rather than creating a second one. Two devices costs a readback of every
+    // rendered frame to host memory and a staging upload back, purely because the
+    // image and the swapchain would live on different devices. Creating this one
+    // without the renderer's features would hand it a device missing the geometry
+    // shader its rectangle lists need and the unformatted storage images its resolve
+    // pass needs -- undefined behaviour rather than a clean failure.
+    VkPhysicalDeviceFeatures features{};
+    gears::DeviceCapabilities capabilities{};
+    gears::SelectDeviceFeatures(physical, features, capabilities);
+
     VkDeviceCreateInfo deviceInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     deviceInfo.queueCreateInfoCount = 1;
     deviceInfo.pQueueCreateInfos = &queueInfo;
     deviceInfo.enabledExtensionCount = 1;
     deviceInfo.ppEnabledExtensionNames = deviceExtensions;
+    deviceInfo.pEnabledFeatures = &features;
 
     r = vkCreateDevice(physical, &deviceInfo, nullptr, &device);
     if (r != VK_SUCCESS)
@@ -278,6 +293,21 @@ bool Presenter::CreateInstanceAndDevice()
     }
     vkGetDeviceQueue(device, queueFamily, 0, &queue);
     vkGetPhysicalDeviceMemoryProperties(physical, &memProps);
+
+    // Publish for the draw path to adopt. This side publishes because it comes up
+    // first in a windowed run -- the presenter thread starts at the first guest
+    // swap, the draw path at GEARS_DRAW_FRAME_AT -- and because only this side has a
+    // surface, so only this side can choose a queue family verified to present.
+    {
+        gears::SharedGpu shared;
+        shared.instance = instance;
+        shared.physical = physical;
+        shared.device = device;
+        shared.queue = queue;
+        shared.queueFamily = queueFamily;
+        shared.checkedForPresent = true;
+        gears::PublishSharedGpu(shared);
+    }
 
     VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
