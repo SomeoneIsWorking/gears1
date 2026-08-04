@@ -44,6 +44,7 @@
 #include "gpu_device_features.h"
 #include "gpu_shared_device.h"
 #include "gpu_queue_family.h"
+#include "swapchain_format.h"
 
 #ifdef GEARS_HAVE_PRESENTER
 
@@ -376,54 +377,25 @@ bool Presenter::CreateSwapchain()
     if (formats.empty())
         return false;
 
-    // THE SWAPCHAIN MUST NOT BE AN sRGB FORMAT, and this used to fall back to one
-    // silently.
+    // THE SWAPCHAIN MUST NOT BE AN sRGB FORMAT.
     //
-    // The drawn frame is R8G8B8A8_UNORM holding values the guest already tonemapped
-    // -- display-ready bytes. vkCmdBlitImage between formats CONVERTS: blitting
-    // those bytes into a *_SRGB swapchain image makes the driver treat them as
-    // linear and encode them to sRGB, which lifts every dark value and flattens the
-    // contrast. The window shows a washed-out, dithered version of a frame the
-    // renderer produced correctly -- and nothing headless can see it, because the
-    // renderer's own screenshots are taken before the blit.
+    // The drawn frame is R8G8B8A8_UNORM holding bytes the guest already tonemapped
+    // -- display-ready values. vkCmdBlitImage between formats CONVERTS, so an sRGB
+    // swapchain image makes the driver treat those bytes as linear and encode them:
+    // mid-tones lift hard, blacks stay black, and the window shows a flat washed-out
+    // version of a frame the renderer produced correctly.
     //
-    // The old code preferred B8G8R8A8_UNORM but fell back to formats[0], which on
-    // this driver is B8G8R8A8_SRGB. Now: any UNORM, whatever its colour space; and
-    // if the surface offers nothing but sRGB, say so loudly rather than presenting
-    // a picture that is wrong in a way that looks like a rendering bug.
-    auto isUnorm = [](VkFormat f) {
-        return f == VK_FORMAT_B8G8R8A8_UNORM || f == VK_FORMAT_R8G8B8A8_UNORM ||
-               f == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
-               f == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
-    };
-    auto isSrgb = [](VkFormat f) {
-        return f == VK_FORMAT_B8G8R8A8_SRGB || f == VK_FORMAT_R8G8B8A8_SRGB ||
-               f == VK_FORMAT_A8B8G8R8_SRGB_PACK32;
-    };
-    VkSurfaceFormatKHR chosen = formats[0];
-    bool foundUnorm = false;
-    for (const VkSurfaceFormatKHR& candidate : formats)
-    {
-        if (candidate.format == VK_FORMAT_B8G8R8A8_UNORM &&
-            candidate.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-        {
-            chosen = candidate;
-            foundUnorm = true;
-            break;
-        }
-        if (!foundUnorm && isUnorm(candidate.format))
-        {
-            chosen = candidate;
-            foundUnorm = true;
-        }
-    }
-    if (!foundUnorm)
-    {
-        for (const VkSurfaceFormatKHR& candidate : formats)
-            if (!isSrgb(candidate.format)) { chosen = candidate; break; }
-    }
+    // The selection lives in swapchain_format.h as a pure function with tests,
+    // because this decides every pixel of the window and no capture in this project
+    // can see it -- the renderer's screenshots come from its readback, before the
+    // blit. The old code preferred B8G8R8A8_UNORM with SRGB_NONLINEAR and fell back
+    // to formats[0], which is an sRGB format on this driver; that fallback only
+    // bites on a surface that does not offer the preferred pair, so WHICH format a
+    // given surface yields is now logged rather than assumed.
+    const VkSurfaceFormatKHR chosen =
+        gears::ChooseSwapchainFormat(formats.data(), formats.size());
     format = chosen.format;
-    if (isSrgb(format))
+    if (gears::SwapchainFormatIsSrgb(format))
         lucent::warn("present", "this surface offers no non-sRGB format, so the"
             " swapchain is {} and the blit will RE-ENCODE the already-tonemapped"
             " frame to sRGB: the window will look washed out and flat. The frame"
