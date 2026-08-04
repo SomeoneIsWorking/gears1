@@ -54,6 +54,29 @@ target_compile_options(gears_ppc PRIVATE
 set(GEARS_PPC_OPT "-O2" CACHE STRING "Optimisation level for the translated guest code")
 target_compile_options(gears_ppc PRIVATE -Wno-unused-variable ${GEARS_PPC_OPT})
 
+# THE HOST RUNTIME IS OPTIMISED TOO, and it was not.
+#
+# The project is configured with CMAKE_BUILD_TYPE=Debug, which is right for the
+# guest side -- a breakpoint in translated code has to land somewhere meaningful --
+# and GEARS_PPC_OPT keeps the 191 generated translation units at -O2 regardless.
+# But it left every host source at -O0, the renderer included, and the renderer is
+# the thing whose per-frame cost this project spends its time measuring.
+#
+# Measured: the texture staleness hash ran at 0.95 GB/s in the runtime while the
+# identical XXH3 over the identical mapping ran at 7-22 GB/s in a -O2 microbench.
+# That is not a memory effect, it is an unoptimised build, and every frame-time
+# number taken before this was of a debug renderer.
+#
+# -O2 with -g, not RelWithDebInfo: the build type stays Debug for the guest side,
+# and host frames stay debuggable. GEARS_HOST_OPT=-O0 turns it off for bisecting a
+# miscompile in our own code, the same escape hatch GEARS_PPC_OPT provides.
+set(GEARS_HOST_OPT "-O2" CACHE STRING "Optimisation level for the host runtime")
+function(gears_optimise_host target)
+    if(TARGET ${target})
+        target_compile_options(${target} PRIVATE $<$<CONFIG:Debug>:${GEARS_HOST_OPT}>)
+    endif()
+endfunction()
+
 # Import stubs are generated because the import list comes from the game.
 set(IMPORT_STUBS "${CMAKE_CURRENT_BINARY_DIR}/imports_generated.cpp")
 add_custom_command(
@@ -236,3 +259,10 @@ endif()
 # host backtrace here is that the frames are named `sub_82xxxxxx`, which names
 # guest code directly.
 target_link_options(gears1 PRIVATE -rdynamic)
+
+# Every host target gets the optimisation the guest code has always had. Listed
+# explicitly rather than applied globally, so a target added later has to opt in
+# and nobody silently ships an -O0 renderer again.
+foreach(gears_host_target gears1 gears_draw gears_draw_xlate frame_replay)
+    gears_optimise_host(${gears_host_target})
+endforeach()
