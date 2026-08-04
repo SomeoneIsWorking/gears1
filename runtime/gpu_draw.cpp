@@ -734,8 +734,11 @@ struct RendererPersistent
                         OutputMergerState, VkRenderPass>, VkPipeline> pipelines;
     VkDescriptorSetLayout set0 = VK_NULL_HANDLE, set1 = VK_NULL_HANDLE;
 
-    // Guest textures, their views by fetch key, and their samplers.
-    std::vector<GuestTex> guestTextures;
+    // Guest textures, their views by fetch key, and their samplers. Keyed rather
+    // than a flat list because an entry whose GUEST BYTES changed has to be found
+    // and destroyed, not just replaced in the view map -- see the eviction in
+    // uploadTexture.
+    std::map<std::array<uint32_t, 4>, GuestTex> guestTextures;
     std::map<std::array<uint32_t, 4>, VkImageView> texCache;
     // The hash of the GUEST bytes each cached texture was built from. The cache key
     // is the fetch constant, which does not change when the guest overwrites the
@@ -826,7 +829,7 @@ void Renderer::ReleasePersistent()
     for (auto& [k, sm] : P.samplerCache) vkDestroySampler(device, sm, nullptr);
     vkDestroyDescriptorSetLayout(device, P.set0, nullptr);
     vkDestroyDescriptorSetLayout(device, P.set1, nullptr);
-    for (GuestTex& t : P.guestTextures)
+    for (auto& [k, t] : P.guestTextures)
     {
         vkDestroyImageView(device, t.view, nullptr);
         vkDestroyImage(device, t.image, nullptr);
@@ -1240,7 +1243,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // classification); here it becomes a host image. A fetch whose format has
     // no host mapping keeps the stub AND is counted with its reason -- nothing
     // is ever substituted to make the frame look better.
-    std::vector<GuestTex>& guestTextures = P.guestTextures;
+    std::map<std::array<uint32_t, 4>, GuestTex>& guestTextures = P.guestTextures;
     std::map<std::array<uint32_t, 4>, VkImageView>& texCache = P.texCache;
     std::map<std::array<uint32_t, 4>, uint64_t>& texContentHash = P.texContentHash;
     // MEASURING BEFORE FIXING. Whether the guest actually overwrites a texture
@@ -1250,6 +1253,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // zero here mean anything.
     uint64_t texContentChecked = 0;
     uint64_t texContentChanged = 0;
+    // A texture is checked at most ONCE per frame. That is not just an
+    // optimisation: this renderer reads guest memory at frame-render time, so
+    // every binding in a frame sees the same bytes, and re-hashing per binding
+    // answers the same question 5094 times instead of 26 (measured: 2.3 s of a
+    // gameplay frame, which is why the check used to be off by default).
+    std::set<std::array<uint32_t, 4>> texCheckedThisFrame;
+    // Images an eviction replaced. They cannot be destroyed on the spot: draws
+    // already recorded into THIS frame's command buffer may still reference them,
+    // so they die after the frame's fence, with the other per-frame transients.
+    std::vector<GuestTex> texRetired;
     std::vector<VkBuffer> stagingBufs;
     std::vector<VkDeviceMemory> stagingMems;
     struct PendingUpload
@@ -1315,19 +1328,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         auto it = texCache.find(key);
         if (it != texCache.end())
         {
+            // IS THE CACHED IMAGE STILL WHAT THE GUEST HAS THERE? The key is the
+            // fetch constant, which does not change when the guest overwrites the
+            // pixels at the same address -- so without this, a texture the guest
+            // rewrites in place is frozen at its first upload forever. That is not
+            // theoretical: the startup movie hands the GPU new Y/U/V planes at the
+            // same three addresses every frame, and the whole movie showed as one
+            // stuck near-black image (catalog #53).
+            //
             // Ask the decoder for the header only -- pure arithmetic on the fetch
             // constant, no data copied -- so the guest byte extent is known, then
             // hash those bytes and compare with what this entry was built from.
-            // GATED, because it has answered. Measured over a real scene: 176 cache
-            // hits re-hashed, 0 changed -- so the cache does not go stale in this
-            // content and eviction would be speculative work. Hashing every
-            // texture's guest bytes every frame is not a cost worth paying to keep
-            // re-learning that, but the check stays available behind
-            // GEARS_DRAW_TEXCHECK for when new content makes the question live
-            // again.
             draw::GuestTexture header;
-            if (lucent::config::flag("DRAW_TEXCHECK") &&
-                it->second != VK_NULL_HANDLE &&
+            if (it->second != VK_NULL_HANDLE &&
+                texCheckedThisFrame.insert(key).second &&
                 draw::DecodeGuestTexture(fetch6, in.guestBase,
                     uint64_t(in.guestWindowBytes), /*wantData=*/false, header) &&
                 header.skipReason == nullptr && header.guestExtentBytes != 0 &&
@@ -1341,17 +1355,30 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 if (known != texContentHash.end() &&
                     !gears::GuestTextureUnchanged(known->second, now))
                 {
+                    // EVICT: retire the stale image and fall through to a fresh
+                    // upload of the bytes that are there now. The old image is not
+                    // destroyed here -- earlier draws of this same frame may
+                    // already reference it -- it goes on the retirement list and
+                    // dies after the frame's fence.
                     ++texContentChanged;
-                    // NOT evicted yet, deliberately. This pass exists to find out
-                    // whether it ever happens; evicting here would need the image
-                    // and its memory tracked per entry so the old one can be
-                    // destroyed, and building that before knowing the count is
-                    // speculative. If this counter is non-zero the next step is
-                    // clear, and if it stays zero across real scenes then the cache
-                    // is sound as it stands and the risk was theoretical.
+                    auto old = guestTextures.find(key);
+                    if (old != guestTextures.end())
+                    {
+                        texRetired.push_back(old->second);
+                        guestTextures.erase(old);
+                    }
+                    texCache.erase(key);
+                    texContentHash.erase(known);
+                }
+                else
+                {
+                    return it->second;
                 }
             }
-            return it->second;
+            else
+            {
+                return it->second;
+            }
         }
         texDistinct.insert(key);
 
@@ -1503,14 +1530,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         uploadedBytes += gt.data.size();
         uploads.push_back({tex.image, staging, gt.width, gt.height, gt.depth3D,
                            gt.layers});
-        guestTextures.push_back(tex);
+        guestTextures[key] = tex;
         texCache[key] = tex.view;
         // Remember what these bytes hashed to, so a later frame can tell that the
         // guest has overwritten the texture under an unchanged fetch constant.
+        // Unconditional: without this record there is nothing to compare against,
+        // and the entry would then look unchanged forever.
         {
             draw::GuestTexture header;
-            if (lucent::config::flag("DRAW_TEXCHECK") &&
-                draw::DecodeGuestTexture(fetch6, in.guestBase,
+            if (draw::DecodeGuestTexture(fetch6, in.guestBase,
                     uint64_t(in.guestWindowBytes), /*wantData=*/false, header) &&
                 header.skipReason == nullptr && header.guestExtentBytes != 0 &&
                 uint64_t(header.baseAddress) + header.guestExtentBytes <=
@@ -4849,25 +4877,21 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 " GEARS_DRAW_UBOCHECK=1); a percentage cannot be inferred from the"
                 " hit rate alone");
 
-        // WHETHER THE TEXTURE CACHE IS ACTUALLY GOING STALE. The cache is keyed on
-        // the fetch constant, which does not change when the guest overwrites the
-        // pixels at the same address, so a changed texture would keep being sampled
-        // from the old upload. Whether that happens has never been measured -- the
-        // frontier entry said "not yet observed", which meant nobody had looked.
-        // Reported with its denominator: N cache hits were checked, of which M had
-        // different guest bytes. A zero with a non-zero denominator means the cache
-        // is sound as it stands; a zero denominator means this check never ran and
-        // says nothing at all.
-        lucent::info("draw", "texture cache: {} cache hit(s) re-hashed against their"
-            " guest bytes, {} found CHANGED under an unchanged fetch constant{}",
+        // WHAT THE TEXTURE CACHE EVICTED. The cache is keyed on the fetch
+        // constant, which does not change when the guest overwrites the pixels at
+        // the same address, so the guest bytes are re-hashed once per frame per
+        // distinct texture and a changed one is evicted and re-uploaded. Reported
+        // with its denominator, because "0 evicted" only means something next to
+        // the number of textures that were actually checked -- a zero denominator
+        // would mean the check never ran, which is a different statement.
+        lucent::info("draw", "texture cache: {} distinct texture(s) re-hashed against"
+            " their guest bytes, {} CHANGED under an unchanged fetch constant and"
+            " were evicted and re-uploaded{}",
             texContentChecked, texContentChanged,
             texContentChecked == 0
-                ? " -- the denominator is ZERO, so this says nothing. Either the"
-                  " check is off (GEARS_DRAW_TEXCHECK=1 enables it) or no cache hit"
-                  " could be checked at all"
-                : (texContentChanged != 0
-                    ? " -- so stale samples ARE happening and eviction is needed"
-                    : " -- so no stale sample occurred in this frame"));
+                ? " -- the denominator is ZERO: no cache hit could be checked at"
+                  " all, so this says NOTHING about staleness"
+                : "");
 
         if (rectDraws)
             lucent::info("draw", "frame rectangle lists: {} of {} draws expanded by a"
@@ -5206,6 +5230,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     {
         vkDestroyBuffer(device, keepBuffers[i], nullptr);
         vkFreeMemory(device, keepMem[i], nullptr);
+    }
+    // Textures evicted this frame because the guest overwrote their bytes. The
+    // fence above has been waited on, so no draw of this frame still references
+    // them; they were kept alive until here precisely because earlier draws did.
+    for (GuestTex& t : texRetired)
+    {
+        vkDestroyImageView(device, t.view, nullptr);
+        vkDestroyImage(device, t.image, nullptr);
+        vkFreeMemory(device, t.mem, nullptr);
     }
     P.built = true;
     return true;
