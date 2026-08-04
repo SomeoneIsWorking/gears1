@@ -271,7 +271,8 @@ struct BoundShader
 
 struct ShaderCaptureState
 {
-    bool enabled = false;
+    bool enabled = false;      // keep the microcode in memory (always: the renderer needs it)
+    bool writeFiles = false;   // also write it to cap.dir (GEARS_SHADER_CAPTURE)
     bool ready = false;
     std::string dir = "scratch/shaders/bound";
     std::map<uint64_t, BoundShader> shaders; // ucode hash -> record
@@ -317,6 +318,8 @@ void RecordBoundShader(uint32_t type, uint32_t address, bool immediate,
     s.ucode = ucode;
     cap.shaders.emplace(hash, s);
 
+    if (!cap.writeFiles)
+        return;
     const std::string path = std::format("{}/{}_{:016x}.ucode",
         cap.dir, type == 0 ? "vs" : "ps", hash);
     if (FILE* f = std::fopen(path.c_str(), "wb"))
@@ -333,6 +336,8 @@ void RecordBoundShader(uint32_t type, uint32_t address, bool immediate,
 void ShaderCaptureManifest()
 {
     auto& cap = g_shaderCapture;
+    if (!cap.writeFiles)
+        return;
     const std::string path = cap.dir + "/manifest.csv";
     FILE* f = std::fopen(path.c_str(), "w");
     if (!f)
@@ -352,11 +357,13 @@ void ShaderCaptureInit()
     if (cap.ready)
         return;
     cap.ready = true;
-    // The guest-draw backend (GEARS_DRAW) needs the bound pair's microcode, so
-    // it turns capture on too -- capture is how the microcode is kept in memory.
-    cap.enabled = lucent::config::flag("SHADER_CAPTURE") || lucent::config::flag("DRAW")
-        || lucent::config::flag("DRAW_FRAME");
-    if (!cap.enabled)
+    // Capturing the microcode is not optional: the renderer translates the pair
+    // bound at each draw, and this is how that microcode is kept in memory. What
+    // GEARS_SHADER_CAPTURE controls is whether a COPY is also written to disk for
+    // the offline tools (tools/xenos_translate, tools/compare_bound_shaders.py).
+    cap.enabled = true;
+    cap.writeFiles = lucent::config::flag("SHADER_CAPTURE");
+    if (!cap.writeFiles)
         return;
     const std::string& dir = lucent::config::text("SHADER_CAPTURE_DIR");
     if (!dir.empty())
@@ -526,12 +533,12 @@ struct CommandProcessor
     std::map<std::pair<uint64_t, uint64_t>, uint64_t> drawPairs; // (vs,ps) -> count
     bool drawCensusReported = false;
 
-    // Whole-frame guest-draw backend (GEARS_DRAW_FRAME): accumulate every
-    // DRAW_INDX/_2 of the frame with the register-file state live at that draw,
-    // then hand the whole ordered list to gears::RenderFrame at the swap. Distinct
-    // from the hot-pair one-shot (TriggerHotDraw). One-shot per run: it fires at
-    // the first swap that has draws so the process's later quit-to-title cannot
-    // race it away.
+    // Whole-frame guest-draw backend: accumulate every DRAW_INDX/_2 of the frame
+    // with the register-file state live at that draw, then hand the whole ordered
+    // list to gears::RenderFrame at the swap. This is the renderer -- it is not
+    // gated, because a run that executes the guest's draws and shows none of them
+    // is not a mode anyone wants. GEARS_DRAW_FRAME_AT/_COUNT bound WHICH frames
+    // are rendered for a capture or a measurement; by default every frame is.
     std::vector<gears::FrameDrawItem> frameDraws;
     bool frameRenderDone = false;
     // One frame capture per run (GEARS_DRAW_FRAME_DUMP), not one per frame.
@@ -541,7 +548,7 @@ struct CommandProcessor
     uint64_t renderedMs = 0;
     std::chrono::steady_clock::time_point lastRenderReport =
         std::chrono::steady_clock::now();
-    uint32_t frameSwaps = 0; // swaps seen while DRAW_FRAME is arming
+    uint32_t frameSwaps = 0; // swaps seen while waiting for GEARS_DRAW_FRAME_AT
 
     // Predication (Xenos PFP bin mask/select). Bit 0 of a TYPE3 header marks the
     // packet predicated; hardware skips it when (bin_select & bin_mask) == 0.
@@ -1006,92 +1013,6 @@ struct CommandProcessor
     // from that fetch constant's dword_0 (address = dword_0 >> 2, in dwords).
     static constexpr uint32_t kHotVertexFetchIndex = 95;   // from vf0 disasm
     static constexpr uint32_t kHotVertexStrideDwords = 12; // baked Stride=12
-    static constexpr uint64_t kHotPixelHash = 0x501ac5d8692bf7b6ull;
-
-    bool drawDone = false; // one-shot latch for the guest-draw backend
-
-    // At the hot-pair DRAW_INDX, hand the draw to the guest-draw graphics
-    // backend (runtime/gpu_draw.cpp): translate the bound pair, fill the UBOs
-    // and shared-memory SSBO from the register file and guest memory, and
-    // rasterise the full-screen quad into an offscreen target for a screenshot.
-    // Gated on GEARS_DRAW so the measurement harnesses are unaffected; one-shot.
-    // `raw`/`usable` are the DRAW_INDX packet payload (for VGT_DMA_BASE); the
-    // initiator has already been mirrored into the register file by the caller.
-    void TriggerHotDraw(uint32_t opcode, const uint32_t* raw, uint32_t usable,
-                        uint32_t initiator)
-    {
-        if (drawDone || !lucent::config::flag("DRAW"))
-            return;
-        if (g_shaderCapture.activeVertexHash != kHotVertexHash ||
-            g_shaderCapture.activePixelHash != kHotPixelHash)
-            return;
-        // Require fetch #95 (the vertex geometry source) to be populated, so we
-        // do not fire on an early degenerate draw before the buffer is bound.
-        const uint32_t fetchBase = kConstBaseFetch + kHotVertexFetchIndex * 2;
-        const uint32_t vf0 = g_gpuRegisters[fetchBase];
-        const uint32_t vf1 = g_gpuRegisters[fetchBase + 1];
-        if ((vf0 & 0x3) != 3)
-            return;
-
-        auto vsIt = g_shaderCapture.shaders.find(kHotVertexHash);
-        auto psIt = g_shaderCapture.shaders.find(kHotPixelHash);
-        if (vsIt == g_shaderCapture.shaders.end() ||
-            psIt == g_shaderCapture.shaders.end() ||
-            vsIt->second.ucode.empty() || psIt->second.ucode.empty())
-            return;
-        drawDone = true;
-
-        const uint32_t primType = initiator & 0x3F;
-        const uint32_t sourceSelect = (initiator >> 6) & 0x3;
-        const uint32_t indexSizeBit = (initiator >> 11) & 0x1; // 0=int16,1=int32
-        const uint32_t numIndices = (initiator >> 16) & 0xFFFF;
-        const uint32_t indexSizeBytes = indexSizeBit ? 4u : 2u;
-        const uint32_t vertexBase = (vf0 >> 2) << 2;
-        const uint32_t vertexSize = ((vf1 >> 2) & 0xFFFFFF) * 4;
-
-        // Index buffer base: VGT_DMA_BASE, in the packet (DRAW_INDX has a viz
-        // token before the initiator, DRAW_INDX_2 does not). Mirrors the layout
-        // decoded in CaptureHotDraw.
-        uint32_t indexGuestBase = 0, indexSwap = 0;
-        if (sourceSelect == 0) // kDMA (indexed)
-        {
-            const uint32_t initiatorIdx = (opcode == 0x22) ? 1u : 0u;
-            const uint32_t baseIdx = initiatorIdx + 1;
-            const uint32_t sizeIdx = initiatorIdx + 2;
-            if (usable > sizeIdx)
-            {
-                indexGuestBase = raw[baseIdx] & ~(indexSizeBytes - 1);
-                indexSwap = (raw[sizeIdx] >> 30) & 0x3;
-            }
-        }
-
-        // Mirror enough low guest physical memory into the SSBO to cover the
-        // vertex buffer this draw fetches from (rounded up, with headroom).
-        uint32_t mirror = vertexBase + vertexSize + 0x10000;
-        mirror = (mirror + 0xFFFFu) & ~0xFFFFu;
-
-        gears::HotDrawInputs in{};
-        in.registerFile = g_gpuRegisters.data();
-        in.guestBase = gears::Memory().Base();
-        in.guestPhysicalMirrorBytes = mirror;
-        in.vsUcode = vsIt->second.ucode.data();
-        in.vsUcodeSize = vsIt->second.ucode.size();
-        in.psUcode = psIt->second.ucode.data();
-        in.psUcodeSize = psIt->second.ucode.size();
-        in.vsHash = kHotVertexHash;
-        in.psHash = kHotPixelHash;
-        in.primType = primType;
-        in.indexCount = numIndices;
-        in.indexIs32 = indexSizeBit != 0;
-        in.indexGuestBase = indexGuestBase;
-        in.indexSwap = indexSwap;
-
-        lucent::info("gpu", "guest-draw: hot pair bound, firing backend"
-            " (prim {:#x}, {} {}-bit indices at {:#x}, vertex base {:#x} size {} bytes,"
-            " mirror {:#x})", primType, numIndices, indexSizeBytes * 8, indexGuestBase,
-            vertexBase, vertexSize, mirror);
-        gears::RenderHotDraw(in);
-    }
 
     // Accumulate one DRAW_INDX/_2 for the whole-frame backend: snapshot the
     // register file live at this draw (constants/fetch/initiator change between
@@ -1101,7 +1022,7 @@ struct CommandProcessor
     void CaptureFrameDraw(uint32_t opcode, const uint32_t* raw, uint32_t usable,
                           uint32_t initiator)
     {
-        if (frameRenderDone || !lucent::config::flag("DRAW_FRAME"))
+        if (frameRenderDone)
             return;
         const uint64_t vsHash = g_shaderCapture.activeVertexHash;
         const uint64_t psHash = g_shaderCapture.activePixelHash;
@@ -1190,7 +1111,7 @@ struct CommandProcessor
     // steady state.
     void TriggerFrameRender()
     {
-        if (frameRenderDone || !lucent::config::flag("DRAW_FRAME") || frameDraws.empty())
+        if (frameRenderDone || frameDraws.empty())
             return;
         // Which frame to capture. The first frame a run reaches is the loading
         // phase; a run that survives further can target a later, richer frame
@@ -1208,10 +1129,10 @@ struct CommandProcessor
             return;
         }
         ++framesRendered;
-        // GEARS_DRAW_FRAME_COUNT=0 renders EVERY frame from GEARS_DRAW_FRAME_AT
-        // onward -- the live path. A positive count stops after that many,
-        // which is what the capture and measurement runs use.
-        const long frameCount = lucent::config::number("DRAW_FRAME_COUNT", 1);
+        // GEARS_DRAW_FRAME_COUNT=0 (the default) renders EVERY frame from
+        // GEARS_DRAW_FRAME_AT onward -- the live path. A positive count stops
+        // after that many, which is what the capture and measurement runs use.
+        const long frameCount = lucent::config::number("DRAW_FRAME_COUNT", 0);
         if (frameCount > 0 && framesRendered >= frameCount)
             frameRenderDone = true;
 
@@ -1256,9 +1177,10 @@ struct CommandProcessor
         // in a second, is the only way to compare two renderer arms on identical
         // input. Written for the REPORTED frame only, so a live run leaves one
         // capture rather than one per frame.
-        if (const char* dumpPath = std::getenv("GEARS_DRAW_FRAME_DUMP"))
+        const std::string& dumpPath = lucent::config::text("DRAW_FRAME_DUMP");
+        if (!dumpPath.empty())
             if (in.report && !frameDumpWritten)
-                frameDumpWritten = gears::WriteFrameCapture(dumpPath, in);
+                frameDumpWritten = gears::WriteFrameCapture(dumpPath.c_str(), in);
 
         lucent::info("gpu", "guest-draw: rendering whole frame ({} draws captured)",
             in.draws.size());
@@ -1867,7 +1789,6 @@ struct CommandProcessor
 
             DumpConstantFiles(opcode);
             CaptureHotDraw(opcode, data, copy);
-            TriggerHotDraw(opcode, data, copy, initiator);
             CaptureFrameDraw(opcode, data, copy, initiator);
         }
 

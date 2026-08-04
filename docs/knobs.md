@@ -28,11 +28,9 @@ the same commit that removes it.
 
 | Knob | Meaning |
 |---|---|
-| `GEARS_DRAW_FRAME` | Render whole frames with the guest-draw backend |
-| `GEARS_DRAW_FRAME_AT=N` | First guest frame to render. Loading frames carry 2–3 draws; the Act 1 scene phase holds 700+ |
-| `GEARS_DRAW_FRAME_COUNT=N` | Render N frames then stop; `0` renders every frame from `_AT` onward (the live path) |
+| `GEARS_DRAW_FRAME_AT=N` | First guest frame to render. Rendering itself is **not** a knob — every frame from here on is drawn. Loading frames carry 2–3 draws; the Act 1 scene phase holds 700+. Default 0 |
+| `GEARS_DRAW_FRAME_COUNT=N` | Render N frames then stop. Default `0` = every frame from `_AT` onward, which is the live path; a positive count is what capture and measurement runs use |
 | `GEARS_DRAW_FRAME_REPORT_EVERY=N` | Census + screenshot every N rendered frames (~40 ms each, so a visible hitch by design) |
-| `GEARS_DRAW=1` | Fire the one-shot hot-pair draw instead |
 | `GEARS_DRAW_DIR=<dir>` | Where screenshots, dumps and diagnostics are written |
 | `GEARS_WATCH_FREE=<guest address>` | Reports the moment that address is released through the pool, with the caller that did it. For a use-after-free whose object address is known from a core file: a raw SIGSEGV leaves no clean exit to dump a table at, so the report happens live |
 | `GEARS_INPUT_SCRIPT=<steps>` | Timed pad input, e.g. `25000:START,25300:,150000:LY+`. Buttons and stick deflections (`LX/LY/RX/RY` with `+`/`-`), combined with `&`. Only advances when the guest polls, so a headless run is reproducible |
@@ -67,7 +65,9 @@ the same commit that removes it.
 | `GEARS_DRAW_CENSUS=1`, `GEARS_DRAW_FRAME_LIST=1` | Per-run and per-draw censuses |
 | `GEARS_DRAW_FRAME_STEP=N` | Checkpoint image every N draws |
 | `GEARS_DRAW_VALIDATE=1` | Vulkan validation layers |
-| `GEARS_SHADER_CAPTURE=1`, `GEARS_CONST_DUMP=1` | Capture bound microcode / the register file |
+| `GEARS_SHADER_CAPTURE=1`, `GEARS_SHADER_CAPTURE_DIR=<dir>` | Also write each bound microcode blob (and a `manifest.csv`) to disk for the offline tools. The runtime keeps the microcode in memory unconditionally — the renderer translates the pair bound at each draw — so this knob controls the **copy on disk**, nothing else |
+| `GEARS_CONST_DUMP=1` | One-shot dump of the constant/fetch register files at the hot pair's draw; `GEARS_CONST_DUMP_ANY=1` drops the hot-pair filter. Feeds `tools/system_constants` |
+| `GEARS_DRAW_CAPTURE=1` | One-shot decode of the hot pair's DRAW_INDX: packet fields, index buffer, vertex fetch constant and the first vertices, to `scratch/draw-params/hot_draw.txt` (`GEARS_DRAW_CAPTURE_DIR` moves it, `GEARS_DRAW_CAPTURE_ANY=1` drops the hot-pair filter). The RE instrument behind catalog #24 |
 
 ## Self-validation — proving an instrument can still say "yes"
 
@@ -109,3 +109,5 @@ Each isolates one cause by comparison against the default.
 | Knob | What happened |
 |---|---|
 | `GEARS_DRAW_RT=1` | **Gone.** The resolve→texture link is ON by default; `GEARS_DRAW_NORT=1` disables it. The old name lingered in scripts and evidence lines long after the code stopped reading it, so runs were passing a variable that did nothing — which is exactly what this registry exists to prevent |
+| `GEARS_DRAW_FRAME=1` | **Gone.** Whole-frame rendering is what the runtime does; there is no arm in which the guest's draws are executed and none of them are shown. `GEARS_DRAW_FRAME_AT`/`_COUNT` still bound which frames |
+| `GEARS_DRAW=1` | **Gone** with the one-shot hot-pair renderer it fired. That path built its own pipeline for one known vertex/pixel pair; the whole-frame renderer issues the same draw as one of the frame's draws, through the code that actually ships. Two renderers meant the milestone one drifting untested |
