@@ -12,24 +12,78 @@
 namespace gears
 {
 
-// ALL dispatcher-object state lives under this one lock, and every waiter waits
-// on this one condition variable.
+// ALL dispatcher-object state lives under this one lock.
 //
-// It used to be a mutex and condvar per object, which is fine until something
-// waits on more than one: KeWaitForMultipleObjects has to test every object and
-// then consume the right ones ATOMICALLY, and per-object locks cannot give that
-// without a lock-ordering scheme nobody would get right. One lock makes the
-// multi-object wait obviously correct, and the contention is irrelevant at the
-// rate a title signals events.
+// It used to be a mutex per object, which is fine until something waits on more
+// than one: KeWaitForMultipleObjects has to test every object and then consume
+// the right ones ATOMICALLY, and per-object locks cannot give that without a
+// lock-ordering scheme nobody would get right. One lock makes the multi-object
+// wait obviously correct.
 //
-// The cost is that a signal wakes every waiter to re-check its own predicate,
-// rather than only the ones that care. At a handful of objects that is cheaper
-// than the bookkeeping needed to avoid it.
+// The CONDITION VARIABLE is per waiter, registered on each object that waiter is
+// blocked on -- see KernelObject::waiters_. One shared condition variable was
+// simpler and made every signal wake every waiting guest thread; the title's
+// audio is a two-thread ping-pong at 187.5 Hz, so that was 375 herd wakeups a
+// second, and the handoff it paces measured 8.6 ms against a 5.3 ms budget.
+// Waking only the waiters registered on the signalled object changes nothing
+// about the atomicity: the state is still under the one lock.
 namespace
 {
 std::mutex g_dispatcherMutex;
-std::condition_variable g_dispatcherCv;
+
+// Registers a waiter's condition variable on every object it is waiting for, and
+// takes it off again on the way out -- including when the wait times out or the
+// predicate throws. A waiter's condition variable lives on its own stack, so
+// leaving one registered would be a dangling pointer in the next signal.
+class RegisteredWaiter
+{
+public:
+    RegisteredWaiter(KernelObject* const* objects, size_t count,
+                     std::condition_variable& cv)
+        : objects_(objects), count_(count), cv_(&cv)
+    {
+        for (size_t i = 0; i < count_; ++i)
+            if (objects_[i])
+                objects_[i]->AddWaiterLocked(cv_);
+    }
+    ~RegisteredWaiter()
+    {
+        for (size_t i = 0; i < count_; ++i)
+            if (objects_[i])
+                objects_[i]->RemoveWaiterLocked(cv_);
+    }
+    RegisteredWaiter(const RegisteredWaiter&) = delete;
+    RegisteredWaiter& operator=(const RegisteredWaiter&) = delete;
+
+private:
+    KernelObject* const* objects_;
+    size_t count_;
+    std::condition_variable* cv_;
+};
 } // namespace
+
+void KernelObject::AddWaiterLocked(std::condition_variable* cv)
+{
+    waiters_.push_back(cv);
+}
+
+void KernelObject::RemoveWaiterLocked(std::condition_variable* cv)
+{
+    for (auto it = waiters_.begin(); it != waiters_.end(); ++it)
+        if (*it == cv)
+        {
+            waiters_.erase(it);
+            return;
+        }
+}
+
+void KernelObject::WakeWaitersLocked()
+{
+    // notify_all on each: a waiter registers exactly one condition variable, so
+    // this is one wakeup per thread actually waiting on THIS object.
+    for (std::condition_variable* cv : waiters_)
+        cv->notify_all();
+}
 
 const char* KernelObject::KindName() const
 {
@@ -103,12 +157,13 @@ int KernelObject::WaitMultiple(KernelObject* const* objects, size_t count,
         return false;
     };
 
+    std::condition_variable cv;
+    RegisteredWaiter registration(objects, count, cv);
     if (timeout100ns < 0)
     {
-        g_dispatcherCv.wait(lock, ready);
+        cv.wait(lock, ready);
     }
-    else if (!g_dispatcherCv.wait_for(
-                 lock, std::chrono::nanoseconds(timeout100ns * 100), ready))
+    else if (!cv.wait_for(lock, std::chrono::nanoseconds(timeout100ns * 100), ready))
     {
         return -1;
     }
@@ -131,30 +186,25 @@ int KernelObject::WaitMultiple(KernelObject* const* objects, size_t count,
 
 void KernelObject::Set()
 {
-    {
-        std::lock_guard<std::mutex> guard(g_dispatcherMutex);
-        signalled_ = true;
-    }
-    // A notification event releases every waiter; a synchronisation event
-    // releases exactly one, which then consumes the signal.
-    if (kind_ == Kind::NotificationEvent)
-        g_dispatcherCv.notify_all();
-    else
-        g_dispatcherCv.notify_all();
+    // Notified with the lock HELD, and every waiter on this object is woken:
+    // which of them gets through is decided by their predicates and by
+    // ConsumeLocked, exactly as before. A notification event lets them all
+    // through; a synchronisation event is consumed by whichever wakes first and
+    // the rest go back to waiting.
+    std::lock_guard<std::mutex> guard(g_dispatcherMutex);
+    signalled_ = true;
+    WakeWaitersLocked();
 }
 
 int32_t KernelObject::Release(int32_t increment)
 {
-    int32_t previous;
-    {
-        std::lock_guard<std::mutex> guard(g_dispatcherMutex);
-        previous = count_;
-        count_ += increment;
-        if (limit_ > 0 && count_ > limit_)
-            count_ = limit_;
-        signalled_ = count_ > 0;
-    }
-    g_dispatcherCv.notify_all();
+    std::lock_guard<std::mutex> guard(g_dispatcherMutex);
+    const int32_t previous = count_;
+    count_ += increment;
+    if (limit_ > 0 && count_ > limit_)
+        count_ = limit_;
+    signalled_ = count_ > 0;
+    WakeWaitersLocked();
     return previous;
 }
 
@@ -167,31 +217,30 @@ void KernelObject::Clear()
 void KernelObject::Pulse()
 {
     // Releases whoever is waiting right now and leaves the object unsignalled;
-    // a thread that arrives afterwards must wait.
+    // a thread that arrives afterwards must wait. The two lock scopes are kept
+    // exactly as they were -- a waiter can only re-test its predicate once this
+    // releases the lock, so a pulse can still be missed. That is a pre-existing
+    // flaw in this emulation of KePulseEvent (the fix is a generation counter a
+    // waiter compares against, not a notify), and it is left alone here so this
+    // change is only about WHICH waiters are woken.
     {
         std::lock_guard<std::mutex> guard(g_dispatcherMutex);
         signalled_ = true;
+        WakeWaitersLocked();
     }
-    if (kind_ == Kind::NotificationEvent)
-        g_dispatcherCv.notify_all();
-    else
-        g_dispatcherCv.notify_all();
-
     std::lock_guard<std::mutex> guard(g_dispatcherMutex);
     signalled_ = false;
 }
 
 bool KernelObject::ReleaseMutant()
 {
-    {
-        std::lock_guard<std::mutex> guard(g_dispatcherMutex);
-        if (owner_ != std::this_thread::get_id())
-            return false;
-        if (--recursion_ > 0)
-            return true;
-        owner_ = {};
-    }
-    g_dispatcherCv.notify_all();
+    std::lock_guard<std::mutex> guard(g_dispatcherMutex);
+    if (owner_ != std::this_thread::get_id())
+        return false;
+    if (--recursion_ > 0)
+        return true;
+    owner_ = {};
+    WakeWaitersLocked();
     return true;
 }
 
@@ -209,11 +258,14 @@ bool KernelObject::Wait(int64_t timeout100ns)
         }
     };
 
+    std::condition_variable cv;
+    KernelObject* self = this;
+    RegisteredWaiter registration(&self, 1, cv);
     if (timeout100ns < 0)
     {
-        g_dispatcherCv.wait(lock, satisfied);
+        cv.wait(lock, satisfied);
     }
-    else if (!g_dispatcherCv.wait_for(lock, std::chrono::nanoseconds(timeout100ns * 100), satisfied))
+    else if (!cv.wait_for(lock, std::chrono::nanoseconds(timeout100ns * 100), satisfied))
     {
         return false;
     }

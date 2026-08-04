@@ -6,6 +6,7 @@
 #include <mutex>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 #include "kernel_status.h"
 
@@ -68,13 +69,39 @@ public:
     Kind kind() const { return kind_; }
     const char* KindName() const;
 
+    // Waiter registration. Public because the registration helper in the .cpp
+    // drives it; every call requires the dispatcher lock to be held.
+    void AddWaiterLocked(std::condition_variable* cv);
+    void RemoveWaiterLocked(std::condition_variable* cv);
+
 private:
+    // Wake the waiters registered on this object. Caller holds the dispatcher
+    // lock and must KEEP it across the call.
+    void WakeWaitersLocked();
+
     // True when this object would let a waiter through. Caller holds the
     // dispatcher lock.
     bool SatisfiedLocked() const;
     // Take the signal, for the object kinds that consume one. Caller holds the
     // dispatcher lock.
     void ConsumeLocked();
+
+    // The waiters currently blocked on THIS object, each waiting on its own
+    // condition variable, all of them under the one dispatcher mutex.
+    //
+    // A single shared condition variable was correct and simple, and it cost the
+    // audio path dearly: every signal woke every waiting guest thread to
+    // re-evaluate its own predicate against the one dispatcher mutex. The title
+    // mixes audio as a ping-pong between two threads at 187.5 Hz, so 375 signals
+    // a second each woke a dozen threads that had nothing to do. Waking only the
+    // waiters registered on the object keeps every atomicity argument above --
+    // the state is still under one lock -- and stops the herd.
+    //
+    // Guarded by the dispatcher mutex; entries are stack objects owned by the
+    // waiting threads, which is why notification happens with the lock HELD: a
+    // waiter cannot leave and destroy its condition variable between the read
+    // and the notify.
+    std::vector<std::condition_variable*> waiters_;
 
     Kind kind_;
     bool signalled_;

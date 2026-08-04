@@ -5,7 +5,7 @@ status: open
 symptom: over a 150 s run reaching gameplay the pump makes 16875 callback invocations where 187.5 Hz wants ~26250 -- about 120 Hz, so the title mixes slower than real time
 tags: audio,performance,pump
 created: 2026-07-28
-updated: 2026-07-28
+updated: 2026-08-04
 ---
 
 Found while verifying the XMA decoder, and deliberately NOT folded into that
@@ -120,3 +120,49 @@ backlog is unbounded (14306 slots, ~76 s of audio debt, in a 200 s run). If the
 guest ever recovers, the pump sprints and pushes faster-than-real-time audio at
 the device. A real device never asks for the past; the backlog wants a clamp of
 a few slots, or the device should pace the pump outright.
+
+### Note (2026-08-04)
+2026-08-04. MECHANISM NAMED, and it is not what the title of this entry says.
+
+Traced with GEARS_LUCENT_DEBUG=wait over 577 consecutive audio frames. The
+title's mixer is a TWO-THREAD PING-PONG, and our pump is one of the two threads:
+
+  audio-pump: enters the guest callback -> KeSetEvent(0x82becc28) -> blocks in
+              KeWaitForMultipleObjects on [0x82becc04 sync-event,
+              0x82becc48 notification-event]
+  guest-4:    wakes on 0x82becc28 -> mixes -> KeSetEvent(0x82becc04) -> blocks
+              on 0x82becc28 again
+
+577 signals from guest-4, 577 audio-pump waits: exactly 1:1, every slot. So one
+audio frame costs a full round trip between two threads, and the audio frame
+rate IS the round-trip rate. Measured on a gameplay walk: the callback's wall
+time is 7.9-10.9 ms against a 5.33 ms slot while its CPU time is 0.09-0.21 ms --
+it is not computing, it is waiting -- and the pump's backlog grows monotonically
+(1432 -> 2669 -> 4644 slots over 30 s). The title therefore produces audio at
+roughly half real time, which is what "crackling and wrong pitch" sounds like:
+the device starves and the title's own audio timeline is stretched.
+
+Rendering is NOT the cause. Control arm with the renderer effectively off
+(GEARS_DRAW_FRAME_AT=99999999): the guest returns to 29.7 fps from 10.5, and the
+pump is STILL 7.9-8.6 ms per slot with a growing backlog. Rendering makes it
+worse (backlog grew ~1500 slots/10 s with it, ~900 without) but there is a
+handoff problem underneath it.
+
+RULED OUT as the dominant cost: the shared dispatcher condition variable. Every
+signal used to wake every waiting guest thread; giving each waiter its own
+condvar registered per object cut the pump thread's voluntary context switches
+from 6629 to 2165 per 1875 slots and left the callback's wall time unchanged.
+Landed anyway (it is strictly less work), but it is not the fix.
+
+CAVEAT ON EVERY NUMBER ABOVE: this machine was at load average 28 from unrelated
+builds throughout. Scheduler latency is part of what is being measured, and the
+pump's own report says so (runqueue 0.8-1.6 s per 10 s interval, i.e. the pump
+thread spent 8-16% of the time RUNNABLE but not running). These runs need
+repeating on an idle machine before the size of the deficit is trusted -- but
+the 1:1 ping-pong structure and the growing backlog are structural, not load.
+
+NEXT: (1) re-measure idle; (2) the round trip is two condvar handoffs per 5.33 ms
+slot -- the console paced this from the DAC IRQ with a real-time audio thread, so
+raising the pump/guest-4 scheduling priority is the obvious first experiment;
+(3) consider letting the pump run several slots ahead when the device queue is
+draining, which is what the host device actually needs.
