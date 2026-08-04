@@ -548,6 +548,8 @@ struct CommandProcessor
     uint64_t lastRenderFrames = 0;
     uint64_t lastDroppedFrames = 0;
     uint64_t lastBusyMillis = 0;
+    uint64_t lastCpuMillis = 0;
+    uint64_t lastRunqueueMillis = 0;
     std::chrono::steady_clock::time_point lastRenderReport =
         std::chrono::steady_clock::now();
     uint32_t frameSwaps = 0; // swaps seen while waiting for GEARS_DRAW_FRAME_AT
@@ -1228,15 +1230,22 @@ struct CommandProcessor
                 const uint64_t droppedNow = st.dropped;
                 lucent::info("gpu", "guest-draw: {:.1f} frames/s rendered,"
                     " {:.1f}/s dropped as the renderer was still busy"
-                    " ({} ms/frame in RenderFrame)",
+                    " ({} ms/frame in RenderFrame, of which {} ms on-core and"
+                    " {} ms runnable-but-off-core)",
                     double(renderedNow - lastRenderFrames) / elapsed,
                     double(droppedNow - lastDroppedFrames) / elapsed,
                     (st.busyMillis - lastBusyMillis) /
+                        std::max<uint64_t>(1, renderedNow - lastRenderFrames),
+                    (st.cpuMillis - lastCpuMillis) /
+                        std::max<uint64_t>(1, renderedNow - lastRenderFrames),
+                    (st.runqueueMillis - lastRunqueueMillis) /
                         std::max<uint64_t>(1, renderedNow - lastRenderFrames));
                 lastRenderReport = now;
                 lastRenderFrames = renderedNow;
                 lastDroppedFrames = droppedNow;
                 lastBusyMillis = st.busyMillis;
+                lastCpuMillis = st.cpuMillis;
+                lastRunqueueMillis = st.runqueueMillis;
             }
         }
         ++frameSwaps;
