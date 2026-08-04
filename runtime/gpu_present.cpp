@@ -376,17 +376,63 @@ bool Presenter::CreateSwapchain()
     if (formats.empty())
         return false;
 
+    // THE SWAPCHAIN MUST NOT BE AN sRGB FORMAT, and this used to fall back to one
+    // silently.
+    //
+    // The drawn frame is R8G8B8A8_UNORM holding values the guest already tonemapped
+    // -- display-ready bytes. vkCmdBlitImage between formats CONVERTS: blitting
+    // those bytes into a *_SRGB swapchain image makes the driver treat them as
+    // linear and encode them to sRGB, which lifts every dark value and flattens the
+    // contrast. The window shows a washed-out, dithered version of a frame the
+    // renderer produced correctly -- and nothing headless can see it, because the
+    // renderer's own screenshots are taken before the blit.
+    //
+    // The old code preferred B8G8R8A8_UNORM but fell back to formats[0], which on
+    // this driver is B8G8R8A8_SRGB. Now: any UNORM, whatever its colour space; and
+    // if the surface offers nothing but sRGB, say so loudly rather than presenting
+    // a picture that is wrong in a way that looks like a rendering bug.
+    auto isUnorm = [](VkFormat f) {
+        return f == VK_FORMAT_B8G8R8A8_UNORM || f == VK_FORMAT_R8G8B8A8_UNORM ||
+               f == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
+               f == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+    };
+    auto isSrgb = [](VkFormat f) {
+        return f == VK_FORMAT_B8G8R8A8_SRGB || f == VK_FORMAT_R8G8B8A8_SRGB ||
+               f == VK_FORMAT_A8B8G8R8_SRGB_PACK32;
+    };
     VkSurfaceFormatKHR chosen = formats[0];
+    bool foundUnorm = false;
     for (const VkSurfaceFormatKHR& candidate : formats)
     {
         if (candidate.format == VK_FORMAT_B8G8R8A8_UNORM &&
             candidate.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
         {
             chosen = candidate;
+            foundUnorm = true;
             break;
         }
+        if (!foundUnorm && isUnorm(candidate.format))
+        {
+            chosen = candidate;
+            foundUnorm = true;
+        }
+    }
+    if (!foundUnorm)
+    {
+        for (const VkSurfaceFormatKHR& candidate : formats)
+            if (!isSrgb(candidate.format)) { chosen = candidate; break; }
     }
     format = chosen.format;
+    if (isSrgb(format))
+        lucent::warn("present", "this surface offers no non-sRGB format, so the"
+            " swapchain is {} and the blit will RE-ENCODE the already-tonemapped"
+            " frame to sRGB: the window will look washed out and flat. The frame"
+            " itself is correct -- compare the renderer's own screenshot",
+            uint32_t(format));
+    else
+        lucent::info("present", "swapchain format {} (non-sRGB, so the blit copies"
+            " the drawn frame's bytes without a colour-space conversion)",
+            uint32_t(format));
 
     // FIFO is the only mode the spec guarantees, but it would make every
     // present block on the host's 60 Hz refresh -- a host clock leaking into
