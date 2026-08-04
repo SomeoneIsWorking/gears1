@@ -73,6 +73,7 @@ Everything derived from the disc lands in `scratch/`, which is gitignored.
 
 | Path | |
 |---|---|
+| `run.sh` | Build and play (`--headless`, `--menu-walk`, `--no-build`, `--log`); `./run.sh --help` |
 | `config/gears.toml` | XenonRecomp configuration — section addresses, register save/restore helpers |
 | `tools/gdf_extract.py` | GDF/XDVDFS extractor for the Xbox 360 disc image |
 | `tools/xex_probe/` | XEX decrypt/decompress, section + import dump, save/restore helper scan |
@@ -101,6 +102,14 @@ XenonRecomp needs CMake 3.20+ and Clang 18+. It exits non-zero if any
 instruction lacks an implementation.
 
 Then build and run the runtime against the generated code:
+
+```sh
+./run.sh                 # configure if needed, build, and play
+./run.sh --menu-walk     # ...driving itself from the title screen into Act 1
+./run.sh --headless      # no window, for measurement
+```
+
+`run.sh` is a thin wrapper over the three steps it saves you typing:
 
 ```sh
 cmake -S . -B scratch/build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
