@@ -24,6 +24,8 @@
 
 #include "guest_heap.h"
 #include "guest_memory.h"
+#include "audio_pace.h"
+#include "audio_frame.h"
 #include "audio_out.h"
 #include "guest_thread.h"
 #include "wait_probe.h"
@@ -41,8 +43,11 @@ std::atomic<bool> g_playing{false};
 uint32_t g_callback = 0;
 uint32_t g_callbackContext = 0;
 
-// A submitted frame is 6 channels x 256 samples of interleaved big-endian
-// float, which is Xenia's XAudioSubmitRenderDriverFrame contract.
+// A submitted frame is 6 channels x 256 samples of big-endian float, laid out
+// CHANNEL-MAJOR: all 256 samples of channel 0, then all of channel 1, and so on.
+// That is the layout Xenia's converter reads (conversion.h, "sequential_6"), and
+// it is not what a host audio API wants -- see runtime/audio_frame.h, which owns
+// the conversion and the evidence for the layout.
 constexpr uint32_t kFrameChannels = 6;
 constexpr uint32_t kFrameSamplesPerChannel = 256;
 constexpr uint32_t kFrameFloats = kFrameChannels * kFrameSamplesPerChannel;
@@ -78,10 +83,11 @@ float FramePeak(const uint8_t* samples)
     return peak;
 }
 
-// GEARS_AUDIO_WAV=<path> writes what the title submits, verbatim: 32-bit float,
-// six channels, 48 kHz. Verbatim matters -- a downmix or a conversion here would
-// be a second thing that can be wrong when the question is whether the FIRST
-// thing produced anything.
+// GEARS_AUDIO_WAV=<path> writes what the title submits: 32-bit float, six
+// channels, 48 kHz, deinterleaved into the order a WAV file is defined to have
+// and otherwise untouched. No downmix, no gain, no resampling -- the point of the
+// dump is to answer what the TITLE produced, so anything beyond making the
+// container honest would be a second thing that can be wrong.
 class WavWriter
 {
 public:
@@ -106,9 +112,13 @@ public:
     {
         if (!file_)
             return;
+        // Deinterleaved, because the file claims to be a six-channel WAV and a
+        // WAV is interleaved. Writing the guest's planes into it byte for byte
+        // would be a file that lies about its own format -- which is how this
+        // dump managed to look like evidence while carrying the layout bug.
         float host[kFrameFloats];
-        for (uint32_t i = 0; i < kFrameFloats; ++i)
-            host[i] = LoadGuestFloat(samples + i * 4);
+        gears::DeinterleaveGuestAudioFrame(samples, host, kFrameChannels,
+                                           kFrameSamplesPerChannel);
         std::fwrite(host, sizeof(float), kFrameFloats, file_);
         dataBytes_ += sizeof(host);
 
@@ -267,11 +277,20 @@ void AudioPump()
     uint64_t wallNanos = 0, wallMaxNanos = 0;
     uint64_t cpuNanos = 0, cpuMaxNanos = 0;
     uint64_t lateSlots = 0, timedCalls = 0;
+    // Slots given up because the pump was too far behind to serve them in time.
+    // Counted and reported: a pump that silently skips reads exactly like a pump
+    // that is keeping up.
+    uint64_t droppedSlots = 0;
+    // The wall time the reporting interval actually took, which is what says
+    // whether the title is being asked for frames at 187.5 Hz. Nothing else in
+    // the report answers that -- late slots and backlog say the pump is
+    // struggling, not what rate came out of it.
+    auto intervalStart = clock::now();
 
     while (!g_pumpStop.load(std::memory_order_relaxed))
     {
         std::this_thread::sleep_until(next);
-        next += period;
+        const auto due = next;
         const uint32_t callback = g_callback;
         if (!callback)
             continue;
@@ -280,7 +299,7 @@ void AudioPump()
         const uint64_t cpuBefore = PumpThreadCpuNanos();
         // Behind by a full slot or more even after sleeping: this iteration is
         // a catch-up run, not a paced one.
-        if (wallBefore >= next)
+        if (wallBefore >= due + period)
             ++lateSlots;
 
         ctx.r1.u32 = block.stackBase - 0x100;
@@ -299,6 +318,26 @@ void AudioPump()
         cpuMaxNanos = std::max(cpuMaxNanos, cpuDelta);
         ++timedCalls;
 
+        // WHERE THE NEXT SLOT GOES. Not `next += period` unconditionally: after a
+        // long stall that schedules every missed slot in the past, so the loop
+        // fires them back to back and the title races through its audio stream --
+        // heard as a raised pitch for as long as the deficit lasts. The pacer
+        // gives the missed slots up instead, and says how many. See
+        // runtime/audio_pace.h and tests/test_audio_pace.cpp.
+        {
+            const auto nowNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                clock::now().time_since_epoch()).count();
+            const auto dueNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                due.time_since_epoch()).count();
+            const auto periodNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                period).count();
+            const gears::PaceDecision paced =
+                gears::PaceAudioPump(nowNanos, dueNanos, periodNanos);
+            droppedSlots += uint64_t(paced.droppedSlots);
+            next = clock::time_point(std::chrono::duration_cast<clock::duration>(
+                std::chrono::nanoseconds(paced.nextSlotNanos)));
+        }
+
         const uint64_t n = g_pumpCalls.fetch_add(1, std::memory_order_relaxed) + 1;
         // Report the pump separately from the submissions: "the callback is
         // being entered and returning" and "the title is producing frames" are
@@ -314,11 +353,17 @@ void AudioPump()
             uint64_t voluntary = 0, involuntary = 0;
             PumpThreadSwitches(voluntary, involuntary);
             const uint64_t runqueue = PumpThreadRunqueueNanos();
+            const double intervalSeconds =
+                std::chrono::duration<double>(now - intervalStart).count();
+            intervalStart = now;
             lucent::info("audio", "pump: {} callback invocations, {} frames"
-                " submitted by the title; last {}: wall {}/{} us mean/max,"
+                " submitted by the title; last {} in {:.2f}s = {:.1f} Hz against"
+                " 187.5 ({} slots dropped): wall {}/{} us mean/max,"
                 " cpu {}/{} us mean/max, {} late slots, backlog {:.0f} slots,"
                 " csw {} vol {} invol, runqueue {} ms",
-                n, g_submittedFrames.load(), timedCalls,
+                n, g_submittedFrames.load(), timedCalls, intervalSeconds,
+                intervalSeconds > 0 ? double(timedCalls) / intervalSeconds : 0.0,
+                droppedSlots,
                 timedCalls ? wallNanos / timedCalls / 1000 : 0,
                 wallMaxNanos / 1000,
                 timedCalls ? cpuNanos / timedCalls / 1000 : 0,
@@ -328,6 +373,7 @@ void AudioPump()
             lastVoluntary = voluntary;
             lastInvoluntary = involuntary;
             lastRunqueue = runqueue;
+            droppedSlots = 0;
             wallNanos = wallMaxNanos = cpuNanos = cpuMaxNanos = 0;
             lateSlots = timedCalls = 0;
             gears::WaitProbeReport();
@@ -451,8 +497,8 @@ void __imp__XAudioSubmitRenderDriverFrame(PPCContext& __restrict ctx, uint8_t* b
                     std::atexit(gears::CloseAudioOutput);
             });
             float host[kFrameFloats];
-            for (uint32_t i = 0; i < kFrameFloats; ++i)
-                host[i] = LoadGuestFloat(samples + i * 4);
+            gears::DeinterleaveGuestAudioFrame(samples, host, kFrameChannels,
+                                               kFrameSamplesPerChannel);
             gears::PlayAudioFrame(host, kFrameSamplesPerChannel);
             g_playing = true;
         }

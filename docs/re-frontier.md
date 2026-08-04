@@ -177,7 +177,7 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - evidence: 60 s run with GEARS_AUDIO_PUMP=1: 11250 callback invocations and 11250 frames submitted, one for one (exactly 60 s at the driver's 187.5 Hz); 2763 frames non-silent, peak 0.518, ffmpeg volumedetect mean -27.4 dB / max -5.7 dB on the GEARS_AUDIO_WAV dump
 - where: runtime/xaudio_null.cpp (pump, submit, peak measurement, WAV dump); runtime/kernel_object_api.cpp (KeWaitForMultipleObjects); runtime/guest_thread.cpp + kernel_thread.cpp (processor number from the title)
 - gap: 
-- notes: The blocker was the guest thread's PROCESSOR NUMBER, not the audio API: the title's audio worker checks into a rendezvous barrier at array[KPCR+0x10C] and we invented that number instead of taking it from ExCreateThread's creation flags. Catalog #40.
+- notes: The blocker was the guest thread's PROCESSOR NUMBER, not the audio API: the title's audio worker checks into a rendezvous barrier at array[KPCR+0x10C] and we invented that number instead of taking it from ExCreateThread's creation flags. Catalog #40. WHAT THIS EVIDENCE DID NOT COVER (2026-08-04): counting frames and measuring their peak says the title PRODUCED audio, not that we read it correctly. The frame is six PLANES of 256 big-endian floats and we read it as interleaved for months -- audible as wildly wrong pitch and a click every 256/6 samples, invisible to every number in the evidence line above, and invisible to the WAV dump too because the dump wrote the same planes into an interleaved container. Fixed and measured in catalog #55; the test that pins the layout is tests/test_audio_frame.cpp.
 
 ### xma-decode — XMA hardware decode
 - status: re-verified
