@@ -50,6 +50,7 @@ the same commit that removes it.
 | Knob | Meaning |
 |---|---|
 | `GEARS_DRAW_FRAME_DUMP=<path>` | Write the reported frame's whole draw stream to a capture file |
+| `GEARS_PRESENT_DUMP=N`, `GEARS_PRESENT_DUMP_AT=N`, `GEARS_PRESENT_DUMP_DIR=<dir>` | Write N frames **as presented** — through the swapchain blit — after frame `_AT`. `./run.sh --present-dump N` is the short form. **The only capture that sees the present path**: every other screenshot here comes from the renderer's readback, which is why an sRGB swapchain washed out the entire window while every capture in the repo looked correct (`catalog.py show 60`). Needs a window |
 | `GEARS_REPLAY_MIRROR_MB=N` | *(frame_replay)* Override the guest-memory mirror size |
 | `GEARS_REPLAY_DUMP_SHADERS=<dir>` | *(frame_replay)* Write every distinct microcode blob, named by hash, for `tools/xenos_translate --raw` |
 
