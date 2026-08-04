@@ -49,3 +49,27 @@ Any UNORM format, whatever its colour space; failing that any non-sRGB format; a
 if a surface offers nothing else, a warning saying the window will look washed out
 and that the frame itself is correct. The chosen format is logged either way -- it
 never was.
+
+### Note (2026-08-05)
+2026-08-05, CORRECTION to the cause above, from the test written to pin it.
+
+The old selection preferred B8G8R8A8_UNORM with SRGB_NONLINEAR and only fell back
+to formats[0] when that pair was absent. Run against the old logic, the test case
+"sRGB listed first, B8G8R8A8_UNORM second" PASSES -- the old code picked the UNORM.
+So the fallback can only have bitten if this surface does not offer that pair,
+which is unusual, and that has NOT been shown.
+
+What is shown, and stands: the same scene renders correctly from the renderer's
+readback and appeared washed out in the window, so the defect is between the two.
+What is NOT shown: that an sRGB swapchain is what did it. That was stated as the
+cause with more confidence than the evidence carried.
+
+Other candidates in the same gap, all inside the blit or after it: a chosen format
+whose COLOUR SPACE is linear (EXTENDED_SRGB_LINEAR) rather than SRGB_NONLINEAR,
+which encodes just the same; the compositor applying an HDR or colour-managed
+transform to the window; or the swapchain image being sampled from a different
+alias than the one written.
+
+The format the surface actually yields is now logged on every run, which settles
+the first two possibilities in one line, and `./run.sh --present-dump N` captures
+what reaches the window. Neither existed when the claim was made.
