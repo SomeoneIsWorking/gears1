@@ -1269,6 +1269,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // from guest memory) or the per-binding bookkeeping around it.
     uint64_t texHashBytes = 0;
     double msTexHash = 0;
+    // The single slowest texture hash of the frame. A total says how much; this
+    // says whether it is one enormous texture or all of them evenly, and those
+    // want different fixes.
+    double texHashWorstMs = 0;
+    uint64_t texHashWorstBytes = 0;
+    uint32_t texHashWorstBase = 0;
     uint64_t texBindingCalls = 0;
     // A texture is checked at most ONCE per frame. That is not just an
     // optimisation: this renderer reads guest memory at frame-render time, so
@@ -1369,8 +1375,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 const auto tHash = Clock::now();
                 const uint64_t now = gears::HashGuestTexture(
                     in.guestBase + header.baseAddress, header.guestExtentBytes);
-                accumulate(msTexHash, tHash);
+                const double thisHashMs =
+                    std::chrono::duration<double, std::milli>(Clock::now() - tHash).count();
+                msTexHash += thisHashMs;
                 texHashBytes += header.guestExtentBytes;
+                if (thisHashMs > texHashWorstMs)
+                {
+                    texHashWorstMs = thisHashMs;
+                    texHashWorstBytes = header.guestExtentBytes;
+                    texHashWorstBase = header.baseAddress;
+                }
                 ++texContentChecked;
                 const auto known = texContentHash.find(key);
                 if (known != texContentHash.end() &&
@@ -5030,6 +5044,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             " texture and sampler binding, so a reuse skips resolving those"
             " bindings entirely; the uniform sets are always the draw's own",
             descHits, descBuilds, descCache.size());
+        lucent::info("draw", "texture cache: slowest single hash {:.2f} ms for"
+            " {:.2f} MiB at {:#x} ({:.2f} GB/s)", texHashWorstMs,
+            double(texHashWorstBytes) / (1024.0 * 1024.0), texHashWorstBase,
+            texHashWorstMs > 0
+                ? double(texHashWorstBytes) / (texHashWorstMs * 1e6) : 0.0);
         lucent::info("draw", "texture cache: {} distinct texture(s) re-hashed"
             " ({:.2f} MiB in {:.1f} ms) over {} bindings, {} CHANGED under an"
             " unchanged fetch constant and were evicted and re-uploaded{}",

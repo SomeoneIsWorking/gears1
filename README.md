@@ -118,6 +118,14 @@ cmake --build scratch/build
 ./scratch/build/runtime/gears1 scratch/game/default.xex scratch/game
 ```
 
+`Debug` is the build type on purpose — a breakpoint in translated guest code has
+to land somewhere meaningful — but it does **not** mean an unoptimised build. The
+191 generated translation units are compiled at `GEARS_PPC_OPT` (default `-O2`)
+and the host runtime at `GEARS_HOST_OPT` (default `-O2`), both with `-g`. Set
+either to `-O0` to bisect a miscompile on that side. The host one was missing
+until it was measured: the renderer's own frame cost fell from 45 ms to 29 ms the
+moment it was compiled the way it had always claimed to be.
+
 The second argument is the directory holding the title's data files, extracted
 from the disc; `GEARS_GAME_DIR` sets the same thing. **It is not optional in
 practice** — without it the runtime warns once and then every file open fails,
