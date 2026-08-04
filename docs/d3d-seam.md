@@ -42,6 +42,32 @@ The 360's D3D is statically linked into the title. The surface is:
 | 0x8223B7D0 / 0x8223B5E0 | D3D worker thread and its CPU command-list interpreter |
 | 0x825B48B8 | render-command executor with the 16-case jump table at 0x825B48F8 |
 
+## 1b. Functions read at the seam (contracts recovered from the recompiled body)
+
+### 0x82220858 — SetTexture(device r3, slot r4, texture r5, dirtyBit r6) **V**
+
+Read out of `PPC_FUNC_IMPL(__imp__sub_82220858)`:
+
+- Assembles the six-dword **fetch constant** into `device + slot*24 + 1024` from
+  the texture object's fields at `+28, +32, +36, +40, +44, +48`, merging bitfields
+  into the existing shadow words rather than overwriting them.
+- **Clamps the mip range** against per-slot limits at `device + slot + 11678` and
+  `device + slot + 11704`.
+- ORs `r6` into the 64-bit **dirty mask** at `device + 16`.
+- Stores the texture pointer into the slot table at `(slot + 3068) * 4`.
+- Then does **deferred-release bookkeeping on the texture it displaced**: a list at
+  `device + 13148` / `+ 13152` that spills through `sub_8222ECC0`, gated on
+  `device + 10780` / `+ 10784`.
+
+Status: **observed, not replaced**. `runtime/hle_d3d.cpp` wraps it, super-calls the
+guest body unchanged, and records what the title put in each slot. The release
+bookkeeping is why it is not native yet -- a wrong release list corrupts the
+title's heap, and there is no payoff until something reads this state natively.
+
+FIRST CROSS-CHECK, movie phase: the title's slots 0/1/2 hold `0x6f000 / 0x7e000 /
+0x83000`, and the renderer's own `frame texture bases` line for the same frame
+reports exactly those three. The register-file inference and the API agree here.
+
 ## 2. Entry points of one presented frame
 
 Measured with gdb ignore-count breakpoints over ~30 s of the movie phase
