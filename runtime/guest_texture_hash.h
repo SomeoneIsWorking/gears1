@@ -23,9 +23,9 @@
 namespace gears
 {
 
-// FNV-1a over the whole span. Chosen for being trivially correct and dependency
-// free rather than for speed; if the measured per-frame cost turns out to matter,
-// replace the mixing and keep the full coverage, not the other way round.
+// FNV-1a over the whole span, mixed eight bytes at a time. Dependency free, and
+// every byte still enters the hash -- the speed came from the mixing width, not
+// from looking at less of the texture, which is the trade this file refuses.
 uint64_t HashGuestTexture(const uint8_t* bytes, size_t length);
 
 // Whether a cached upload is still good. Separated from the hashing so the policy
