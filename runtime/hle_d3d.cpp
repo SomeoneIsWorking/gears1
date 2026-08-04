@@ -511,6 +511,73 @@ PPC_FUNC(sub_8223B5E0)
     }
 }
 
+// ---------------------------------------------------------------------------
+// SetTexture (0x82220858) -- the first function of the D3D API read at the seam.
+//
+// OBSERVER, NOT A REPLACEMENT, deliberately. Its contract from the recompiled
+// body: SetTexture(device r3, slot r4, texture r5, dirtyBit r6) assembles the
+// six-dword fetch constant into device + slot*24 + 1024 from the texture object's
+// fields at +28..+48, clamps the mip range against per-slot limits at
+// device + slot + 11678/11704, ORs r6 into the 64-bit dirty mask at device+16,
+// stores the texture pointer into the table at (slot + 3068)*4, and then does
+// DEFERRED-RELEASE bookkeeping on the texture it displaced -- a list at
+// device+13148/13152 that spills through sub_8222ECC0. That last part is why this
+// is not yet native: getting a release list wrong corrupts the title's own heap,
+// and the payoff of replacing it is zero until something reads the state natively.
+//
+// What it is for NOW: the title's own account of which texture is in which slot,
+// to be compared against what the renderer infers from the PM4 register file. Our
+// renderer reads fetch constants at 0x4800 + fc*6 -- the registers these shadow
+// words are eventually written into -- so the two sets must agree. Where they do
+// not, either the guest wrote registers we do not mirror, or we are sampling a
+// texture the title had already replaced.
+//
+// The census is per frame and prints on the same schedule as the renderer's own
+// "frame texture bases" line, so the two can be diffed directly.
+namespace
+{
+struct TitleTextureSlot
+{
+    uint32_t fetch0 = 0;   // dword 0 of the assembled fetch constant
+    uint32_t fetch1 = 0;   // dword 1: base address is (fetch1 >> 12) << 12
+    uint32_t object = 0;   // the guest texture object
+    uint64_t sets = 0;
+};
+constexpr uint32_t kTitleTextureSlots = 32;
+TitleTextureSlot g_titleSlots[kTitleTextureSlots];
+std::atomic<uint64_t> g_setTextureCalls{0};
+std::atomic<uint64_t> g_setTextureNull{0};
+// Slots the title used beyond the shadow this census keeps. Counted rather than
+// wrapped, so "16 slots" can never quietly mean "16 of 40".
+std::atomic<uint64_t> g_setTextureOutOfRange{0};
+} // namespace
+
+namespace gears
+{
+void ReportTitleTextureSlots()
+{
+    const uint64_t calls = g_setTextureCalls.load();
+    if (calls == 0)
+        return;
+    lucent::Line line;
+    line.add("title texture slots (D3D SetTexture, {} calls, {} of them clearing"
+             " a slot, {} past slot {}):", calls, g_setTextureNull.load(),
+             g_setTextureOutOfRange.load(), kTitleTextureSlots - 1);
+    bool any = false;
+    for (uint32_t i = 0; i < kTitleTextureSlots; ++i)
+    {
+        if (g_titleSlots[i].sets == 0)
+            continue;
+        any = true;
+        line.add(" [{}:{:#x}x{}]", i, (g_titleSlots[i].fetch1 >> 12) << 12,
+                 g_titleSlots[i].sets);
+    }
+    if (!any)
+        line.add(" none bound");
+    line.flush(lucent::Level::Info, "hle");
+}
+} // namespace gears
+
 // The ring kick. Censuses the PM4 header of every packet the CPU command-list
 // interpreter appends, so the six packets each replay emits can be named -- in
 // particular how many of them are the INTERRUPT that re-enqueues the list.
@@ -610,8 +677,29 @@ struct RegSetTex { RegSetTex() { Register(&g_probe_settex); } } g_regSetTex;
 }
 PPC_FUNC(sub_82220858)
 {
+    const uint32_t device = ctx.r3.u32;
+    const uint32_t slot = ctx.r4.u32;
+    const uint32_t texture = ctx.r5.u32;
     Note(g_probe_settex, uint32_t(ctx.lr));
+    // The guest body runs unchanged; everything below reads what it produced.
     __imp__sub_82220858(ctx, base);
+
+    g_setTextureCalls.fetch_add(1, std::memory_order_relaxed);
+    if (texture == 0)
+    {
+        g_setTextureNull.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (slot >= kTitleTextureSlots)
+    {
+        g_setTextureOutOfRange.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    const uint32_t shadow = device + slot * 24 + 1024;
+    g_titleSlots[slot].fetch0 = ReadGuestBE32(shadow + 0);
+    g_titleSlots[slot].fetch1 = ReadGuestBE32(shadow + 4);
+    g_titleSlots[slot].object = texture;
+    ++g_titleSlots[slot].sets;
 }
 
 extern "C" PPC_FUNC(__imp__sub_82544148);
