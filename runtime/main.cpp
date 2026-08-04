@@ -120,6 +120,11 @@ int main(int argc, char* argv[])
         lucent::error("boot", "cannot read {}", xexPath.string());
         return EXIT_FAILURE;
     }
+    // WHICH BUILD IS THIS. Screenshots and logs from a run get compared against
+    // fixes that landed at a known time, and "did that binary contain the fix" was
+    // guessed at twice. It is one line and it removes the guess.
+    lucent::info("boot", "gears1 built {} {} from {}", __DATE__, __TIME__,
+                 GEARS_BUILD_REVISION);
     lucent::info("boot", "read {} ({} bytes)", xexPath.string(), xex.size());
 
     Image image = Image::ParseImage(xex.data(), xex.size());
