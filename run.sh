@@ -14,6 +14,12 @@
 #   --no-build          run whatever is already built
 #   --log <path>        tee the run's output here (default scratch/logs/run.log)
 #   --script <steps>    scripted pad input, e.g. '25000:START,25300:'
+#   --present-dump N    write the next N frames AS PRESENTED to scratch/screenshots
+#                       (after frame 300). This is the only capture that goes
+#                       through the swapchain blit -- every other screenshot this
+#                       project takes comes from the renderer's readback, before it,
+#                       which is how an sRGB swapchain washed out the whole window
+#                       while every capture in the repo looked correct (catalog #60)
 #   --menu-walk         the scripted walk from the title screen into Act 1
 #   -h, --help          this text
 #
@@ -34,6 +40,7 @@ log="scratch/logs/run.log"
 build=1
 headless=0
 input_script="${GEARS_INPUT_SCRIPT:-}"
+present_dump=""
 
 # The walk that reaches Act 1 gameplay, kept in one place -- it is the same
 # sequence tools/capture_gameplay_frame.sh and tools/run_to_checkpoint.sh use,
@@ -42,7 +49,7 @@ input_script="${GEARS_INPUT_SCRIPT:-}"
 # chapter, difficulty).
 menu_walk='25000:START,25300:,30000:A,30300:,35000:B,35300:,42000:A,42300:,50000:A,50300:,60000:A,60300:'
 
-usage() { sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -51,6 +58,7 @@ while [ $# -gt 0 ]; do
         --log)       log="$2"; shift ;;
         --script)    input_script="$2"; shift ;;
         --menu-walk) input_script="$menu_walk" ;;
+        --present-dump) present_dump="$2"; shift ;;
         -h|--help)   usage; exit 0 ;;
         --)          shift; break ;;
         -*)          echo "run.sh: unknown option '$1' (try --help)" >&2; exit 2 ;;
@@ -93,6 +101,12 @@ if [ "$headless" -eq 1 ]; then
 fi
 if [ -n "$input_script" ]; then
     export GEARS_INPUT_SCRIPT="$input_script"
+fi
+if [ -n "$present_dump" ]; then
+    export GEARS_PRESENT_DUMP="$present_dump"
+    : "${GEARS_PRESENT_DUMP_AT:=300}"
+    export GEARS_PRESENT_DUMP_AT
+    echo "run.sh: will write $present_dump presented frame(s) to scratch/screenshots" >&2
 fi
 
 echo "run.sh: $binary $game_dir/default.xex (log: $log)" >&2
