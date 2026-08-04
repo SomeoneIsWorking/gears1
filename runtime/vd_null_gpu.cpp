@@ -553,6 +553,10 @@ struct CommandProcessor
     std::chrono::steady_clock::time_point lastRenderReport =
         std::chrono::steady_clock::now();
     uint32_t frameSwaps = 0; // swaps seen while waiting for GEARS_DRAW_FRAME_AT
+    // The front buffer address from the swap packet that ends the frame, handed to
+    // the renderer so it presents the surface the GUEST named rather than the one a
+    // rule of thumb picks.
+    uint32_t frontBufferAddress = 0;
 
     // Predication (Xenos PFP bin mask/select). Bit 0 of a TYPE3 header marks the
     // packet predicated; hardware skips it when (bin_select & bin_mask) == 0.
@@ -1113,6 +1117,8 @@ struct CommandProcessor
     // of a WARM renderer is measured -- the first frame pays for translating
     // every shader and building every pipeline, and says nothing about the
     // steady state.
+    void SetFrontBuffer(uint32_t address) { frontBufferAddress = address; }
+
     void TriggerFrameRender()
     {
         if (frameRenderDone || frameDraws.empty())
@@ -1141,6 +1147,7 @@ struct CommandProcessor
             frameRenderDone = true;
 
         gears::FrameDrawInputs in;
+        in.frontBufferAddress = frontBufferAddress;
         in.guestBase = gears::Memory().Base();
         // Mirror a generous window of low guest physical memory so per-draw
         // vertex fetches resolve. Vertex/index buffers observed so far live in
@@ -1557,6 +1564,9 @@ struct CommandProcessor
                     // Whole-frame guest-draw backend: at the first swap that has
                     // accumulated draws, render them all into a persistent target.
                     TriggerCpStall();
+                    // data[0] is the front buffer this swap presents. The renderer
+                    // needs it BEFORE it chooses what to present.
+                    SetFrontBuffer(data[0]);
                     TriggerFrameRender();
                     // The frame boundary is here, at the point in the stream
                     // where the hardware would flip -- so this is where the
