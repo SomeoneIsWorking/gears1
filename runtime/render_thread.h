@@ -49,6 +49,8 @@ struct RenderThreadStats
     uint64_t dropped = 0;
     uint64_t rendered = 0;
     uint64_t busyMillis = 0;   // wall time inside RenderFrame
+    uint64_t cpuMillis = 0;    // ...of which this thread actually ran
+    uint64_t runqueueMillis = 0; // ...and spent RUNNABLE but off-core
 };
 RenderThreadStats RenderThreadCounters();
 

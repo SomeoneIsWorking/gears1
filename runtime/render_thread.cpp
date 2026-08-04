@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <cerrno>
+#include <cstdio>
+#include <ctime>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -33,6 +35,32 @@ std::atomic<uint64_t> g_submitted{0};
 std::atomic<uint64_t> g_dropped{0};
 std::atomic<uint64_t> g_rendered{0};
 std::atomic<uint64_t> g_busyMillis{0};
+// Wall against CPU, the same discriminator the audio pump uses (catalog #43): a
+// renderer that is genuinely slow burns thread CPU time roughly equal to its wall
+// time, while one that is descheduled shows wall far above CPU. The live frame
+// costs 53 ms against 29 ms for the same frame replayed offline, and those two
+// explanations want opposite fixes.
+std::atomic<uint64_t> g_cpuMillis{0};
+std::atomic<uint64_t> g_runqueueMillis{0};
+
+uint64_t ThreadCpuNanos()
+{
+    timespec ts{};
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts);
+    return uint64_t(ts.tv_sec) * 1000000000ull + uint64_t(ts.tv_nsec);
+}
+
+// The scheduler's own account of time spent RUNNABLE but not running.
+uint64_t ThreadRunqueueNanos()
+{
+    std::FILE* f = std::fopen("/proc/thread-self/schedstat", "r");
+    if (!f)
+        return 0;
+    unsigned long long ran = 0, waited = 0, slices = 0;
+    const int got = std::fscanf(f, "%llu %llu %llu", &ran, &waited, &slices);
+    std::fclose(f);
+    return got == 3 ? waited : 0;
+}
 
 void RenderThreadMain()
 {
@@ -66,10 +94,14 @@ void RenderThreadMain()
         }
 
         const auto t0 = std::chrono::steady_clock::now();
+        const uint64_t cpu0 = ThreadCpuNanos();
+        const uint64_t rq0 = ThreadRunqueueNanos();
         RenderFrame(work);
         g_busyMillis.fetch_add(uint64_t(
             std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now() - t0).count()));
+        g_cpuMillis.fetch_add((ThreadCpuNanos() - cpu0) / 1000000ull);
+        g_runqueueMillis.fetch_add((ThreadRunqueueNanos() - rq0) / 1000000ull);
         g_rendered.fetch_add(1);
 
         {
@@ -115,6 +147,8 @@ RenderThreadStats RenderThreadCounters()
     out.dropped = g_dropped.load();
     out.rendered = g_rendered.load();
     out.busyMillis = g_busyMillis.load();
+    out.cpuMillis = g_cpuMillis.load();
+    out.runqueueMillis = g_runqueueMillis.load();
     return out;
 }
 
