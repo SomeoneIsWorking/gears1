@@ -11,10 +11,20 @@
 #   A                dismiss the "no storage device" dialog
 #   B                back out of the profile prompt
 #   A, A, A          campaign -> act/chapter -> difficulty -> begin
+#   A, A, A, A       spare presses -- see below
 #
 # The times are wall-clock milliseconds and are generous: the script only
 # advances when the guest polls XamInputGetState, so a slower run just fires
 # each step later, it does not desynchronise.
+#
+# THE SPARE PRESSES ARE NOT PADDING. With six presses this walk stopped on the
+# difficulty screen and stayed there: a press that lands during a menu
+# transition is swallowed, and the run then reports frames of ~170 draws that
+# look like a successful capture until you notice they are a menu. A press on an
+# already-accepted screen is harmless -- the extra A presses are on the level
+# after it has begun -- so the walk is padded until it reliably reaches
+# gameplay. The check at the end of the run is the draw count: an Act 1 frame
+# carries 800+ draws, a menu frame under 200.
 #
 # Usage: tools/capture_gameplay_frame.sh [seconds] [extra env...]
 #   GEARS_DRAW_FRAME_AT / _COUNT / _REPORT_EVERY are respected if already set.
@@ -28,7 +38,7 @@ SECONDS_TO_RUN="${1:-180}"
 : "${GEARS_DRAW_FRAME_COUNT:=0}"
 : "${GEARS_DRAW_FRAME_REPORT_EVERY:=60}"
 : "${GEARS_NO_WINDOW:=1}"
-: "${GEARS_INPUT_SCRIPT:=25000:START,25300:,30000:A,30300:,35000:B,35300:,42000:A,42300:,50000:A,50300:,60000:A,60300:}"
+: "${GEARS_INPUT_SCRIPT:=25000:START,25300:,30000:A,30300:,35000:B,35300:,42000:A,42300:,50000:A,50300:,60000:A,60300:,75000:A,75300:,90000:A,90300:,105000:A,105300:,120000:A,120300:}"
 : "${GEARS_BUILD_DIR:=scratch/build}"
 # The game's own files, extracted from the user's disc image (see README).
 : "${GEARS_GAME_DIR:=scratch/game}"
