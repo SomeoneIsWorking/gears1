@@ -1997,7 +1997,8 @@ void __imp__VdInitializeEngines(PPCContext& __restrict ctx, uint8_t*)
             g_pm4WatchAddress);
     }
 
-    lucent::warn("gpu", "VdInitializeEngines -- protocol-only GPU: no draws will be executed");
+    lucent::info("gpu", "VdInitializeEngines -- command processor up; the frame's"
+        " draws are rendered by the guest-draw backend at each swap");
     ctx.r3.u64 = 1;
 }
 
