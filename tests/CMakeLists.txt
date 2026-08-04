@@ -282,6 +282,18 @@ target_include_directories(test_guest_texture_hash PRIVATE ../runtime
     "${THIRDPARTY_ROOT}/xxHash")
 add_test(NAME guest_texture_hash COMMAND test_guest_texture_hash)
 
+# The swapchain format choice. It decides every pixel of the window and NO capture
+# in this project can see it: the renderer's screenshots come from its own readback,
+# before the blit into the swapchain. An sRGB swapchain re-encodes an
+# already-tonemapped frame, so the window washes out while every file on disk looks
+# correct. Needs only the Vulkan headers.
+find_package(Vulkan QUIET)
+if(Vulkan_FOUND)
+    add_executable(test_swapchain_format test_swapchain_format.cpp)
+    target_include_directories(test_swapchain_format PRIVATE ../runtime ${Vulkan_INCLUDE_DIRS})
+    add_test(NAME swapchain_format COMMAND test_swapchain_format)
+endif()
+
 # The audio pump's pacing policy. What a pump does with slots it MISSED decides
 # what the game sounds like: serving them back to back makes the title consume its
 # stream faster than real time (a raised pitch that lasts as long as the deficit),
