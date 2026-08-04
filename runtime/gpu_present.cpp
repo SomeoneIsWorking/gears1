@@ -121,6 +121,10 @@ struct Presenter
     // "the window was black" is a number rather than an impression.
     uint64_t blankPresents = 0;
     bool announcedBlank = false;
+    // Presents showing a frame the renderer had just produced, and presents
+    // re-showing the previous one because it had not produced a new one yet.
+    uint64_t freshFramesShown = 0;
+    uint64_t repeatedFramesShown = 0;
     VkBuffer presentCapture = VK_NULL_HANDLE;
     VkDeviceMemory presentCaptureMem = VK_NULL_HANDLE;
     void* presentCaptureMapped = nullptr;
@@ -733,9 +737,14 @@ bool Presenter::PresentOne(uint32_t sequence)
     // vkCmdBlitImage converts between formats component by component. If the colours
     // come out swapped, this comment is wrong and GEARS_PRESENT_DUMP will show it.
     {
+        // BLIT WHATEVER THE LATEST FRAME IS, even if it is the one already shown.
+        // The renderer runs on its own thread and produces frames more slowly than
+        // the guest swaps, so most presents have no NEW frame -- and a display does
+        // not go dark between two flips of the same picture, it keeps showing it.
+        // Skipping the blit here is what made the window flicker: roughly three of
+        // every four presents fell through to the clear below.
         gears::SharedFrameImage drawn;
         if (gears::AcquireSharedFrameImage(drawn) &&
-            drawn.sequence != lastBlittedFrame &&
             drawn.width == extent.width && drawn.height == extent.height)
         {
             VkImageBlit blit{};
@@ -747,7 +756,18 @@ bool Presenter::PresentOne(uint32_t sequence)
                 drawn.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 images[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                 1, &blit, VK_FILTER_NEAREST);
-            lastBlittedFrame = drawn.sequence;
+            if (drawn.sequence != lastBlittedFrame)
+            {
+                ++freshFramesShown;
+                lastBlittedFrame = drawn.sequence;
+            }
+            else
+            {
+                // The same frame, shown again. Counted, because "the renderer is
+                // keeping up" and "the window is holding one frame for four flips"
+                // look identical from outside and sound identical in a bug report.
+                ++repeatedFramesShown;
+            }
             uploadedGuest = true;
             if (!announcedBlit)
             {
@@ -1040,9 +1060,11 @@ void Presenter::Thread()
             const double seconds =
                 std::chrono::duration<double>(finish - lastReport).count();
             lastReport = finish;
-            lucent::info("present", "{} presents ({} black, no drawn frame yet),"
+            lucent::info("present", "{} presents ({} new frames, {} repeats of the"
+                " previous one, {} black before the first frame),"
                 " last 300 in {:.2f}s ({:.2f} fps), mean present cost {:.2f} ms",
-                presentCount, blankPresents, seconds,
+                presentCount, freshFramesShown, repeatedFramesShown, blankPresents,
+                seconds,
                 seconds > 0 ? 300.0 / seconds : 0.0,
                 double(presentMicros) / double(presentCount) / 1000.0);
         }

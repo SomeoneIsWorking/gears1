@@ -777,10 +777,17 @@ struct RendererPersistent
     VkImage depth = VK_NULL_HANDLE; VkDeviceMemory depthMem = VK_NULL_HANDLE;
     VkImageView depthView = VK_NULL_HANDLE;
 
-    // An 8888 staging image for readback, used only when the presented surface
-    // is in some other host format.
-    VkImage presentStage = VK_NULL_HANDLE;
-    VkDeviceMemory presentStageMem = VK_NULL_HANDLE;
+    // The image the finished frame is handed to the presenter in: 8888, one blit
+    // from whatever surface the frame ended on.
+    //
+    // TWO OF THEM, ALTERNATING, and that is the whole point. The presenter runs on
+    // its own thread and the renderer on another, so publishing the live render
+    // target meant the presenter could blit a surface the renderer had already
+    // started drawing the next frame into. Alternating means the image being shown
+    // is never the image being written.
+    VkImage presentStage[2]{};
+    VkDeviceMemory presentStageMem[2]{};
+    uint32_t presentStageIndex = 0;
 
     // The guest-memory mirror the translated shaders fetch through. The buffer
     // is persistent; its CONTENTS are refreshed every frame, because guest
@@ -874,8 +881,11 @@ void Renderer::ReleasePersistent()
     vkDestroyDescriptorPool(device, P.resolveDescPool, nullptr);
     vkDestroyImageView(device, P.depthView, nullptr);
     vkDestroyImage(device, P.depth, nullptr); vkFreeMemory(device, P.depthMem, nullptr);
-    vkDestroyImage(device, P.presentStage, nullptr);
-    vkFreeMemory(device, P.presentStageMem, nullptr);
+    for (uint32_t i = 0; i < 2; ++i)
+    {
+        vkDestroyImage(device, P.presentStage[i], nullptr);
+        vkFreeMemory(device, P.presentStageMem[i], nullptr);
+    }
     if (P.ssboMapped)
         vkUnmapMemory(device, P.ssboMem);
     vkDestroyBuffer(device, P.ssbo, nullptr); vkFreeMemory(device, P.ssboMem, nullptr);
@@ -1655,19 +1665,24 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         si.samples = VK_SAMPLE_COUNT_1_BIT;
         si.tiling = VK_IMAGE_TILING_OPTIMAL;
         si.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        VK_CHECK(vkCreateImage(device, &si, nullptr, &P.presentStage));
-        VkMemoryRequirements sreq{};
-        vkGetImageMemoryRequirements(device, P.presentStage, &sreq);
-        uint32_t stype = 0;
-        if (!FindMemory(sreq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, stype))
-            FindMemory(sreq.memoryTypeBits, 0, stype);
-        VkMemoryAllocateInfo sai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        sai.allocationSize = sreq.size;
-        sai.memoryTypeIndex = stype;
-        VK_CHECK(vkAllocateMemory(device, &sai, nullptr, &P.presentStageMem));
-        VK_CHECK(vkBindImageMemory(device, P.presentStage, P.presentStageMem, 0));
+        for (uint32_t i = 0; i < 2; ++i)
+        {
+            VK_CHECK(vkCreateImage(device, &si, nullptr, &P.presentStage[i]));
+            VkMemoryRequirements sreq{};
+            vkGetImageMemoryRequirements(device, P.presentStage[i], &sreq);
+            uint32_t stype = 0;
+            if (!FindMemory(sreq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, stype))
+                FindMemory(sreq.memoryTypeBits, 0, stype);
+            VkMemoryAllocateInfo sai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            sai.allocationSize = sreq.size;
+            sai.memoryTypeIndex = stype;
+            VK_CHECK(vkAllocateMemory(device, &sai, nullptr, &P.presentStageMem[i]));
+            VK_CHECK(vkBindImageMemory(device, P.presentStage[i], P.presentStageMem[i], 0));
+        }
     }
-    VkImage presentStage = P.presentStage;
+    // This frame's half of the pair. The presenter may still be blitting the other.
+    VkImage presentStage = P.presentStage[P.presentStageIndex];
+    P.presentStageIndex ^= 1u;
 
     // --- render pass (colour + depth) ------------------------------------
     // Two variants of the same pass per host colour format: one that CLEARS the
@@ -4517,11 +4532,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // 8888 staging image rather than being reinterpreted, which would read
         // the float bits as bytes.
         VkImage source = presentTarget->color;
-        // Recorded outside this block so the presenter can be handed the same image
-        // the readback is taken from -- see the publish below.
-        presentableImage = source;
-        if (presentTarget->hostFormat != VK_FORMAT_R8G8B8A8_UNORM &&
-            presentStage != VK_NULL_HANDLE)
+        // ALWAYS through the staging image, not only when the format differs. The
+        // presenter runs on its own thread now: handing it presentTarget->color
+        // means it can be blitting the surface while the renderer draws the NEXT
+        // frame into it. The blit below is one 1280x720 copy into this frame's half
+        // of an alternating pair, so what the presenter shows is finished and stays
+        // finished until two frames later.
+        if (presentStage != VK_NULL_HANDLE)
         {
             VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -4549,6 +4566,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &r);
             source = presentStage;
         }
+        // Published to the presenter: the staging copy when there is one, and only
+        // otherwise the live surface.
+        presentableImage = source;
         if (needHostPixels)
         {
             VkBufferImageCopy region{};
