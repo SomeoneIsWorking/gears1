@@ -52,6 +52,7 @@
 #include "gpu_present.h"
 #include "input.h"
 #include "gpu_draw.h"
+#include "render_thread.h"
 #include "frame_capture.h"
 #include "hle_d3d.h"
 #include "guest_thread.h"
@@ -544,8 +545,9 @@ struct CommandProcessor
     // One frame capture per run (GEARS_DRAW_FRAME_DUMP), not one per frame.
     bool frameDumpWritten = false;
     long framesRendered = 0;
-    long lastRenderFrames = 0;
-    uint64_t renderedMs = 0;
+    uint64_t lastRenderFrames = 0;
+    uint64_t lastDroppedFrames = 0;
+    uint64_t lastBusyMillis = 0;
     std::chrono::steady_clock::time_point lastRenderReport =
         std::chrono::steady_clock::now();
     uint32_t frameSwaps = 0; // swaps seen while waiting for GEARS_DRAW_FRAME_AT
@@ -1182,33 +1184,54 @@ struct CommandProcessor
             if (in.report && !frameDumpWritten)
                 frameDumpWritten = gears::WriteFrameCapture(dumpPath.c_str(), in);
 
-        lucent::info("gpu", "guest-draw: rendering whole frame ({} draws captured)",
-            in.draws.size());
-        const auto t0 = std::chrono::steady_clock::now();
-        gears::RenderFrame(in);
-        const uint64_t ms = uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - t0).count());
+        // A CAPTURE OR MEASUREMENT RUN RENDERS IN LINE, a live run does not.
+        // GEARS_DRAW_FRAME_COUNT>0 means "render exactly these N frames and report
+        // on them" -- dropping one because a thread was busy would make the run
+        // measure something other than what it asked for, and the guest stalling
+        // is irrelevant when the point is the render itself.
         if (frameCount > 0)
         {
+            lucent::info("gpu", "guest-draw: rendering whole frame ({} draws captured)",
+                in.draws.size());
+            const auto t0 = std::chrono::steady_clock::now();
+            gears::RenderFrame(in);
+            const uint64_t ms = uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - t0).count());
             lucent::info("gpu", "guest-draw: frame {} of {}: RenderFrame blocked the"
                 " command processor for {} ms", framesRendered, frameCount, ms);
         }
         else
         {
-            // Live: one line a second rather than one a frame.
-            renderedMs += ms;
+            // LIVE: hand the draw list to the render thread and return to the
+            // guest. Rendering inside the guest's VdSwap cost it the whole frame
+            // time -- VdSwap fell from 29.9 to 17.9 fps the moment gameplay
+            // started, and the audio pump fell behind with it, because it is
+            // paced by a hand-off with a guest thread.
+            const bool taken = gears::SubmitFrameForRender(std::move(in));
+            (void)taken;
+            // One line a second rather than one a frame. The DROPPED count is
+            // the load-bearing number: it is the difference between a renderer
+            // keeping up with the guest and one running at half its rate, and
+            // without it both look identical from here.
             const auto now = std::chrono::steady_clock::now();
             if (now - lastRenderReport >= std::chrono::seconds(1))
             {
+                const gears::RenderThreadStats st = gears::RenderThreadCounters();
                 const double elapsed = std::chrono::duration<double>(
                     now - lastRenderReport).count();
-                lucent::info("gpu", "guest-draw: {:.1f} rendered frames/s"
+                const uint64_t renderedNow = st.rendered;
+                const uint64_t droppedNow = st.dropped;
+                lucent::info("gpu", "guest-draw: {:.1f} frames/s rendered,"
+                    " {:.1f}/s dropped as the renderer was still busy"
                     " ({} ms/frame in RenderFrame)",
-                    double(framesRendered - lastRenderFrames) / elapsed,
-                    renderedMs / std::max<uint64_t>(1, framesRendered - lastRenderFrames));
+                    double(renderedNow - lastRenderFrames) / elapsed,
+                    double(droppedNow - lastDroppedFrames) / elapsed,
+                    (st.busyMillis - lastBusyMillis) /
+                        std::max<uint64_t>(1, renderedNow - lastRenderFrames));
                 lastRenderReport = now;
-                lastRenderFrames = framesRendered;
-                renderedMs = 0;
+                lastRenderFrames = renderedNow;
+                lastDroppedFrames = droppedNow;
+                lastBusyMillis = st.busyMillis;
             }
         }
         ++frameSwaps;
