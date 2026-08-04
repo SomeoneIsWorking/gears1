@@ -114,6 +114,9 @@ struct Presenter
     // than assumed: if it is false the capture is simply unavailable, and a request
     // for one has to say so instead of writing nothing and looking like it worked.
     bool canCapturePresented = false;
+    // Run the whole present path against VK_EXT_headless_surface instead of a
+    // window (GEARS_PRESENT_HEADLESS=1).
+    bool headlessSurface = false;
     // The last drawn frame blitted, so the same one is not blitted twice, and a
     // one-shot note so the fast path announces itself once rather than every frame.
     uint64_t lastBlittedFrame = 0;
@@ -182,13 +185,51 @@ Presenter g_presenter;
 
 bool Presenter::CreateInstanceAndDevice()
 {
-    uint32_t sdlExtensionCount = 0;
-    const char* const* sdlExtensions =
-        SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
-    if (sdlExtensions == nullptr)
+    // A REAL SWAPCHAIN WITH NO WINDOW, when asked for.
+    //
+    // Everything this project measures is taken from the renderer's readback,
+    // which is BEFORE the blit into the swapchain -- so the present path, the one
+    // step that decides what a person actually sees, was outside every instrument
+    // here. It could only be checked by opening a window, and a window is not
+    // something a measurement run may do on someone's desktop.
+    //
+    // VK_EXT_headless_surface removes the dilemma: a surface backed by nothing,
+    // with a real swapchain, real images, the real blit and a real vkQueuePresent.
+    // GEARS_PRESENT_HEADLESS=1 takes that path, and GEARS_PRESENT_DUMP then
+    // captures what would have reached the screen.
+    std::vector<const char*> extensions;
+    if (headlessSurface)
     {
-        lucent::warn("present", "SDL_Vulkan_GetInstanceExtensions: {}", SDL_GetError());
-        return false;
+        uint32_t available = 0;
+        vkEnumerateInstanceExtensionProperties(nullptr, &available, nullptr);
+        std::vector<VkExtensionProperties> props(available);
+        vkEnumerateInstanceExtensionProperties(nullptr, &available, props.data());
+        bool have = false;
+        for (const auto& e : props)
+            if (std::strcmp(e.extensionName, "VK_EXT_headless_surface") == 0)
+                have = true;
+        if (!have)
+        {
+            lucent::error("present", "GEARS_PRESENT_HEADLESS=1 but this loader has no"
+                " VK_EXT_headless_surface, so there is no way to exercise the present"
+                " path without a window. Refusing rather than silently presenting"
+                " nothing");
+            return false;
+        }
+        extensions.push_back("VK_KHR_surface");
+        extensions.push_back("VK_EXT_headless_surface");
+    }
+    else
+    {
+        uint32_t sdlExtensionCount = 0;
+        const char* const* sdlExtensions =
+            SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
+        if (sdlExtensions == nullptr)
+        {
+            lucent::warn("present", "SDL_Vulkan_GetInstanceExtensions: {}", SDL_GetError());
+            return false;
+        }
+        extensions.assign(sdlExtensions, sdlExtensions + sdlExtensionCount);
     }
 
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -197,8 +238,8 @@ bool Presenter::CreateInstanceAndDevice()
 
     VkInstanceCreateInfo instanceInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     instanceInfo.pApplicationInfo = &app;
-    instanceInfo.enabledExtensionCount = sdlExtensionCount;
-    instanceInfo.ppEnabledExtensionNames = sdlExtensions;
+    instanceInfo.enabledExtensionCount = uint32_t(extensions.size());
+    instanceInfo.ppEnabledExtensionNames = extensions.data();
 
     VkResult r = vkCreateInstance(&instanceInfo, nullptr, &instance);
     if (r != VK_SUCCESS)
@@ -208,7 +249,21 @@ bool Presenter::CreateInstanceAndDevice()
         return false;
     }
 
-    if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))
+    if (headlessSurface)
+    {
+        auto create = (PFN_vkCreateHeadlessSurfaceEXT)vkGetInstanceProcAddr(
+            instance, "vkCreateHeadlessSurfaceEXT");
+        VkHeadlessSurfaceCreateInfoEXT hs{
+            VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
+        if (create == nullptr || create(instance, &hs, nullptr, &surface) != VK_SUCCESS)
+        {
+            lucent::error("present", "vkCreateHeadlessSurfaceEXT failed");
+            return false;
+        }
+        lucent::info("present", "headless surface created: the real swapchain, blit"
+            " and present run with no window");
+    }
+    else if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))
     {
         lucent::warn("present", "SDL_Vulkan_CreateSurface: {}", SDL_GetError());
         return false;
@@ -946,6 +1001,10 @@ bool Presenter::PresentOne(uint32_t sequence)
 
 void Presenter::PumpEvents()
 {
+    // Nothing to pump without a window, and SDL's video subsystem was never
+    // started on that path.
+    if (headlessSurface)
+        return;
     SDL_Event event;
     while (SDL_PollEvent(&event))
     {
@@ -974,24 +1033,27 @@ void Presenter::Thread()
     // here. The window layer must not take over the process's signal disposition.
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
 
+    headlessSurface = lucent::config::flag("PRESENT_HEADLESS");
+
     // GAMEPAD as well as VIDEO: the presenter thread is the one that reads the
     // pad, because it is the thread that owns the SDL event queue.
-    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
+    if (!headlessSurface && !SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
     {
         lucent::warn("present", "SDL_Init(VIDEO|GAMEPAD) failed: {} -- running headless",
             SDL_GetError());
         return;
     }
-    if (!SDL_Vulkan_LoadLibrary(nullptr))
+    if (!headlessSurface && !SDL_Vulkan_LoadLibrary(nullptr))
     {
         lucent::warn("present", "SDL_Vulkan_LoadLibrary failed: {} -- running headless",
             SDL_GetError());
         return;
     }
 
-    window = SDL_CreateWindow("gears1",
-        int(kWindowWidth), int(kWindowHeight), SDL_WINDOW_VULKAN);
-    if (window == nullptr)
+    if (!headlessSurface)
+        window = SDL_CreateWindow("gears1",
+            int(kWindowWidth), int(kWindowHeight), SDL_WINDOW_VULKAN);
+    if (!headlessSurface && window == nullptr)
     {
         lucent::warn("present", "SDL_CreateWindow failed: {} -- running headless",
             SDL_GetError());
