@@ -136,6 +136,26 @@ struct Presenter
     uint64_t presentCaptureWanted = 0;   // how many frames still to write
     uint64_t presentCaptureAfter = 0;    // ...but not before this present
 
+    // THE SWAPCHAIN IS TAGGED sRGB, AND THE FRAME GOES IN AS RAW BYTES.
+    //
+    // A UNORM swapchain says nothing about its transfer function, and a compositor
+    // is free to read the bytes as linear light and encode them for the display.
+    // Measured on this machine: the window's 25th and 50th percentiles were
+    // sRGB_encode() of the frame we presented, to three decimals. Our bytes ARE
+    // sRGB-encoded -- the guest tonemapped them -- so the honest thing is to say so,
+    // and a *_SRGB swapchain format is how that is said.
+    //
+    // The catch is that vkCmdBlitImage into an sRGB image CONVERTS, which would
+    // encode the frame a second time. So the frame is blitted into this
+    // B8G8R8A8_UNORM stage first (a UNORM->UNORM blit reorders channels and touches
+    // no transfer function), and then vkCmdCopyImage moves it into the sRGB
+    // swapchain image: a copy between size-compatible formats is a raw byte move,
+    // with no conversion at all. The bytes that reach the screen are exactly the
+    // bytes the renderer produced, now correctly labelled.
+    VkImage srgbStage = VK_NULL_HANDLE;
+    VkDeviceMemory srgbStageMem = VK_NULL_HANDLE;
+    bool swapchainIsSrgb = false;
+
     VkBuffer guestStaging = VK_NULL_HANDLE;
     VkDeviceMemory guestStagingMem = VK_NULL_HANDLE;
     void* guestStagingMapped = nullptr;
@@ -469,8 +489,12 @@ bool Presenter::CreateSwapchain()
     // to formats[0], which is an sRGB format on this driver; that fallback only
     // bites on a surface that does not offer the preferred pair, so WHICH format a
     // given surface yields is now logged rather than assumed.
-    const VkSurfaceFormatKHR chosen =
-        gears::ChooseSwapchainFormat(formats.data(), formats.size());
+    // PREFER THE sRGB TAG, now that the frame can reach it unconverted. The bytes
+    // are sRGB-encoded and a *_SRGB format says exactly that, which leaves a
+    // compositor nothing to assume. GEARS_PRESENT_UNORM=1 selects the old
+    // untagged arrangement, as the control arm for a display where this is wrong.
+    const VkSurfaceFormatKHR chosen = gears::ChooseSwapchainFormat(
+        formats.data(), formats.size(), !lucent::config::flag("PRESENT_UNORM"));
     format = chosen.format;
     if (gears::SwapchainFormatIsSrgb(format))
         lucent::warn("present", "this surface offers no non-sRGB format, so the"
@@ -567,6 +591,45 @@ bool Presenter::CreateSwapchain()
     images.resize(count);
     vkGetSwapchainImagesKHR(device, swapchain, &count, images.data());
 
+    swapchainIsSrgb = gears::SwapchainFormatIsSrgb(format);
+    if (swapchainIsSrgb && srgbStage == VK_NULL_HANDLE)
+    {
+        VkImageCreateInfo si{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        si.imageType = VK_IMAGE_TYPE_2D;
+        si.format = VK_FORMAT_B8G8R8A8_UNORM;
+        si.extent = {extent.width, extent.height, 1};
+        si.mipLevels = 1;
+        si.arrayLayers = 1;
+        si.samples = VK_SAMPLE_COUNT_1_BIT;
+        si.tiling = VK_IMAGE_TILING_OPTIMAL;
+        si.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        if (vkCreateImage(device, &si, nullptr, &srgbStage) == VK_SUCCESS)
+        {
+            VkMemoryRequirements req{};
+            vkGetImageMemoryRequirements(device, srgbStage, &req);
+            uint32_t type = 0;
+            for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i)
+                if ((req.memoryTypeBits & (1u << i)) &&
+                    (memProps.memoryTypes[i].propertyFlags &
+                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
+                { type = i; break; }
+            VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            ai.allocationSize = req.size;
+            ai.memoryTypeIndex = type;
+            if (vkAllocateMemory(device, &ai, nullptr, &srgbStageMem) != VK_SUCCESS ||
+                vkBindImageMemory(device, srgbStage, srgbStageMem, 0) != VK_SUCCESS)
+            {
+                vkDestroyImage(device, srgbStage, nullptr);
+                srgbStage = VK_NULL_HANDLE;
+                lucent::warn("present", "no memory for the raw-copy stage; the frame"
+                    " will be blitted into the sRGB swapchain and encoded twice");
+            }
+        }
+        lucent::info("present", "swapchain is sRGB-tagged: the frame goes in as raw"
+            " bytes through a UNORM stage, so the compositor is told the bytes are"
+            " encoded without encoding them again");
+    }
+
     presentReady.resize(count);
     for (uint32_t i = 0; i < count; i++)
     {
@@ -582,6 +645,13 @@ bool Presenter::CreateSwapchain()
 
 void Presenter::DestroySwapchain()
 {
+    if (srgbStage != VK_NULL_HANDLE)
+    {
+        vkDestroyImage(device, srgbStage, nullptr);
+        vkFreeMemory(device, srgbStageMem, nullptr);
+        srgbStage = VK_NULL_HANDLE;
+        srgbStageMem = VK_NULL_HANDLE;
+    }
     for (VkSemaphore s : presentReady)
         if (s != VK_NULL_HANDLE)
             vkDestroySemaphore(device, s, nullptr);
@@ -929,10 +999,53 @@ bool Presenter::PresentOne(uint32_t sequence)
             blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             blit.srcOffsets[1] = {int32_t(drawn.width), int32_t(drawn.height), 1};
             blit.dstOffsets[1] = {int32_t(extent.width), int32_t(extent.height), 1};
-            vkCmdBlitImage(commands[slot],
-                drawn.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                images[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                1, &blit, VK_FILTER_NEAREST);
+            if (swapchainIsSrgb && srgbStage != VK_NULL_HANDLE)
+            {
+                // Two steps, and the second one converts nothing. Blit into the
+                // UNORM stage (channel order, no transfer function), then a
+                // size-compatible vkCmdCopyImage into the sRGB swapchain image,
+                // which moves bytes verbatim.
+                VkImageSubresourceRange one{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                toDst.srcAccessMask = 0;
+                toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex =
+                    VK_QUEUE_FAMILY_IGNORED;
+                toDst.image = srgbStage;
+                toDst.subresourceRange = one;
+                vkCmdPipelineBarrier(commands[slot],
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    0, 0, nullptr, 0, nullptr, 1, &toDst);
+                vkCmdBlitImage(commands[slot],
+                    drawn.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    srgbStage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &blit, VK_FILTER_NEAREST);
+                VkImageMemoryBarrier toSrc = toDst;
+                toSrc.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+                toSrc.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                vkCmdPipelineBarrier(commands[slot],
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    0, 0, nullptr, 0, nullptr, 1, &toSrc);
+                VkImageCopy copy{};
+                copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                copy.extent = {extent.width, extent.height, 1};
+                vkCmdCopyImage(commands[slot],
+                    srgbStage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    images[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &copy);
+            }
+            else
+            {
+                vkCmdBlitImage(commands[slot],
+                    drawn.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    images[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    1, &blit, VK_FILTER_NEAREST);
+            }
             if (drawn.sequence != lastBlittedFrame)
             {
                 ++freshFramesShown;
