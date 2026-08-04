@@ -23,9 +23,9 @@
 namespace gears
 {
 
-// FNV-1a over the whole span, mixed eight bytes at a time. Dependency free, and
-// every byte still enters the hash -- the speed came from the mixing width, not
-// from looking at less of the texture, which is the trade this file refuses.
+// XXH3 over the whole span. Every byte enters the hash: the speed came from the
+// mixing, never from looking at less of the texture, which is the trade this file
+// refuses. See the .cpp for the measured rate.
 uint64_t HashGuestTexture(const uint8_t* bytes, size_t length);
 
 // Whether a cached upload is still good. Separated from the hashing so the policy
