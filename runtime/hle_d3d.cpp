@@ -147,6 +147,13 @@ void HleDumpCensus(const char* why)
         __imp__sub_##addr(ctx, base);                                          \
     }
 
+// CANDIDATE DRAW EMITTERS. The frame's draws are emitted ~744 times a frame in
+// gameplay and ~170 in menus (the renderer counts them independently), so a
+// per-frame rate identifies the emitter on its own -- which is how 0x82544148 was
+// ruled out at exactly 1 per frame (catalog #58). 0x8221D3A8 is the path the movie
+// phase draws through, per the seam map.
+GEARS_HLE_TRACE(8221D3A8) // movie-phase draw path
+
 // The submission chain, bottom to top.
 GEARS_HLE_TRACE(822218C0) // submit: direct kick, or record into the CPU list
 GEARS_HLE_TRACE(82221980) // flush / end-of-segment

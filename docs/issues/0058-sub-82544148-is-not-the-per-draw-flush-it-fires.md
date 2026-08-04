@@ -52,3 +52,33 @@ gameplay and ~170 in menus, so a per-frame count is enough to identify it: probe
 the candidates in the RHI/draw zone and look for one whose rate tracks the
 renderer's draw count. 0x8221D3A8 (the movie path's draw) is the first to try,
 since the movie phase draws through it.
+
+### Note (2026-08-05)
+2026-08-05. The per-draw emitter is NOT among the eleven functions this seam has
+probed. Rates over a 2867-frame run (scripted walk, menus + Act 1 mixed), taken
+from the per-swap census:
+
+  82220858 SetTexture   74.0 /frame
+  822212D8 ring kick     9.2 /frame
+  822218C0 submit        6.3 /frame
+  82221980 flush         3.9 /frame
+  82221A68 ticket wait   1.3 /frame
+  8223B200 CPU list      1.8 /frame
+  8223E3E0 Present       1.0 /frame
+  8223E860 present pump  1.0 /frame
+  82544148 "draw flush"  0.9 /frame   <- confirms one per frame
+  8223BA18 frame block   0.9 /frame
+  8221D3A8 movie draw    0.3 /frame
+
+The frames in that run carry 170 draws (menus) to 744 (gameplay). Nothing probed
+is within two orders of magnitude of either, so the function that emits DRAW_INDX
+has never been instrumented -- guessing addresses from the static map has now been
+tried and did not find it.
+
+METHOD FOR NEXT TIME, since address-guessing is exhausted: catch the writer. The
+guest writes the DRAW_INDX packet words into the ring, and hle_d3d.cpp already has
+the machinery to catch that -- WatchArm/WatchProtect mprotects a guest page and
+takes the faulting context, which is how the worker's queue head was pinned down.
+Point it at the ring pages where the command processor sees DRAW_INDX arrive, read
+the LR out of the faulting context, and the emitter names itself. That is a
+measurement, not a guess, and it works no matter how the draw is dispatched.
