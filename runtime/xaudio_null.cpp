@@ -487,7 +487,15 @@ void __imp__XAudioSubmitRenderDriverFrame(PPCContext& __restrict ctx, uint8_t* b
         // is not a presentation". GEARS_AUDIO_OUT=1 forces it on anyway, and
         // GEARS_AUDIO_OUT=0 forces it off. `present` is what separates "not
         // set" from "set to 0".
-        const bool audioOutDefault = !lucent::config::flag("NO_WINDOW");
+        // A run makes noise only when it is a PRESENTATION -- a real window that a
+        // person is watching. GEARS_NO_WINDOW is one way to say "this is
+        // measurement"; GEARS_PRESENT_HEADLESS is another, and it was missed. That
+        // mode runs the whole present path against a headless surface, so it has
+        // every property of a measurement run except the name, and it played sound
+        // out of the operator's speakers in the middle of their work.
+        const bool measurementRun = lucent::config::flag("NO_WINDOW") ||
+                                    lucent::config::flag("PRESENT_HEADLESS");
+        const bool audioOutDefault = !measurementRun;
         if (lucent::config::present("AUDIO_OUT") ? lucent::config::flag("AUDIO_OUT")
                                                  : audioOutDefault)
         {

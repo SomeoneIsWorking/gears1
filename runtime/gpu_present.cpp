@@ -432,6 +432,21 @@ bool Presenter::CreateSwapchain()
     if (formats.empty())
         return false;
 
+    // EVERY PAIR THE SURFACE OFFERS, once, before choosing. Which format/colour
+    // space a display exposes is the one input to this decision that differs
+    // between machines, and it was never in the log -- so a window that looks wrong
+    // on someone else's desktop could not be diagnosed from their run.
+    {
+        lucent::Line fl;
+        fl.add("surface offers {} format/colour-space pair(s):", formats.size());
+        for (const VkSurfaceFormatKHR& f : formats)
+            fl.add(" [{}/{}]", uint32_t(f.format), uint32_t(f.colorSpace));
+        fl.add(" (colour space 0 is SRGB_NONLINEAR, which is the one to want;"
+               " 1000104002 is EXTENDED_SRGB_LINEAR and 1000104008 is HDR10_ST2084,"
+               " both of which re-interpret an already-encoded frame)");
+        fl.flush(lucent::Level::Info, "present");
+    }
+
     // THE SWAPCHAIN MUST NOT BE AN sRGB FORMAT.
     //
     // The drawn frame is R8G8B8A8_UNORM holding bytes the guest already tonemapped
@@ -460,6 +475,22 @@ bool Presenter::CreateSwapchain()
         lucent::info("present", "swapchain format {} (non-sRGB, so the blit copies"
             " the drawn frame's bytes without a colour-space conversion)",
             uint32_t(format));
+
+    // THE COLOUR SPACE MATTERS AS MUCH AS THE FORMAT, and only the format was
+    // reported. A UNORM format paired with EXTENDED_SRGB_LINEAR or an HDR10 space
+    // tells the compositor to read our already-sRGB-encoded bytes as linear light
+    // or as PQ, and it will map them for the display: mid-tones lift, contrast
+    // flattens, and the window looks washed out with a frame that is byte-perfect
+    // all the way to vkQueuePresent. That is indistinguishable, from inside this
+    // process, from the frame being right -- because it IS right.
+    if (chosen.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+        lucent::warn("present", "swapchain colour space is {} rather than"
+            " SRGB_NONLINEAR: the compositor will re-interpret the frame's bytes"
+            " and the window can look washed out even though every pixel handed to"
+            " the swapchain is correct", uint32_t(chosen.colorSpace));
+    else
+        lucent::info("present", "swapchain colour space SRGB_NONLINEAR (the"
+            " compositor takes the bytes as sRGB, which is what they are)");
 
     // FIFO is the only mode the spec guarantees, but it would make every
     // present block on the host's 60 Hz refresh -- a host clock leaking into
