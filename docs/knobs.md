@@ -50,6 +50,7 @@ the same commit that removes it.
 | Knob | Meaning |
 |---|---|
 | `GEARS_DRAW_FRAME_DUMP=<path>` | Write the reported frame's whole draw stream to a capture file |
+| `GEARS_PRESENT_HEADLESS=1` | Run the whole present path -- swapchain, blit, `vkQueuePresentKHR` -- against `VK_EXT_headless_surface`, with **no window**. This is what makes the present path measurable in a headless run; with `GEARS_PRESENT_DUMP` it captures what would have reached the screen. Refuses loudly if the loader lacks the extension rather than presenting nothing (`catalog.py show 60`) |
 | `GEARS_PRESENT_DUMP=N`, `GEARS_PRESENT_DUMP_AT=N`, `GEARS_PRESENT_DUMP_DIR=<dir>` | Write N frames **as presented** — through the swapchain blit — after frame `_AT`. `./run.sh --present-dump N` is the short form. **The only capture that sees the present path**: every other screenshot here comes from the renderer's readback, which is why an sRGB swapchain washed out the entire window while every capture in the repo looked correct (`catalog.py show 60`). Needs a window |
 | `GEARS_REPLAY_MIRROR_MB=N` | *(frame_replay)* Override the guest-memory mirror size |
 | `GEARS_REPLAY_DUMP_SHADERS=<dir>` | *(frame_replay)* Write every distinct microcode blob, named by hash, for `tools/xenos_translate --raw` |
