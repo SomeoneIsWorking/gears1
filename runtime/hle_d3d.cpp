@@ -15,6 +15,9 @@
 #include <lucent/config.h>
 #include <lucent/log.h>
 
+#include <mutex>
+#include <set>
+
 #include <csignal>
 #include <cstdlib>
 #include <cstring>
@@ -550,6 +553,19 @@ std::atomic<uint64_t> g_setTextureNull{0};
 // Slots the title used beyond the shadow this census keeps. Counted rather than
 // wrapped, so "16 slots" can never quietly mean "16 of 40".
 std::atomic<uint64_t> g_setTextureOutOfRange{0};
+// The state-flush-and-draw emitter. This is the count of draws the TITLE issued
+// through its own API, which is the number our PM4 capture is supposed to end up
+// with -- the first cross-check that does not depend on any struct layout.
+std::atomic<uint64_t> g_drawFlushCalls{0};
+uint64_t g_lastReportedFlushes = 0;
+uint64_t g_lastReportedSets = 0;
+// The DISTINCT texture base addresses the title bound since the last reported
+// frame. The slot table alone is a snapshot at frame end and is not comparable
+// with the renderer's per-frame census; this is. Guarded by its own mutex because
+// SetTexture runs on the guest's render thread and the report on the command
+// processor.
+std::mutex g_titleBaseMutex;
+std::set<uint32_t> g_titleBasesThisFrame;
 } // namespace
 
 namespace gears
@@ -559,10 +575,38 @@ void ReportTitleTextureSlots()
     const uint64_t calls = g_setTextureCalls.load();
     if (calls == 0)
         return;
+    std::set<uint32_t> bases;
+    {
+        std::lock_guard<std::mutex> guard(g_titleBaseMutex);
+        bases.swap(g_titleBasesThisFrame);
+    }
+    {
+        lucent::Line bl;
+        bl.add("title texture bases bound since the last reported frame ({}"
+               " distinct):", bases.size());
+        uint32_t shown = 0;
+        for (uint32_t b : bases)
+        {
+            if (shown++ == 24) { bl.add(" ..."); break; }
+            bl.add(" {:#x}", b);
+        }
+        bl.flush(lucent::Level::Info, "hle");
+    }
+
+    const uint64_t flushes = g_drawFlushCalls.load();
+    lucent::info("hle", "title issued {} draws through sub_82544148 since the last"
+        " reported frame ({} total); compare with the renderer's \"N of M draws"
+        " issued\" for this frame -- M is what our PM4 capture saw, and these two"
+        " count the same draws from opposite ends of the same frame",
+        flushes - g_lastReportedFlushes, flushes);
+    g_lastReportedFlushes = flushes;
+
     lucent::Line line;
-    line.add("title texture slots (D3D SetTexture, {} calls, {} of them clearing"
-             " a slot, {} past slot {}):", calls, g_setTextureNull.load(),
+    line.add("title texture slots (D3D SetTexture, {} calls since the last report,"
+             " {} total, {} of them clearing a slot, {} past slot {}):",
+             calls - g_lastReportedSets, calls, g_setTextureNull.load(),
              g_setTextureOutOfRange.load(), kTitleTextureSlots - 1);
+    g_lastReportedSets = calls;
     bool any = false;
     for (uint32_t i = 0; i < kTitleTextureSlots; ++i)
     {
@@ -700,6 +744,12 @@ PPC_FUNC(sub_82220858)
     g_titleSlots[slot].fetch1 = ReadGuestBE32(shadow + 4);
     g_titleSlots[slot].object = texture;
     ++g_titleSlots[slot].sets;
+    const uint32_t titleBase = (g_titleSlots[slot].fetch1 >> 12) << 12;
+    if (titleBase != 0)
+    {
+        std::lock_guard<std::mutex> guard(g_titleBaseMutex);
+        g_titleBasesThisFrame.insert(titleBase);
+    }
 }
 
 extern "C" PPC_FUNC(__imp__sub_82544148);
@@ -709,6 +759,7 @@ struct RegDraw { RegDraw() { Register(&g_probe_draw); } } g_regDraw;
 }
 PPC_FUNC(sub_82544148)
 {
+    g_drawFlushCalls.fetch_add(1, std::memory_order_relaxed);
     Note(g_probe_draw, uint32_t(ctx.lr));
     __imp__sub_82544148(ctx, base);
 }

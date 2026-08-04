@@ -64,9 +64,15 @@ guest body unchanged, and records what the title put in each slot. The release
 bookkeeping is why it is not native yet -- a wrong release list corrupts the
 title's heap, and there is no payoff until something reads this state natively.
 
-FIRST CROSS-CHECK, movie phase: the title's slots 0/1/2 hold `0x6f000 / 0x7e000 /
-0x83000`, and the renderer's own `frame texture bases` line for the same frame
-reports exactly those three. The register-file inference and the API agree here.
+CROSS-CHECKS SO FAR. Movie phase: the title's slots 0/1/2 hold `0x6f000 /
+0x7e000 / 0x83000`, and the renderer's `frame texture bases` line for that frame
+reports exactly those three. **Gameplay: the title binds 122 distinct texture
+bases in a frame and the renderer's census reports 122 distinct bases for the
+same frame.** The register-file inference for textures is sound at both ends.
+
+The same wrap falsified the draw-flush identification -- see 0x82544148 below and
+`catalog.py show 58`. That is what this seam is for: each function read here is
+either confirmed against the renderer's own account of the frame, or corrected.
 
 ## 2. Entry points of one presented frame
 
@@ -89,7 +95,7 @@ so this set IS the "first presented frame" target. **V**
 | 0x8222E8E0 | 0.12 | setter with 99 static callers incl. thunk arrays (unidentified) |
 | 0x8222B068 / 0x8222B398 | 0.08 | paired (set/unset-shaped) (low) |
 | 0x8221D9B8 | 0.07 | async/block-wait helper (appears in movie + resource paths) (low) |
-| 0x82544148 | ~0 in movie phase | THE draw flush (state → TYPE0 packets + draw); the movie path instead draws via 0x8221D3A8 | 
+| 0x82544148 | **exactly 1 per frame, measured in both menus and gameplay** | State flush, NOT the draw emitter. It was labelled "THE draw flush (state → TYPE0 packets + draw)" from a static read; wrapping it and counting against the renderer's own per-frame draw count gives one call per frame against 744 draws (`catalog.py show 58`). The movie path draws via 0x8221D3A8 |
 | present chain | 1.0 | UE3 wrapper 0x824A5170 → 0x8223E860 → 0x8223E3E0 → VdSwap (high) **V** |
 
 Full static surface: 201 distinct functions in 0x82218000–0x82241000 are
