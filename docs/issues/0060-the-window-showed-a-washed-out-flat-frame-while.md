@@ -73,3 +73,38 @@ alias than the one written.
 The format the surface actually yields is now logged on every run, which settles
 the first two possibilities in one line, and `./run.sh --present-dump N` captures
 what reaches the window. Neither existed when the claim was made.
+
+### Note (2026-08-05)
+2026-08-05, CLOSED, and closable without a window after all.
+
+VK_EXT_headless_surface gives a real VkSurfaceKHR backed by nothing: real
+swapchain, real images, the real vkCmdBlitImage, a real vkQueuePresentKHR, and no
+window on anyone's desktop. GEARS_PRESENT_HEADLESS=1 takes that path, so the one
+step this project could never measure is now measurable in a headless run like
+everything else.
+
+THE TEST THAT SETTLES IT. Render exactly one frame (GEARS_DRAW_FRAME_AT=400,
+_COUNT=1) so the presenter has a single image and repeats it, then dump a
+presented frame after present 460 and compare it with the renderer's own readback
+of that same frame:
+
+    presented vs rendered, same frame: IDENTICAL, max |diff| 0, mean 0.0000
+    (both mean 168.51 over 1280x720x3)
+
+So on this machine the present path preserves the frame exactly. The chosen
+swapchain format is logged as 44 -- B8G8R8A8_UNORM, non-sRGB -- and nothing
+between the renderer and the screen alters a pixel.
+
+WHAT THAT MEANS FOR THE REPORTED SYMPTOM. The washed-out window was real and the
+frame behind it was correct, but the sRGB blit theory is not what this build does
+here. The remaining explanations are outside this binary's control or predate the
+fixes: a build from earlier today (the flicker fix, the texture eviction and the
+swapchain selection all landed while the screenshots were being taken), or a
+surface on another driver/compositor yielding a different format -- which the new
+log line names on every run.
+
+THE LESSON, since it is the second time in two days. "I cannot measure that from
+here" was wrong both times: the frame_replay mirror made a wrong picture look like
+a renderer bug, and the present path looked unreachable without a window. Both
+had an instrument available. Before accepting that something is unmeasurable,
+check whether the API offers a headless form of it.
