@@ -36,36 +36,51 @@ inline bool SwapchainFormatIsUnorm(VkFormat f)
            f == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
 }
 
-// Picks in this order: B8G8R8A8_UNORM with the usual colour space, any other UNORM,
-// any non-sRGB format, and only then whatever came first. The caller reports which
-// it got, and warns when the answer is an sRGB one -- a surface offering nothing
-// else is a real possibility and the user should be told their window will look
-// wrong rather than left to wonder.
+// THE COLOUR SPACE IS PART OF THE ANSWER, not a detail of it.
+//
+// A UNORM format paired with EXTENDED_SRGB_LINEAR or HDR10_ST2084 tells the
+// compositor to read the frame's bytes as linear light or as PQ. Those bytes are
+// sRGB-encoded, so the display maps them for a range they were never in: mid-tones
+// lift, contrast flattens, and the window looks washed out while every pixel handed
+// to the swapchain is byte-perfect. A desktop in HDR mode offers exactly those
+// pairings, and an earlier version of this function preferred ANY UNORM over the
+// colour space -- which on such a desktop picks the wrong one.
+//
+// So SRGB_NONLINEAR comes first, and the format second:
+//   1. B8G8R8A8_UNORM with SRGB_NONLINEAR -- what a normal desktop offers
+//   2. any UNORM with SRGB_NONLINEAR
+//   3. any non-sRGB format with SRGB_NONLINEAR
+//   4. any UNORM at all (a surface with no sRGB_NONLINEAR entry)
+//   5. any non-sRGB format
+//   6. whatever came first, and the caller warns
 inline VkSurfaceFormatKHR ChooseSwapchainFormat(const VkSurfaceFormatKHR* formats,
                                                 size_t count)
 {
     if (formats == nullptr || count == 0)
         return VkSurfaceFormatKHR{VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
 
-    VkSurfaceFormatKHR chosen = formats[0];
-    bool foundUnorm = false;
-    for (size_t i = 0; i < count; ++i)
-    {
-        const VkSurfaceFormatKHR& candidate = formats[i];
-        if (candidate.format == VK_FORMAT_B8G8R8A8_UNORM &&
-            candidate.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-            return candidate;
-        if (!foundUnorm && SwapchainFormatIsUnorm(candidate.format))
+    auto find = [&](bool wantSrgbSpace, bool wantUnorm) -> const VkSurfaceFormatKHR* {
+        for (size_t i = 0; i < count; ++i)
         {
-            chosen = candidate;
-            foundUnorm = true;
+            const VkSurfaceFormatKHR& c = formats[i];
+            if (wantSrgbSpace && c.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+                continue;
+            if (wantUnorm ? !SwapchainFormatIsUnorm(c.format)
+                          : SwapchainFormatIsSrgb(c.format))
+                continue;
+            return &c;
         }
-    }
-    if (foundUnorm)
-        return chosen;
+        return nullptr;
+    };
+
     for (size_t i = 0; i < count; ++i)
-        if (!SwapchainFormatIsSrgb(formats[i].format))
+        if (formats[i].format == VK_FORMAT_B8G8R8A8_UNORM &&
+            formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
             return formats[i];
+    if (const VkSurfaceFormatKHR* c = find(true, true))   return *c;
+    if (const VkSurfaceFormatKHR* c = find(true, false))  return *c;
+    if (const VkSurfaceFormatKHR* c = find(false, true))  return *c;
+    if (const VkSurfaceFormatKHR* c = find(false, false)) return *c;
     return formats[0];
 }
 

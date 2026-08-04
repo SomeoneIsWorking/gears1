@@ -92,11 +92,43 @@ void TestEmptyListDoesNotInventAFormat()
         "no formats yields UNDEFINED rather than a plausible guess");
 }
 
+// AN HDR DESKTOP. The surface offers UNORM formats, but paired with colour spaces
+// that tell the compositor the bytes are linear light or PQ. Taking one of those
+// because it is UNORM re-interprets an sRGB-encoded frame and washes the window
+// out with every pixel in the swapchain byte-perfect.
+void TestColourSpaceBeatsFormatPreference()
+{
+    const std::vector<VkSurfaceFormatKHR> formats{
+        {VK_FORMAT_R8G8B8A8_UNORM, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT},
+        {VK_FORMAT_A2B10G10R10_UNORM_PACK32, VK_COLOR_SPACE_HDR10_ST2084_EXT},
+        {VK_FORMAT_B8G8R8A8_SRGB, kSrgbNonlinear},
+        {VK_FORMAT_B8G8R8A8_UNORM, kSrgbNonlinear},
+    };
+    const VkSurfaceFormatKHR got = ChooseSwapchainFormat(formats.data(), formats.size());
+    Check(got.format == VK_FORMAT_B8G8R8A8_UNORM &&
+          got.colorSpace == kSrgbNonlinear,
+        "with HDR colour spaces listed FIRST, the sRGB-nonlinear UNORM still wins --"
+        " a linear or PQ colour space re-interprets an already-encoded frame");
+}
+
+void TestSrgbNonlinearWinsEvenWithoutAUnormFormat()
+{
+    const std::vector<VkSurfaceFormatKHR> formats{
+        {VK_FORMAT_R16G16B16A16_SFLOAT, VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT},
+        {VK_FORMAT_A2B10G10R10_UNORM_PACK32, kSrgbNonlinear},
+    };
+    const VkSurfaceFormatKHR got = ChooseSwapchainFormat(formats.data(), formats.size());
+    Check(got.colorSpace == kSrgbNonlinear,
+        "a UNORM with SRGB_NONLINEAR is preferred to a float format in a linear space");
+}
+
 } // namespace
 
 int main()
 {
     TestSrgbFirstIsNotChosenWhenUnormExists();
+    TestColourSpaceBeatsFormatPreference();
+    TestSrgbNonlinearWinsEvenWithoutAUnormFormat();
     TestAnyUnormBeatsAnySrgb();
     TestNonSrgbBeatsSrgbEvenWhenNotUnorm();
     TestSrgbOnlySurfaceIsReportedHonestly();
