@@ -12,11 +12,12 @@
 // both able to stand alone -- the draw path still works headless, where no
 // presenter ever runs and there is nothing to adopt.
 //
-// The ordering works out in practice: the presenter thread starts at the first
-// guest swap, while the draw path initialises at GEARS_DRAW_FRAME_AT (600 by
-// default), so in a windowed run the presenter publishes and the draw path adopts.
-// The reverse order is still handled -- see AdoptSharedGpu -- because a headless
-// run has no presenter at all and must not depend on one.
+// The ordering is not left to chance: PresenterStart() runs before the command
+// processor executes a single packet and blocks until the presenter thread has
+// created (and published) its device, while the draw path initialises at the
+// first swap that carries draws. So in a windowed run the presenter publishes and
+// the draw path adopts. The reverse order is still handled -- see AdoptSharedGpu
+// -- because a headless run has no presenter at all and must not depend on one.
 #pragma once
 
 #include <cstdint>
