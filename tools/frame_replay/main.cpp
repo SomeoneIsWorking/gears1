@@ -50,18 +50,30 @@ int main(int argc, char** argv)
     if (!gears::ReadFrameCapture(path, cap))
         return 1;
 
-    // GEARS_REPLAY_MIRROR_MB overrides how much guest memory the renderer mirrors
-    // into its SSBO. A capture carries the whole guest window, so the replay can
-    // answer "would this frame's geometry resolve with a bigger mirror?" without
-    // a rebuild -- which is how the 64 MiB mirror was identified as the reason
-    // this frame's world geometry read zero.
-    if (const long mb = lucent::config::number("REPLAY_MIRROR_MB", 0); mb > 0)
+    // THE MIRROR IS THE RENDERER'S, NOT THE CAPTURE'S. A capture stores the value
+    // that was in effect when it was recorded, and captures outlive the value: one
+    // taken while the mirror was 64 MiB replays with 606 of its 722 draws fetching
+    // past it, reading zero and collapsing at clipping -- a plausible but WRONG
+    // picture of a frame the live runtime renders correctly (catalog #57). So the
+    // replay uses what the runtime uses today, and says so when the capture
+    // disagreed. GEARS_REPLAY_MIRROR_MB still overrides, for asking what a
+    // different mirror would do.
     {
-        const uint64_t want = uint64_t(mb) << 20;
+        const long mb = lucent::config::number("REPLAY_MIRROR_MB", 0);
+        const uint64_t want = mb > 0 ? (uint64_t(mb) << 20)
+                                     : uint64_t(gears::kGuestPhysicalMirrorBytes);
+        const uint32_t captured = cap.inputs.guestPhysicalMirrorBytes;
         cap.inputs.guestPhysicalMirrorBytes =
             uint32_t(std::min<uint64_t>(want, cap.inputs.guestWindowBytes));
-        lucent::info("replay", "guest memory mirror overridden to {} MiB",
-                     cap.inputs.guestPhysicalMirrorBytes >> 20);
+        if (mb > 0)
+            lucent::info("replay", "guest memory mirror overridden to {} MiB",
+                         cap.inputs.guestPhysicalMirrorBytes >> 20);
+        else if (captured != cap.inputs.guestPhysicalMirrorBytes)
+            lucent::warn("replay", "this capture was recorded with a {} MiB guest"
+                " memory mirror; replaying with the runtime's current {} MiB"
+                " instead. Replaying the captured value would render a DIFFERENT"
+                " frame from the one the runtime renders today",
+                captured >> 20, cap.inputs.guestPhysicalMirrorBytes >> 20);
     }
 
     // GEARS_REPLAY_DUMP_SHADERS=<dir> writes every distinct microcode blob in the

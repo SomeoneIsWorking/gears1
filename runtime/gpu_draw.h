@@ -17,6 +17,19 @@
 namespace gears
 {
 
+// How much of the console's physical memory the translated shaders can FETCH
+// through -- the whole 512 MiB window, because a vertex fetch constant may name
+// any of it.
+//
+// It lives here, in one place, because it is a property of the RENDERER and not
+// of a frame: a captured frame stores the value that was in effect when it was
+// recorded, and captures outlive the value. One taken before this was raised from
+// 64 MiB carries 64 MiB, and replaying it honoured that -- 606 of 722 draws
+// fetched past the mirror, read zero, collapsed at clipping, and the replay
+// produced a plausible but WRONG picture of a frame the live runtime renders
+// correctly (catalog #57).
+inline constexpr uint32_t kGuestPhysicalMirrorBytes = 0x20000000;
+
 // ---------------------------------------------------------------------------
 // Whole-frame rendering: every DRAW_INDX/_2 of one frame, in submission order,
 // into a single persistent colour+depth target, then presented/screenshotted.

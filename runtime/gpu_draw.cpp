@@ -5028,10 +5028,23 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             for (const auto& [what, n] : pairs)
                 lucent::info("draw", "  resolve {} x{}", what, n);
         }
-        lucent::info("draw", "frame geometry reach: {} draws fetch vertices inside the"
-            " {:#x}-byte SSBO mirror, {} draws fetch PAST it (those read zero and"
-            " collapse); highest vertex-buffer end seen {:#x}",
-            vfDrawsInMirror, in.guestPhysicalMirrorBytes, vfDrawsPastMirror, vfHighestByte);
+        // WARN when any draw fetches past the mirror, not info. Those draws read
+        // zero and every primitive collapses at clipping, so the frame on screen
+        // is missing world geometry -- and it still looks like a frame, which is
+        // how a 64 MiB mirror once passed for a rendering bug and how a stale
+        // capture later passed for a broken renderer (catalog #30, #57).
+        {
+            const std::string reach = std::format(
+                "frame geometry reach: {} draws fetch vertices inside the {:#x}-byte"
+                " SSBO mirror, {} draws fetch PAST it (those read zero and collapse);"
+                " highest vertex-buffer end seen {:#x}",
+                vfDrawsInMirror, in.guestPhysicalMirrorBytes, vfDrawsPastMirror,
+                vfHighestByte);
+            if (vfDrawsPastMirror != 0)
+                lucent::warn("draw", "{} -- THE FRAME IS MISSING WORLD GEOMETRY", reach);
+            else
+                lucent::info("draw", "{}", reach);
+        }
         lucent::info("draw", "frame textures: {} distinct fetch constants, {} uploaded"
             " ({:.1f} MiB), {} samplers", texDistinct.size(), uploads.size(),
             double(uploadedBytes) / (1024.0 * 1024.0), samplerCache.size());
