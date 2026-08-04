@@ -1167,6 +1167,11 @@ struct CommandProcessor
         in.report = frameCount > 0
             ? framesRendered >= frameCount
             : reportEvery > 0 && framesRendered % reportEvery == 0;
+        // The title's own texture-slot table, on exactly the frames the renderer
+        // censuses its own texture bases -- the two lines are meant to be read
+        // next to each other.
+        if (in.report)
+            gears::ReportTitleTextureSlots();
         // Number the reported screenshots in a live run so a menu walk leaves a
         // filmstrip rather than overwriting one file.
         if (frameCount <= 0 && in.report)
