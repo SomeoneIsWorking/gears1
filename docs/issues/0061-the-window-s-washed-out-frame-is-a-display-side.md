@@ -103,3 +103,26 @@ INSTRUMENT ADDED, and it is the useful part: GEARS_PRESENT_HIDDEN. Every previou
 "I cannot test the window from here" was answered by a headless surface, which
 turned out not to exercise the window system at all. This does, and costs the
 operator nothing.
+
+### Note (2026-08-05)
+2026-08-05, FIXED.
+
+The swapchain is now tagged sRGB (B8G8R8A8_SRGB with SRGB_NONLINEAR), which states
+what our bytes have always been: sRGB-encoded, because the guest tonemapped them. A
+UNORM swapchain states nothing, and a compositor is free to read it as linear light
+and encode it -- which is what the measurement showed happening.
+
+The frame reaches that tagged image WITHOUT a conversion, which is the part that
+makes it a fix rather than a second bug: vkCmdBlitImage into an sRGB image would
+encode a second time, so the frame is blitted into a B8G8R8A8_UNORM stage (channel
+order only, no transfer function) and then moved into the swapchain image with
+vkCmdCopyImage -- a copy between size-compatible formats is a raw byte move.
+
+VERIFIED, through the real Wayland surface (GEARS_PRESENT_HIDDEN=1), reading the
+swapchain image back after present:
+
+    swapchain is sRGB-tagged: the frame goes in as raw bytes through a UNORM stage
+    bytes reaching the sRGB-tagged swapchain are unconverted: True, max |diff| 0
+
+So the pixels are unchanged and only the label differs. GEARS_PRESENT_UNORM=1 is
+the control arm that restores the untagged arrangement.

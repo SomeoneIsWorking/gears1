@@ -53,9 +53,23 @@ inline bool SwapchainFormatIsUnorm(VkFormat f)
 //   4. any UNORM at all (a surface with no sRGB_NONLINEAR entry)
 //   5. any non-sRGB format
 //   6. whatever came first, and the caller warns
+// `preferSrgb` asks for a *_SRGB format, which TELLS the compositor the bytes are
+// sRGB-encoded -- which they are, because the guest tonemapped them. A UNORM
+// swapchain says nothing, and a compositor that reads it as linear light will
+// encode it for the display: measured on this machine, the window's 25th and 50th
+// percentiles were sRGB_encode() of the frame presented, to three decimals.
+//
+// The caller must then get the frame in WITHOUT a conversion -- blitting into an
+// sRGB image encodes it a second time -- which gpu_present.cpp does with a
+// size-compatible vkCmdCopyImage through a UNORM stage.
 inline VkSurfaceFormatKHR ChooseSwapchainFormat(const VkSurfaceFormatKHR* formats,
-                                                size_t count)
+                                                size_t count, bool preferSrgb = false)
 {
+    if (formats != nullptr && count != 0 && preferSrgb)
+        for (size_t i = 0; i < count; ++i)
+            if (SwapchainFormatIsSrgb(formats[i].format) &&
+                formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+                return formats[i];
     if (formats == nullptr || count == 0)
         return VkSurfaceFormatKHR{VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
 
