@@ -1253,6 +1253,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // zero here mean anything.
     uint64_t texContentChecked = 0;
     uint64_t texContentChanged = 0;
+    // What the staleness check itself costs, split from everything else that
+    // happens per binding. "texture upload 28 ms with 0 textures uploaded" is not
+    // an answer -- these two numbers say whether it is the hashing (bytes read
+    // from guest memory) or the per-binding bookkeeping around it.
+    uint64_t texHashBytes = 0;
+    double msTexHash = 0;
+    uint64_t texBindingCalls = 0;
     // A texture is checked at most ONCE per frame. That is not just an
     // optimisation: this renderer reads guest memory at frame-render time, so
     // every binding in a frame sees the same bytes, and re-hashing per binding
@@ -1323,6 +1330,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Builds (once per distinct fetch) the host image for one texture fetch
     // constant, or returns VK_NULL_HANDLE with the reason counted.
     auto uploadTexture = [&](const uint32_t* fetch6, uint32_t wantDim) -> VkImageView {
+        ++texBindingCalls;
         const std::array<uint32_t, 4> key{fetch6[0], fetch6[1], fetch6[2],
                                           fetch6[3] & 0x1FFEu /*swizzle bits*/};
         auto it = texCache.find(key);
@@ -1348,8 +1356,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 uint64_t(header.baseAddress) + header.guestExtentBytes <=
                     uint64_t(in.guestWindowBytes))
             {
+                const auto tHash = Clock::now();
                 const uint64_t now = gears::HashGuestTexture(
                     in.guestBase + header.baseAddress, header.guestExtentBytes);
+                accumulate(msTexHash, tHash);
+                texHashBytes += header.guestExtentBytes;
                 ++texContentChecked;
                 const auto known = texContentHash.find(key);
                 if (known != texContentHash.end() &&
@@ -4884,10 +4895,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // with its denominator, because "0 evicted" only means something next to
         // the number of textures that were actually checked -- a zero denominator
         // would mean the check never ran, which is a different statement.
-        lucent::info("draw", "texture cache: {} distinct texture(s) re-hashed against"
-            " their guest bytes, {} CHANGED under an unchanged fetch constant and"
-            " were evicted and re-uploaded{}",
-            texContentChecked, texContentChanged,
+        lucent::info("draw", "texture cache: {} distinct texture(s) re-hashed"
+            " ({:.2f} MiB in {:.1f} ms) over {} bindings, {} CHANGED under an"
+            " unchanged fetch constant and were evicted and re-uploaded{}",
+            texContentChecked, double(texHashBytes) / (1024.0 * 1024.0), msTexHash,
+            texBindingCalls, texContentChanged,
             texContentChecked == 0
                 ? " -- the denominator is ZERO: no cache hit could be checked at"
                   " all, so this says NOTHING about staleness"

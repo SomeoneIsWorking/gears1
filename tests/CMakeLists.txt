@@ -278,7 +278,8 @@ add_test(NAME gpu_instance COMMAND test_gpu_instance)
 add_executable(test_guest_texture_hash
     test_guest_texture_hash.cpp
     ../runtime/guest_texture_hash.cpp)
-target_include_directories(test_guest_texture_hash PRIVATE ../runtime)
+target_include_directories(test_guest_texture_hash PRIVATE ../runtime
+    "${THIRDPARTY_ROOT}/xxHash")
 add_test(NAME guest_texture_hash COMMAND test_guest_texture_hash)
 
 # The audio pump's pacing policy. What a pump does with slots it MISSED decides

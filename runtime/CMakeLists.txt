@@ -107,6 +107,7 @@ add_executable(gears1
     gpu_queue_family.cpp
     gpu_instance.cpp
     gpu_device_features.cpp
+    render_thread.cpp
     guest_texture_hash.cpp
     guest_indirect_call.cpp
     user_profile.cpp
@@ -125,7 +126,7 @@ add_executable(gears1
     kernel_file.cpp
     "${IMPORT_STUBS}")
 
-target_include_directories(gears1 PRIVATE .)
+target_include_directories(gears1 PRIVATE . "${THIRDPARTY_ROOT}/xxHash")
 target_link_libraries(gears1 PRIVATE gears_ppc XenonUtils lucent::lucent)
 
 if(GEARS_HAVE_XMA_DECODER)
@@ -145,7 +146,7 @@ add_library(gears_draw STATIC gpu_draw.cpp frame_capture.cpp
                               gpu_device_features.cpp
                               guest_texture_hash.cpp
                               frame_ab.cpp)
-target_include_directories(gears_draw PUBLIC .)
+target_include_directories(gears_draw PUBLIC . PRIVATE "${THIRDPARTY_ROOT}/xxHash")
 target_link_libraries(gears_draw PRIVATE lucent::lucent)
 target_link_libraries(gears1 PRIVATE gears_draw)
 
