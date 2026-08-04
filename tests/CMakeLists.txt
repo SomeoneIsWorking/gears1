@@ -281,6 +281,25 @@ add_executable(test_guest_texture_hash
 target_include_directories(test_guest_texture_hash PRIVATE ../runtime)
 add_test(NAME guest_texture_hash COMMAND test_guest_texture_hash)
 
+# The audio pump's pacing policy. What a pump does with slots it MISSED decides
+# what the game sounds like: serving them back to back makes the title consume its
+# stream faster than real time (a raised pitch that lasts as long as the deficit),
+# while dropping them keeps the stream in real time at the cost of a gap. The
+# policy is a pure function of two time points so it can be tested without a
+# clock, a thread or a guest.
+add_executable(test_audio_pace test_audio_pace.cpp)
+target_include_directories(test_audio_pace PRIVATE ../runtime)
+add_test(NAME audio_pace COMMAND test_audio_pace)
+
+# The render-driver frame's layout: the guest hands us six PLANES of 256
+# big-endian floats and every host API wants them interleaved. Reading one as the
+# other does not fail, it plays -- far too high, with a click at every plane
+# crossing -- so the test builds a frame whose planes hold per-channel constants,
+# which the two readings cannot both satisfy.
+add_executable(test_audio_frame test_audio_frame.cpp)
+target_include_directories(test_audio_frame PRIVATE ../runtime)
+add_test(NAME audio_frame COMMAND test_audio_frame)
+
 # The in-run A/B. Comparing two runs of the title does not resolve anything below
 # ~10 ms a frame: three runs of the same gameplay walk at an identical 743 draws a
 # frame gave 39.4, 47.2 and 42.7 ms draw loops, and the two SLOWER ones were the
