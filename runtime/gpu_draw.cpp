@@ -4620,7 +4620,50 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // EDRAM 0x2d0, reached by rule rather than by naming the address.
     uint32_t presentBase = 0;
     bool havePresent = false;
+
+    // FIRST, WHAT THE GUEST SAID. VdSwap carries the front buffer's address, and a
+    // surface's resolve destination is where its pixels land in guest memory, so the
+    // surface whose destination IS the front buffer is the one being shown. That is
+    // a statement, not a rule of thumb.
+    if (in.frontBufferAddress != 0)
+    {
+        const uint32_t front = in.frontBufferAddress & 0x1FFFFFFFu; // drop the alias
+        for (const auto& pd : prepared)
+        {
+            if (!pd.isResolve || pd.resolveDest == 0)
+                continue;
+            if ((pd.resolveDest & 0x1FFFFFFFu) != front)
+                continue;
+            presentBase = pd.surfaceBase;
+            havePresent = true;
+            break;
+        }
+        if (!havePresent)
+            lucent::debug("draw", "front buffer {:#x} names no resolve destination in"
+                " this frame; falling back to the last-geometry-draw rule",
+                in.frontBufferAddress);
+    }
+    // The old rule is still computed, and DISAGREEMENT IS REPORTED. If it ever
+    // differs from what the guest named, that frame is one the renderer would have
+    // presented from the wrong surface -- the scene's linear-light HDR buffer rather
+    // than the tonemapped one, which shows as flat unlit grey with every texture
+    // detail intact. That is the shape of a reported symptom this project could not
+    // reproduce, so the disagreement is worth a line rather than a silent
+    // correction.
+    uint32_t ruleBase = 0;
     for (auto it = prepared.rbegin(); it != prepared.rend(); ++it)
+    {
+        if (it->isResolve)
+            continue;
+        ruleBase = it->surfaceBase;
+        break;
+    }
+    if (havePresent && ruleBase != 0 && ruleBase != presentBase)
+        lucent::warn("draw", "the guest's front buffer names surface {:#x} but the"
+            " last-geometry-draw rule would have picked {:#x} -- presenting the"
+            " guest's. Before this frame the rule decided, and on frames like it the"
+            " window showed the wrong buffer", presentBase, ruleBase);
+    for (auto it = prepared.rbegin(); !havePresent && it != prepared.rend(); ++it)
     {
         if (it->isResolve)
             continue;
@@ -5099,7 +5142,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             for (const auto& [base, r] : P.resolveTargets)
                 dl.add(" {:#x}<-{}", base, r.copies);
             dl.flush(lucent::Level::Info, "draw");
-            lucent::info("draw", "render-target cache: presented surface {:#x};"
+            lucent::info("draw", "render-target cache: presented surface {:#x} (chosen by"
+            " the guest's front-buffer address);"
                 " resolves issued {}, skipped {}; {} distinct"
                 " RB_DEPTH_INFO depth bases (one shared host depth image)",
                 presentBase, issuedResolves, skippedResolves, depthBases.size());

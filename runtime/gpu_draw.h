@@ -86,6 +86,17 @@ struct FrameDrawInputs
     // summary lines and the PPM screenshot. ~40 ms, which is most of a warm
     // frame -- it belongs to a capture, not to every frame of a live run.
     bool report = true;
+
+    // THE FRONT BUFFER THE GUEST NAMED, from the swap packet that ended this frame
+    // (VdSwap's data[0], physical, alias bits included). Zero when unknown.
+    //
+    // The renderer used to decide what to present by rule -- the surface the last
+    // geometry draw wrote -- which is a guess that happens to be right on this
+    // title's pipeline. The guest states the answer outright, and a frame where the
+    // guess and the statement disagree is a frame presenting the wrong buffer: the
+    // scene's linear-light HDR surface instead of the tonemapped one, say, which
+    // looks like flat unlit grey with all the texture detail present.
+    uint32_t frontBufferAddress = 0;
     // A monotonic frame index. When >= 0, a reported frame's screenshot is named
     // frame_<sequence>.ppm rather than overwriting frame.ppm, so a menu walk
     // leaves a filmstrip instead of only its last frame.
