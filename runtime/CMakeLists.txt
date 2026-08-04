@@ -149,6 +149,14 @@ add_executable(gears1
     kernel_file.cpp
     "${IMPORT_STUBS}")
 
+execute_process(COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}/.." rev-parse --short HEAD
+                OUTPUT_VARIABLE GEARS_GIT_REV OUTPUT_STRIP_TRAILING_WHITESPACE
+                ERROR_QUIET)
+if(NOT GEARS_GIT_REV)
+    set(GEARS_GIT_REV "unknown")
+endif()
+set_source_files_properties(main.cpp PROPERTIES COMPILE_DEFINITIONS
+                            "GEARS_BUILD_REVISION=\"${GEARS_GIT_REV}\"")
 target_include_directories(gears1 PRIVATE . "${THIRDPARTY_ROOT}/xxHash")
 target_link_libraries(gears1 PRIVATE gears_ppc XenonUtils lucent::lucent)
 
