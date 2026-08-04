@@ -1154,11 +1154,11 @@ struct CommandProcessor
         // The renderer does not copy this much per frame: it uploads only the
         // ranges the frame's draws actually fetch (a few MiB), so the span costs
         // address space rather than bandwidth.
-        in.guestPhysicalMirrorBytes = 0x20000000; // 512 MiB
+        in.guestPhysicalMirrorBytes = gears::kGuestPhysicalMirrorBytes;
         // Textures live anywhere in the console's 512 MiB of physical RAM,
         // which is mapped at the 0x0 alias; the texture decoder reads it
         // directly (bounds-checked) rather than through the SSBO mirror.
-        in.guestWindowBytes = 0x20000000; // 512 MiB
+        in.guestWindowBytes = gears::kGuestPhysicalMirrorBytes;
         in.draws = std::move(frameDraws);
         // A capture run reports on its last frame. A live run reports never,
         // unless GEARS_DRAW_FRAME_REPORT_EVERY=N asks for a periodic census and
