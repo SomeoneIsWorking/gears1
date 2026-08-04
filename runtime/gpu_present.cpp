@@ -177,6 +177,13 @@ struct Presenter
     // diagnostic must not share a resource with the path it is checking.
     bool EnsurePresentCapture(VkDeviceSize size);
     void WritePresentedFrame(uint32_t width, uint32_t height, VkFormat format);
+    // One look at the numbers of a real presented frame, to catch the frame
+    // being finished-looking-but-not-finished. Runs once per run.
+    void CheckPresentedFrameLooksFinished(uint32_t width, uint32_t height,
+                                          VkFormat format);
+    bool presentedFrameChecked = false;
+    uint32_t presentedFrameSamples = 0;
+    uint32_t presentedFrameBestP99 = 0;
     bool PresentOne(uint32_t sequence);
     void PumpEvents();
 };
@@ -648,6 +655,72 @@ bool Presenter::EnsurePresentCapture(VkDeviceSize size)
     return true;
 }
 
+// Does the frame on its way to the screen look like a FINISHED frame?
+//
+// A reported symptom this project could never reproduce: the window showing flat
+// grey, every texture detail present, no lighting contrast, everything squeezed
+// into the bottom third of the range. That is what a pre-tonemap linear-light
+// buffer looks like presented as if it were display-ready -- and from inside the
+// runtime it is indistinguishable from a correct dark scene unless somebody looks
+// at the numbers.
+//
+// So the numbers get looked at, once, on a real presented frame: the 99th
+// percentile of luminance. A finished frame has highlights -- UI text, a sky, a
+// specular -- and reaches near the top of the range. A linear-light buffer does
+// not. The threshold is deliberately low so a genuinely dark scene does not trip
+// it; the case this is for sits at 0.30.
+void Presenter::CheckPresentedFrameLooksFinished(uint32_t width, uint32_t height,
+                                                 VkFormat format)
+{
+    if (presentCaptureMapped == nullptr || presentedFrameChecked)
+        return;
+    const bool bgr = format == VK_FORMAT_B8G8R8A8_UNORM ||
+                     format == VK_FORMAT_B8G8R8A8_SRGB;
+    const uint8_t* px = static_cast<const uint8_t*>(presentCaptureMapped);
+    uint64_t histogram[256] = {};
+    const uint64_t pixels = uint64_t(width) * height;
+    for (uint64_t i = 0; i < pixels; ++i)
+    {
+        const uint8_t r = px[i * 4 + (bgr ? 2 : 0)];
+        const uint8_t g = px[i * 4 + 1];
+        const uint8_t b = px[i * 4 + (bgr ? 0 : 2)];
+        ++histogram[std::max({r, g, b})];
+    }
+    uint64_t seen = 0;
+    uint32_t p99 = 0;
+    for (uint32_t v = 0; v < 256; ++v)
+    {
+        seen += histogram[v];
+        if (seen >= pixels * 99 / 100) { p99 = v; break; }
+    }
+    // KEEP LOOKING until a frame has highlights, rather than judging the first one
+    // sampled. The title's opening minute is legitimately black -- logos fading in,
+    // a dark cell -- so one flat sample proves nothing. A run that never produces a
+    // frame with highlights, across samples spanning a couple of minutes, is the
+    // case worth a warning.
+    ++presentedFrameSamples;
+    presentedFrameBestP99 = std::max(presentedFrameBestP99, p99);
+    if (p99 >= 90)
+    {
+        presentedFrameChecked = true;
+        lucent::info("present", "presented frame checked after {} sample(s):"
+            " 99th-percentile brightness {}/255, so what reaches the screen has"
+            " highlights and is not an untonemapped buffer", presentedFrameSamples,
+            p99);
+    }
+    else if (presentedFrameSamples >= 12)
+    {
+        presentedFrameChecked = true;
+        lucent::warn("present", "{} presented frames sampled over this run and the"
+            " brightest 99th percentile any of them reached was {}/255: nothing that"
+            " reaches the screen has highlights. A finished frame reaches the top of"
+            " the range somewhere -- UI text, a light, a sky. This is what an"
+            " untonemapped linear-light buffer looks like presented as display-ready;"
+            " check the presented surface against the guest's front-buffer address in"
+            " the draw log", presentedFrameSamples, presentedFrameBestP99);
+    }
+}
+
 void Presenter::WritePresentedFrame(uint32_t width, uint32_t height,
                                     VkFormat format)
 {
@@ -942,10 +1015,21 @@ bool Presenter::PresentOne(uint32_t sequence)
     // PRESENT_SRC afterwards. Only when a capture was requested AND the surface
     // permits TRANSFER_SRC -- otherwise the swapchain was created without it and
     // the copy would be invalid.
-    const bool capturingThisFrame =
-        presentCaptureWanted > 0 && sequence >= presentCaptureAfter &&
+    // ONE SELF-CHECK PER RUN, unasked. The dump below is opt-in and needs a flag
+    // nobody remembers; this reads a single real presented frame, once, a few
+    // hundred presents in (by which time the title is past its black startup), and
+    // says whether what reaches the screen has any highlights in it. It is the only
+    // thing in the runtime that looks at what a person actually sees.
+    const bool selfCheckThisFrame =
+        !presentedFrameChecked && presentCount > 300 &&
+        (presentCount % 300) == 0 && uploadedGuest &&
         canCapturePresented &&
         EnsurePresentCapture(VkDeviceSize(extent.width) * extent.height * 4);
+    const bool capturingThisFrame =
+        (presentCaptureWanted > 0 && sequence >= presentCaptureAfter &&
+         canCapturePresented &&
+         EnsurePresentCapture(VkDeviceSize(extent.width) * extent.height * 4)) ||
+        selfCheckThisFrame;
     if (capturingThisFrame)
     {
         VkImageMemoryBarrier toSrc = toClear;
@@ -997,8 +1081,13 @@ bool Presenter::PresentOne(uint32_t sequence)
         if (vkWaitForFences(device, 1, &submitted[slot], VK_TRUE,
                             UINT64_MAX) == VK_SUCCESS)
         {
-            WritePresentedFrame(extent.width, extent.height, format);
-            --presentCaptureWanted;
+            if (selfCheckThisFrame)
+                CheckPresentedFrameLooksFinished(extent.width, extent.height, format);
+            if (presentCaptureWanted > 0 && sequence >= presentCaptureAfter)
+            {
+                WritePresentedFrame(extent.width, extent.height, format);
+                --presentCaptureWanted;
+            }
         }
         else
         {
