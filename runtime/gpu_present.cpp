@@ -1,12 +1,12 @@
 // Host graphics backend: window, Vulkan swapchain, present.
 //
 // SCOPE. This translation unit puts a window on screen and flips it once per
-// guest frame. It does not draw the game: it clears the swapchain image to a
-// colour derived from the guest's own VdSwap sequence number. That is the whole
-// point of this milestone -- the content is deliberately synthetic so that a
-// window which changes colour is unambiguous proof that the guest's frame loop
-// is driving host presentation, and cannot be mistaken for the title rendering.
-// No shader translation, no textures, no geometry, no EDRAM resolve.
+// guest frame. It owns the window, the swapchain and the present queue and
+// nothing else: the pixels come from the guest-draw backend (gpu_draw.cpp),
+// which renders every draw of the frame and publishes the resulting image on
+// the shared device for this file to blit into the swapchain. A frame that has
+// not been drawn yet presents black -- there is no substitute content, because
+// a substitute is indistinguishable from the renderer working.
 //
 // WHERE PRESENT COMES FROM. Not a host timer. gears::PresentFrame is called by
 // the command processor when it executes an accepted swap packet -- the packet
@@ -49,7 +49,6 @@
 
 #include <atomic>
 #include <chrono>
-#include <cmath>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
@@ -87,26 +86,6 @@ const char* ResultName(VkResult r)
     }
 }
 
-// The synthetic frame colour. Full-saturation hue sweep keyed on the guest's
-// VdSwap sequence, so consecutive guest frames are visibly different and a
-// stalled guest is visible as a frozen colour.
-void FrameColour(uint32_t sequence, float rgb[3])
-{
-    const float hue = float(sequence % 180u) * (6.0f / 180.0f); // 0..6
-    const int sector = int(hue) % 6;
-    const float f = hue - std::floor(hue);
-    const float q = 1.0f - f;
-    switch (sector)
-    {
-    case 0: rgb[0] = 1; rgb[1] = f; rgb[2] = 0; break;
-    case 1: rgb[0] = q; rgb[1] = 1; rgb[2] = 0; break;
-    case 2: rgb[0] = 0; rgb[1] = 1; rgb[2] = f; break;
-    case 3: rgb[0] = 0; rgb[1] = q; rgb[2] = 1; break;
-    case 4: rgb[0] = f; rgb[1] = 0; rgb[2] = 1; break;
-    default: rgb[0] = 1; rgb[1] = 0; rgb[2] = q; break;
-    }
-}
-
 struct Presenter
 {
     // --- host objects, touched only by the present thread -------------------
@@ -130,8 +109,6 @@ struct Presenter
 
     VkPhysicalDeviceMemoryProperties memProps{};
 
-    // Staging buffer for uploading a real guest frame (from the guest-draw
-    // backend) into the swapchain image instead of the synthetic clear.
     // Whether the surface permits reading the presented image back. Reported rather
     // than assumed: if it is false the capture is simply unavailable, and a request
     // for one has to say so instead of writing nothing and looking like it worked.
@@ -140,6 +117,10 @@ struct Presenter
     // one-shot note so the fast path announces itself once rather than every frame.
     uint64_t lastBlittedFrame = 0;
     bool announcedBlit = false;
+    // Presents that had no drawn frame to show and went out black. Reported, so
+    // "the window was black" is a number rather than an impression.
+    uint64_t blankPresents = 0;
+    bool announcedBlank = false;
     VkBuffer presentCapture = VK_NULL_HANDLE;
     VkDeviceMemory presentCaptureMem = VK_NULL_HANDLE;
     void* presentCaptureMapped = nullptr;
@@ -736,11 +717,10 @@ bool Presenter::PresentOne(uint32_t sequence)
     vkCmdPipelineBarrier(commands[slot], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toClear);
 
-    // If the guest-draw backend has produced a real frame, present THAT (copied
-    // in through a staging buffer) instead of the synthetic colour. The guest
-    // frame is R8G8B8A8; the swapchain image is B8G8R8A8, so swap R/B on the way
-    // in. When there is no guest frame, fall back to the synthetic hue sweep so
-    // the present path is still exercised.
+    // The frame the guest-draw backend rendered, and nothing else. Two ways in:
+    // a blit from the drawn image when the draw path shares this device, or a
+    // copy through a staging buffer when it does not. Until the first frame is
+    // drawn the swapchain image is cleared to black -- see the clear below.
     bool uploadedGuest = false;
 
     // PREFER A BLIT FROM THE DRAWN IMAGE. When the draw path adopted this device it
@@ -809,15 +789,28 @@ bool Presenter::PresentOne(uint32_t sequence)
     }
     if (!uploadedGuest)
     {
-        float rgb[3];
-        FrameColour(sequence, rgb);
-        VkClearColorValue colour{};
-        colour.float32[0] = rgb[0];
-        colour.float32[1] = rgb[1];
-        colour.float32[2] = rgb[2];
-        colour.float32[3] = 1.0f;
+        // No drawn frame for this swap: present black. A swapchain image is
+        // acquired in UNDEFINED layout, so something must write it or the window
+        // shows whatever was in that memory.
+        //
+        // Say so, rather than presenting a colour and letting the window look
+        // alive: a black window and a window presenting substitute content are
+        // indistinguishable from the outside, and the second one lies. Counted
+        // and reported once, because the early frames of every run legitimately
+        // land here -- the guest swaps before the renderer has a frame.
+        VkClearColorValue black{};
+        black.float32[3] = 1.0f;
         vkCmdClearColorImage(commands[slot], images[imageIndex],
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &colour, 1, &range);
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+        ++blankPresents;
+        if (!announcedBlank)
+        {
+            announcedBlank = true;
+            lucent::info("present", "presenting BLACK: the guest swapped (sequence {})"
+                " before the draw backend published a frame. Every present until the"
+                " first drawn frame is black, and the count is reported at shutdown.",
+                sequence);
+        }
     }
 
     // CAPTURE WHAT IS ABOUT TO BE PRESENTED, when asked. The image is in
@@ -958,7 +951,7 @@ void Presenter::Thread()
         return;
     }
 
-    window = SDL_CreateWindow("gears1 (synthetic present test)",
+    window = SDL_CreateWindow("gears1",
         int(kWindowWidth), int(kWindowHeight), SDL_WINDOW_VULKAN);
     if (window == nullptr)
     {
@@ -1001,8 +994,8 @@ void Presenter::Thread()
             presentCaptureWanted);
     }
 
-    lucent::info("present", "window up; presenting on the guest's VdSwap."
-        " The colour sweep is SYNTHETIC -- nothing of the game is drawn.");
+    lucent::info("present", "window up; presenting the drawn guest frame on the"
+        " guest's VdSwap. Presents before the first drawn frame go out black.");
     running = true;
     lastReport = std::chrono::steady_clock::now();
 
@@ -1047,9 +1040,10 @@ void Presenter::Thread()
             const double seconds =
                 std::chrono::duration<double>(finish - lastReport).count();
             lastReport = finish;
-            lucent::info("present", "{} presents, last 300 in {:.2f}s ({:.2f} fps),"
-                " mean present cost {:.2f} ms",
-                presentCount, seconds, seconds > 0 ? 300.0 / seconds : 0.0,
+            lucent::info("present", "{} presents ({} black, no drawn frame yet),"
+                " last 300 in {:.2f}s ({:.2f} fps), mean present cost {:.2f} ms",
+                presentCount, blankPresents, seconds,
+                seconds > 0 ? 300.0 / seconds : 0.0,
                 double(presentMicros) / double(presentCount) / 1000.0);
         }
 
@@ -1068,7 +1062,7 @@ namespace gears
 
 bool PresenterStart()
 {
-    if (getenv("GEARS_NO_WINDOW") != nullptr)
+    if (lucent::config::flag("NO_WINDOW"))
     {
         lucent::warn("present", "GEARS_NO_WINDOW set: no host window, no presentation");
         return false;

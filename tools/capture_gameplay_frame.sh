@@ -24,7 +24,6 @@ set -eu
 SECONDS_TO_RUN="${1:-180}"
 [ $# -gt 0 ] && shift
 
-: "${GEARS_DRAW_FRAME:=1}"
 : "${GEARS_DRAW_FRAME_AT:=1500}"
 : "${GEARS_DRAW_FRAME_COUNT:=0}"
 : "${GEARS_DRAW_FRAME_REPORT_EVERY:=60}"
@@ -34,7 +33,7 @@ SECONDS_TO_RUN="${1:-180}"
 # The game's own files, extracted from the user's disc image (see README).
 : "${GEARS_GAME_DIR:=scratch/game}"
 
-export GEARS_DRAW_FRAME GEARS_DRAW_FRAME_AT GEARS_DRAW_FRAME_COUNT \
+export GEARS_DRAW_FRAME_AT GEARS_DRAW_FRAME_COUNT \
        GEARS_DRAW_FRAME_REPORT_EVERY GEARS_NO_WINDOW GEARS_INPUT_SCRIPT
 
 # Kill only the process this script started, by PID -- never by name, because
