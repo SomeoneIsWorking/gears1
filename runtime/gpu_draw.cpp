@@ -1242,6 +1242,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                                  std::min(gv.scissorH, H - std::min(gv.scissorY, H))};
         }
         draw::DumpVertices(R, in, *vsX, issued, pd.diagIndex);
+        draw::DumpVsConstants(*vsX, UC, d.vsHash, issued, pd.diagIndex);
         // What this draw fetches, and whether the mirror covers it, is in
         // gpu_draw_vertexfetch.{h,cpp}.
         draw::CollectFetchRanges(R, in, *vsX, *psX, CN, fetchRanges);
@@ -2238,6 +2239,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         {
             CN.ReportReach(in.guestPhysicalMirrorBytes);
         }
+        // What the draw-index knobs actually selected. A knob that matched
+        // nothing has to say so: silence is what a draw with nothing to show
+        // produces too.
+        draw::ReportDrawSelections();
         // A NEGATIVE THAT CARRIES ITS DENOMINATOR: "no signed fetches" has to be
         // distinguishable from "nobody looked".
         if (TB.fetchesWithSigns.empty())
