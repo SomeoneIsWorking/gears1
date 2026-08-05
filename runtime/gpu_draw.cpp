@@ -50,6 +50,7 @@
 #include "gpu_draw_arena.h"
 #include "gpu_draw_pipelines.h"
 #include "gpu_draw_probe.h"
+#include "gpu_draw_uniforms.h"
 #include "gpu_draw_shaders.h"
 
 namespace gears
@@ -460,8 +461,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // containers out was tried first on a hunch and moved it by 1 ms.
     double msDescAlloc = 0, msDescUpdate = 0, msUniforms = 0, msIndex = 0;
     // Uniform-cache accounting; see the hit test in the draw loop.
-    uint64_t uboLookups = 0, uboHits = 0, uboMissSnapshot = 0, uboMissShaders = 0;
-    uint64_t uboRecomputes = 0, uboRecomputesIdentical = 0;
     double msState = 0, msRecord = 0, msCensus = 0;
     // Inside the record region, which is the biggest item in a gameplay frame.
     // msDescWrite is a SUPERSET of msDescUpdate: it is assembling the writes AND
@@ -1099,13 +1098,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     w.reserve(32);
 
     // The constant blocks, reused across draws (see the cache check below).
-    std::vector<uint8_t> syscBuf, fVsBuf, fPsBuf, boolLoopBuf, fetchBuf;
-    VkDescriptorBufferInfo biSysCache{}, biFvsCache{}, biFpsCache{};
-    VkDescriptorBufferInfo biBlCache{}, biFetchCache{};
-    const void* uboCacheSnapshot = nullptr;
-    uint64_t uboCacheVs = 0, uboCachePs = 0;
-    bool uboCacheValid = false;
-    uint64_t uboRebuilds = 0, uboReuses = 0;
+    // The constant blocks and their cache; see gpu_draw_uniforms.h.
+    draw::UniformCache UC(AR);
     // THE DESCRIPTOR SETS RIDE THE SAME CACHE. A draw's four sets are determined
     // by exactly what the uniform blocks are determined by -- the register
     // snapshot and the shader pair -- plus the resolve-target map, which changes
@@ -1465,136 +1459,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                          d.primType, om, rp->first, pipeLayout, pipe))
         { ++skipped; ++skipReasons[3]; continue; }
 
-        // Per-draw constant UBOs.
-        //
-        // These derive ONLY from the register snapshot and the two shaders'
-        // constant bitmaps, so consecutive draws that share a snapshot and a
-        // shader pair produce byte-identical blocks. Recomputing and re-writing
-        // them per draw meant five heap allocations and five arena copies each
-        // -- about 3500 allocations in a gameplay frame -- for data that had
-        // not changed. Reuse the previous result when the inputs are the same
-        // ones; correctness comes from the inputs being the whole input, not
-        // from a heuristic.
+        // The five per-draw constant blocks and the cache that keeps consecutive
+        // draws from repacking identical bytes live in gpu_draw_uniforms.{h,cpp}.
         const double uniformsBegin = sinceStartMs();
         msState += uniformsBegin - stateBegin;
-        const bool sameConstants = uboCacheValid &&
-                                   uboCacheSnapshot == d.registerFile.get() &&
-                                   uboCacheVs == d.vsHash && uboCachePs == d.psHash;
-        // IS THE CACHE ACTUALLY HITTING? Uniforms are 118 ms of a 187 ms frame, and
-        // this cache exists precisely to avoid that work -- so either it misses far
-        // more than expected, or the miss path is much more expensive than it looks.
-        // The comparison is by POINTER on the register snapshot, so a draw carrying
-        // its own copy would never match however identical the contents.
-        ++uboLookups;
-        if (sameConstants)
-            ++uboHits;
-        else if (uboCacheValid)
-        {
-            // Which part of the key differed. A snapshot-pointer miss with equal
-            // shader hashes is the shape that would mean the cache can never work.
-            if (uboCacheSnapshot != d.registerFile.get())
-                ++uboMissSnapshot;
-            else
-                ++uboMissShaders;
-        }
-        if (!sameConstants)
-        {
-            // MEASURING THE HEADROOM, gated because it costs an extra copy and
-            // compare per miss. Every uniform-cache miss is on the register snapshot
-            // POINTER -- 114 of 114 in a measured frame, none on the shader pair --
-            // and the snapshot is already shared between draws that changed no
-            // register, so those misses mean the guest really did write registers.
-            //
-            // But a register write does not imply the UNIFORM blocks changed: the
-            // guest may have touched a viewport or a state register that feeds none
-            // of them. This counts how often the recomputed blocks come out
-            // byte-identical to the ones already cached, which is exactly the work a
-            // content comparison would let us skip. Without this number, narrowing
-            // the cache key would be a guess at where the time goes.
-            const bool measureHeadroom = lucent::config::flag("DRAW_UBOCHECK");
-            std::vector<uint8_t> prevSysc, prevFvs, prevFps, prevBl, prevFetch;
-            if (measureHeadroom && uboCacheValid)
-            {
-                prevSysc = syscBuf; prevFvs = fVsBuf; prevFps = fPsBuf;
-                prevBl = boolLoopBuf; prevFetch = fetchBuf;
-            }
-
-            syscBuf = draw::DeriveSystemConstants(R);
-            fVsBuf = PackFloatConstants(R, vsX->floatBitmap, vsX->floatCount, 0x4000);
-            fPsBuf = PackFloatConstants(R, psX->floatBitmap, psX->floatCount, 0x4400);
-            // CONTROL ARM. GEARS_DRAW_PS_CONST_SET=<pshash>:<i>=<x>,<y>,<z>,<w>
-            // (';'-separated for several) replaces one packed float constant of one
-            // pixel shader. It answers exactly one question -- "is the picture wrong
-            // because of THIS number?" -- by substituting the value a working
-            // capture has. It is never a fix: the number comes from the guest, and
-            // a wrong one is a bug on the CPU side, not here.
-            if (const std::string& setSpec = lucent::config::text("DRAW_PS_CONST_SET");
-                !setSpec.empty())
-            {
-                size_t at = 0;
-                while (at < setSpec.size())
-                {
-                    const size_t end = std::min(setSpec.find(';', at), setSpec.size());
-                    const std::string one = setSpec.substr(at, end - at);
-                    at = end + 1;
-                    const size_t colon = one.find(':'), eq = one.find('=');
-                    if (colon == std::string::npos || eq == std::string::npos || eq < colon)
-                    { lucent::warn("draw", "GEARS_DRAW_PS_CONST_SET: cannot parse"
-                        " '{}', expected <pshash>:<index>=<x>,<y>,<z>,<w>", one); continue; }
-                    const uint64_t h = std::strtoull(one.c_str(), nullptr, 16);
-                    if (h != d.psHash)
-                        continue;
-                    const uint32_t idx = uint32_t(std::strtoul(
-                        one.c_str() + colon + 1, nullptr, 10));
-                    float v[4] = {0, 0, 0, 0};
-                    const char* p = one.c_str() + eq + 1;
-                    for (float& f : v)
-                    { char* nxt = nullptr; f = std::strtof(p, &nxt);
-                      if (nxt == p) break; p = (*nxt == ',') ? nxt + 1 : nxt; }
-                    if ((idx + 1) * 16 > fPsBuf.size())
-                    { lucent::warn("draw", "GEARS_DRAW_PS_CONST_SET: ps {:#x} has"
-                        " {} packed constants, so index {} DOES NOT EXIST and was"
-                        " NOT applied", d.psHash, psX->floatCount, idx); continue; }
-                    std::memcpy(fPsBuf.data() + size_t(idx) * 16, v, 16);
-                    lucent::info("draw", "GEARS_DRAW_PS_CONST_SET: ps {:#x} c[{}]"
-                        " forced to ({}, {}, {}, {})", d.psHash, idx,
-                        v[0], v[1], v[2], v[3]);
-                }
-            }
-            boolLoopBuf.resize(sizeof(uint32_t) * (8 + 32));
-            std::memcpy(boolLoopBuf.data(), &R[0x4900], boolLoopBuf.size());
-            fetchBuf.resize(sizeof(uint32_t) * 6 * 32);
-            std::memcpy(fetchBuf.data(), &R[0x4800], fetchBuf.size());
-
-            if (!AR.MakeUbo(syscBuf.data(), syscBuf.size(), biSysCache) ||
-                !AR.MakeUbo(fVsBuf.data(), fVsBuf.size(), biFvsCache) ||
-                !AR.MakeUbo(fPsBuf.data(), fPsBuf.size(), biFpsCache) ||
-                !AR.MakeUbo(boolLoopBuf.data(), boolLoopBuf.size(), biBlCache) ||
-                !AR.MakeUbo(fetchBuf.data(), fetchBuf.size(), biFetchCache))
-            { uboCacheValid = false; ++skipped; ++skipReasons[4]; continue; }
-
-            if (measureHeadroom && !prevSysc.empty())
-            {
-                ++uboRecomputes;
-                if (prevSysc == syscBuf && prevFvs == fVsBuf &&
-                    prevFps == fPsBuf && prevBl == boolLoopBuf &&
-                    prevFetch == fetchBuf)
-                    ++uboRecomputesIdentical;
-            }
-
-            uboCacheValid = true;
-            uboCacheSnapshot = d.registerFile.get();
-            uboCacheVs = d.vsHash;
-            uboCachePs = d.psHash;
-            ++uboRebuilds;
-        }
-        else
-        {
-            ++uboReuses;
-        }
-        VkDescriptorBufferInfo biSys = biSysCache, biFvs = biFvsCache;
-        VkDescriptorBufferInfo biFps = biFpsCache, biBl = biBlCache;
-        VkDescriptorBufferInfo biFetch = biFetchCache;
+        const draw::UniformCache::Result ur = UC.Update(R, d, *vsX, *psX);
+        if (ur == draw::UniformCache::Result::kFailed)
+        { ++skipped; ++skipReasons[4]; continue; }
+        VkDescriptorBufferInfo biSys = UC.biSys, biFvs = UC.biFvs;
+        VkDescriptorBufferInfo biFps = UC.biFps, biBl = UC.biBl;
+        VkDescriptorBufferInfo biFetch = UC.biFetch;
+        const bool sameConstants = ur == draw::UniformCache::Result::kReused;
         msUniforms += sinceStartMs() - uniformsBegin;
         const double indexBegin = sinceStartMs();
 
@@ -2058,7 +1933,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             const uint32_t c255bits = R[0x4400 + 255 * 4];
             std::memcpy(&psC255, &c255bits, 4);
             dl.add(" vsconst {}/{} nz, psconst {}/{} nz, ps c255.x={} ({:#x})",
-                   nonZero(fVsBuf), vsX->floatCount, nonZero(fPsBuf), psX->floatCount,
+                   nonZero(UC.fVs), vsX->floatCount, nonZero(UC.fPs), psX->floatCount,
                    psC255, c255bits);
             // GEARS_DRAW_PS_CONSTS=<hash> prints the pixel float constants a named
             // shader actually received, as the numbers the shader will multiply by.
@@ -2077,11 +1952,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                            " shader's own packed order):", issued, d.psHash,
                            psX->floatCount);
                     for (uint32_t i = 0; i < psX->floatCount &&
-                                         (i + 1) * 16 <= fPsBuf.size(); ++i)
+                                         (i + 1) * 16 <= UC.fPs.size(); ++i)
                     {
                         float v[4]; uint32_t b[4];
-                        std::memcpy(v, fPsBuf.data() + size_t(i) * 16, 16);
-                        std::memcpy(b, fPsBuf.data() + size_t(i) * 16, 16);
+                        std::memcpy(v, UC.fPs.data() + size_t(i) * 16, 16);
+                        std::memcpy(b, UC.fPs.data() + size_t(i) * 16, 16);
                         // The RAW BITS as well, because a NaN or an inf printed as
                         // a word says nothing about where it came from: 0xffffffff
                         // is uninitialised memory, 0x7fc00000 is arithmetic, and the
@@ -2939,15 +2814,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // and that failure would look exactly like "the constants really do change".
         lucent::info("draw", "uniform cache: {} lookup(s), {} hit ({:.1f}%);"
             " misses: {} on the register snapshot, {} on the shader pair",
-            uboLookups, uboHits,
-            uboLookups ? 100.0 * double(uboHits) / double(uboLookups) : 0.0,
-            uboMissSnapshot, uboMissShaders);
-        if (uboRecomputes != 0)
+            UC.lookups, UC.hits,
+            UC.lookups ? 100.0 * double(UC.hits) / double(UC.lookups) : 0.0,
+            UC.missSnapshot, UC.missShaders);
+        if (UC.recomputes != 0)
             lucent::info("draw", "uniform headroom: of {} recompute(s) measured,"
                 " {} produced BYTE-IDENTICAL blocks ({:.1f}%) -- that is the work a"
-                " content comparison would skip", uboRecomputes,
-                uboRecomputesIdentical,
-                100.0 * double(uboRecomputesIdentical) / double(uboRecomputes));
+                " content comparison would skip", UC.recomputes,
+                UC.recomputesIdentical,
+                100.0 * double(UC.recomputesIdentical) / double(UC.recomputes));
         else
             lucent::info("draw", "uniform headroom: not measured (set"
                 " GEARS_DRAW_UBOCHECK=1); a percentage cannot be inferred from the"
