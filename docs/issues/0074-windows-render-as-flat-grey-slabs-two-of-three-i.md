@@ -112,3 +112,27 @@ re-open this as a clipping bug; the clip is exonerated on measurement.
 
 ### Note (2026-08-05)
 Clipping exonerated by measurement: the three 'identical' draws differ in their world matrix (GEARS_DRAW_VS_CONSTS, new) and 286/287 are genuinely outside the frustum -- 286 behind the camera. See the RETRACTED section and tools/clip_volume_check.py.
+
+### Note (2026-08-05)
+Frame-wide context, so the next reader does not re-ask it. 276 of 552 draws in
+courtyard.gfr die at clipping, which invites "then the clip is systemically
+wrong". Broken down by pass (diag table + tools/pass_structure.py):
+
+    PREPASS    115 of 167 killed (69%)
+    BASEPASS   121 of 175 killed (69%)
+    OCCLUSION    1 of  90 killed
+    NO_OP        0 of  48 killed
+
+The depth prepass and the base pass draw the same visible set from the same
+view, and they agree to within a percent -- the same objects are being thrown
+away in both. A clip that was miscomputing positions would not land on the same
+fraction twice through two different shader sets; a guest submitting a
+conservatively-culled set would. 175 base-pass draws is also far short of a
+whole UE3 level, so the title IS culling on the CPU, just coarsely.
+
+This is consistency reasoning, NOT a measurement that the clip is correct
+frame-wide. The only draws proven correct-to-clip are 286/287
+(tools/clip_volume_check.py). Proving it at frame scale needs the vertex
+shaders' actual clip-space output -- transform feedback on a killed draw --
+which nothing here has, because the per-shader constant layout that made the
+286/287 arithmetic possible does not generalise across shaders.
