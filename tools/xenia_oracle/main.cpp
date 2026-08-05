@@ -42,9 +42,12 @@
 #include "xenia/base/string.h"
 #include "xenia/emulator.h"
 #include "xenia/gpu/graphics_system.h"
-#include "xenia/apu/nop/nop_audio_system.h"
+#include "xenia/apu/sdl/sdl_audio_system.h"
 #include "xenia/gpu/vulkan/vulkan_graphics_system.h"
+#include "xenia/hid/input_driver.h"
 #include "xenia/ui/presenter.h"
+
+#include "scripted_input.h"
 
 #include "third_party/stb/stb_image_write.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
@@ -70,6 +73,14 @@ DEFINE_int32(oracle_seconds, 120, "How long to let the title run, in seconds.",
 DEFINE_int32(oracle_interval, 10,
              "Seconds between captured frames. One capture per interval.",
              "Oracle");
+// A headless run has no operator, and this title does not leave its title
+// screen or its storage-device dialog on its own -- it waits, and every frame
+// captured is black for as long as it waits. The default is what a person does
+// to get in: START once the title screen is up, then A over and over.
+DEFINE_string(oracle_input, "START@25+8,A@30+2",
+              "Scripted controller presses, BUTTON@SECONDS[+REPEAT_SECONDS], "
+              "comma separated. Empty disables input entirely.",
+              "Oracle");
 
 namespace xe {
 namespace oracle {
@@ -124,22 +135,55 @@ int oracle_main(const std::vector<std::string>& args) {
     return 5;
   }
 
+  std::vector<gears::ScriptedPress> presses;
+  if (!cvars::oracle_input.empty()) {
+    std::string error;
+    if (!gears::ParseInputScript(cvars::oracle_input, presses, error)) {
+      // Refused rather than run without input: a run with a schedule that
+      // failed to parse would sit on the title screen and produce black frames
+      // that look like a rendering problem.
+      XELOGE("oracle: --oracle_input is not usable: {}. Nothing was run.",
+             error);
+      return 5;
+    }
+    XELOGI("oracle: {} scheduled press(es) from \"{}\"", presses.size(),
+           cvars::oracle_input);
+  } else {
+    XELOGW("oracle: input is DISABLED, so the title will sit wherever it first "
+           "waits for a button. Expect black frames.");
+  }
+
   auto emulator = std::make_unique<Emulator>("", "", "", "");
   // Null window, null ImGui drawer -- and offscreen presentation ON, which is
   // the whole reason a windowless run can produce an image at all.
   X_STATUS result = emulator->Setup(
       nullptr, nullptr, false, true,
-      // An audio system is NOT optional for a running title, even one nobody
-      // listens to. Passed nullptr first, and the guest booted as far as
-      // XAudioRegisterRenderDriverClient and stopped there: the title waits for
-      // the audio driver to pump it, so with no APU at all its render thread
-      // never starts and the GPU never sees a frame. The nop backend pumps
-      // without producing sound, which is exactly what a headless oracle wants.
-      apu::nop::NopAudioSystem::Create,
+      // An audio system is NOT optional for a running title, and the NOP one is
+      // not enough either. Both were measured:
+      //   nullptr      -- the guest boots as far as
+      //                   XAudioRegisterRenderDriverClient and stops; with no
+      //                   APU its render thread never starts and no frame is
+      //                   ever drawn.
+      //   nop          -- the guest gets further, draws ~124 frames, then
+      //                   CRASHES inside its own render-driver callback:
+      //                   PC 0x825F39F4, read of 0x10000003C, where 0x825F3450
+      //                   is the callback it registered. Silent until the crash
+      //                   dump was moved ahead of Emulator::Pause().
+      // So a real backend it is. SDL with SDL_AUDIODRIVER=dummy needs no sound
+      // device, which keeps this usable on a machine with no audio at all.
+      apu::sdl::SDLAudioSystem::Create,
       []() -> std::unique_ptr<gpu::GraphicsSystem> {
         return std::make_unique<gpu::vulkan::VulkanGraphicsSystem>();
       },
-      nullptr);
+      [&presses](ui::Window* window)
+          -> std::vector<std::unique_ptr<hid::InputDriver>> {
+        std::vector<std::unique_ptr<hid::InputDriver>> drivers;
+        if (!presses.empty()) {
+          drivers.push_back(std::make_unique<gears::ScriptedInputDriver>(
+              window, 0, presses));
+        }
+        return drivers;
+      });
   if (XFAILED(result)) {
     XELOGE("oracle: failed to set up the emulator: {:08X}", result);
     return 4;
