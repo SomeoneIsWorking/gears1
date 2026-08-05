@@ -5,7 +5,7 @@ status: open
 symptom: our in-game frame is missing the character and HUD, windows are flat grey blocks, vertical streaking, lifted blacks
 tags: render,oracle,gameplay-scene
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 ---
 
 The first oracle-backed comparison of an in-game frame, both sides headless and
@@ -95,3 +95,41 @@ The offline loop is what makes this cheap to pursue: `frame_replay` on
 scratch/frames/courtyard.gfr reproduces the symptom in about fifteen seconds
 (same wall, no character, no HUD, two of three windows flat grey, and the image
 pillarboxed inside a black border), so no further playthroughs are needed.
+
+### Note (2026-08-06)
+## The character is not being DRAWN, and the camera is under control (2026-08-06)
+
+Two measurements narrow findings 1 and 2 (no character, no HUD) considerably,
+and they move the suspicion off the renderer.
+
+FIRST, we are in real gameplay under player control. Driving the left stick
+through GEARS_INPUT_SCRIPT moves the view: across checkpoint frames 85-100% of
+pixels change, and the run ends looking at a different corner of the room from
+where it started. This is not a fixed intro camera.
+
+SECOND, the frame contains no constant-skinned geometry. Across every distinct
+vertex shader in two separate captures -- courtyard.gfr and a new walk_v3.gfr
+taken WHILE the stick was driving the camera -- the largest float-constant count
+is 25:
+
+    counts: 0 x2, 1 x5, 4 x4, 8 x3, 12 x1, 13 x2, 14 x4, 15 x1, 16 x3,
+            22 x2, 25 x1
+
+A UE3 skinned character needs a bone palette -- three float4 per bone, dozens of
+bones, so 60-200+ constants. Nothing here is close.
+
+WHAT THAT ESTABLISHES, and what it does not. It rules out the reading that the
+character's draws are issued and then lost somewhere in our backend: on this
+evidence there are no such draws to lose. It does NOT prove the guest never
+draws a pawn, because a skinned mesh whose bones arrive some other way -- a
+texture fetch, a vertex fetch from a skinning buffer, or CPU skinning -- would
+not show up in a constant count. That distinction is unresolved.
+
+Also ruled out earlier and worth keeping together: every draw fetches inside the
+SSBO mirror ("726 draws fetch vertices inside the 0x20000000-byte mirror, 0
+fetch PAST it"), so this is not the vertex data being unreachable.
+
+So the next question is a GUEST-side one -- whether the title creates and
+submits a player pawn at all -- rather than a backend one. Filed here rather
+than acted on, because it is a different area of the project from the render
+comparison this entry started as.
