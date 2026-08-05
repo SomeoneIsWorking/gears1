@@ -176,6 +176,37 @@ if(Python3_Interpreter_FOUND)
                 --dir "${CMAKE_CURRENT_BINARY_DIR}/no-such-catalog" search anything)
     set_tests_properties(instrument_catalog_refuses_empty_corpus
         PROPERTIES WILL_FAIL TRUE)
+    # frame_stats.py reports catalog #62's headline number. Its self-test
+    # includes cases that must NOT trip -- the R/B-swap detector staying silent
+    # on an unrelated pair, an all-black frame being named as black rather than
+    # handed a ratio, and the PNG reader matching the PPM reader byte for byte,
+    # without which a cross-format diff compares two decoders.
+    add_test(NAME instrument_frame_stats
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/frame_stats.py" --selftest)
+    # ... and it must REFUSE a file that is not there rather than print
+    # statistics of nothing.
+    add_test(NAME instrument_frame_stats_refuses_missing
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/frame_stats.py"
+                "${CMAKE_CURRENT_BINARY_DIR}/no-such-frame.ppm")
+    set_tests_properties(instrument_frame_stats_refuses_missing
+        PROPERTIES WILL_FAIL TRUE)
+    # Same for the capture search: a search of a corpus that is not there
+    # searched NOTHING, and must not be readable as "no matches".
+    add_test(NAME instrument_find_const_block_refuses_missing
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/find_const_block.py"
+                "${CMAKE_CURRENT_BINARY_DIR}/no-such-capture.gfr")
+    set_tests_properties(instrument_find_const_block_refuses_missing
+        PROPERTIES WILL_FAIL TRUE)
+    # clip_volume_check.py carries every number inline, so it needs no capture:
+    # it re-runs catalog #74's arithmetic, requires it to agree with the GPU on
+    # the draw that rasterised, AND requires a deliberately wrong constant
+    # layout to be rejected. A check that has only ever passed is not a check.
+    add_test(NAME instrument_clip_volume_check
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/clip_volume_check.py")
+    # The pass classifier's own self-test: cases it must accept, and one it
+    # must reject.
+    add_test(NAME instrument_pass_structure
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/pass_structure.py" --selftest)
 endif()
 
 # RtlTimeToTimeFields / RtlTimeFieldsToTime. Verified until now only by "the
