@@ -106,4 +106,60 @@ struct TextureUploader
     VkSampler GetSampler(const GuestSamplerState& gs);
 };
 
+// Which image a texture binding is served by -- the frame's own resolved
+// surface, the guest's uploaded texture, or a stub -- and the census of what
+// each frame's bindings named.
+//
+// The census is not decoration. "24 of 5278 bindings served by a resolve
+// target" was once read as a defect and retracted, and the signed-fetch tally
+// exists because this renderer leaves texture_swizzled_signs at zero: that is
+// correct only while no fetch constant asks for a signed component, which is a
+// claim about the title rather than about the renderer, so it is counted.
+struct TextureBinder
+{
+    TextureBinder(RendererPersistent& p, TextureUploader& tx,
+                  const std::set<uint32_t>& resolveDestinations,
+                  const std::set<uint32_t>& depthResolveDestinations)
+        : P(p), TX(tx), resolveDests(resolveDestinations),
+          depthResolveDests(depthResolveDestinations) {}
+
+    RendererPersistent& P;
+    TextureUploader& TX;
+    const std::set<uint32_t>& resolveDests;
+    const std::set<uint32_t>& depthResolveDests;
+
+    // GEARS_DRAW_NORT=1 restores the old behaviour of decoding a resolve
+    // destination out of stale guest memory; GEARS_DRAW_NOTEX=1 restores the
+    // stub-only frame. Both are A/B control arms, never fixes.
+    bool rtLinkEnabled = true;
+    bool texUploadEnabled = true;
+
+    // Set before ANY binding of a draw is resolved, so a sampler of resolved
+    // depth is attributed to the shader that reads it and not the previous one.
+    uint64_t currentPsHash = 0;
+
+    uint64_t bindsStub = 0;   // bindings served by a stub image
+    uint64_t bindsRt = 0;     // bindings served by a resolve target
+    uint64_t bindsGuest = 0;  // bindings served by real guest texture data
+    uint64_t Binds() const { return bindsStub + bindsRt + bindsGuest; }
+
+    // (depth resolve destination, pixel shader hash) -> bindings. Names the
+    // shaders that decode resolved depth, so their microcode can be read.
+    std::map<std::pair<uint32_t, uint64_t>, uint64_t> depthDestSamplers;
+    std::map<uint32_t, uint64_t> fetchesWithSigns;  // sign bits -> bindings
+    std::map<uint32_t, uint64_t> signedBases;       // base -> bindings wanting kSigned
+    std::map<uint32_t, uint64_t> baseCount;         // fetch base address -> bindings
+    std::map<uint32_t, uint64_t> baseRtCount;       // ... restricted to resolve destinations
+
+    // What UPLOAD cost this frame. Accumulated here because this is the only
+    // call site of TextureUploader::Upload -- reporting it under state+pipeline,
+    // where its accumulator used to be declared, made state look twice its real
+    // size and the descriptor writes a third of theirs.
+    double msUpload = 0;
+
+    // Picks the image view for one texture binding. The stub matching the
+    // shader's declared image dimension is the floor.
+    VkImageView SelectView(const uint32_t* regs, const ShaderTextureBinding& tb);
+};
+
 } // namespace gears::draw
