@@ -761,8 +761,13 @@ bool BuildResolveComputeShader(std::vector<uint32_t>& spirv)
     builder.addDecoration(imageDst, spv::DecorationDescriptorSet, 0);
     builder.addDecoration(imageDst, spv::DecorationBinding, 1);
     builder.addDecoration(imageDst, spv::DecorationNonReadable);
-    mainInterface.push_back(imageSrc);
-    mainInterface.push_back(imageDst);
+    // NOT in mainInterface. In SPIR-V 1.3 and earlier -- and this builder emits
+    // Spv_1_0 -- an OpEntryPoint interface may only name Input and Output
+    // variables; listing a UniformConstant or PushConstant one is invalid
+    // (spirv-val: "OpEntryPoint interfaces must be OpVariables with Storage
+    // Class of Input(1) or Output(3)"). SPIR-V 1.4 widened it to every global,
+    // which is where the habit comes from. The variables are still declared and
+    // still used; the interface list is metadata.
 
     // Push constants, laid out to match ResolvePushConstants exactly.
     std::vector<spv::Id> pushMembers;
@@ -779,7 +784,7 @@ bool BuildResolveComputeShader(std::vector<uint32_t>& spirv)
                                     kOffsets[i]);
     const spv::Id pushVar = builder.createVariable(spv::NoPrecision,
         spv::StorageClassPushConstant, typePush, "xe_resolve_constants");
-    mainInterface.push_back(pushVar);
+    // pushVar is PushConstant: same rule, see above.
 
     const spv::Id inGlobalId = builder.createVariable(spv::NoPrecision,
         spv::StorageClassInput, typeUint3, "gl_GlobalInvocationID");
@@ -853,7 +858,16 @@ bool BuildResolveComputeShader(std::vector<uint32_t>& spirv)
                                                         texel, {2, 1, 0, 3});
     const spv::Id doSwap = builder.createBinOp(spv::OpINotEqual, typeBool,
         pushMember(4, typeUint), builder.makeUintConstant(0));
-    texel = builder.createTriOp(spv::OpSelect, typeFloat4, doSwap, swapped, texel);
+    // The condition is BROADCAST to a bool4. In SPIR-V 1.3 and earlier -- and
+    // this builder emits Spv_1_0 -- OpSelect on a vector result requires a
+    // condition vector of the same size; a scalar condition is only legal from
+    // SPIR-V 1.4 (spirv-val: "Expected vector sizes of Result Type and the
+    // condition to be equal"). The module was invalid, and the driver happened
+    // to run it.
+    const spv::Id typeBool4 = builder.makeVectorType(builder.makeBoolType(), 4);
+    const spv::Id doSwap4 = builder.createCompositeConstruct(
+        typeBool4, {doSwap, doSwap, doSwap, doSwap});
+    texel = builder.createTriOp(spv::OpSelect, typeFloat4, doSwap4, swapped, texel);
 
     builder.createNoResultOp(spv::OpImageWrite,
         {builder.createLoad(imageDst, spv::NoPrecision), dstCoord, texel});
@@ -917,8 +931,13 @@ bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv)
     builder.addDecoration(imageDst, spv::DecorationDescriptorSet, 0);
     builder.addDecoration(imageDst, spv::DecorationBinding, 1);
     builder.addDecoration(imageDst, spv::DecorationNonReadable);
-    mainInterface.push_back(imageSrc);
-    mainInterface.push_back(imageDst);
+    // NOT in mainInterface. In SPIR-V 1.3 and earlier -- and this builder emits
+    // Spv_1_0 -- an OpEntryPoint interface may only name Input and Output
+    // variables; listing a UniformConstant or PushConstant one is invalid
+    // (spirv-val: "OpEntryPoint interfaces must be OpVariables with Storage
+    // Class of Input(1) or Output(3)"). SPIR-V 1.4 widened it to every global,
+    // which is where the habit comes from. The variables are still declared and
+    // still used; the interface list is metadata.
 
     // Same push-constant block as the colour resolve, plus the depth format:
     // swapRB is reused as "1 = kD24FS8 (float24), 0 = kD24S8 (unorm24)".
@@ -930,7 +949,7 @@ bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv)
         builder.addMemberDecoration(typePush, unsigned(i), spv::DecorationOffset, kOffsets[i]);
     const spv::Id pushVar = builder.createVariable(spv::NoPrecision,
         spv::StorageClassPushConstant, typePush, "xe_resolve_constants");
-    mainInterface.push_back(pushVar);
+    // pushVar is PushConstant: same rule, see above.
 
     const spv::Id inGlobalId = builder.createVariable(spv::NoPrecision,
         spv::StorageClassInput, typeUint3, "gl_GlobalInvocationID");
