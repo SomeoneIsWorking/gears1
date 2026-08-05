@@ -1,3 +1,9 @@
 .env
 scratch/
 build/
+
+# Python bytecode. A committed .pyc embeds the absolute path of the machine
+# that produced it -- tools/__pycache__/pass_structure.cpython-314.pyc carried
+# /home/<user> through every clone until 2026-08-05.
+__pycache__/
+*.pyc
