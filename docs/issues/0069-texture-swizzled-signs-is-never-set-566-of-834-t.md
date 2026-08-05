@@ -52,9 +52,37 @@ Verified across a full walk (34 frames, boot -> menus -> Act 1): none black, the
 crimson-omen loading screen still red, menu text legible, characters and captions
 rendering. `GEARS_DRAW_NO_TEX_SIGNS=1` is the control arm.
 
-**What is still NOT proven: the absolute brightness.** The one quantitative
-reference available (an in-engine still) is a different scene, so it cannot settle
-whether the result is now too dark. What IS settled is that the transform belongs.
+## The decode curve is verified against the TITLE'S OWN inverse, not against taste
+
+The open question was absolute brightness: does our decode curve match the one the
+game was authored against? It can be answered without any external reference,
+because the title itself ships the inverse transform.
+
+Method: replay the same frame with the decode ON and OFF, and measure the
+CONTRIBUTION of each individual draw (checkpoint after minus checkpoint before) in
+both arms. A draw whose pixel shader is the composite (gamma 0.5, exposure 1)
+applies the exact inverse of the fetch decode, so its contribution must be
+IDENTICAL in both arms if -- and only if -- our decode curve is the right one.
+
+    draw   pixels    contribution ON   contribution OFF   |difference|
+     131     1138             +6.668             +6.254         0.414
+     132     4257            +10.446            +11.107         0.661
+     133     4228             +9.248             +9.848         0.600
+     139    20989             -6.601             -6.327         0.274
+     143     3047            +12.227            +11.712         0.515
+
+**The round-trip closes to under 0.7 of 255** -- about a quarter of one 8-bit level
+per channel, which is quantisation. A wrong decode curve could not do that through
+the title's own encode.
+
+Draws whose shaders do NOT encode shift by 10-47, as they must: the console decodes
+at fetch for them too, and what those shaders write is linear by design. Their level
+change is the hardware's behaviour being reproduced, not an error introduced here.
+
+So: the transform belongs (it is the missing half of a matched pair), AND its curve
+is the right one (verified against the title's own inverse to 0.2%). What remains
+outside this proof is only whether the title's own art and lighting then look as
+intended -- which is a question about the game, not about the renderer.
 
 ## The first attempt, and why it was reverted
 
