@@ -50,6 +50,7 @@
 #include "gpu_draw_arena.h"
 #include "gpu_draw_pipelines.h"
 #include "gpu_draw_probe.h"
+#include "gpu_draw_indices.h"
 #include "gpu_draw_uniforms.h"
 #include "gpu_draw_shaders.h"
 
@@ -1473,105 +1474,21 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         msUniforms += sinceStartMs() - uniformsBegin;
         const double indexBegin = sinceStartMs();
 
-        // Index buffer: only for kDMA (indexed) draws. A kAutoIndex draw feeds
-        // gl_VertexIndex = 0..count-1 directly (vkCmdDraw), matching how the
-        // hardware sequences an auto-indexed primitive; the shader's vfetch then
-        // reads the vertex from the SSBO by that index.
-        //
-        // kQuadList (0x0D) has no Vulkan topology. The hardware draws each
-        // group of 4 vertices as a quad; Xenia's PrimitiveProcessor expands
-        // that to a triangle list (0,1,2 / 0,2,3) rather than pretending a
-        // quad list is a triangle list. Without the expansion the vertices are
-        // regrouped into unrelated triangles, and this frame's ENTIRE world
-        // geometry is quad_list -- it drew nothing.
-        VkBuffer ibuf = VK_NULL_HANDLE;
-        VkDeviceSize ibufOffset = 0;
-        uint32_t drawCount = d.indexCount;
-        bool drawIndexed = d.indexed;
-        if (d.primType == 13 /*kQuadList*/)
+        // The index buffer -- guest read, byte swap, widening to 32-bit and the
+        // quad-list expansion -- is in gpu_draw_indices.{h,cpp}.
+        draw::PreparedIndices idx;
+        switch (draw::PrepareIndices(AR, in, d, idx))
         {
-            const uint32_t quads = d.indexCount / 4;
-            const uint32_t triIndices = quads * 6;
-            if (quads == 0)
-            { ++skipped; ++skipReasons[7]; continue; }
-            // Guest indices (when present) are read first, then regrouped, so
-            // the expansion works for both auto and DMA quad lists.
-            std::vector<uint32_t> src(d.indexCount);
-            if (d.indexed)
-            {
-                const uint8_t* base = in.guestBase + d.indexGuestBase;
-                const uint32_t width = d.indexIs32 ? 4u : 2u;
-                const bool inRange = d.indexGuestBase + d.indexCount * width <=
-                                     in.guestPhysicalMirrorBytes;
-                for (uint32_t i = 0; i < d.indexCount; ++i)
-                {
-                    uint32_t v = 0;
-                    if (inRange && d.indexIs32)
-                    { std::memcpy(&v, base + i * 4, 4); v = __builtin_bswap32(v); }
-                    else if (inRange)
-                    {
-                        uint16_t h = 0; std::memcpy(&h, base + i * 2, 2);
-                        v = uint16_t((h >> 8) | (h << 8));
-                    }
-                    src[i] = v;
-                }
-            }
-            else
-            {
-                for (uint32_t i = 0; i < d.indexCount; ++i)
-                    src[i] = i;
-            }
-            std::vector<uint32_t> expanded(triIndices);
-            uint32_t* dst = expanded.data();
-            for (uint32_t q = 0; q < quads; ++q)
-            {
-                const uint32_t* v = &src[q * 4];
-                *dst++ = v[0]; *dst++ = v[1]; *dst++ = v[2];
-                *dst++ = v[0]; *dst++ = v[2]; *dst++ = v[3];
-            }
-            if (!AR.MakeIndexBuffer(expanded.data(), triIndices * 4u, ibuf, ibufOffset))
-            { ++skipped; ++skipReasons[5]; continue; }
-            drawCount = triIndices;
-            drawIndexed = true;
+            case draw::IndexResult::kEmptyQuad:
+                ++skipped; ++skipReasons[7]; continue;
+            case draw::IndexResult::kArenaFull:
+                ++skipped; ++skipReasons[5]; continue;
+            case draw::IndexResult::kOk: break;
         }
-        else if (d.indexed)
-        {
-            // The buffer is ALWAYS 32-bit: guest 16-bit indices are widened on
-            // the way in. The draw binds VK_INDEX_TYPE_UINT32 unconditionally,
-            // so sizing it by the guest's index width made every 16-bit indexed
-            // draw read twice its buffer (validation
-            // VUID-vkCmdDrawIndexed-robustBufferAccess2-08798) and rasterise
-            // garbage indices.
-            const uint32_t idxBytes = std::max(d.indexCount * 4u, 4u);
-            std::vector<uint32_t> widened(idxBytes / 4, 0);
-            void* p = widened.data();
-            const uint8_t* base = in.guestBase + d.indexGuestBase;
-            const bool inRange = d.indexGuestBase + idxBytes <= in.guestPhysicalMirrorBytes;
-            if (d.indexIs32)
-            {
-                uint32_t* dst = static_cast<uint32_t*>(p);
-                for (uint32_t i = 0; i < d.indexCount; ++i)
-                {
-                    uint32_t v = 0;
-                    if (inRange) { std::memcpy(&v, base + i * 4, 4); v = __builtin_bswap32(v); }
-                    dst[i] = v;
-                }
-            }
-            else
-            {
-                uint32_t* dst = static_cast<uint32_t*>(p);
-                const bool in16 = d.indexGuestBase + d.indexCount * 2u <=
-                                  in.guestPhysicalMirrorBytes;
-                for (uint32_t i = 0; i < d.indexCount; ++i)
-                {
-                    uint16_t v = 0;
-                    if (in16) { std::memcpy(&v, base + i * 2, 2); v = uint16_t((v >> 8) | (v << 8)); }
-                    dst[i] = v;
-                }
-            }
-            if (!AR.MakeIndexBuffer(widened.data(), idxBytes, ibuf, ibufOffset))
-            { ++skipped; ++skipReasons[5]; continue; }
-        }
+        const VkBuffer ibuf = idx.buffer;
+        const VkDeviceSize ibufOffset = idx.offset;
+        const uint32_t drawCount = idx.count;
+        const bool drawIndexed = idx.indexed;
 
         msIndex += sinceStartMs() - indexBegin;
 
