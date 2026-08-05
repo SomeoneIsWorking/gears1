@@ -1,9 +1,9 @@
 ---
 id: 69
 title: texture_swizzled_signs is never set: 566 of 834 texture bindings ask for GAMMA and are read as linear
-status: open
+status: resolved
 symptom: scene colour and contrast look wrong in a way no single pass explains; textures read without their sRGB-to-linear decode
-tags: gpu,textures,colour,gamma,system-constants,open
+tags: gpu,textures,colour,gamma,system-constants,fixed
 created: 2026-08-05
 updated: 2026-08-05
 ---
@@ -26,7 +26,37 @@ unsigned, undecoded path. Counted per frame by the new 'frame texture signs' lin
 0x3f is TextureSign::kGamma on R, G and B; 0x55 is kSigned on all four. So on a
 gameplay frame **566 of 834 bindings are gamma textures being read as linear**.
 
-## The fix that was written, and why it is NOT shipped
+## RESOLVED -- the decode IS shipped. What changed my mind
+
+The first pass at this was reverted because the picture got darker and I judged it
+worse from the MENU frame. That judgement was wrong, and two measurements settled
+it.
+
+**1. The game's own composite is the matching encode.** On a gameplay frame the
+composite pass (ps 0x501ac5d8692bf7b6) runs five times: four with c0.x = 0.5, which
+enables its `pow(saturate(rgb), c0.x)` branch, and one with c0.x = 1, which disables
+it. So the title encodes linear -> gamma on the way out, per pass.
+
+**2. The decode and that encode are numerically inverse.** Hand-evaluating the
+PWL curve the shader implements: 1.0 -> 1.0, 0.5 -> 0.248, i.e. gamma 2.0, and the
+composite's exponent is 0.5. Over the range, `encode(decode(x)) - x` has a worst
+error of 0.062, all of it in the curve's low linear segment. The pair is an
+identity. **So the decode is the half we were missing, not an extra transform
+nothing undoes.**
+
+The frame gets darker because the lighting math now runs in LINEAR space instead of
+multiplying gamma-encoded values together, which inflated everything. That is the
+console's behaviour, not a regression.
+
+Verified across a full walk (34 frames, boot -> menus -> Act 1): none black, the
+crimson-omen loading screen still red, menu text legible, characters and captions
+rendering. `GEARS_DRAW_NO_TEX_SIGNS=1` is the control arm.
+
+**What is still NOT proven: the absolute brightness.** The one quantitative
+reference available (an in-engine still) is a different scene, so it cannot settle
+whether the result is now too dark. What IS settled is that the transform belongs.
+
+## The first attempt, and why it was reverted
 
 Xenia's own algorithm ports in a dozen lines -- `texture_util::SwizzleSigns` on
 each fetch constant, packed 8 bits per slot into `texture_swizzled_signs[fc >> 2]`.

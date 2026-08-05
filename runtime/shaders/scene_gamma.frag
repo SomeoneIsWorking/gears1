@@ -36,8 +36,15 @@ layout(set = 3, binding = 0) uniform texture2D SceneColor;   // unsigned view
 layout(set = 3, binding = 2) uniform sampler SceneSampler;
 
 layout(set = 1, binding = 0) uniform XeSystemConstants {
-    layout(offset = 0)   uint flags;
-    layout(offset = 192) vec4 color_exp_bias;
+    layout(offset = 0)   uint  flags;
+    // Post-swizzle TextureSign per component, 8 bits per fetch constant, four
+    // fetch constants per uint. This pass samples fetch constant 0, so its byte is
+    // the low 8 bits of element 0. Reading it is not optional: the translated
+    // shader branches on it, so a native pass that ignores it silently diverges
+    // the moment the constant stops being zero -- which is exactly what the A/B
+    // gate caught when it did.
+    layout(offset = 64)  uvec4 texture_swizzled_signs[2];
+    layout(offset = 192) vec4  color_exp_bias;
 } Sys;
 
 // PACKED, NOT INDEXED BY REGISTER NUMBER. The microcode names c0, c1 and c255,
@@ -58,6 +65,34 @@ layout(location = 0) out vec4 OutColor;
 const uint kConvertColor0ToGamma = 0x4000u;
 const float kTexelRoundingOffset = 0.75 / 512.0;
 
+// TextureSign::kGamma -- the 360's piecewise gamma-to-LINEAR decode, the inverse of
+// the encode this same pass applies on the way out. Evaluating it: 1.0 -> 1.0 and
+// 0.5 -> 0.248, i.e. gamma 2.0, against the composite's own exponent of 0.5.
+float DecodeTextureGamma(float v)
+{
+    v = clamp(v, 0.0, 1.0);
+    bool hi  = v >= 0.752941191;
+    bool mid = v >= 0.250980407;
+    bool up  = v >= 0.376470596;
+    float scale  = up ? (hi ? 0.0078125   : 0.00390625)
+                      : (mid ? 0.001953125 : 0.0009765625);
+    float offset = up ? (hi ? -1024.0 : -256.0)
+                      : (mid ? -64.0  : 0.0);
+    float a = v * 261120.0 * scale + offset;
+    return (a + trunc(a * scale)) * 0.000977517106;
+}
+
+// The fetch epilogue the translator emits, for one component. Mode 1 (kSigned)
+// samples the signed view; this renderer binds the unsigned view to both, so it is
+// a pass-through here exactly as it is in the translated shader under the same
+// binding -- and that equivalence is what the A/B gate is checking.
+float ApplyTextureSign(float v, uint mode)
+{
+    if (mode == 2u) return v * 2.0 - 1.0;          // kBiased
+    if (mode == 3u) return DecodeTextureGamma(v);  // kGamma
+    return v;                                       // kUnsigned, kSigned
+}
+
 vec3 EncodePwlGamma(vec3 linear)
 {
     vec3 v = clamp(linear, 0.0, 1.0);
@@ -75,7 +110,14 @@ void main()
 {
     vec2 uv = InTexCoord.xy
             + kTexelRoundingOffset / vec2(textureSize(sampler2D(SceneColor, SceneSampler), 0));
-    precise vec4 texel = texture(sampler2D(SceneColor, SceneSampler), uv) * InModulate;
+    vec4 sampled = texture(sampler2D(SceneColor, SceneSampler), uv);
+    // Fetch constant 0's signs: byte 0 of element 0, two bits per component.
+    const uint signs = Sys.texture_swizzled_signs[0].x & 0xFFu;
+    sampled.x = ApplyTextureSign(sampled.x, (signs >> 0) & 3u);
+    sampled.y = ApplyTextureSign(sampled.y, (signs >> 2) & 3u);
+    sampled.z = ApplyTextureSign(sampled.z, (signs >> 4) & 3u);
+    sampled.w = ApplyTextureSign(sampled.w, (signs >> 6) & 3u);
+    precise vec4 texel = sampled * InModulate;
 
     vec3 rgb = texel.xyz;
     if (kGamma != kGammaDisabled)

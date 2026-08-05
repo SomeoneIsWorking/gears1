@@ -3,6 +3,8 @@
 // they conflict with Xenia's bundled Vulkan-Headers). See gpu_draw_xlate.h.
 #include "gpu_draw_xlate.h"
 
+#include <lucent/config.h>
+
 #include <lucent/log.h>
 
 #ifdef GEARS_HAVE_GUEST_DRAW
@@ -1109,23 +1111,36 @@ std::vector<uint8_t> DeriveSystemConstants(const uint32_t* registerFile)
                                           : xenos::CompareFunction::kAlways;
     flags |= uint32_t(alpha_test_function)
              << SpirvShaderTranslator::kSysFlag_AlphaPassIfLess_Shift;
-    // TEXTURE SIGNEDNESS AND GAMMA -- MEASURED, ATTEMPTED, AND DELIBERATELY NOT
-    // SHIPPED. See catalog #69 before touching this.
+    // TEXTURE SIGNEDNESS AND GAMMA. Every translated fetch branches on this
+    // constant to choose between the unsigned and signed views of a texture and
+    // whether to apply a sign remap; the remap for TextureSign::kGamma is the
+    // piecewise sRGB-to-linear decode. Leaving it zero makes every fetch take the
+    // unsigned, undecoded path -- on a gameplay frame of this title that is 566 of
+    // 834 bindings reading a GAMMA texture as linear (catalog #69).
     //
-    // texture_swizzled_signs stays ZERO here, so every translated fetch takes the
-    // unsigned, undecoded path. That is NOT known to be right: on a gameplay frame
-    // of this title 566 of 834 texture bindings ask for TextureSign::kGamma, whose
-    // remap is the piecewise sRGB-to-linear decode. The per-frame "frame texture
-    // signs" line in gpu_draw.cpp counts them, so the gap is loud rather than
-    // silent.
+    // Xenia fills only the slots its shaders use, for dirty-tracking; filling all
+    // 32 costs nothing and removes the need for the shader's texture mask in a
+    // function that only has the register file. Non-texture slots are SKIPPED
+    // rather than packed as zero: a vertex-fetch constant's bits in these
+    // positions are not signs and must never be read as them.
     //
-    // Filling it with Xenia's own texture_util::SwizzleSigns (same register base
-    // 0x4800, same 6-dword stride, verified) makes the image visibly WORSE: an Act
-    // 1 frame drops from mean 15.9 to 5.4 and the menu goes blotchy with crushed
-    // blacks. It is not simply a missing output encode either -- re-encoding the
-    // result at 1/2.2 moves it FURTHER from the current image (mean difference 44.0
-    // against 10.5), so a companion piece is missing that is not a global tone
-    // curve. Shipping half of a matched pair is worse than shipping neither.
+    // The signs are POST-SWIZZLE -- the fetch's swizzle decides which source
+    // component feeds each output component and the shader reads them in output
+    // order -- so this uses Xenia's own texture_util::SwizzleSigns.
+    //
+    // GEARS_DRAW_NO_TEX_SIGNS=1 restores the undecoded behaviour as a control arm.
+    if (!lucent::config::flag("DRAW_NO_TEX_SIGNS")) {
+        for (uint32_t fc = 0; fc < 32; ++fc) {
+            xenos::xe_gpu_texture_fetch_t fetch{};
+            std::memcpy(&fetch,
+                        &registerFile[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + fc * 6],
+                        sizeof(fetch));
+            if (fetch.type != xenos::FetchConstantType::kTexture)
+                continue;
+            const uint8_t signs = texture_util::SwizzleSigns(fetch);
+            sc.texture_swizzled_signs[fc >> 2] |= uint32_t(signs) << (8 * (fc & 3));
+        }
+    }
 
     for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
         auto color_info =

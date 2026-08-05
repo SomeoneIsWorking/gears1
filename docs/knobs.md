@@ -72,6 +72,7 @@ the same commit that removes it.
 | `GEARS_DRAW_STATS=1` | Per-draw pipeline statistics |
 | `GEARS_DRAW_CENSUS=1`, `GEARS_DRAW_FRAME_LIST=1` | Per-run and per-draw censuses |
 | `GEARS_DRAW_FRAME_STEP=N`, `GEARS_DRAW_FRAME_STEP_FROM=M` | Checkpoint image every N draws, starting at draw M. **This is how a defect is attributed to a draw.** Capped at 48 images and it says how many it dropped — without `_FROM` the cap always lands on the first 48 steps, so a late-frame defect (UI, post) can never be reached |
+| `GEARS_DRAW_NO_TEX_SIGNS=1` | **Control arm.** Leave `texture_swizzled_signs` at zero, so every texture fetch takes the unsigned, undecoded path — the behaviour before the sRGB decode was implemented. On a gameplay frame that is 566 of 834 bindings reading a gamma texture as linear (`catalog.py show 69`) |
 | `GEARS_DRAW_FORCE_LDR=1` | **Control arm.** Collapse a reinterpreted surface's host image to 8-bit UNORM, to ask what the fixed-point render target's source-colour clamp would have done. Destroys every HDR pass on that surface, so it answers one question and breaks the frame (`catalog.py show 68`) |
 | `GEARS_DRAW_VALIDATE=1` | Vulkan validation layers |
 | `GEARS_SHADER_CAPTURE=1`, `GEARS_SHADER_CAPTURE_DIR=<dir>` | Also write each bound microcode blob (and a `manifest.csv`) to disk for the offline tools. The runtime keeps the microcode in memory unconditionally — the renderer translates the pair bound at each draw — so this knob controls the **copy on disk**, nothing else |
