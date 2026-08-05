@@ -472,6 +472,34 @@ transfers.
 
 All three were reduced with `tools/ucode_reduce.py` and all three were bit-exact
 **on the first attempt**, which is what makes this a procedure rather than a series
-of one-offs. All three have their control arm — breaking the shader deliberately
+of one-offs.
+
+### How much of the base pass is this one family
+
+Sized by measurement rather than by eye — `tools/ucode_reduce.py --census` runs the
+reduction over every base-pass shader and keys on a structural property of the
+result, the number of **saturated dot products** that survive. Six is this
+family's fingerprint: three basis weights for the shading normal and three for the
+reflection. Over the 61 distinct base-pass pixel shaders in four captures
+(1,113 draws):
+
+| Shape | Shaders | Draws | Share of base-pass draws |
+|---|---|---|---|
+| Six saturated dots — this family | **37** | **938** | **84%** |
+| Reduces cleanly, a different shape | 20 | ~119 | 11% |
+| Refused: `kill_gt`, i.e. a masked material that discards | 4 | 56 | 5% |
+
+So "the base pass" is **not 44 one-off materials**. It is one family covering
+five-sixths of the base-pass draws, plus a smaller set of simpler shapes, plus
+four masked materials the reducer correctly refuses because it models no
+predication. Within the family the variation is bounded and visible: fetch counts
+run 3 to 11, and the reflection weights are squared in 3 shaders, raised to one
+exponent in 29, and to two in 5 — exactly the three variants already written.
+
+**A fingerprint is a plan, not a result.** A shader that shares the count and not
+the structure would be misfiled by that census, and the only thing that settles
+any individual shader is writing it and running the gate. What the number changes
+is the *estimate*: the remaining work is bounded and repetitive rather than
+open-ended. All three have their control arm — breaking the shader deliberately
 changes 473,625, 58,907 and 564,754 channel samples respectively — so no
 zero-difference result here is a pass that never reached the image.
