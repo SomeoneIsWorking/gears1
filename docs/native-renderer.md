@@ -92,11 +92,29 @@ pass-level structure, not a blocker.
 
 1. **~~Identify the draw emitter~~ — not needed.** Key on the pixel-shader hash.
    DONE, `runtime/native_pass.h`.
-2. **Write one pass and make it bit-exact.** DONE for the movie composite. The
-   method that worked, in order: disassemble the microcode
-   (`scratch/shaders/bound_out/<hash>.ucode.txt`), read the *translated* module's
-   interface with `spirv-dis` for the descriptor bindings and block layouts,
-   write the GLSL, `tools/gen_native_spv.sh`, `tools/verify_native_pass.sh`.
+2. **Write one pass and make it bit-exact.** DONE five times. **The recipe, in
+   order** — every step earned by a failure recorded in this file:
+
+   1. `xenos_translate --raw` the bound microcode → the disassembly.
+   2. `tools/ucode_reduce.py` it. Read the `read before written` line first: those
+      must ALL be interpolators, and anything else there means an instruction was
+      dropped and the listing is wrong.
+   3. `GEARS_DRAW_SPV_DUMP=<dir>` a replay, `spirv-dis` the module for THIS
+      shader. Take the descriptor bindings (numbered by order of first **use**,
+      not by fetch constant), the float-constant block **size** (they are packed
+      ascending, so `c255` is the last index, not index 255), the interpolator
+      count, and the image dimensionality (2D **arrays**).
+   4. Write the GLSL. Reduce the swizzles; preserve the accumulation **order**.
+   5. `tools/gen_native_spv.sh`, register in `runtime/native_pass.cpp`, build.
+   6. `tools/verify_native_pass.sh` — all three arms, on **two** captures.
+   7. **Run the control arm**: break the shader deliberately (halve its output)
+      and confirm the comparison reports a difference. A pass whose draws never
+      reach the compared image matches for a reason that has nothing to do with
+      being right.
+
+   Nothing about a material's parameters transfers between shaders — the basis
+   coefficients and the basis-to-lightmap pairing differ between two materials of
+   the *same* family. Read them off the microcode every time.
 3. **Recover the pass structure**, not the draws. **DONE** —
    `tools/pass_structure.py`, and `GEARS_DRAW_DIAG` now emits a row per resolve so
    the boundaries are visible at all. See "The frame, recovered" below.
