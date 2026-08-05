@@ -207,6 +207,17 @@ if(Python3_Interpreter_FOUND)
     # must reject.
     add_test(NAME instrument_pass_structure
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/pass_structure.py" --selftest)
+    # gfr_to_xtr transcribes Xenia's trace format and Xenos packet bitfields by
+    # hand. A transcription slip there produces a trace that parses and renders
+    # the WRONG thing -- an oracle that lies is worse than no oracle -- so the
+    # packing is checked against values worked out independently.
+    add_test(NAME instrument_gfr_to_xtr
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/gfr_to_xtr.py" --selftest)
+    add_test(NAME instrument_gfr_to_xtr_refuses_missing
+        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/gfr_to_xtr.py"
+                "${CMAKE_CURRENT_BINARY_DIR}/no-such.gfr" "${CMAKE_CURRENT_BINARY_DIR}/o.xtr")
+    set_tests_properties(instrument_gfr_to_xtr_refuses_missing
+        PROPERTIES WILL_FAIL TRUE)
 endif()
 
 # RtlTimeToTimeFields / RtlTimeFieldsToTime. Verified until now only by "the
