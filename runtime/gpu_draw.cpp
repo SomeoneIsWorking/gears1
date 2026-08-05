@@ -48,6 +48,7 @@
 #include "gpu_draw_textures.h"
 #include "gpu_draw_targets.h"
 #include "gpu_draw_pipelines.h"
+#include "gpu_draw_shaders.h"
 
 namespace gears
 {
@@ -502,7 +503,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // console thing on request.
     const bool untileThisFrame = abUntile.Enabled()
         ? abUntile.Arm() : !lucent::config::flag("DRAW_TILED");
-    double msTranslate = 0, msTexture = 0, msSsboUpload = 0;
+    double msTexture = 0, msSsboUpload = 0;
     auto accumulate = [](double& into, Clock::time_point from) {
         into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
     };
@@ -521,134 +522,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     RendererPersistent& P = *persistent;
     const bool firstFrame = !P.built;
 
-    // --- translate + cache each distinct (shader, modification) ----------
-    // The key is the PAIR (microcode hash, modification), not the hash alone:
-    // the modification carries the interpolator mask the vertex and pixel
-    // shaders exchange for THIS draw, so one microcode can legitimately need
-    // several translations across a frame.
-    // (hash, modification, output clamped). The clamp is part of the KEY, not a
-    // property of the draw: two draws can share a microcode and a modification and
-    // still need different modules, because they target the same widened host
-    // surface through different guest colour formats.
-    using ShaderKey = std::tuple<uint64_t, uint64_t, int>;
-    std::map<ShaderKey, draw::ShaderXlate>& xlate = P.xlate;
-    std::map<ShaderKey, VkShaderModule>& modules = P.modules;
-    auto getShader = [&](bool isVertex, const uint8_t* uc, size_t sz, uint64_t hash,
-                         uint64_t modification, bool clampOutput,
-                         draw::ClampMode clampMode,
-                         draw::ShaderXlate*& outX, VkShaderModule& outM) -> bool {
-        const ShaderKey key{hash, modification,
-                            clampOutput ? (clampMode == draw::ClampMode::kRgba ? 1 : 2) : 0};
-        auto xit = xlate.find(key);
-        if (xit == xlate.end())
-        {
-            draw::ShaderXlate x;
-            const auto t0 = Clock::now();
-            const bool translated =
-                draw::TranslateShader(isVertex, uc, sz, hash, modification, x);
-            accumulate(msTranslate, t0);
-            if (!translated)
-                return false;
-            xit = xlate.emplace(key, std::move(x)).first;
-            // GEARS_DRAW_SPV_DUMP=<dir>: the TRANSLATED module, as the runtime
-            // actually built it for THIS draw's modification key.
-            //
-            // WHY IT HAD TO EXIST. Writing a native pass means implementing the
-            // translator's interface exactly -- descriptor bindings, uniform block
-            // sizes, interpolator locations -- and getting any of it wrong is not
-            // a validation error, it samples a different image and still draws a
-            // plausible picture (docs/native-renderer.md). The only modules on
-            // disk were the offline ones in scratch/shaders/bound_out/, translated
-            // with NO modification key, so they carry no interpolator inputs and a
-            // colour write mask of zero. This writes the real one.
-            //
-            // Always the TRANSLATED module, never the native substitute: the
-            // reference is the thing being matched, and dumping our own output
-            // instead would let a native pass "verify" against itself.
-            {
-                static const std::string& spvDir = lucent::config::text("DRAW_SPV_DUMP");
-                if (!spvDir.empty())
-                {
-                    std::error_code ec;
-                    std::filesystem::create_directories(spvDir, ec);
-                    char name[128];
-                    std::snprintf(name, sizeof name, "%s_%016llx_mod%016llx.spv",
-                                  isVertex ? "vs" : "ps",
-                                  static_cast<unsigned long long>(hash),
-                                  static_cast<unsigned long long>(modification));
-                    const std::filesystem::path out =
-                        std::filesystem::path(spvDir) / name;
-                    std::ofstream f(out, std::ios::binary);
-                    if (f)
-                    {
-                        f.write(reinterpret_cast<const char*>(xit->second.spirv.data()),
-                                std::streamsize(xit->second.spirv.size()));
-                        lucent::debug("draw", "translated module -> {} ({} bytes)",
-                                      out.string(), xit->second.spirv.size());
-                    }
-                    else
-                    {
-                        // A dump that silently writes nothing is worse than none:
-                        // the next reader concludes the shader was never bound.
-                        lucent::error("draw", "GEARS_DRAW_SPV_DUMP: cannot write {}",
-                                      out.string());
-                    }
-                }
-            }
-            // A NATIVE PASS STANDS IN HERE, and only here: the translation still
-            // ran, so its binding layout, constant map and texture list are what
-            // the rest of the frame uses -- the native module implements the same
-            // interface with our own arithmetic. Substituting at the module keeps
-            // every other property of the draw the guest's.
-            const gears::native::Pass* nat =
-                isVertex ? nullptr : gears::native::Find(hash);
-            VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-            if (nat != nullptr)
-            {
-                mi.codeSize = nat->spirv.size() * sizeof(uint32_t);
-                mi.pCode = nat->spirv.data();
-                lucent::info("native", "pass \"{}\" is rendering natively for pixel"
-                    " shader {:#018x} ({} SPIR-V words, from {})", nat->name, hash,
-                    nat->spirv.size(), nat->derivedFrom);
-            }
-            else
-            {
-                mi.codeSize = xit->second.spirv.size();
-                mi.pCode = reinterpret_cast<const uint32_t*>(xit->second.spirv.data());
-            }
-            // THE CLAMP THE HOST RENDER TARGET NO LONGER PERFORMS. Applied to the
-            // module, not the draw, so it is cached with it.
-            // It applies to a NATIVE module too. Exempting native passes would
-            // make them diverge from the translated shader on exactly the draws
-            // this fixes -- and the A/B gate would then compare two different
-            // things and call the difference a native-pass bug.
-            std::vector<uint32_t> clampedCode;
-            if (clampOutput)
-            {
-                clampedCode.assign(static_cast<const uint32_t*>(mi.pCode),
-                                   static_cast<const uint32_t*>(mi.pCode) +
-                                       mi.codeSize / sizeof(uint32_t));
-                if (draw::ClampFragmentOutputs(clampedCode, clampMode))
-                {
-                    mi.codeSize = clampedCode.size() * sizeof(uint32_t);
-                    mi.pCode = clampedCode.data();
-                }
-                else
-                    // Refusal is not silent: the draw renders unclamped, which is
-                    // the defect this exists to fix, so it has to be visible.
-                    lucent::warn("draw", "pixel shader {:#018x} could not be clamped"
-                        " to its fixed-point render target's range; this draw blends"
-                        " as if the target were HDR", hash);
-            }
-            VkShaderModule m = VK_NULL_HANDLE;
-            if (vkCreateShaderModule(device, &mi, nullptr, &m) != VK_SUCCESS)
-                return false;
-            modules[key] = m;
-        }
-        outX = &xit->second;
-        outM = modules[key];
-        return true;
-    };
+    // Shader translation and its cache live in gpu_draw_shaders.{h,cpp}: the
+    // key is (microcode hash, modification, clamp), and a native pass is
+    // substituted there, at the module, so the rest of the frame keeps the
+    // guest shader's binding layout and constant map.
+    draw::ShaderCache SC(*this, P);
 
     // --- shared SSBO: the guest physical memory the shaders fetch through ---
     // The buffer SPANS the whole guest physical window, because a vertex fetch
@@ -1710,10 +1588,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                                                           : draw::ClampMode::kAlphaOnly;
                 }
             }
-            if (!getShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification, false,
-                           draw::ClampMode::kRgba, vsX, vsMod) ||
-                !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification, clampPs,
-                           clampMode, psX, psMod))
+            if (!SC.GetShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification,
+                              false, draw::ClampMode::kRgba, vsX, vsMod) ||
+                !SC.GetShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification,
+                              clampPs, clampMode, psX, psMod))
             { ++skipped; ++skipReasons[2]; continue; }
             if (!PC.GetPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
             { ++skipped; ++skipReasons[3]; continue; }
@@ -3843,7 +3721,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             " {} pipeline layouts; {} texture bindings ({} guest textures,"
             " {} from the rendered RT, {} from a stub); {}/{} px non-black"
             " ({:.1f}%), {} px changed from the clear ({:.1f}%)",
-            issued, in.draws.size(), skipped, pairs.size(), modules.size(), PC.pipelines.size(),
+            issued, in.draws.size(), skipped, pairs.size(), SC.modules.size(), PC.pipelines.size(),
             PC.texLayouts.size(), PC.pipeLayouts.size(),
             texBindsRt + texBindsStub + texBindsGuest, texBindsGuest, texBindsRt,
             texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
@@ -4206,7 +4084,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         " {:.0f} + descriptor writes {:.0f} of which texture upload {:.0f} and the"
         " driver's update {:.0f}, so own {:.0f} + prepare {:.0f} of which viewport"
         " census {:.0f} + own {:.0f}) + unattributed {:.0f}",
-        msDrawLoop, msState, msTranslate, PC.msPipeline, msModify, msShaderLookup,
+        msDrawLoop, msState, SC.msTranslate, PC.msPipeline, msModify, msShaderLookup,
         msStateOwn,
         msUniforms, msIndex, msRecord, msDescAlloc, msDescWrite, msTexture,
         msDescUpdate, msDescWrite - msTexture - msDescUpdate,
