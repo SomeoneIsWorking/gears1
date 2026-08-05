@@ -1,9 +1,9 @@
 ---
 id: 73
-title: A whole gameplay frame renders black: the bloom/DOF buffer is empty, so the post-process blend divides by zero
+title: A whole gameplay frame renders black: the guest hands the post-process blend a zero colour scale and a NaN offset
 status: open
 symptom: a captured gameplay frame renders completely black (0 of 921600 px non-black) although every draw issues and the scene colour target is full of content; other captures of the same scene render fine
-tags: gpu,draw,post,bloom,dof,black,frame,native-renderer
+tags: gpu,draw,post,black,frame,constants,guest,native-renderer
 created: 2026-08-05
 updated: 2026-08-05
 ---
@@ -20,69 +20,93 @@ It has been black since before any of this session's changes; it is the capture
 
 ## Localised to one draw
 
-Resolve dump (`GEARS_DRAW_RESOLVE_DUMP=1`) shows the world renders correctly --
-scene colour `0xbdf0000` is 100% non-zero -- and the post chain then produces
-zero: `0xc7f9000`, `0x6e4000` and the presented `0x311000` are all 0%.
-
-Checkpoints (`GEARS_DRAW_FRAME_STEP`) put the transition at issued draw 631 =
+Checkpoints (`GEARS_DRAW_FRAME_STEP`) put the transition at issued draw 630 =
 **draw 840, pixel shader 0x9610bf8038af9aaf** -- UE3's uber post-process blend
-(DOF/bloom composite + colour transform). Surface 0x2d0 holds 899,996 non-black
-px before it and 0 after.
-
-## What it is NOT
-
-- **Not routing.** Forcing that pass to output solid red makes the final image
-  solid red (33.3% of components non-zero = one channel). Its output reaches the
-  resolve and the screen.
-- **Not this session's native pass.** Native passes are OFF by default and the
-  frame is black with the translated shader.
-- **Not the scene colour.** It is full of content.
+(DOF/bloom composite + colour transform).
 
 ## The cause, measured
 
-The pass takes three textures. Probed one at a time by making the native
-reimplementation of that exact shader output each input in all three channels
-(swap-proof -- the resolve applies `copy_dest_swap`, and a probe that writes one
-channel gets its channels confounded, which cost an hour of contradictory
-readings):
+The pixel shader's own float constants, as the guest programmed them
+(`GEARS_DRAW_FRAME_LIST=1 GEARS_DRAW_PS_CONSTS=9610bf8038af9aaf`). Every capture
+agrees on c0..c6 and c9; **only c7 and c8 differ**:
 
-| input | play_v2 | courtyard |
+| capture | c7 | c8 |
 |---|---|---|
-| tf2 | **0.0% non-zero** | 1.8%, max 0.15 |
-| tf0 (carries the picture) | 100%, max 1.0 | 100%, max 1.0 |
-| tf1 (depth) | 100%, 0.0295..0.1626 | 100%, 0.0012..0.0826 |
+| courtyard | (1, 1, 1, 0.5) | (0, 0, 0, 0) |
+| bright | (1, 1, 1, 0.5) | (0, 0, 0, 0) |
+| act1_v2 | (1, 1, 1, 0.5) | (0, 0, 0, 0) |
+| **play_v2** | **(0, 0, 0, 0.5)** | **(-nan, -nan, -nan, 0)**, bits `ffc00000` |
 
-tf2's numbers are exactly those of resolve target **0x6e4000** (0% on play_v2,
-1.6% on courtyard), the 352x182 buffer the bloom/downsample chain on surface
-0x5a0 writes immediately before this pass. So **tf2 is the bloom/DOF buffer and
-it is empty**.
+c7.xyz is the shader's output colour scale (instruction 32, `mul_sat r1.xyz,
+r0, c7.xyz`) and c8.xyz is an additive term (instruction 29). A zero scale takes
+every pixel to zero on its own; a NaN offset poisons every pixel on its own.
 
-Why that turns the frame black rather than merely removing bloom: the shader's
-decoded maths (see `runtime/shaders/uber_post_blend.frag`) is
+**Proved with a control arm**, not argued. `GEARS_DRAW_PS_CONST_SET` substitutes
+a working capture's numbers into this one:
 
-    S = tf0 * sharpWeight + tf2.rgb
-    W = sharpWeight + tf2.a
-    A = saturate(S / W - Shadows)      ... and everything downstream is 0 if A is 0
+    GEARS_DRAW_PS_CONST_SET='9610bf8038af9aaf:7=1,1,1,0.5;9610bf8038af9aaf:8=0,0,0,0'
+      -> 916139/921600 px non-black (99.4%)   [the frame appears]
+    ...:7=1,1,1,0.5  alone   -> 0.0%          [the NaN still kills it]
+    ...:8=0,0,0,0    alone   -> 0.0%          [the zero scale still kills it]
 
-`sharpWeight = saturate(1 - blurAmount)`. play_v2's depth range (0.0295..0.1626)
-is far enough from the focus plane that `blurAmount` saturates, so
-`sharpWeight = 0`; with tf2 also zero, **W = 0** and the divide takes the whole
-frame to zero/NaN. On courtyard tf2 is 1.8% alive and the depth range is nearer
-the focus plane, so W stays non-zero and the frame survives -- but its bloom is
-almost certainly wrong too, just not fatally.
+Both constants are independently fatal, and together they are the whole cause.
+
+`ffc00000` is the negative quiet NaN an invalid operation produces (0/0). It is
+not a value any post-process setting is authored with, so **at least c8 is a
+guest-side defect** -- the renderer is faithfully drawing what the command
+stream told it to. c7.xyz = 0 is what UE3 writes for a camera fade to black, so
+on its own it could be legitimate; arriving alongside a NaN in the adjacent
+constant, it is more likely that one guest-side computation produced both.
+
+With both substituted, the frame is a dark interior with correct geometry --
+very dark, but that is a separate question from black.
+
+## RETRACTED: the earlier explanation on this page was WRONG
+
+This entry previously said the frame was black because the bloom/DOF buffer at
+`0x6e4000` resolved empty and the blend's `W = sharpWeight + tf2.a` therefore
+divided by zero. Both halves are false, and the constants above refute them:
+
+- **There is no divide by zero.** c2 = (0, 0.4, 0, 0): MaxNearBlur is 0. c1.x =
+  1200 is the focus distance and the frame's depths run 62..350, so every pixel
+  is IN FRONT of focus, takes the near maximum, and gets `blurAmount = 0` --
+  hence `sharpWeight = 1` and `W = 1`. It was never near zero.
+- **The empty bloom buffer is CORRECT for this frame.** The downsample
+  (`a146058ecfeb9122`) weights each tap by the DOF unfocused percent plus a
+  bloom term thresholded at c255.x = 1.0. With MaxNearBlur = 0 the DOF term is
+  zero everywhere, and the scene colour maxes out at exactly 1.0, which `sgt`
+  does not pass. Zero out is the right answer. Measured: `GEARS_DRAW_ONLY=627`
+  (that draw alone) leaves `0x6e4000` at 0.0%, and the checkpoint on surface
+  `0x5a0` right after it is 0 px non-black -- the pass shades zero, the resolve
+  is innocent.
+- **The 328x184-into-352x182 resolve size mismatch is not implicated.** It was
+  the first thing the old entry told the next session to check. It is real and
+  harmless here.
+
+The measurement that produced the wrong story was a per-input probe of the blend
+pass. It was accurate -- tf2 really is 0.0% -- and the inference from it was not.
+A probe of the INPUTS could never see that the fault was in the CONSTANTS.
 
 ## Next
 
-Find why the surface-0x5a0 -> 0x6e4000 chain resolves to zero. Its draws
-(issued 626-630, ps a146058ecfeb9122 and bb4572ac75a8b550) all report `shaded`,
-so they run and produce fragments; the content is lost between shading and the
-resolve destination. Note the resolve is 328x184 into a 352x182 texture -- a
-size mismatch worth checking first.
+Find what the guest computes into these two constants. They are written into the
+pixel float constant file before draw 840, so the values are already in the
+command stream: this is CPU-side. In UE3 terms c7 looks like
+`GammaColorScaleAndInverse` (ColorScale.rgb, 1/Gamma) and c8 an additive colour
+term, both fed from the view's post-process settings. A 0/0 reaching a
+render-thread constant points at a recompiled-code defect or an uninitialised
+post-process setting, not at the renderer.
 
-## Instrument fixed on the way
+## Instruments added or fixed on the way
 
-`GEARS_DRAW_FRAME_STEP` did not say WHICH surface each checkpoint dumped. A
-frame switches surfaces several times, so a checkpoint going from 900k non-black
-px to zero reads as "something wiped the frame" when it is only the target
-changing to a small bloom buffer -- which is exactly how it was misread here
-before the surface base was added to the line.
+- `GEARS_DRAW_PS_CONST_SET=<pshash>:<i>=<x>,<y>,<z>,<w>` (new, control arm) --
+  substitute one packed float constant. This is what turned "the constants
+  differ" into "the constants are the cause".
+- `GEARS_DRAW_PS_CONSTS` now prints **raw bits** next to each float. `-nan` as a
+  word says nothing; `ffc00000` (invalid operation) versus `ffffffff`
+  (uninitialised memory) point at completely different bugs.
+- `GEARS_DRAW_FRAME_STEP` **silently dropped every checkpoint that followed a
+  resolve** -- it read `openTarget`, which `endPass()` nulls -- and those are
+  exactly the checkpoints that say whether a pass's output survived to its
+  resolve. It now falls back to the last opened surface, and when it still
+  cannot take one it says so instead of printing nothing.

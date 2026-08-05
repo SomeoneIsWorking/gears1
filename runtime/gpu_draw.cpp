@@ -3600,6 +3600,45 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             syscBuf = draw::DeriveSystemConstants(R);
             fVsBuf = PackFloatConstants(R, vsX->floatBitmap, vsX->floatCount, 0x4000);
             fPsBuf = PackFloatConstants(R, psX->floatBitmap, psX->floatCount, 0x4400);
+            // CONTROL ARM. GEARS_DRAW_PS_CONST_SET=<pshash>:<i>=<x>,<y>,<z>,<w>
+            // (';'-separated for several) replaces one packed float constant of one
+            // pixel shader. It answers exactly one question -- "is the picture wrong
+            // because of THIS number?" -- by substituting the value a working
+            // capture has. It is never a fix: the number comes from the guest, and
+            // a wrong one is a bug on the CPU side, not here.
+            if (const std::string& setSpec = lucent::config::text("DRAW_PS_CONST_SET");
+                !setSpec.empty())
+            {
+                size_t at = 0;
+                while (at < setSpec.size())
+                {
+                    const size_t end = std::min(setSpec.find(';', at), setSpec.size());
+                    const std::string one = setSpec.substr(at, end - at);
+                    at = end + 1;
+                    const size_t colon = one.find(':'), eq = one.find('=');
+                    if (colon == std::string::npos || eq == std::string::npos || eq < colon)
+                    { lucent::warn("draw", "GEARS_DRAW_PS_CONST_SET: cannot parse"
+                        " '{}', expected <pshash>:<index>=<x>,<y>,<z>,<w>", one); continue; }
+                    const uint64_t h = std::strtoull(one.c_str(), nullptr, 16);
+                    if (h != d.psHash)
+                        continue;
+                    const uint32_t idx = uint32_t(std::strtoul(
+                        one.c_str() + colon + 1, nullptr, 10));
+                    float v[4] = {0, 0, 0, 0};
+                    const char* p = one.c_str() + eq + 1;
+                    for (float& f : v)
+                    { char* nxt = nullptr; f = std::strtof(p, &nxt);
+                      if (nxt == p) break; p = (*nxt == ',') ? nxt + 1 : nxt; }
+                    if ((idx + 1) * 16 > fPsBuf.size())
+                    { lucent::warn("draw", "GEARS_DRAW_PS_CONST_SET: ps {:#x} has"
+                        " {} packed constants, so index {} DOES NOT EXIST and was"
+                        " NOT applied", d.psHash, psX->floatCount, idx); continue; }
+                    std::memcpy(fPsBuf.data() + size_t(idx) * 16, v, 16);
+                    lucent::info("draw", "GEARS_DRAW_PS_CONST_SET: ps {:#x} c[{}]"
+                        " forced to ({}, {}, {}, {})", d.psHash, idx,
+                        v[0], v[1], v[2], v[3]);
+                }
+            }
             boolLoopBuf.resize(sizeof(uint32_t) * (8 + 32));
             std::memcpy(boolLoopBuf.data(), &R[0x4900], boolLoopBuf.size());
             fetchBuf.resize(sizeof(uint32_t) * 6 * 32);
@@ -4118,9 +4157,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     for (uint32_t i = 0; i < psX->floatCount &&
                                          (i + 1) * 16 <= fPsBuf.size(); ++i)
                     {
-                        float v[4];
+                        float v[4]; uint32_t b[4];
                         std::memcpy(v, fPsBuf.data() + size_t(i) * 16, 16);
-                        cl.add(" c[{}]=({}, {}, {}, {})", i, v[0], v[1], v[2], v[3]);
+                        std::memcpy(b, fPsBuf.data() + size_t(i) * 16, 16);
+                        // The RAW BITS as well, because a NaN or an inf printed as
+                        // a word says nothing about where it came from: 0xffffffff
+                        // is uninitialised memory, 0x7fc00000 is arithmetic, and the
+                        // two point at completely different bugs.
+                        cl.add(" c[{}]=({}, {}, {}, {})[{:08x} {:08x} {:08x} {:08x}]",
+                               i, v[0], v[1], v[2], v[3], b[0], b[1], b[2], b[3]);
                     }
                     cl.flush(lucent::Level::Info, "draw");
                 }
@@ -4963,8 +5008,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     uint32_t checkpointsSkipped = 0;
     auto checkpointHere = [&](uint32_t drawsSoFar, const SurfaceTarget* t,
                               uint32_t surfaceBase) {
+        // SAY SO. A checkpoint that produces nothing must not look like a
+        // checkpoint that found nothing -- the run's log is the only place the
+        // difference is visible.
         if (!t || !t->begunThisFrame)
+        {
+            lucent::info("draw", "  checkpoint after {} draws: NOT TAKEN -- {}",
+                drawsSoFar, t ? "the surface has not been rendered to this frame"
+                              : "no surface has been opened yet");
             return;
+        }
         if (checkpoints.size() >= kMaxCheckpoints)
         {
             ++checkpointsSkipped;
@@ -5068,6 +5121,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     bool inPass = false;
     uint32_t openSurface = 0;
     SurfaceTarget* openTarget = nullptr;
+    // The last surface a pass was opened on, which -- unlike openTarget -- SURVIVES
+    // endPass(). A checkpoint asked for immediately after a resolve has no pass
+    // open, and using openTarget there dropped the checkpoint silently: exactly the
+    // draws at a pass boundary, which is where the post chain's defects live. The
+    // colour image sits in TRANSFER_SRC_OPTIMAL either way, so reading it closed is
+    // as valid as reading it open.
+    uint32_t lastSurface = 0;
+    SurfaceTarget* lastTarget = nullptr;
 
     auto endPass = [&]() {
         if (!inPass)
@@ -5096,6 +5157,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         inPass = true;
         openSurface = base;
         openTarget = t;
+        lastSurface = base;
+        lastTarget = t;
         ++segments;
         return true;
     };
@@ -5197,8 +5260,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // checkpoint afterwards passed a null every single time, so this knob
             // has never written an image or logged a line -- it looked exactly like
             // a frame with nothing to check.
-            SurfaceTarget* const checkpointTarget = openTarget;
-            const uint32_t checkpointBase = openSurface;
+            // The `last` fallback covers the draw right after a resolve, where no
+            // pass is open yet: without it those checkpoints vanished with no line,
+            // and they are the ones that say whether a pass's output survived to
+            // its resolve.
+            SurfaceTarget* const checkpointTarget = openTarget ? openTarget : lastTarget;
+            const uint32_t checkpointBase = openTarget ? openSurface : lastSurface;
             endPass();
             checkpointHere(drawn, checkpointTarget, checkpointBase);
         }
