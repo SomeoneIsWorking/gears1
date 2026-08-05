@@ -65,6 +65,7 @@ the same commit that removes it.
 | Knob | Meaning |
 |---|---|
 | `GEARS_DRAW_DIAG=<path.tsv>` | **The per-draw table.** One row per draw joining what it was, what it did (pipeline statistics) and every piece of state that can zero it, with a `verdict` naming the stage it died at. Start here |
+| *(no knob)* | Every frame reports **`frame texture signs`**: how many texture bindings ask for a signed or gamma component, which this renderer currently reads as plain unsigned. `0 of N` is printed with its denominator so the negative is distinguishable from nobody looking (`catalog.py show 69`) |
 | `GEARS_DRAW_RESOLVE_DUMP=1` | Write every resolve target to a PPM — what the guest's post passes actually sample — and log its true **range and non-zero count**. The PPM alone cannot be trusted for non-colour targets: it clamps to [0,1] at 8 bits, so a signed sub-unit buffer (the motion-blur velocity target) writes as pure black. The log line says so when that is the case (`catalog.py show 66`) |
 | `GEARS_DRAW_TEX_DUMP=1` | Write each decoded guest texture; `tools/decode_bc.py` turns one into a PNG |
 | `GEARS_DRAW_VDUMP=N` | Dump draw N's first vertices at the shader's own stride. N is the `draw` column of the diag table |

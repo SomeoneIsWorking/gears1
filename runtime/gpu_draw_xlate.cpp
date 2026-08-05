@@ -1109,6 +1109,24 @@ std::vector<uint8_t> DeriveSystemConstants(const uint32_t* registerFile)
                                           : xenos::CompareFunction::kAlways;
     flags |= uint32_t(alpha_test_function)
              << SpirvShaderTranslator::kSysFlag_AlphaPassIfLess_Shift;
+    // TEXTURE SIGNEDNESS AND GAMMA -- MEASURED, ATTEMPTED, AND DELIBERATELY NOT
+    // SHIPPED. See catalog #69 before touching this.
+    //
+    // texture_swizzled_signs stays ZERO here, so every translated fetch takes the
+    // unsigned, undecoded path. That is NOT known to be right: on a gameplay frame
+    // of this title 566 of 834 texture bindings ask for TextureSign::kGamma, whose
+    // remap is the piecewise sRGB-to-linear decode. The per-frame "frame texture
+    // signs" line in gpu_draw.cpp counts them, so the gap is loud rather than
+    // silent.
+    //
+    // Filling it with Xenia's own texture_util::SwizzleSigns (same register base
+    // 0x4800, same 6-dword stride, verified) makes the image visibly WORSE: an Act
+    // 1 frame drops from mean 15.9 to 5.4 and the menu goes blotchy with crushed
+    // blacks. It is not simply a missing output encode either -- re-encoding the
+    // result at 1/2.2 moves it FURTHER from the current image (mean difference 44.0
+    // against 10.5), so a companion piece is missing that is not a global tone
+    // curve. Shipping half of a matched pair is worse than shipping neither.
+
     for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i) {
         auto color_info =
             regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[i]);
