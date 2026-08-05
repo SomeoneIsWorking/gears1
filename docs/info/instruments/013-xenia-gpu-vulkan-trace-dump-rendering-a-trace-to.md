@@ -41,3 +41,19 @@ resolve that produces the front buffer.
 
 Re-validate by recapturing with `--readback_resolve=full` and dumping THAT. It
 needs a live Xenia run against the disc image.
+
+## That re-validation was RUN, and it FAILED (2026-08-06)
+
+`--readback_resolve=full` at capture time does **not** fix it. A 42 MB trace
+captured under it dumps exactly as black. So the stale front-buffer snapshot,
+while real, is not the cause.
+
+The live arm that the same run provided is the positive control this record
+never had: live, the front buffer is 74.0% non-zero and every colour resolve
+destination is populated. Played back, the same title's own trace reproduces
+DEPTH to within 0.1% of the live byte counts and produces no colour at all.
+
+Still DISTRUSTED, and now for a stated reason rather than an unexplained one:
+**colour never reaches the shared-memory buffer during trace playback.** Any
+comparison built on this tool would be comparing our renderer against a black
+image. `tools/xenia_oracle` (claim C013) remains the oracle that works.
