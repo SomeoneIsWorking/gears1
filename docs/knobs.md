@@ -71,6 +71,7 @@ the same commit that removes it.
 | `GEARS_DRAW_STATS=1` | Per-draw pipeline statistics |
 | `GEARS_DRAW_CENSUS=1`, `GEARS_DRAW_FRAME_LIST=1` | Per-run and per-draw censuses |
 | `GEARS_DRAW_FRAME_STEP=N`, `GEARS_DRAW_FRAME_STEP_FROM=M` | Checkpoint image every N draws, starting at draw M. **This is how a defect is attributed to a draw.** Capped at 48 images and it says how many it dropped — without `_FROM` the cap always lands on the first 48 steps, so a late-frame defect (UI, post) can never be reached |
+| `GEARS_DRAW_FORCE_LDR=1` | **Control arm.** Collapse a reinterpreted surface's host image to 8-bit UNORM, to ask what the fixed-point render target's source-colour clamp would have done. Destroys every HDR pass on that surface, so it answers one question and breaks the frame (`catalog.py show 68`) |
 | `GEARS_DRAW_VALIDATE=1` | Vulkan validation layers |
 | `GEARS_SHADER_CAPTURE=1`, `GEARS_SHADER_CAPTURE_DIR=<dir>` | Also write each bound microcode blob (and a `manifest.csv`) to disk for the offline tools. The runtime keeps the microcode in memory unconditionally — the renderer translates the pair bound at each draw — so this knob controls the **copy on disk**, nothing else |
 | `GEARS_CONST_DUMP=1` | One-shot dump of the constant/fetch register files at the hot pair's draw; `GEARS_CONST_DUMP_ANY=1` drops the hot-pair filter. Feeds `tools/system_constants` |
