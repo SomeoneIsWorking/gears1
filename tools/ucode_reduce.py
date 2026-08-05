@@ -30,6 +30,7 @@ decode, the exponent bias and the gamma encode are the runtime's, and
 is right. Its output is a reading aid with a stated blind spot, not evidence.
 """
 import argparse
+import os
 import re
 import sys
 
@@ -43,8 +44,9 @@ VECTOR_OPS = {'add', 'mul', 'mad', 'dp3', 'dp3_sat', 'dp2add', 'dp2add_sat',
               'add_sat', 'mul_sat', 'mad_sat', 'max', 'min', 'cndgt', 'floor',
               'frc', 'trunc'}
 SCALAR_OPS = {'rsq', 'rcp', 'log', 'exp', 'sqrt', 'adds', 'maxs', 'mins',
-              'mulsc', 'muls', 'muls_prev', 'adds_prev', 'subsc', 'subsc_sat',
-              'addsc', 'addsc_sat',
+              'mulsc', 'muls', 'muls_prev', 'adds_prev', 'adds_prev_sat',
+              'subsc', 'subsc_sat', 'addsc', 'addsc_sat', 'subs', 'subs_sat',
+              'adds_sat', 'maxs_sat', 'mins_sat', 'muls_sat', 'retain_prev',
               'sin', 'cos', 'rcp_sat', 'rsq_sat', 'exp_sat', 'log_sat'}
 # Structural lines that carry no arithmetic.
 STRUCTURAL = {'exec', 'exece', 'alloc', 'cnop', 'serialize', 'nop'}
@@ -256,10 +258,14 @@ def scalar(sim, op, srcs):
               'sqrt': 'sqrt', 'sin': 'sin', 'cos': 'cos'}[base]
         v = sim.operand(srcs[0], 0)
         return sat(op, ('(1.0 / %s)' % v) if base == 'rcp' else '%s(%s)' % (fn, v))
-    if base in ('adds', 'maxs', 'mins'):
+    if base == 'retain_prev':
+        # Writes the previous-scalar value through unchanged.
+        return sat(op, sim.ps)
+    if base in ('adds', 'maxs', 'mins', 'subs'):
         # A one-source scalar op reading TWO components of the same register.
         a, b = sim.operand(srcs[0], 0), sim.operand(srcs[0], 1)
-        fn = {'adds': '(%s + %s)', 'maxs': 'max(%s, %s)', 'mins': 'min(%s, %s)'}[base]
+        fn = {'adds': '(%s + %s)', 'subs': '(%s - %s)',
+              'maxs': 'max(%s, %s)', 'mins': 'min(%s, %s)'}[base]
         return sat(op, fn % (a, b))
     if base in ('mulsc', 'subsc', 'addsc'):
         a, b = sim.operand(srcs[0], 0), sim.operand(srcs[1], 0)
@@ -419,17 +425,85 @@ def selftest():
     return 1 if bad else 0
 
 
+def census(directory):
+    """Classify a DIRECTORY of disassemblies by shape, so a corpus can be sized.
+
+    The question this answers: is "the base pass" forty-odd one-off materials, or
+    one family with forty-odd parameter sets? Sizing it by eye off a shader census
+    cannot tell the difference, and a grep for a token cannot either -- it counts
+    comments and dead code. This runs the actual reduction and keys on a
+    STRUCTURAL property of the result: how many saturated dot products survive.
+
+    Six of them is the directional-lightmap family's fingerprint -- three basis
+    weights for the shading normal and three for the reflection. It is a
+    fingerprint and not a proof: a shader with six saturated dots that is NOT this
+    family would be misfiled here, and the only thing that settles a given shader
+    is writing it and gating it. The count is a plan, not a result.
+    """
+    import glob as _glob
+    files = sorted(_glob.glob(os.path.join(directory, '*.ucode.txt')))
+    if not files:
+        print('REFUSING: no *.ucode.txt in %s. It classified NOTHING -- this is a'
+              % directory, file=sys.stderr)
+        print('failure, not an empty corpus.', file=sys.stderr)
+        return 2
+    fam, other, ref = [], [], []
+    reasons = {}
+    for f in files:
+        name = os.path.basename(f)[:-10]
+        sim, refused = run(f, {})
+        if refused:
+            ref.append(name)
+            for r in set(refused):
+                reasons[r] = reasons.get(r, 0) + 1
+            continue
+        sats = sum(1 for _, e in sim.order if e.startswith('saturate('))
+        exps = sum(1 for _, e in sim.order if e.startswith('exp2('))
+        (fam if sats == 6 else other).append((name, len(sim.fetches), sats, exps,
+                                              len(sim.order)))
+    print('== shape census of %d shader(s) in %s ==' % (len(files), directory))
+    print()
+    print('SIX saturated dot products (the directional-lightmap fingerprint):'
+          ' %d' % len(fam))
+    if fam:
+        byexp = {}
+        for _, _, _, e, _ in fam:
+            byexp[e] = byexp.get(e, 0) + 1
+        print('   exp2 count -> shaders: %s' % dict(sorted(byexp.items())))
+        print('   fetch counts range %d..%d' % (min(x[1] for x in fam),
+                                                max(x[1] for x in fam)))
+    print('OTHER shapes, reduction succeeded: %d' % len(other))
+    for name, nf, sats, exps, ne in sorted(other, key=lambda x: -x[4])[:10]:
+        print('   %-24s fetches=%-2d sats=%-2d exp2=%-2d expr=%d'
+              % (name, nf, sats, exps, ne))
+    print('REFUSED (the reducer does not model something): %d' % len(ref))
+    for k, v in sorted(reasons.items(), key=lambda kv: -kv[1]):
+        print('   %-48s %d' % (k, v))
+    if not ref:
+        print('   (none)')
+    print()
+    print('A fingerprint is a PLAN, not a result. Six saturated dots is what the')
+    print('three verified members of this family have; a shader that shares the')
+    print('count and not the structure would be misfiled here, and only writing it')
+    print('and running tools/verify_native_pass.sh settles any individual one.')
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('ucode', nargs='?', help='a .ucode.txt from xenos_translate')
     ap.add_argument('--inputs', default='',
                     help='rename input registers, e.g. r0=lmuv,r1=uv,r3=eye')
+    ap.add_argument('--census', metavar='DIR',
+                    help='classify a directory of disassemblies by shape')
     ap.add_argument('--selftest', action='store_true',
                     help='prove the reduction cancels a rotation AND refuses control flow')
     a = ap.parse_args()
     if a.selftest:
         return selftest()
+    if a.census:
+        return census(a.census)
     if not a.ucode:
         ap.error('a .ucode.txt is required (or --selftest)')
     inputs = dict(kv.split('=', 1) for kv in a.inputs.split(',') if '=' in kv)
