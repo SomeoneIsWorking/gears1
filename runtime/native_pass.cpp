@@ -1,4 +1,5 @@
 #include "native_pass.h"
+#include "native_pass_basepass_spv.h"
 #include "native_pass_gamma_spv.h"
 #include "native_pass_movie_spv.h"
 #include "native_pass_uber_spv.h"
@@ -60,8 +61,14 @@ const std::vector<Pass>& RosterStorage()
         // candidates by colour mask, all four the motion-blur shader
         // 0x629226076307234e with blending off. Declaring it kept a pass on
         // this roster that the title does not run. Claim C004, catalog #71.
-        Pass{0ull, "base pass",
-             "Engine/Shaders/BasePassPixelShader.usf, Src/Engine/Src/BasePassRendering.cpp", {}},
+        // IMPLEMENTED. The first native pass that draws the WORLD rather than a
+        // full-screen composite: UE3's base pass for a directional-lightmap
+        // material -- runtime/shaders/base_pass_lightmap.frag. One of the 44
+        // base-pass materials in an Act 1 frame, and the hottest of them.
+        Pass{0x1f1a3f779667a02aull, "base pass, directional-lightmap material",
+             "the title's ps_1f1a3f779667a02a microcode; UE3"
+             " Engine/Shaders/BasePassPixelShader.usf and BasePassCommon.usf",
+             BasePassLightmapSpirv()},
     };
     return roster;
 }

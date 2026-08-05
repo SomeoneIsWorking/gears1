@@ -1,6 +1,6 @@
 # The native renderer
 
-Status: **seam landed, three passes implemented and bit-exact, one declared.**
+Status: **seam landed, four passes implemented and bit-exact, none merely declared.**
 Everything below that is not marked DONE is a plan, and this file says which is
 which so the next session does not have to guess.
 
@@ -9,8 +9,8 @@ which so the next session does not have to guess.
 | Startup movie YUV→RGB composite | `0xea0007942db096ad` | **DONE** — `runtime/shaders/movie_yuv.frag`, bit-exact against the translated pass (2,764,800 of 2,764,800 channel samples identical on `scratch/frames/boot150.gfr`) |
 | Full-screen scene composite (gamma + exposure) | `0x501ac5d8692bf7b6` | **DONE** — `runtime/shaders/scene_gamma.frag`, bit-exact on `scratch/frames/act1.gfr` (2,764,800 of 2,764,800) |
 | Uber post-process blend (DOF + colour transform) | `0x9610bf8038af9aaf` | **DONE** — `runtime/shaders/uber_post_blend.frag`, bit-exact on `scratch/frames/courtyard.gfr` and `scratch/frames/act1_v2.gfr` (2,764,800 of 2,764,800 each) |
+| Base pass — directional-lightmap material | `0x1f1a3f779667a02a` | **DONE** — `runtime/shaders/base_pass_lightmap.frag`, bit-exact on `scratch/frames/courtyard.gfr` and `scratch/frames/bright.gfr` (2,764,800 of 2,764,800 each). **One of 44 base-pass materials in that frame**, and the hottest — 36 of its 348 base-pass draws |
 | Height fog | **none — the pass is not in any frame we have** | withdrawn, see below |
-| Base pass | many (one per material) | declared, not written. `tools/pass_structure.py --draws BASEPASS` now names the draws |
 
 Run the gate with `tools/verify_native_pass.sh`. It has three arms and refuses to
 report a match it cannot back:
@@ -100,8 +100,10 @@ pass-level structure, not a blocker.
    `tools/pass_structure.py`, and `GEARS_DRAW_DIAG` now emits a row per resolve so
    the boundaries are visible at all. See "The frame, recovered" below.
 4. ~~**Height fog**~~ — **WITHDRAWN, and the withdrawal is the finding.** See below.
-5. **The base pass**, which is where the frame's content actually is. This is now
-   the next step, and step 3 says exactly which draws it is.
+5. **The base pass**, which is where the frame's content actually is. **STARTED**:
+   one material of 44 is written and bit-exact (below). The remaining 43 are the
+   same procedure again, and `tools/pass_structure.py --draws BASEPASS` names
+   them.
 
 ## What the first pass cost, and what it teaches
 
@@ -338,3 +340,68 @@ set 3: 0/1 = texture2 unsigned/signed, 2/3 = texture0, 4/5 = texture1,
 The movie pass fetches `tf0` first, which is the only reason its layout looks like
 `0 = texture0`. Copying that pattern into a shader that fetches in a different
 order samples the wrong images and still draws a plausible picture.
+
+
+## The base pass: the first native pass that draws the world
+
+`0x1f1a3f779667a02a` is UE3's base pass for a texture-lightmapped material — 36 of
+the Act 1 courtyard's 348 base-pass draws, the hottest of that frame's 44
+base-pass pixel shaders. Everything native before it was a full-screen composite;
+this one is geometry.
+
+What it computes, and it is straight out of UE3's static-lighting model: a
+**directional lightmap**. Three coefficient textures hold the incoming radiance
+projected onto three fixed basis vectors, and a surface samples them weighted by
+how much its normal faces each basis. This shader does that **twice** — once with
+the shading normal, which gives diffuse, and once with the reflection of the eye
+vector about that normal, which gives specular out of the same lightmap. Then two
+dynamic directional terms, then a constant.
+
+```
+N   = normalize(base normal map + detail normal map)        tf0, tf1
+R   = 2*(N.V)*N - V
+LMi = LightMapScale[i] * lightmap_texture_i                 tf4, tf5, tf6
+colour = Diffuse*Albedo * (LM0*bN2 + LM1*bN1 + LM2*bN0)     bN = saturate(N.basis)^2
+       +        Specular * (LM0*bR2 + LM1*bR1 + LM2*bR0)    bR = saturate(R.basis)^2
+       + Diffuse*Albedo * (c1*wrapA^2 + c2*wrapB^2)
+       + c0
+```
+
+The basis vectors are the guest's own constants and they have UE3's shape: two of
+them differ only in their first component and the third has a zero component —
+two mirrored vectors and one in the plane between them.
+
+### The swizzles were reduced by simulation, not by reading
+
+This is where the method had to change. The two post passes had swizzle chains
+short enough to compose in your head. This one has 49 ALU instructions that rotate
+channels on almost every line — **ten consecutive `mad r0.xyz_, ..., r0.zxyy`
+accumulations, each rotating by one**, lightmap constants read as `c3.zyx` against
+textures fetched with destination swizzle `zxy_`, and a normal that lives in
+`r1` as `(z, x, y)`.
+
+Composing that by hand is how a native pass ships subtly wrong. Instead the
+register file was **symbolically simulated**: every instruction applied to named
+expressions, with common subexpressions interned, producing a 140-line
+straight-line program. Every one of those permutations cancels — the shader is
+per-channel arithmetic in the original channel order. What does *not* cancel is
+the **order of the six accumulation steps**, and that is preserved literally,
+because the sequencer rounds after each one.
+
+### The control that makes the match mean something
+
+A bit-exact match on a pass that never reaches the compared image is worth
+nothing, and the base pass renders into EDRAM and only reaches the screen through
+two resolves and the whole post chain. So the pass was deliberately broken —
+output halved — and the comparison re-run: **473,625 of 2,764,800 channel samples
+changed, worst channel 28**. The draws demonstrably reach the frame being
+compared, so the zero-difference result with the pass correct is a result.
+
+### What this does and does not finish
+
+It finishes the roster: nothing is left merely *declared*. It does **not** finish
+the base pass. This is one material of 44 in one frame, and Gears has hundreds
+across the game. What it establishes is that a base-pass material is tractable by
+the same procedure as a post pass — dump the module, read the interface, simulate
+the register file, write the reduction, gate it — and that the procedure now
+includes a simulation step for anything with this much channel rotation.
