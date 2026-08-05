@@ -17,7 +17,22 @@
 
 #include "gpu_draw.h"
 #include "gpu_draw_formats.h"
+#include "gpu_draw_pixels.h"
 #include "gpu_draw_xlate.h"
+
+#include <lucent/log.h>
+
+// Every renderer translation unit builds Vulkan objects and every one of them
+// has to fail loudly rather than carry on with a null handle. One definition,
+// so a TU cannot quietly use a laxer one.
+#define VK_CHECK(expr)                                                       \
+    do {                                                                     \
+        VkResult _r = (expr);                                                \
+        if (_r != VK_SUCCESS) {                                              \
+            lucent::warn("draw", "{} -> {}", #expr, ::gears::draw::VkStr(_r)); \
+            return false;                                                    \
+        }                                                                    \
+    } while (0)
 
 namespace gears::draw
 {
