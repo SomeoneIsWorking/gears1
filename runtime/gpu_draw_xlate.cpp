@@ -12,6 +12,8 @@
 #include <algorithm>
 #include <bit>
 #include <cstring>
+#include <cstddef>
+#include <type_traits>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -154,6 +156,35 @@ SpirvShaderTranslator MakeTranslator()
 
 }  // namespace
 
+
+// THE REGISTER FILE IS ALIASED, NOT COPIED.
+//
+// Every one of the four Derive* entry points below used to do
+//
+//     RegisterFile regs;
+//     std::memcpy(regs.values, registerFile, kRegisterCount * sizeof(uint32_t));
+//
+// to read about ten registers. kRegisterCount is 0x5003, so that is 80 KiB per
+// call; all four are called PER DRAW, and an Act 1 frame issues ~810 draws. That
+// is a quarter of a gigabyte of memcpy per frame, and it measured as 8-9 ms of
+// "modification derivation" plus most of "uniforms" and "prepare" in the draw
+// loop -- on a 24 ms loop that was dropping 6-12 frames a second.
+//
+// RegisterFile is standard-layout with `values` as its only data member, so the
+// caller's array IS a RegisterFile; the asserts below fail the build if that ever
+// stops being true rather than letting it become a silent aliasing bug.
+const RegisterFile& AsRegisterFile(const uint32_t* registerFile)
+{
+    static_assert(std::is_standard_layout_v<RegisterFile>,
+                  "RegisterFile must be standard-layout to alias a raw array");
+    static_assert(sizeof(RegisterFile) ==
+                      RegisterFile::kRegisterCount * sizeof(uint32_t),
+                  "RegisterFile must be exactly its values array");
+    static_assert(offsetof(RegisterFile, values) == 0,
+                  "RegisterFile::values must be at offset 0");
+    return *reinterpret_cast<const RegisterFile*>(registerFile);
+}
+
 bool DeriveShaderModifications(const uint32_t* registerFile,
                                const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
                                const uint8_t* psUcode, size_t psSize, uint64_t psHash,
@@ -168,9 +199,7 @@ bool DeriveShaderModifications(const uint32_t* registerFile,
     if (!vs || !ps)
         return false;
 
-    RegisterFile regs;
-    std::memcpy(regs.values, registerFile,
-        RegisterFile::kRegisterCount * sizeof(uint32_t));
+    const RegisterFile& regs = AsRegisterFile(registerFile);
     auto sq_program_cntl = regs.Get<reg::SQ_PROGRAM_CNTL>();
     auto sq_context_misc = regs.Get<reg::SQ_CONTEXT_MISC>();
 
@@ -1052,17 +1081,13 @@ bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv)
 
 bool IsPrimitivePolygonal(const uint32_t* registerFile)
 {
-    RegisterFile regs;
-    std::memcpy(regs.values, registerFile,
-        RegisterFile::kRegisterCount * sizeof(uint32_t));
+    const RegisterFile& regs = AsRegisterFile(registerFile);
     return draw_util::IsPrimitivePolygonal(regs);
 }
 
 std::vector<uint8_t> DeriveSystemConstants(const uint32_t* registerFile)
 {
-    RegisterFile regs;
-    std::memcpy(regs.values, registerFile,
-        RegisterFile::kRegisterCount * sizeof(uint32_t));
+    const RegisterFile& regs = AsRegisterFile(registerFile);
 
     SpirvShaderTranslator::SystemConstants sc;
     std::memset(&sc, 0, sizeof(sc));
@@ -1282,9 +1307,7 @@ HostFormat MapFormat(xenos::TextureFormat f)
 
 bool DeriveViewport(const uint32_t* registerFile, GuestViewport& out)
 {
-    RegisterFile regs;
-    std::memcpy(regs.values, registerFile,
-        RegisterFile::kRegisterCount * sizeof(uint32_t));
+    const RegisterFile& regs = AsRegisterFile(registerFile);
 
     reg::RB_DEPTHCONTROL normalized_depth_control =
         draw_util::GetNormalizedDepthControl(regs);
