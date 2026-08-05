@@ -358,4 +358,74 @@ VkSampler TextureUploader::GetSampler(const GuestSamplerState& gs)
     return s;
 }
 
+
+VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureBinding& tb)
+{
+    const uint32_t fc = tb.fetchConstant & 31;
+    const uint32_t dword1 = regs[0x4800 + fc * 6 + 1];
+    const uint32_t base = (dword1 >> 12) << 12;
+    const bool isRt = base != 0 && resolveDests.count(base) != 0;
+    if (base != 0 && depthResolveDests.count(base))
+        ++depthDestSamplers[{base, currentPsHash}];
+    ++baseCount[base];
+    if (isRt)
+        ++baseRtCount[base];
+    // THE SYSTEM CONSTANT WE NEVER SET. The translated fetch reads
+    // xe_uniform_system_constants.texture_swizzled_signs to decide between the
+    // unsigned and signed views of a texture and whether to apply a sign
+    // remap; this renderer leaves that constant ZERO, so every fetch takes the
+    // unsigned path. That is correct only while no fetch constant actually
+    // asks for a signed component -- which is a claim about the title, not
+    // about the renderer, so it is counted rather than assumed.
+    {
+        const uint32_t d0 = regs[0x4800 + fc * 6];
+        const uint32_t signs = (d0 >> 2) & 0xFF;   // sign_x/y/z/w, 2 bits each
+        if (signs != 0)
+        {
+            ++fetchesWithSigns[signs];
+            // WHICH textures, not just how many. A sign mode this renderer
+            // cannot serve properly (kSigned needs the signed view, and only
+            // the unsigned one is bound) has to name the texture it affects,
+            // or the count is a number nobody can act on.
+            if (((signs >> 0) & 3) == 1 || ((signs >> 2) & 3) == 1 ||
+                ((signs >> 4) & 3) == 1 || ((signs >> 6) & 3) == 1)
+                ++signedBases[base];
+        }
+    }
+    // A binding that names a resolve destination of THIS frame reads that
+    // destination's own host image -- the surface it was resolved from, in
+    // that surface's format. Each destination has its own image, so two
+    // passes sampling two different resolves no longer collide.
+    if (isRt && rtLinkEnabled && tb.dimension <= 1)
+    {
+        auto rt = P.resolveTargets.find(base);
+        if (rt != P.resolveTargets.end())
+        {
+            ++bindsRt;
+            return rt->second.view;
+        }
+    }
+    // The guest's own texture, decoded from this fetch constant. The stub
+    // below is only reached when the decode reports a reason it cannot.
+    if (texUploadEnabled)
+    {
+        const auto t0 = std::chrono::steady_clock::now();
+        VkImageView v = TX.Upload(&regs[0x4800 + fc * 6], tb.dimension);
+        msUpload += std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - t0).count();
+        if (v != VK_NULL_HANDLE)
+        {
+            ++bindsGuest;
+            return v;
+        }
+    }
+    ++bindsStub;
+    switch (tb.dimension)
+    {
+        case 2: return P.stub3D.view;
+        case 3: return P.stubCube.view;
+        default: return P.stub2D.view;
+    }
+}
+
 } // namespace gears::draw

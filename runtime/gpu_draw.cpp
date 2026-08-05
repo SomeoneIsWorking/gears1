@@ -438,7 +438,7 @@ void Renderer::ReleasePersistent()
 // order, into ONE persistent colour+depth target inside a single render pass so
 // the geometry accumulates. Each draw carries its own register-file snapshot
 // (constants live at that draw) and its own bound shader pair; distinct shader
-// pairs are translated and their PC.pipelines/modules cached across the frame.
+// pairs are translated and their pipelines/modules cached across the frame.
 bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 {
     const uint32_t W = in.width ? in.width : kWidth;
@@ -505,7 +505,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // console thing on request.
     const bool untileThisFrame = abUntile.Enabled()
         ? abUntile.Arm() : !lucent::config::flag("DRAW_TILED");
-    double msTexture = 0, msSsboUpload = 0;
+    double msSsboUpload = 0;
     auto accumulate = [](double& into, Clock::time_point from) {
         into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
     };
@@ -709,7 +709,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     RT.BuildResolvePipeline();
 
     // Descriptor set layouts, pipeline layouts, rectangle geometry shaders and
-    // the graphics PC.pipelines are in gpu_draw_pipelines.{h,cpp}.
+    // the graphics pipelines are in gpu_draw_pipelines.{h,cpp}.
     draw::PipelineCache PC(*this, P);
     if (firstFrame && !PC.Build())
         return false;
@@ -837,9 +837,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     std::map<std::pair<uint32_t, uint32_t>, uint64_t> surfaceDepthPairs;
     uint32_t issuedResolves = 0, skippedResolves = 0;
     std::map<uint64_t, uint64_t> skipReasons; // reason code -> count (for a summary)
-    uint64_t texBindsStub = 0;   // texture bindings served by a stub image
-    uint64_t texBindsRt = 0;     // texture bindings served by the rendered RT
-    uint64_t texBindsGuest = 0;  // texture bindings served by real guest texture data
     // Geometry reach: how many draws fetch vertices from outside the SSBO
     // mirror. Such a fetch reads zero, so every primitive collapses -- and the
     // result looks exactly like "shaded black", which is why it is counted.
@@ -1010,90 +1007,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         rd.flush(lucent::Level::Info, "draw");
     }
 
-    // Picks the image view for one texture binding. The stub matching the
-    // shader's declared image dimension is the floor; a binding whose fetch
-    // constant points at a resolve destination of THIS frame is served by the
-    // rendered colour target instead (rtView, null until the segmented pass
-    // below has something to give it).
-    // GEARS_DRAW_NORT=1 is the control arm that restores the old behaviour of
-    // decoding a resolve destination out of stale guest memory, for an A/B.
-    const bool rtLinkEnabled = !lucent::config::flag("DRAW_NORT");
+    // Which image serves each texture binding, and the census of what the
+    // frame's bindings named, live on TextureBinder in gpu_draw_textures.
+    draw::TextureBinder TB(P, TX, resolveDests, depthResolveDests);
+    TB.rtLinkEnabled = !lucent::config::flag("DRAW_NORT");
+    TB.texUploadEnabled = texUploadEnabled;
     const bool listDraws = lucent::config::flag("DRAW_FRAME_LIST");
-    // (depth resolve destination, pixel shader hash) -> bindings. Names the
-    // shaders that decode resolved depth, so their microcode can be read.
-    std::map<std::pair<uint32_t, uint64_t>, uint64_t> depthDestSamplers;
-    uint64_t currentPsHash = 0;
-    std::map<uint32_t, uint64_t> texFetchesWithSigns; // sign bits -> bindings
-    std::map<uint32_t, uint64_t> texSignedBases;      // base -> bindings wanting kSigned
-    std::map<uint32_t, uint64_t> texBaseCount;    // fetch base address -> bindings
-    std::map<uint32_t, uint64_t> texBaseRtCount;  // ... restricted to resolve destinations
-    auto selectTexView = [&](const uint32_t* R, const draw::ShaderTextureBinding& tb)
-        -> VkImageView {
-        const uint32_t fc = tb.fetchConstant & 31;
-        const uint32_t dword1 = R[0x4800 + fc * 6 + 1];
-        const uint32_t base = (dword1 >> 12) << 12;
-        const bool isRt = base != 0 && resolveDests.count(base) != 0;
-        if (base != 0 && depthResolveDests.count(base))
-            ++depthDestSamplers[{base, currentPsHash}];
-        ++texBaseCount[base];
-        if (isRt)
-            ++texBaseRtCount[base];
-        // THE SYSTEM CONSTANT WE NEVER SET. The translated fetch reads
-        // xe_uniform_system_constants.texture_swizzled_signs to decide between the
-        // unsigned and signed views of a texture and whether to apply a sign
-        // remap; this renderer leaves that constant ZERO, so every fetch takes the
-        // unsigned path. That is correct only while no fetch constant actually
-        // asks for a signed component -- which is a claim about the title, not
-        // about the renderer, so it is counted rather than assumed.
-        {
-            const uint32_t d0 = R[0x4800 + fc * 6];
-            const uint32_t signs = (d0 >> 2) & 0xFF;   // sign_x/y/z/w, 2 bits each
-            if (signs != 0)
-            {
-                ++texFetchesWithSigns[signs];
-                // WHICH textures, not just how many. A sign mode this renderer
-                // cannot serve properly (kSigned needs the signed view, and only
-                // the unsigned one is bound) has to name the texture it affects,
-                // or the count is a number nobody can act on.
-                if (((signs >> 0) & 3) == 1 || ((signs >> 2) & 3) == 1 ||
-                    ((signs >> 4) & 3) == 1 || ((signs >> 6) & 3) == 1)
-                    ++texSignedBases[base];
-            }
-        }
-        // A binding that names a resolve destination of THIS frame reads that
-        // destination's own host image -- the surface it was resolved from, in
-        // that surface's format. Each destination has its own image, so two
-        // passes sampling two different resolves no longer collide.
-        if (isRt && rtLinkEnabled && tb.dimension <= 1)
-        {
-            auto rt = P.resolveTargets.find(base);
-            if (rt != P.resolveTargets.end())
-            {
-                ++texBindsRt;
-                return rt->second.view;
-            }
-        }
-        // The guest's own texture, decoded from this fetch constant. The stub
-        // below is only reached when the decode reports a reason it cannot.
-        if (texUploadEnabled)
-        {
-            const auto tTex = Clock::now();
-            VkImageView v = TX.Upload(&R[0x4800 + fc * 6], tb.dimension);
-            accumulate(msTexture, tTex);
-            if (v != VK_NULL_HANDLE)
-            {
-                ++texBindsGuest;
-                return v;
-            }
-        }
-        ++texBindsStub;
-        switch (tb.dimension)
-        {
-            case 2: return stub3D.view;
-            case 3: return stubCube.view;
-            default: return stub2D.view;
-        }
-    };
 
     // The guest's resolve rectangle, per Xenia's GetResolveInfo. Shared by the
     // colour and depth paths -- a depth resolve carries the same rectangle and
@@ -1191,7 +1110,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // by exactly what the uniform blocks are determined by -- the register
     // snapshot and the shader pair -- plus the resolve-target map, which changes
     // only when a resolve executes. So a draw that reuses the uniforms can reuse
-    // its sets too: no allocation, no per-binding selectTexView, no sampler
+    // its sets too: no allocation, no per-binding TextureBinder::SelectView, no sampler
     // derivation, no vkUpdateDescriptorSets.
     //
     // That is where the frame's time was: 5224 texture bindings resolved per
@@ -1215,7 +1134,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // constants), so caching them shares nothing: keyed together with the texture
     // sets they produced 722 distinct groups for 722 draws. The texture sets are
     // the ones draws share, and they are also the expensive ones -- building them
-    // is what resolves 5224 bindings a frame through selectTexView.
+    // is what resolves 5224 bindings a frame through TextureBinder::SelectView.
     std::unordered_map<uint64_t, std::array<VkDescriptorSet, 2>> descCache;
     uint64_t descCacheGeneration = 0;
     uint64_t descHits = 0, descBuilds = 0;
@@ -1455,12 +1374,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     psModification))
             { ++skipped; ++skipReasons[2]; continue; }
         }
-        // Set before ANY texture binding of this draw is resolved: selectTexView
+        // Set before ANY texture binding of this draw is resolved: TextureBinder::SelectView
         // runs while the descriptor sets are built, which is earlier than the
         // PreparedDraw is filled in. Recording it later attributed every binding
         // to the PREVIOUS draw's shader -- and sent me disassembling a shader
         // with no texture fetch in it at all.
-        currentPsHash = d.psHash;
+        TB.currentPsHash = d.psHash;
         VkDescriptorSetLayout vsTexLayout = 0, psTexLayout = 0;
         VkPipelineLayout pipeLayout = 0;
         {
@@ -1903,7 +1822,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 {
                     VkDescriptorImageInfo ii{};
                     ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    ii.imageView = selectTexView(R, x.textures[i]);
+                    ii.imageView = TB.SelectView(R, x.textures[i]);
                     imgInfos.push_back(ii);
                     VkWriteDescriptorSet ws{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
                     ws.dstSet = set; ws.dstBinding = i; ws.descriptorCount = 1;
@@ -3183,14 +3102,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         for (const FrameDrawItem& d : in.draws)
             pairs.emplace(d.vsHash, d.psHash);
         lucent::info("draw", "frame: {} of {} draws issued, {} skipped; {} distinct shader"
-            " pairs, {} distinct shaders, {} PC.pipelines, {} texture layouts,"
+            " pairs, {} distinct shaders, {} pipelines, {} texture layouts,"
             " {} pipeline layouts; {} texture bindings ({} guest textures,"
             " {} from the rendered RT, {} from a stub); {}/{} px non-black"
             " ({:.1f}%), {} px changed from the clear ({:.1f}%)",
             issued, in.draws.size(), skipped, pairs.size(), SC.modules.size(), PC.pipelines.size(),
             PC.texLayouts.size(), PC.pipeLayouts.size(),
-            texBindsRt + texBindsStub + texBindsGuest, texBindsGuest, texBindsRt,
-            texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
+            TB.Binds(), TB.bindsGuest, TB.bindsRt,
+            TB.bindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
             changed, 100.0 * double(changed) / (double(W) * H));
 
         // WHERE THE UNIFORM TIME GOES. Uniforms are the largest item in the frame
@@ -3379,11 +3298,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
         // A NEGATIVE THAT CARRIES ITS DENOMINATOR: "no signed fetches" has to be
         // distinguishable from "nobody looked".
-        if (texFetchesWithSigns.empty())
+        if (TB.fetchesWithSigns.empty())
             lucent::info("draw", "frame texture signs: 0 of {} bindings ask for a"
                 " signed or gamma component, so the decode is a no-op on this frame"
                 " -- printed with its denominator so it is not mistaken for nobody"
-                " having looked", texBindsRt + texBindsStub + texBindsGuest);
+                " having looked", TB.Binds());
         else
         {
             lucent::Line sl;
@@ -3391,20 +3310,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                    " (0x3f is kGamma on RGB, 0x55 is kSigned on all four). These are"
                    " decoded per the fetch constant; GEARS_DRAW_NO_TEX_SIGNS=1 is the"
                    " control arm that reads them all unsigned:",
-                   texFetchesWithSigns.size(),
-                   texBindsRt + texBindsStub + texBindsGuest);
-            for (const auto& [bits, n] : texFetchesWithSigns)
+                   TB.fetchesWithSigns.size(),
+                   TB.Binds());
+            for (const auto& [bits, n] : TB.fetchesWithSigns)
                 sl.add(" [{:#04x} x{}]", bits, n);
             sl.flush(lucent::Level::Info, "draw");
         }
-        if (!texSignedBases.empty())
+        if (!TB.signedBases.empty())
         {
             lucent::Line bl;
             bl.add("frame kSigned textures: {} distinct bases want the SIGNED view,"
                    " which this renderer does not create -- the unsigned view is"
                    " bound to both slots, so these fetches read 0..1 where the"
-                   " shader expects -1..1:", texSignedBases.size());
-            for (const auto& [b, n] : texSignedBases)
+                   " shader expects -1..1:", TB.signedBases.size());
+            for (const auto& [b, n] : TB.signedBases)
                 bl.add(" [{:#x} x{}]", b, n);
             bl.flush(lucent::Level::Warn, "draw");
         }
@@ -3449,24 +3368,24 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
         {
             lucent::Line tb;
-            if (!depthDestSamplers.empty())
+            if (!TB.depthDestSamplers.empty())
             {
                 lucent::Line dl;
                 dl.add("frame shaders sampling a DEPTH resolve destination"
                        " (served by the depth resolve):");
-                for (const auto& [k, n] : depthDestSamplers)
+                for (const auto& [k, n] : TB.depthDestSamplers)
                     dl.add(" {:#x}<-ps{:016x}x{}", k.first, k.second, n);
                 dl.flush(lucent::Level::Info, "draw");
             }
-            tb.add("frame texture bases ({} distinct):", texBaseCount.size());
-            for (const auto& [base, n] : texBaseCount)
+            tb.add("frame texture bases ({} distinct):", TB.baseCount.size());
+            for (const auto& [base, n] : TB.baseCount)
             {
                 // Three cases, and only the third is a routing miss: the base IS
                 // a resolve target; the base falls INSIDE one (so the guest is
                 // sampling a sub-rectangle of something we resolved, and we hand
                 // it stale guest memory); or it is an ordinary guest asset.
                 const char* tag = "";
-                if (texBaseRtCount.count(base))
+                if (TB.baseRtCount.count(base))
                     tag = "(RT)";
                 else
                     for (const auto& [k, r] : P.resolveTargets)
@@ -3503,7 +3422,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             " predicated tile)", depthClearsDone, RT.midFrameDepthClears);
         lucent::info("draw", "frame render pass: {} segments across {} surface"
             " switches, {} resolves executed (RT link {})", segments,
-            surfaceSwitches, resolvesDone, rtLinkEnabled ? "on" : "off");
+            surfaceSwitches, resolvesDone, TB.rtLinkEnabled ? "on" : "off");
 
         const std::string& dirStr = lucent::config::text("DRAW_DIR");
         const char* dir = dirStr.empty() ? nullptr : dirStr.c_str();
@@ -3523,8 +3442,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // flat list they invite a reader to add them up, and the sum is meaningless.
     // The residual is printed rather than left for the reader to derive, because
     // an unnamed remainder is how 18 ms of a 36 ms draw loop went unnoticed.
-    // msTexture is NOT a child of msState. uploadTexture is reached from exactly
-    // one place -- selectTexView, inside the descriptor-write assembly -- so the
+    // TB.msUpload is NOT a child of msState. uploadTexture is reached from exactly
+    // one place -- TextureBinder::SelectView, inside the descriptor-write assembly -- so the
     // 8 ms it costs on a gameplay frame belongs under record, and reporting it
     // under state+pipeline made state look twice its real size and the
     // descriptor writes look a third of theirs. Grep confirmed the single call
@@ -3552,8 +3471,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         " census {:.0f} + own {:.0f}) + unattributed {:.0f}",
         msDrawLoop, msState, SC.msTranslate, PC.msPipeline, msModify, msShaderLookup,
         msStateOwn,
-        msUniforms, msIndex, msRecord, msDescAlloc, msDescWrite, msTexture,
-        msDescUpdate, msDescWrite - msTexture - msDescUpdate,
+        msUniforms, msIndex, msRecord, msDescAlloc, msDescWrite, TB.msUpload,
+        msDescUpdate, msDescWrite - TB.msUpload - msDescUpdate,
         msPrepare, msCensus, msRecordOwn, msLoopOther);
 
     // The draw loop rather than the whole frame, and NOT on report frames: a
@@ -3617,7 +3536,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // --- teardown --------------------------------------------------------
     PB.Release();
     // Only this frame's own transients are destroyed here. The render target,
-    // passes, layouts, PC.pipelines, shader modules, textures and samplers belong
+    // passes, layouts, pipelines, shader modules, textures and samplers belong
     // to RendererPersistent and are released by ReleasePersistent.
     for (size_t i = 0; i < stagingBufs.size(); ++i)
     {
@@ -3645,7 +3564,7 @@ using draw::kHeight;
 using draw::Renderer;
 
 // The renderer is built once and kept. Rebuilding it per frame was what made a
-// frame cost ~300 ms; the device, render target, shader translations, PC.pipelines
+// frame cost ~300 ms; the device, render target, shader translations, pipelines
 // and textures all survive from one frame to the next now.
 Renderer& FrameRenderer()
 {
