@@ -160,3 +160,36 @@ Two instruments that stay useful and are validated:
   identically whether one channel is short.
 - The diag table has `resolve_swap_rb` and `resolve_scale`, so what a resolve
   was ASKED to do is readable without toggling a knob and diffing images.
+
+### Note (2026-08-05)
+## The oracle: what is ready, and what needs a person
+
+The entry has said since it opened that an oracle settles this in one
+comparison. Scoped this session; the blocker is not the build.
+
+READY, nothing to do:
+- Xenia is built on this machine and launches: `scratch/oracle/xenia-canary/
+  build/bin/Linux/xenia_canary` (19 MB, catalog #7 has the three local
+  workarounds and the exact configure line).
+- The title's data is extracted at `scratch/game` (`default.xex` present), so
+  it can be loaded directly -- no disc image step.
+- `tools/frame_stats.py` (new) reports our frame and a reference frame with the
+  SAME statistics from one command, PPM or PNG, so the comparison is not two
+  ad-hoc scripts with two definitions. `--selftest` proves it reports both
+  answers. It reproduces this entry's numbers on courtyard.gfr:
+  R/G 0.7684, and a p99.9 of 0.298 against a max of 1.0 -- the 0.30 ceiling is
+  a real ceiling with a handful of pixels above it, not a soft rolloff.
+
+NEEDS A PERSON: reaching a gameplay scene in Xenia takes a window and a
+controller, and that is an interactive session rather than something a
+measurement run can do. Note `xenia_canary --help` does NOT print help and
+hangs (it went to a UI picker); kill it by PID.
+
+So the remaining step is one short interactive Xenia session that reaches any
+Gears gameplay scene and takes a screenshot. It does NOT have to match one of
+our captures: the question is whether a correct renderer of this title also
+puts red a fifth below green frame-wide with a ~0.30 ceiling. If it does, the
+premise of this entry is wrong and the frames were always right. If it does
+not, the entry's three suspects are back on with a reference to aim at.
+
+Then: `tools/frame_stats.py --diff <ours.ppm> <xenia.png>`.
