@@ -4710,6 +4710,27 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (it != P.surfaceTargets.end() && it->second.begunThisFrame)
             presentTarget = &it->second;
     }
+
+    // WHY THE SOURCE SURFACE AND NOT THE FRONT BUFFER -- TESTED, NOT ASSUMED.
+    //
+    // The guest scans out the resolve DESTINATION, and the resolve is not a plain
+    // copy: RB_COPY_DEST_INFO carries a red/blue swap, which this frame sets. So
+    // "present what the guest scans out" looks like the obviously correct rule, and
+    // on a gameplay frame it turns the cold blue-grey image into a warm sepia one
+    // that matches how Gears of War is usually described.
+    //
+    // IT IS WRONG, and the thing that settles it is the boot movie. On that frame
+    // the source surface holds the Epic Games logo in its correct orange, and the
+    // front buffer holds it in blue. The guest writes swapped bytes BECAUSE the
+    // scanout format reads them back swapped; the two cancel, and the image a
+    // person sees is the source surface. Presenting the destination would invert
+    // every frame in the game.
+    //
+    // This also explains the red/blue swap that was shipped and reverted earlier
+    // (catalog #62): there is nothing to compensate anywhere, and every "fix" that
+    // swaps channels somewhere is undoing a swap that was never wrong. Checked
+    // against real footage too -- an in-engine reference frame has red as its
+    // lowest channel, as this path produces and the swapped version does not.
     if (presentTarget)
     {
         // Readback is 8-bit RGBA. A presented surface in any other host format
@@ -4739,7 +4760,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             bl.srcOffsets[1] = {int32_t(W), int32_t(H), 1};
             bl.dstOffsets[1] = {int32_t(W), int32_t(H), 1};
-            vkCmdBlitImage(cmd, presentTarget->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            vkCmdBlitImage(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                 presentStage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl,
                 VK_FILTER_NEAREST);
             VkImageMemoryBarrier r = b;
@@ -5162,11 +5183,22 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             for (const auto& [base, r] : P.resolveTargets)
                 dl.add(" {:#x}<-{}", base, r.copies);
             dl.flush(lucent::Level::Info, "draw");
-            lucent::info("draw", "render-target cache: presented surface {:#x} (chosen by"
-            " the guest's front-buffer address);"
+            // Says WHICH RULE picked the surface. The old wording claimed the
+            // guest's front-buffer address chose it even on frames where that
+            // address was zero and the fallback decided -- which is every replay of
+            // a v1 capture.
+            lucent::info("draw", "render-target cache: presenting surface {:#x},"
+                " chosen by {} (front buffer {:#x}); the guest's copy swap is NOT"
+                " undone here and must not be -- the scanout format reads it back"
+                " swapped, see the Epic-logo evidence in catalog #64;"
                 " resolves issued {}, skipped {}; {} distinct"
                 " RB_DEPTH_INFO depth bases (one shared host depth image)",
-                presentBase, issuedResolves, skippedResolves, depthBases.size());
+                presentBase,
+                in.frontBufferAddress != 0 ? "the guest's front-buffer address"
+                                           : "the LAST-GEOMETRY-DRAW FALLBACK (no"
+                                             " front-buffer address in this frame)",
+                in.frontBufferAddress,
+                issuedResolves, skippedResolves, depthBases.size());
             {
                 lucent::Line sd;
                 sd.add("frame (colour surface, depth base) pairs:");
