@@ -4161,6 +4161,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // target is copied to its own readback buffer and written out, so the frame
     // can be attributed to individual draws instead of guessed at.
     const long stepEvery = lucent::config::number("DRAW_FRAME_STEP", 0);
+    const long stepFrom = lucent::config::number("DRAW_FRAME_STEP_FROM", 0);
     std::vector<std::pair<uint32_t, VkBuffer>> checkpoints; // draws-so-far -> buffer
     std::vector<VkDeviceMemory> checkpointMem;
 
@@ -4429,20 +4430,97 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Each checkpoint costs a full-frame readback buffer, so STEP=1 on a
     // 170-draw frame is capped rather than allocating 170 of them.
     const size_t kMaxCheckpoints = 48;
+    // Its OWN staging image, not one of the present pair: those are the frames the
+    // presenter thread may still be blitting, and a diagnostic must never be able
+    // to corrupt what the user sees.
+    VkImage checkpointStage = VK_NULL_HANDLE;
+    VkDeviceMemory checkpointStageMem = VK_NULL_HANDLE;
+    if (stepEvery > 0)
+    {
+        VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ci.imageType = VK_IMAGE_TYPE_2D;
+        ci.format = VK_FORMAT_R8G8B8A8_UNORM;
+        ci.extent = {W, H, 1};
+        ci.mipLevels = 1;
+        ci.arrayLayers = 1;
+        ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        uint32_t type = 0;
+        VkMemoryRequirements req{};
+        if (vkCreateImage(device, &ci, nullptr, &checkpointStage) == VK_SUCCESS)
+        {
+            vkGetImageMemoryRequirements(device, checkpointStage, &req);
+            if (!FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
+                FindMemory(req.memoryTypeBits, 0, type);
+            VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            ai.allocationSize = req.size;
+            ai.memoryTypeIndex = type;
+            if (vkAllocateMemory(device, &ai, nullptr, &checkpointStageMem) != VK_SUCCESS ||
+                vkBindImageMemory(device, checkpointStage, checkpointStageMem, 0) != VK_SUCCESS)
+            {
+                vkDestroyImage(device, checkpointStage, nullptr);
+                checkpointStage = VK_NULL_HANDLE;
+                lucent::warn("draw", "GEARS_DRAW_FRAME_STEP: no staging image, so"
+                    " checkpoints of non-8888 surfaces will be skipped");
+            }
+        }
+    }
     // A checkpoint dumps the surface that was being rendered into at that
     // point, and only when that surface is 8888 -- the readback path is 8-bit
     // RGBA, and an HDR surface's bytes are not pixels.
+    // WHY THIS BLITS RATHER THAN REFUSING. The old version returned unless the
+    // surface was already 8888, and said nothing when it did. Every surface in
+    // this title's frames is R16G16B16A16_SFLOAT, so GEARS_DRAW_FRAME_STEP was a
+    // SILENT NO-OP: it wrote no images, logged no lines, and looked exactly like a
+    // frame with nothing to report. An HDR surface's bytes are indeed not pixels --
+    // so convert them, the same way the presented frame already is.
+    uint32_t checkpointsSkipped = 0;
     auto checkpointHere = [&](uint32_t drawsSoFar, const SurfaceTarget* t) {
-        if (checkpoints.size() >= kMaxCheckpoints || !t ||
-            t->hostFormat != VK_FORMAT_R8G8B8A8_UNORM || !t->begunThisFrame)
+        if (!t || !t->begunThisFrame)
             return;
+        if (checkpoints.size() >= kMaxCheckpoints)
+        {
+            ++checkpointsSkipped;
+            return;
+        }
         VkBuffer b = 0; VkDeviceMemory m = 0;
         if (!MakeBuffer(rbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m))
             return;
+        VkImage source = t->color;
+        if (t->hostFormat != VK_FORMAT_R8G8B8A8_UNORM && checkpointStage != VK_NULL_HANDLE)
+        {
+            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            bar.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            bar.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            bar.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            bar.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            bar.srcQueueFamilyIndex = bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            bar.image = checkpointStage; bar.subresourceRange = range;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &bar);
+            VkImageBlit bl{};
+            bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            bl.srcOffsets[1] = {int32_t(W), int32_t(H), 1};
+            bl.dstOffsets[1] = {int32_t(W), int32_t(H), 1};
+            vkCmdBlitImage(cmd, t->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                checkpointStage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl,
+                VK_FILTER_NEAREST);
+            VkImageMemoryBarrier rb = bar;
+            rb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            rb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            rb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            rb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb);
+            source = checkpointStage;
+        }
         VkBufferImageCopy rg{};
         rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         rg.imageExtent = {W, H, 1};
-        vkCmdCopyImageToBuffer(cmd, t->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        vkCmdCopyImageToBuffer(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             b, 1, &rg);
         checkpoints.emplace_back(drawsSoFar, b);
         checkpointMem.push_back(m);
@@ -4620,12 +4698,22 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
         if (onlyDraw >= 0 && long(drawn) != onlyDraw)
         { ++drawn; continue; }
+        // GEARS_DRAW_FRAME_STEP_FROM=N aims the (capped) window of checkpoints at
+        // the draws that matter. Without it the cap always lands on the FIRST 48
+        // steps, so a defect introduced late in a frame -- the UI, the post chain --
+        // can never be attributed no matter what step size is chosen.
         const bool needCheckpoint = stepEvery > 0 && drawn > 0 &&
+                                    long(drawn) >= stepFrom &&
                                     (drawn % uint32_t(stepEvery)) == 0;
         if (needCheckpoint)
         {
+            // THE TARGET MUST BE READ BEFORE endPass(), which nulls it. Taking the
+            // checkpoint afterwards passed a null every single time, so this knob
+            // has never written an image or logged a line -- it looked exactly like
+            // a frame with nothing to check.
+            SurfaceTarget* const checkpointTarget = openTarget;
             endPass();
-            checkpointHere(drawn, openTarget);
+            checkpointHere(drawn, checkpointTarget);
         }
         // Open a pass if there is none, or re-open on a different surface.
         if (!inPass || openSurface != pd.surfaceBase)
@@ -5542,8 +5630,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         lucent::info("draw", "  checkpoint after {} draws: {} px != clear, {} px non-black"
             " -> {}", checkpoints[i].first, cpLit, cpNonBlack, name);
     }
+    // NO SILENT TRUNCATION. A capped census that does not say it was capped reads
+    // as full coverage of the frame.
+    if (checkpointsSkipped != 0)
+        lucent::warn("draw", "GEARS_DRAW_FRAME_STEP: {} further checkpoints were"
+            " DROPPED at the {}-checkpoint cap -- the images above stop partway"
+            " through the frame, they do not cover it", checkpointsSkipped,
+            kMaxCheckpoints);
 
     // --- teardown --------------------------------------------------------
+    if (checkpointStage != VK_NULL_HANDLE)
+    {
+        vkDestroyImage(device, checkpointStage, nullptr);
+        vkFreeMemory(device, checkpointStageMem, nullptr);
+    }
     for (size_t i = 0; i < checkpoints.size(); ++i)
     {
         vkDestroyBuffer(device, checkpoints[i].second, nullptr);
