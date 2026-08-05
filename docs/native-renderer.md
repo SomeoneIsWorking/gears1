@@ -30,6 +30,21 @@ report a match it cannot back:
 - **negative control** — a second capture, which must NOT match, so the comparison
   is shown reporting a difference in the same run.
 
+## What is native here, and what is not — read this first
+
+Four of the six passes below are **bit-exact reimplementations of individual pixel
+shaders substituted inside the existing renderer**. They are a verification result
+about the Xenos→SPIR-V translator, not a renderer: everything around them — the
+geometry, the render targets, the EDRAM tiling, the resolves, the state — is still
+reconstructed from the PM4 command stream, and a bit-exact pass changes nothing on
+screen by construction. Six passes in, that is six suspects eliminated and zero
+fixes.
+
+The section **"Stop emulating EDRAM tiling"** at the end is the first change that
+is actually a native renderer: it removes a piece of console-specific machinery
+from the pipeline instead of reimplementing a leaf of it. That is the direction the
+rest of this work should follow.
+
 ## Why
 
 The renderer this project has today reconstructs the frame from the PM4 command
@@ -503,3 +518,89 @@ is the *estimate*: the remaining work is bounded and repetitive rather than
 open-ended. All three have their control arm — breaking the shader deliberately
 changes 473,625, 58,907 and 564,754 channel samples respectively — so no
 zero-difference result here is a pass that never reached the image.
+
+
+## Stop emulating EDRAM tiling
+
+`GEARS_DRAW_UNTILE=1`. **The first change here that is a renderer rather than a
+shader port.**
+
+The Xbox 360 has 10 MiB of EDRAM. A 1280×720 colour-plus-depth surface does not
+fit, so UE3-on-360 splits it into tiles and **replays the whole command buffer once
+per tile** — the same draws, the same shaders, the same geometry, with a different
+scissor band and a `PA_SC_WINDOW_OFFSET` that shifts the world so the tile's rows
+land at the top of EDRAM. Each tile is then resolved out to its own rows of the
+destination texture. Emulating that faithfully is what this renderer has been
+doing, and it is why a gameplay frame issues 348 base-pass draws for 174 draws'
+worth of geometry.
+
+A host renderer targeting a full-resolution image has no 10 MiB budget and no
+reason to do any of it.
+
+**The measurement that says collapsing is sound**, on the Act 1 courtyard frame:
+the two tiles are 174 draws each, and **40 of the 46 columns** of the per-draw
+table are identical on all 174 pairs — same vertex and pixel shader, index count,
+primitive type, colour mask, blend, depth control, surface. Only three
+*programmed* values differ:
+
+| | tile 0 | tile 1 |
+|---|---|---|
+| viewport height | 720 | 208 |
+| scissor height | 512 | 208 |
+| `PA_SC_WINDOW_OFFSET` | `0x0` | `0x7e000000` (window_y = −512) |
+
+The other three differing columns — primitives surviving clip, fragment
+invocations, the verdict — are *outcomes* of the scissor, not inputs. And tile 0
+already carries the **full** viewport height with a window offset of zero; only its
+scissor clips it to the first band. So widening that one scissor draws the whole
+picture in one pass, and the replays are redundant.
+
+### Results
+
+| Capture | base-pass draws | after | image |
+|---|---|---|---|
+| `act1_v2` | 8 | 4 | **bit-exact** |
+| `courtyard` | 348 | 174 | 197 of 2,764,800 samples differ by one |
+| `bright` | 370 | 185 | **bit-exact** |
+| `play_v2` | 389 | 196 | **bit-exact** |
+
+### The residual, measured rather than excused
+
+Courtyard's 197 samples are all **inside the second tile's band**, spread over 124
+rows, none at the seam. The cause is not guessed:
+
+- **primitives after clip fall 894 → 818.** A triangle spanning the tile boundary
+  is rasterised twice under tiling — once clipped to each band, one of the two
+  shifted by 512 rows — and once without it. 76 primitives cross the seam here.
+- **fragment invocations move by +3 in 1,730,163.** So it is not depth rejection,
+  not a lost draw, and not a change in what gets shaded — it is coverage and
+  attribute interpolation at the edges of seam-crossing triangles, which cannot be
+  bit-identical between a clipped-and-translated triangle and the same triangle
+  drawn whole.
+- `bright` and `play_v2` have **557 and 453** seam-crossing primitives and are
+  bit-exact, so the mechanism is present everywhere and simply does not cross a
+  rounding boundary there.
+
+This is the honest shape of the result: collapsing tiling is **not** bit-exact by
+construction, because not translating the world is the entire point. Claim C007.
+
+### Cost
+
+Indicative only, and said that way deliberately. Repeated replays of `courtyard`
+put the draw loop at 1291 ms tiled and 939 ms collapsed (−27%), but a replay's
+first frame is dominated by shader translation and pipeline creation, and the
+spread across captures is wide enough that `play_v2` timed *slower* collapsed.
+Separate runs cannot resolve this — `runtime/frame_ab.*` exists precisely because
+of that. **The result that does not depend on a clock is the draw count:** a
+quarter of the frame's draws stop being issued.
+
+### What it refuses to do
+
+It collapses only when the replay is *provably* a replay, and it reports
+per-candidate why it declined — a count of rejections with no reason cannot
+distinguish "this frame is not tiled" from "my grouping is wrong", and that
+distinction is what found two bugs while this was being written: the base tile's
+group also carries the frame's colour clear (175 draws against the replay's 174,
+so the match had to become a suffix match), and a tile's resolves come *after* its
+draws, so the first boundary I wrote dropped the replay's draws while leaving its
+resolves to copy stale rows over the bottom band.
