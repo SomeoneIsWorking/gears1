@@ -584,15 +584,53 @@ rows, none at the seam. The cause is not guessed:
 This is the honest shape of the result: collapsing tiling is **not** bit-exact by
 construction, because not translating the world is the entire point. Claim C007.
 
-### Cost
+### Cost: measured, and it is a NULL RESULT
 
-Indicative only, and said that way deliberately. Repeated replays of `courtyard`
-put the draw loop at 1291 ms tiled and 939 ms collapsed (−27%), but a replay's
-first frame is dominated by shader translation and pipeline creation, and the
-spread across captures is wide enough that `play_v2` timed *slower* collapsed.
-Separate runs cannot resolve this — `runtime/frame_ab.*` exists precisely because
-of that. **The result that does not depend on a clock is the draw count:** a
-quarter of the frame's draws stop being issued.
+**Removing a quarter of the frame's draws does not make the renderer measurably
+faster.** That is the opposite of what the first pass at this suggested, and the
+correction is the point of this section.
+
+The first numbers here were two replay timings — 1291 ms tiled against 939 ms
+collapsed — presented as "indicative". They were worse than indicative: they were
+measuring the **cold** frame, where collapsing means the replayed tile's shaders
+and pipelines are never prepared at all. That cost appears in no steady-state
+frame.
+
+`GEARS_DRAW_AB_UNTILE=1` alternates the two arms frame by frame inside one run
+(`runtime/frame_ab.h`), which is the only way to resolve anything this size here.
+Over 101 replayed frames per capture, with the collapse verified to fire on
+exactly 50 of them:
+
+| Capture | collapsed − tiled | this run could resolve | verdict |
+|---|---|---|---|
+| `courtyard` | −0.26 ms | 0.54 ms | **not resolved** |
+| `bright` | +0.34 ms | 0.49 ms | **not resolved** |
+| `play_v2` | +0.08 ms | 0.84 ms | **not resolved** |
+
+Why nothing moves: the collapse removes no *shading*. Fragment invocations are
+1,730,163 tiled against 1,730,166 collapsed — the same pixels are shaded either
+way, just organised differently. What it removes is the per-draw CPU cost of 174
+draws whose state is **byte-identical** to draws already issued this frame, so
+every cache in the renderer — shader, pipeline, uniform, descriptor — hits on all
+of them. They were nearly free.
+
+So the collapse's value is that it stops emulating console machinery, and the
+frame's cost lives somewhere else entirely. `docs/re-frontier.md` already says
+where, and says the architectural answer is taking the render off the swap thread
+rather than shaving items off a flat profile.
+
+**A defect in the harness wiring was found getting here, and it is worth its own
+paragraph.** `frame_ab.h` says warm-up frames "are simply not recorded" — but that
+is the *caller's* job, and `gpu_draw.cpp` was recording every non-report frame
+including the first render of a scene, which pays for every shader translation and
+pipeline in it. With those included, the same measurement reported the collapsed
+arm **15 ms faster** against a **30 ms** noise floor; with 12 warm-up frames
+excluded, the floor drops to 0.5 ms and the difference to 0.3. The harness was
+right both times — it refused to resolve either — but the first version could not
+have resolved anything at all. The fix applies to the per-draw-census arm too;
+that earlier result (4.02 ms against 2.01 ms of noise) is unaffected in direction,
+because excluding warm-up only *lowers* the floor and it had already cleared the
+higher one.
 
 ### What it refuses to do
 
