@@ -48,6 +48,7 @@
 #include "gpu_draw_textures.h"
 #include "gpu_draw_targets.h"
 #include "gpu_draw_arena.h"
+#include "gpu_draw_descriptors.h"
 #include "gpu_draw_pipelines.h"
 #include "gpu_draw_probe.h"
 #include "gpu_draw_indices.h"
@@ -460,14 +461,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // for ~700 draws and the existing breakdown accounts for only ~2 of it,
     // so the rest is measured rather than guessed at -- hoisting the loop's
     // containers out was tried first on a hunch and moved it by 1 ms.
-    double msDescAlloc = 0, msDescUpdate = 0, msUniforms = 0, msIndex = 0;
+    double msUniforms = 0, msIndex = 0;
     // Uniform-cache accounting; see the hit test in the draw loop.
     double msState = 0, msRecord = 0, msCensus = 0;
     // Inside the record region, which is the biggest item in a gameplay frame.
-    // msDescWrite is a SUPERSET of msDescUpdate: it is assembling the writes AND
+    // DB.msWrite is a SUPERSET of DB.msUpdate: it is assembling the writes AND
     // submitting them, and the submit measures at ~0, so the two together say
     // whether the cost is ours or the driver's.
-    double msDescWrite = 0, msPrepare = 0;
+    double msPrepare = 0;
     // Inside state+pipeline, whose own 13-14 ms is the largest item in a
     // gameplay frame and the only one still unexplained inside itself.
     double msModify = 0, msShaderLookup = 0;
@@ -1097,50 +1098,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
     };
 
-    // Hoisted out of the per-draw loop deliberately. Recording a gameplay frame
-    // costs ~32 ms of CPU for ~700 draws, and a fresh vector plus a fresh deque
-    // per draw is ~700 rounds of heap churn for containers that are rebuilt
-    // from scratch each time anyway. Cleared per draw below; the deque still
-    // gives the pointer stability vkUpdateDescriptorSets needs.
-    std::vector<VkWriteDescriptorSet> w;
-    std::deque<VkDescriptorImageInfo> imgInfos;
-    w.reserve(32);
-
-    // The constant blocks, reused across draws (see the cache check below).
     // The constant blocks and their cache; see gpu_draw_uniforms.h.
     draw::UniformCache UC(AR);
-    // THE DESCRIPTOR SETS RIDE THE SAME CACHE. A draw's four sets are determined
-    // by exactly what the uniform blocks are determined by -- the register
-    // snapshot and the shader pair -- plus the resolve-target map, which changes
-    // only when a resolve executes. So a draw that reuses the uniforms can reuse
-    // its sets too: no allocation, no per-binding TextureBinder::SelectView, no sampler
-    // derivation, no vkUpdateDescriptorSets.
-    //
-    // That is where the frame's time was: 5224 texture bindings resolved per
-    // gameplay frame across 743 draws, when only ~114 of those draws change the
-    // registers the bindings are read from.
-    // Descriptor sets, keyed by everything they are built from. The pool is reset
-    // at the top of each frame, so this cache lives for one frame -- which is
-    // where the win is anyway: a gameplay frame issues 743 draws that resolve 5224
-    // texture bindings between them, and draws sharing a material share their sets
-    // exactly.
-    //
-    // The key is CONTENT, not identity: the shader pair, plus the six fetch-constant
-    // dwords behind every texture and sampler binding the two shaders declare, plus
-    // the uniform buffers this draw would bind. Two draws agreeing on all of that
-    // cannot want different descriptors. (An earlier attempt keyed on the uniform
-    // cache's register-snapshot POINTER instead and hit 0 times in 722 draws: the
-    // guest rewrites registers between draws, so identity never matches even when
-    // the bindings do.)
-    // ONLY SETS 2 AND 3 -- the texture and sampler sets. Sets 0 and 1 carry this
-    // draw's uniform blocks, which are genuinely per draw (its transform, its
-    // constants), so caching them shares nothing: keyed together with the texture
-    // sets they produced 722 distinct groups for 722 draws. The texture sets are
-    // the ones draws share, and they are also the expensive ones -- building them
-    // is what resolves 5224 bindings a frame through TextureBinder::SelectView.
-    std::unordered_map<uint64_t, std::array<VkDescriptorSet, 2>> descCache;
-    uint64_t descCacheGeneration = 0;
-    uint64_t descHits = 0, descBuilds = 0;
+    // THE DESCRIPTOR SETS RIDE THE SAME INPUTS. A draw's texture sets are
+    // determined by the shader pair, the fetch constants behind every binding
+    // and the resolve generation -- see gpu_draw_descriptors.h for why that is
+    // the key and what keying on identity instead cost.
+    draw::DescriptorBuilder DB(*this, P, TB, TX);
+    DB.pool = pool;
+    DB.ssbo = biSsbo;
+    DB.stubSampler = samp;
 
     for (const FrameDrawItem& d : in.draws)
     {
@@ -1505,161 +1472,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // derivation and the census. It was declared and never accumulated, so
         // the breakdown reported ~2 ms of a ~36 ms draw loop and the remaining
         // 18 ms had no name at all -- which reads as "the loop is cheap" rather
-        // than "the loop is unmeasured". msDescAlloc/msDescUpdate are inside it.
+        // than "the loop is unmeasured". DB.msAlloc/DB.msUpdate are inside it.
         ScopedMs recordTime(msRecord);
 
-        // Descriptor sets for this draw. Sets 2/3 use this shader pair's own
-        // texture layouts, so their binding counts match the SPIR-V exactly.
-        //
-        // REUSED when nothing they depend on has changed: the same uniform-cache
-        // hit (register snapshot + shader pair) and the same resolve generation.
-        // Taking that path skips the per-binding texture lookup too, which is the
-        // expensive half.
+        // The draw's four descriptor sets, and the per-frame cache that lets most
+        // draws reuse the expensive two, are in gpu_draw_descriptors.{h,cpp}.
         VkDescriptorSet sets[4] = {};
-        uint64_t descKey = 0xCBF29CE484222325ull;
-        {
-            auto mix = [&descKey](uint32_t v) {
-                descKey ^= v;
-                descKey *= 0x100000001B3ull;
-            };
-            mix(uint32_t(d.vsHash)); mix(uint32_t(d.vsHash >> 32));
-            mix(uint32_t(d.psHash)); mix(uint32_t(d.psHash >> 32));
-            mix(uint32_t(RT.resolveGeneration));
-            auto mixBindings = [&](const draw::ShaderXlate& x) {
-                for (const auto& tb : x.textures)
-                    for (uint32_t k = 0; k < 6; ++k)
-                        mix(R[0x4800 + (tb.fetchConstant & 31) * 6 + k]);
-                for (const auto& sb : x.samplers)
-                    for (uint32_t k = 0; k < 6; ++k)
-                        mix(R[0x4800 + (sb.fetchConstant & 31) * 6 + k]);
-            };
-            mixBindings(*vsX);
-            mixBindings(*psX);
-        }
-        const auto cached = descCache.find(descKey);
-        const bool reuseSets = cached != descCache.end();
-        // Sets 0 and 1 are always this draw's own; 2 and 3 come from the cache
-        // when some earlier draw in this frame bound the same textures.
-        {
-            VkDescriptorSetLayout uboLayouts[2] = {P.set0, P.set1};
-            VkDescriptorSetAllocateInfo uai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-            uai.descriptorPool = pool;
-            uai.descriptorSetCount = 2;
-            uai.pSetLayouts = uboLayouts;
-            const double uboAllocBegin = sinceStartMs();
-            const VkResult r0 = vkAllocateDescriptorSets(device, &uai, sets);
-            msDescAlloc += sinceStartMs() - uboAllocBegin;
-            if (r0 != VK_SUCCESS)
-            { ++skipped; ++skipReasons[6]; continue; }
-        }
-        if (reuseSets)
-        {
-            ++descHits;
-            sets[2] = cached->second[0]; sets[3] = cached->second[1];
-            const double uboWriteBegin = sinceStartMs();
-            w.clear();
-            auto setBufOnly = [&](VkDescriptorSet st, uint32_t b, VkDescriptorType t,
-                                  VkDescriptorBufferInfo* bi) {
-                VkWriteDescriptorSet ws{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                ws.dstSet = st; ws.dstBinding = b; ws.descriptorCount = 1;
-                ws.descriptorType = t; ws.pBufferInfo = bi;
-                w.push_back(ws);
-            };
-            setBufOnly(sets[0], 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &biSsbo);
-            setBufOnly(sets[1], 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biSys);
-            setBufOnly(sets[1], 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFvs);
-            setBufOnly(sets[1], 2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFps);
-            setBufOnly(sets[1], 3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biBl);
-            setBufOnly(sets[1], 4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFetch);
-            vkUpdateDescriptorSets(device, uint32_t(w.size()), w.data(), 0, nullptr);
-            msDescWrite += sinceStartMs() - uboWriteBegin;
-        }
-        else
-        {
-            ++descBuilds;
-            VkDescriptorSetLayout drawLayouts[2] = {vsTexLayout, psTexLayout};
-            VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-            ai.descriptorPool = pool;
-            ai.descriptorSetCount = 2;
-            ai.pSetLayouts = drawLayouts;
-            const double descAllocBegin = sinceStartMs();
-            const VkResult allocResult = vkAllocateDescriptorSets(device, &ai, &sets[2]);
-            msDescAlloc += sinceStartMs() - descAllocBegin;
-            if (allocResult != VK_SUCCESS)
-            { ++skipped; ++skipReasons[6]; continue; }
-
-            // Assembling the descriptor writes, as distinct from submitting them.
-            // vkUpdateDescriptorSets itself measures at ~0 ms a frame, so if this
-            // region is expensive the cost is in BUILDING the writes -- deriving a
-            // sampler per binding, looking it up, pushing the structs -- and not in
-            // the driver.
-            // Plain begin/end rather than a ScopedMs: this span has no `continue` in
-            // it (checked), and a scope guard here would run to the end of the draw
-            // body and measure the wrong thing.
-            const double descWriteBegin = sinceStartMs();
-
-            // Reused across draws (declared before the loop).
-            w.clear();
-            imgInfos.clear();
-            auto setBuf = [&](VkDescriptorSet s, uint32_t b, VkDescriptorType t,
-                              VkDescriptorBufferInfo* bi) {
-                VkWriteDescriptorSet ws{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                ws.dstSet = s; ws.dstBinding = b; ws.descriptorCount = 1;
-                ws.descriptorType = t; ws.pBufferInfo = bi;
-                w.push_back(ws);
-            };
-            setBuf(sets[0], 0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, &biSsbo);
-            setBuf(sets[1], 0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biSys);
-            setBuf(sets[1], 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFvs);
-            setBuf(sets[1], 2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFps);
-            setBuf(sets[1], 3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biBl);
-            setBuf(sets[1], 4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, &biFetch);
-
-            // One image per texture the shader declared, then one sampler each,
-            // exactly in the translator's binding order.
-            auto writeTextures = [&](const draw::ShaderXlate& x, VkDescriptorSet set) {
-                for (uint32_t i = 0; i < uint32_t(x.textures.size()); ++i)
-                {
-                    VkDescriptorImageInfo ii{};
-                    ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    ii.imageView = TB.SelectView(R, x.textures[i]);
-                    imgInfos.push_back(ii);
-                    VkWriteDescriptorSet ws{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                    ws.dstSet = set; ws.dstBinding = i; ws.descriptorCount = 1;
-                    ws.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                    ws.pImageInfo = &imgInfos.back();
-                    w.push_back(ws);
-                }
-                for (uint32_t j = 0; j < x.samplerCount; ++j)
-                {
-                    // Sampler state is the guest's: filters and clamp modes come
-                    // from the fetch constant this sampler binding names.
-                    VkDescriptorImageInfo si = iiSamp;
-                    draw::GuestSamplerState gs;
-                    if (j < x.samplers.size() &&
-                        draw::DeriveSamplerState(
-                            &R[0x4800 + (x.samplers[j].fetchConstant & 31) * 6],
-                            x.samplers[j], gs))
-                        si.sampler = TX.GetSampler(gs);
-                    imgInfos.push_back(si);
-                    VkWriteDescriptorSet ws{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-                    ws.dstSet = set; ws.dstBinding = uint32_t(x.textures.size()) + j;
-                    ws.descriptorCount = 1;
-                    ws.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                    ws.pImageInfo = &imgInfos.back();
-                    w.push_back(ws);
-                }
-            };
-            writeTextures(*vsX, sets[2]);
-            writeTextures(*psX, sets[3]);
-            const double descUpdateBegin = sinceStartMs();
-            if (!w.empty())
-                vkUpdateDescriptorSets(device, uint32_t(w.size()), w.data(), 0, nullptr);
-            msDescUpdate += sinceStartMs() - descUpdateBegin;
-            msDescWrite += sinceStartMs() - descWriteBegin;
-            descCache.emplace(descKey,
-                std::array<VkDescriptorSet, 2>{sets[2], sets[3]});
-        }
+        if (!DB.Build(R, d, RT.resolveGeneration, *vsX, *psX,
+                      vsTexLayout, psTexLayout, UC, sets))
+        { ++skipped; ++skipReasons[6]; continue; }
 
         // Building the PreparedDraw and deriving this draw's viewport/scissor.
         // Runs to the end of the body, which has no further `continue`.
@@ -2766,7 +2587,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             " The key is the shader pair plus the fetch constants behind every"
             " texture and sampler binding, so a reuse skips resolving those"
             " bindings entirely; the uniform sets are always the draw's own",
-            descHits, descBuilds, descCache.size());
+            DB.hits, DB.builds, DB.CacheSize());
         lucent::info("draw", "texture cache: slowest single hash {:.2f} ms for"
             " {:.2f} MiB at {:#x} ({:.2f} GB/s)", TX.texHashWorstMs,
             double(TX.texHashWorstBytes) / (1024.0 * 1024.0), TX.texHashWorstBase,
@@ -3074,7 +2895,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // descriptor update is inside the descriptor-write span, so neither is
     // subtracted here -- subtracting a child twice is how a residual goes
     // negative and gets waved away as a rounding artefact.
-    const double msRecordOwn = msRecord - msDescAlloc - msDescWrite - msPrepare;
+    const double msRecordOwn = msRecord - DB.msAlloc - DB.msWrite - msPrepare;
     const double msLoopOther =
         msDrawLoop - msState - msUniforms - msIndex - msRecord;
     lucent::info("draw", "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f},"
@@ -3089,8 +2910,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         " census {:.0f} + own {:.0f}) + unattributed {:.0f}",
         msDrawLoop, msState, SC.msTranslate, PC.msPipeline, msModify, msShaderLookup,
         msStateOwn,
-        msUniforms, msIndex, msRecord, msDescAlloc, msDescWrite, TB.msUpload,
-        msDescUpdate, msDescWrite - TB.msUpload - msDescUpdate,
+        msUniforms, msIndex, msRecord, DB.msAlloc, DB.msWrite, TB.msUpload,
+        DB.msUpdate, DB.msWrite - TB.msUpload - DB.msUpdate,
         msPrepare, msCensus, msRecordOwn, msLoopOther);
 
     // The draw loop rather than the whole frame, and NOT on report frames: a
