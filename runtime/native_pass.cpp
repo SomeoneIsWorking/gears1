@@ -1,4 +1,5 @@
 #include "native_pass.h"
+#include "native_pass_movie_spv.h"
 
 #include <lucent/config.h>
 #include <lucent/log.h>
@@ -27,6 +28,14 @@ namespace
 const std::vector<Pass>& RosterStorage()
 {
     static const std::vector<Pass> roster = {
+        // IMPLEMENTED. The startup movie's YUV->RGB composite, written from the
+        // title's own 33-dword microcode (runtime/shaders/movie_yuv.frag) rather
+        // than translated from it. The matrix and offsets are still the guest's,
+        // read from its float-constant UBO -- a native pass reproduces the
+        // OPERATION, not the numbers.
+        Pass{0xea0007942db096adull, "movie YUV composite",
+             "the title's ps_ea000794 microcode; layout per gpu_draw_xlate",
+             MovieYuvSpirv()},
         Pass{0x501ac5d8692bf7b6ull, "full-screen scene composite",
              "Engine/Shaders/PostProcessCommon.usf + MaterialTemplate.usf", {}},
         Pass{0ull, "height fog",
