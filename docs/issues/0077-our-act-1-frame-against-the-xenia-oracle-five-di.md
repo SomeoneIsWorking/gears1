@@ -189,3 +189,64 @@ ramp at on the input side; the only thing we lose that the console has is the
 Our ramp application is faithful. The reduced level count after applying it is
 what the console's own pipeline produces at 8-bit output precision, and is not
 part of the dynamic-range gap this entry is about.
+
+### Note (2026-08-06)
+## Following the window pixel through the frame, and two probe traps (2026-08-06)
+
+Traced pixel (400,255) -- inside a window -- and (640,350) -- bare wall -- with
+GEARS_DRAW_PIXEL_TRACE on the replayed courtyard frame.
+
+    surface 0x2d0, window pixel        surface 0x2d0, wall pixel
+    draw 612  (2.66, 2.97, 3.03)       draw 612  (0.53, 0.63, 0.80)
+    draw 643  (1, 1, 1)                (not touched)
+    issued 527 (0.297,0.297,0.269)     issued 527 (0.205,0.218,0.208)
+    issued 528 (0.269,0.297,0.297)     issued 528 (0.208,0.218,0.205)
+
+and the final image agrees exactly: window (68,76,76), wall (53,55,52).
+
+So the HDR data is RIGHT where it is produced -- a 5x brightness ratio between
+window and wall -- and the presented image has a 1.4x ratio. The compression
+happens on surface 0x2d0, between the copy at draw 612 and the final content.
+
+## Two things the probes made me get wrong first
+
+TRAP 1: the probes sample WHICHEVER surface is bound. A frame switches between
+several, so rows interleave buffers, a target switch reads as a value change,
+and a value can look like it came from a draw that never touched it. Fixed:
+GEARS_DRAW_SURFACE=<hex> restricts both probes to one EDRAM surface, and the
+trace above uses it.
+
+TRAP 2: draw 643 writing (1,1,1) over the HDR value looked like a clamp. It is
+not. Disassembling its pixel shader (0x3f8dacf87fb8da17):
+
+    mad_sat r0.x___, r1.zzzz, c0.xxxx, c1.xxxx
+    maxs_sat oDepth.x___, r0.xx
+    max oC0, r0.xxxx, r0.xxxx
+
+with c0.x = 0.0028078845 and c1.x = 0.017 read from that draw's own register
+file: saturate(distance/356 + 0.017), i.e. a LINEAR DISTANCE ENCODE. The window
+looks at distant sky, so saturating to 1.0 is correct, and surface 0x2d0 is
+serving as a depth-encode buffer at that moment, not as colour. Reading it as
+colour is what made it look like a defect.
+
+## What is left, and what it is not
+
+The final content appears at issued draw 527, attributed to original draw 702 --
+which is prim=1 with ONE index, a single point, and cannot paint two pixels 500
+apart. Draw 703 then writes the same value with RED AND BLUE SWAPPED
+(0.297,0.297,0.269 -> 0.269,0.297,0.297). So neither of those draws is painting
+the scene: the surface's content is being changed by something that is not a
+draw -- a resolve reload or a FORMAT REINTERPRETATION.
+
+That fits what the render-target cache already reports for this surface:
+
+    new surface 0x2d0 -> k_8_8_8_8 k_2_10_10_10 k_2_10_10_10_FLOAT k_16_16
+    k_2_10_10_10_FLOAT_AS_16_16_16_16 in one host target 1280x720
+    (reinterpreted mid-frame; widened host format)
+
+One host target serving five guest formats is already listed as an untested
+candidate on the colour step of the RE frontier. This is the first evidence
+pointing AT it: the guest writes HDR through one interpretation and reads it
+through another, and our single widened float target does not reproduce the bit
+reinterpretation. Next session should start there, with the R/B swap between
+draws 702 and 703 as a second clue that a format's channel order is in play.

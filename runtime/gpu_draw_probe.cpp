@@ -26,6 +26,18 @@ void FrameProbe::Build(size_t nDraws, VkDeviceSize readbackBytes)
     // Checkpoint dumps (GEARS_DRAW_FRAME_STEP=N): after every N draws the colour
     // target is copied to its own readback buffer and written out, so the frame
     // can be attributed to individual draws instead of guessed at.
+    // Which surface the probes are allowed to sample. Parsed as hex, since every
+    // other place an EDRAM base appears in this runtime is hex.
+    {
+        const std::string& t = lucent::config::text("DRAW_SURFACE");
+        if (!t.empty())
+        {
+            onlySurface = int64_t(std::strtoul(t.c_str(), nullptr, 16));
+            lucent::info("draw", "probes restricted to EDRAM surface {:#x}:"
+                " samples on any other surface are DROPPED, so a row here means"
+                " that draw changed the pixel on THIS surface", onlySurface);
+        }
+    }
     stepEvery = lucent::config::number("DRAW_FRAME_STEP", 0);
     stepFrom = lucent::config::number("DRAW_FRAME_STEP_FROM", 0);
     if (stepEvery > 0)
@@ -120,6 +132,10 @@ bool FrameProbe::CheckpointDue(uint32_t drawn) const
 void FrameProbe::Checkpoint(VkCommandBuffer cmd, uint32_t drawsSoFar,
                             const SurfaceTarget* t, uint32_t surfaceBase)
 {
+    // Restricted to one surface when asked: a checkpoint of whichever target
+    // happened to be bound cannot answer "which draw changed this pixel".
+    if (!SurfaceWanted(surfaceBase))
+        return;
     // SAY SO. A checkpoint that produces nothing must not look like a
     // checkpoint that found nothing -- the run's log is the only place the
     // difference is visible.
@@ -181,6 +197,8 @@ void FrameProbe::TracePixel(VkCommandBuffer cmd, uint32_t drawsSoFar,
                             const SurfaceTarget* t, uint32_t surfaceBase)
 {
     if (traceX < 0 || !t || !t->begunThisFrame)
+        return;
+    if (!SurfaceWanted(surfaceBase))
         return;
     VkBufferImageCopy rg{};
     rg.bufferOffset = VkDeviceSize(pixelSamples.size()) * 16;
