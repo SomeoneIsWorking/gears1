@@ -1142,9 +1142,21 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         lucent::error("draw", "GEARS_DRAW_AB_CENSUS and GEARS_DRAW_AB_UNTILE are"
             " both on. They alternate independently and both record the same frame"
             " cost, so neither result would mean anything. Enable ONE.");
-    // Off by default; the A/B arm overrides the plain knob when it is running.
+    // ON BY DEFAULT. A renderer that is native does not emulate the console's
+    // EDRAM tiling, and this one no longer does: GEARS_DRAW_TILED=1 puts the
+    // faithful per-tile replay back for an A/B or a bisect.
+    //
+    // The default was flipped on evidence, and the evidence is not unanimous.
+    // Collapsing is bit-exact against the tiled path on act1_v2, bright and
+    // play_v2, and differs on 197 of 2,764,800 channel samples on courtyard --
+    // all inside the replayed band, caused by seam-crossing triangles being
+    // rasterised once instead of twice-and-translated (claim C007). It CANNOT be
+    // bit-exact, because not translating the world is the whole point. It costs
+    // no measurable time either way (C008). So this is a change of posture, not
+    // an optimisation: the renderer now does the host thing by default and the
+    // console thing on request.
     const bool untileThisFrame = abUntile.Enabled()
-        ? abUntile.Arm() : lucent::config::flag("DRAW_UNTILE");
+        ? abUntile.Arm() : !lucent::config::flag("DRAW_TILED");
     double msTranslate = 0, msPipeline = 0, msTexture = 0, msSsboUpload = 0;
     auto accumulate = [](double& into, Clock::time_point from) {
         into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
