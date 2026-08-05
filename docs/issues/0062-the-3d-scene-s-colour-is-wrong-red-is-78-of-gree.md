@@ -193,3 +193,33 @@ premise of this entry is wrong and the frames were always right. If it does
 not, the entry's three suspects are back on with a reference to aim at.
 
 Then: `tools/frame_stats.py --diff <ours.ppm> <xenia.png>`.
+
+### Note (2026-08-05)
+## The oracle plan, corrected: build a harness, do not drive the emulator
+
+The earlier note here said the remaining step was "one short interactive Xenia
+session". That was wrong about what is needed. Xenia ships a HEADLESS renderer
+for exactly this -- `xenia-gpu-vulkan-trace-dump`, which loads a GPU trace,
+renders it and writes the frame with no window and no controller. It now builds
+(catalog #7 has the one-line recipe and the artifact path).
+
+So the shape is: OUR capture -> a Xenia GPU trace -> their renderer -> a PNG ->
+`tools/frame_stats.py --diff`.
+
+## The caveat that decides how much the answer is worth
+
+A `.gfr` stores per-draw REGISTER SNAPSHOTS, decoded microcode and guest pages.
+A Xenia trace stores a PM4 PACKET STREAM that their command processor executes.
+We do not keep the packets, so a converter has to SYNTHESISE a command stream
+from our snapshots -- which means encoding our own reading of the registers into
+the input.
+
+That is fine for what #62 asks (does a correct renderer of these draws put red a
+fifth below green?) because the question is about SHADING, RESOLVE and FORMAT,
+downstream of the decode. It is worthless for any question about command-stream
+decoding: on those the oracle would agree with us by construction, exactly where
+we are wrong. Say which kind of question is being asked before trusting a run.
+
+The alternative with no such caveat is a trace RECORDED from Xenia running the
+title, which needs the game played once. Strictly better evidence, higher cost.
+Do not conflate the two arms or report one as if it were the other.

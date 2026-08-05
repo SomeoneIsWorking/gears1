@@ -5,7 +5,7 @@ status: resolved
 symptom: need a reference emulator to compare guest state against; unclear whether Xenia builds and runs on Linux
 tags: harness,method,oracle
 created: 2026-07-22
-updated: 2026-07-22
+updated: 2026-08-05
 ---
 
 ## Root cause
@@ -123,3 +123,39 @@ USER JUDGEMENT (ground truth): Xenia is not reliable enough to be an oracle. Con
 
 ### Note (2026-07-22)
 Do NOT resume the Xenia harness. The recomp-harness methodology assumes a trustworthy reference emulator; that assumption holds for mature N64/SNES emulators and does NOT hold for Xbox 360 on Linux. Applying the skill without checking its precondition is the mistake made here.
+
+### Note (2026-08-05)
+## Xenia's headless trace-dump tool builds here too (2026-08-05)
+
+The oracle does NOT need the emulator driven by hand. Xenia ships
+`xenia-gpu-vulkan-trace-dump`: load a GPU trace, render it, write the frame --
+console app, no window, no controller. It is one of Xenia's own CMake targets,
+gated behind an option that was off:
+
+    cmake -S . -B build -DXENIA_BUILD_MISC=ON     # in scratch/oracle/xenia-canary
+    ninja -C build xenia-gpu-vulkan-trace-dump
+
+Builds clean on top of the existing configure from this entry (the version.h,
+bfd-linker and lz4-symlink workarounds still apply and still suffice).
+Artifact: build/bin/Linux/xenia-gpu-vulkan-trace-dump, 17 MB.
+
+Contract, read from src/xenia/gpu/trace_dump.cc rather than from --help:
+
+    --target_trace_file=<path.xtr>   (or first unnamed argument)
+    --trace_dump_path=<dir>          (or second unnamed argument)
+
+NOT YET WORKING, and this is where it stands: invoked with a nonexistent trace
+it hangs in `Setup()` -- which builds the graphics system, BEFORE `Load()` ever
+looks at the file -- and writes no log line in 60 s. So the failure is not
+"missing trace"; something in Setup blocks. Next session: find where Setup
+blocks before doing anything else with it.
+
+## THE TRAP TO AVOID: --help HANGS, it does not print help
+
+`xenia_canary --help` and this tool both route help/errors through a **zenity
+dialog** and block forever waiting for a button nobody will press. A 120 s
+command timeout fires and the dialog process SURVIVES the parent. Confirmed:
+one was still alive 27 minutes later holding the usage text.
+
+Read the cvars in the source instead. If one is left behind, kill it BY PID
+(`ps -eo pid,etimes,comm | grep zenity`) -- never by name, other things share it.
