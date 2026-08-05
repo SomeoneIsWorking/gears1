@@ -385,3 +385,42 @@ STILL OPEN, both recorded so they are not rediscovered:
   * `RequestFrameTrace()` from the harness issues the request and writes no
     .xtr, with nothing from the trace writer either. That would be the control
     arm for the point above.
+
+### Note (2026-08-05)
+## THE TRACE DUMP TOOL IS THE BROKEN INSTRUMENT (2026-08-05)
+
+Every "our synthesised trace renders black" result was measuring the tool.
+
+The control arm, finally available once the headless harness could make Xenia
+capture its own trace: feed `xenia-gpu-vulkan-trace-dump` a trace XENIA ITSELF
+produced (4D5307D5_13457.xtr, 41.7 MB), of a frame the same run rendered
+correctly -- the harness's own PNG of that moment has 22k distinct colours and
+76% of pixels above 8/255. The dump writes a UNIFORMLY BLACK image and exits 0.
+
+Ruled out along the way, each measured on that known-good trace:
+  * draws execute -- zero "Failed in backend";
+  * all 18 resolves run, the last writing 3,768,320 bytes to the front buffer;
+  * the swap finds its 1280x720 k_8_8_8_8 texture at that address;
+  * the guest-output image reports a SUCCESSFUL refresh (instrumented);
+  * a 2-second wait after playback changes nothing, so it is not a race
+    between playback finishing and the GPU catching up.
+
+So the fault is downstream of "guest output refreshed" and upstream of the PNG.
+Not chased further today, because the LIVE harness (tools/xenia_oracle, claim
+C013) already answers the oracle question without it.
+
+CONSEQUENCES, which is the point of writing this down:
+  * recorded as instrument I013, DISTRUSTED;
+  * gfr_to_xtr is exonerated of the blackness. Its index-count bug (665 of 744
+    draws claiming empty index buffers, from a VGT_DMA_SIZE register our command
+    processor never writes) was real, separately measured and fixed -- but it
+    was not why the image was black;
+  * a trace-based comparison cannot be built on this tool until it can render a
+    Xenia-produced trace. The route that works is comparing our renderer against
+    the live harness.
+
+Enabling the trace writer at all needed a fork change: it is compiled out under
+NDEBUG (trace_writer.h), so RequestFrameTrace ACCEPTED the request and silently
+wrote nothing. The header now respects a pre-set
+XE_ENABLE_TRACE_WRITER_INSTRUMENTATION, and both entry points say so when the
+build has it off.
