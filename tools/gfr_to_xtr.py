@@ -24,6 +24,14 @@ has a command for exactly that) and emits only the DRAW_INDX packet itself.
 Say which kind of question is being asked before quoting a result.
 
     tools/gfr_to_xtr.py <capture.gfr> <out.xtr> [--draws N] [--selftest]
+                        [--present guest|frame]
+
+--present guest (default) swaps the buffer the guest's VdSwap named, which is
+the faithful thing and, for a ONE-FRAME capture, is the buffer the PREVIOUS
+frame filled -- so the oracle renders it black and is right to. --present frame
+swaps the address this frame's own last colour resolve wrote, which is what
+makes the oracle show the output of the draws in the trace. Use `frame` to
+compare renderers and `guest` to ask about the present path.
 """
 import struct
 import sys
@@ -57,6 +65,18 @@ REG_FETCH_CONSTANT_00 = 0x4800
 # memory blocks are stored at physical offsets too, so the same translation is
 # what makes the address land on the captured bytes.
 GUEST_PHYSICAL_MASK = 0x1FFFFFFF
+
+# Resolve ("copy") state, read exactly where runtime/gpu_draw.cpp reads it, so
+# the two agree by construction rather than by transcription:
+#   RB_MODECONTROL.edram_mode == 6      a draw that is a resolve, not geometry
+#   RB_COPY_CONTROL.copy_src_select     >= 4 means the source is depth
+#   RB_COPY_DEST_BASE                   where the resolved pixels land in memory
+#   RB_COPY_DEST_PITCH                  pitch in the low 14 bits, height above 16
+REG_RB_MODECONTROL = 0x2208
+REG_RB_COPY_CONTROL = 0x2318
+REG_RB_COPY_DEST_BASE = 0x2319
+REG_RB_COPY_DEST_PITCH = 0x231A
+REG_RB_COPY_DEST_INFO = 0x231B
 SHADER_TYPE_VERTEX = 0
 SHADER_TYPE_PIXEL = 1
 # A PM4 count field is 14 bits, so a packet cannot carry more than this many
@@ -66,6 +86,10 @@ SRC_SELECT_DMA = 0
 SRC_SELECT_AUTO_INDEX = 2
 REG_VGT_DMA_BASE = 0x21FA
 REG_VGT_DMA_SIZE = 0x21FB
+# xenos::Endian. Our renderer reads indices with a full byte swap at both
+# widths, so these are the modes that reproduce ITS interpretation.
+ENDIAN_8IN16 = 1
+ENDIAN_8IN32 = 2
 REG_COUNT = 0x8000
 # Xenia's register file is SMALLER than the one we capture (register_file.h:
 # kRegisterCount). RestoreRegisters rejects the whole command when it overruns
@@ -73,6 +97,63 @@ REG_COUNT = 0x8000
 # looks like a backend failure rather than a format mismatch. Send the prefix
 # Xenia can hold; every register either renderer reads lives well below it.
 XENIA_REG_COUNT = 0x5003
+
+def final_colour_resolve(cap):
+    """Where this frame's last COLOUR resolve puts its pixels, or None.
+
+    This is the frame's own finished composite landing in memory -- the thing a
+    later VdSwap would present. It is read from the frame's own registers, not
+    chosen: `--present frame` needs an address, and the only honest source for
+    one is the resolve the frame actually performed.
+    """
+    for d in reversed(cap.draws):
+        regs = d["regs"]
+        if len(regs) <= REG_RB_COPY_DEST_INFO:
+            continue
+        if (regs[REG_RB_MODECONTROL] & 0x7) != 6:      # not a resolve
+            continue
+        if (regs[REG_RB_COPY_CONTROL] & 0x7) >= 4:     # depth, not colour
+            continue
+        dest = regs[REG_RB_COPY_DEST_BASE] & ~0xFFF
+        if not dest:
+            continue
+        return dict(base=dest,
+                    pitch=regs[REG_RB_COPY_DEST_PITCH] & 0x3FFF,
+                    height=(regs[REG_RB_COPY_DEST_PITCH] >> 16) & 0x3FFF,
+                    info=regs[REG_RB_COPY_DEST_INFO])
+    return None
+
+
+def fetch_from_resolve(resolve):
+    """Describe a resolve destination as a texture fetch constant.
+
+    Every field comes from the resolve's OWN registers, which is what makes this
+    usable on a capture that predates the front-buffer fetch constant -- and
+    ColorFormat casts straight onto TextureFormat, exactly as Xenia does it
+    (draw_util.cc: `TextureFormat(rb_copy_dest_info.copy_dest_format)`).
+
+    VALIDATED, not asserted: on a capture where the frame resolves into the very
+    buffer the guest then swaps, this reproduces the guest's own descriptor
+    dword for dword apart from the address alias. The selftest pins that against
+    real captured values, so a wrong field here fails a test rather than
+    producing a plausible image.
+    """
+    info = resolve["info"]
+    pitch, height = resolve["pitch"], resolve["height"]
+    fmt = (info >> 7) & 0x3F                   # ColorFormat == TextureFormat
+    endian = info & 0x7
+    # copy_dest_swap says the destination is written red/blue swapped, which is
+    # the same statement the fetch constant makes with its swizzle: (Z,Y,X,1)
+    # rather than (X,Y,Z,1).
+    swizzle = 0xA0A if (info >> 24) & 1 else 0xA88
+    dword_0 = (1 << 31) | ((pitch // 32) << 22) | 2      # tiled, pitch, kTexture
+    dword_1 = (fmt & 0x3F) | ((endian & 3) << 6) | ((resolve["base"] >> 12) << 12)
+    dword_2 = ((pitch and (min(pitch, 0x2000) - 1)) & 0x1FFF) | \
+              (((height - 1) & 0x1FFF) << 13)
+    dword_3 = (swizzle & 0xFFF) << 1
+    dword_5 = 1 << 9                                     # k2DOrStacked
+    return [dword_0, dword_1, dword_2, dword_3, 0, dword_5]
+
 
 def front_buffer_extent(cap):
     """The guest bytes the swap will read as the presented image, [lo, hi).
@@ -83,17 +164,27 @@ def front_buffer_extent(cap):
     is exactly the part that looks free. Empty when the capture cannot say,
     which excludes nothing -- the caller is then no worse off than before.
     """
-    if not cap.front_fetch or not any(cap.front_fetch):
+    spans = []
+    if cap.front_fetch and any(cap.front_fetch):
+        spans.append((((cap.front_fetch[1] >> 12) << 12) & GUEST_PHYSICAL_MASK,
+                      ((cap.front_fetch[0] >> 22) & 0x1FF) * 32,
+                      ((cap.front_fetch[2] >> 13) & 0x1FFF) + 1))
+    # The frame's own resolve destination counts too, and on a capture that
+    # predates the fetch constant it is the ONLY thing that does. It was not
+    # excluded once, and the packets went into the buffer the oracle presents --
+    # a v2 capture put them at 0x320000 inside a destination based at 0x311000.
+    resolve = final_colour_resolve(cap)
+    if resolve:
+        spans.append((resolve["base"] & GUEST_PHYSICAL_MASK, resolve["pitch"],
+                      resolve["height"]))
+    if not spans:
         return (0, 0)
-    base = (((cap.front_fetch[1] >> 12) << 12) & GUEST_PHYSICAL_MASK)
-    pitch = ((cap.front_fetch[0] >> 22) & 0x1FF) * 32
-    width = (cap.front_fetch[2] & 0x1FFF) + 1
-    height = ((cap.front_fetch[2] >> 13) & 0x1FFF) + 1
-    row_pixels = pitch if pitch else width
-    rows = (height + 31) & ~31
-    # Every format the front buffer can take is 32 bits per pixel: the kernel
-    # accepts only k_8_8_8_8 and k_2_10_10_10_AS_16_16_16_16 (VdSwap_entry).
-    return (base, base + row_pixels * rows * 4)
+    # Every format either buffer can take here is 32 bits per pixel, and a tiled
+    # surface is padded to whole 32-pixel tile rows.
+    lo = min(base for base, _, _ in spans)
+    hi = max(base + (pitch or 1280) * ((height + 31) & ~31) * 4
+             for base, pitch, height in spans)
+    return (lo, hi)
 
 
 def pick_packet_scratch(cap):
@@ -297,25 +388,40 @@ def im_load_packet(shader_type, ucode):
 def draw_packet(draw):
     """Build one PM4_DRAW_INDX, per ExecutePacketType3Draw.
 
-    The index base and size come from the draw's OWN register snapshot rather
-    than being invented here: the capture does not store the index buffer's
-    endian swap mode, but VGT_DMA_SIZE does, and inventing one would silently
-    reorder every index.
+    VGT_DMA_SIZE carries the index buffer's length in its low 24 bits
+    (`num_words`) and its endian swap mode in the top two. It was previously
+    copied from the draw's register snapshot, on the belief that the capture did
+    not record the swap mode but the register did. THE REGISTER IS ZERO: our
+    command processor takes the index parameters from the DRAW_INDX packet and
+    never writes 0x21FB, so all 659 indexed draws of the courtyard frame carried
+    "this index buffer contains 0 indices". Xenia obeyed exactly that -- 665
+    "index buffer only containing 0" warnings and a black frame -- and the frame
+    looked like a shading failure rather than a malformed trace.
+
+    So the length comes from the draw's own index count, which the capture does
+    store. The swap mode is set to the FULL swap our renderer performs when it
+    reads indices (gpu_draw_indices.cpp: bswap32 for 32-bit, byte swap for
+    16-bit), i.e. k8in32 and k8in16 respectively.
+
+    That last part is a DECODE assumption, and it is the kind this tool's header
+    warns about: if our reading of index endianness is wrong, the oracle is now
+    wrong the same way and will agree with us. It is not evidence about index
+    endianness. It is only sound for the shading, resolve and format questions.
     """
-    regs = draw["regs"]
     src = SRC_SELECT_DMA if draw["indexed"] else SRC_SELECT_AUTO_INDEX
     initiator = ((draw["prim"] & 0x3F) | (src << 6) |
                  ((1 if draw["index32"] else 0) << 11) |
                  ((draw["index_count"] & 0xFFFF) << 16))
     body = [0, initiator]                         # viz query token, initiator
     if draw["indexed"]:
-        dma_size = regs[REG_VGT_DMA_SIZE] if len(regs) > REG_VGT_DMA_SIZE else 0
+        swap_mode = ENDIAN_8IN32 if draw["index32"] else ENDIAN_8IN16
+        dma_size = (draw["index_count"] & 0xFFFFFF) | (swap_mode << 30)
         body += [draw["index_base"], dma_size]
     header = 0xC0000000 | ((len(body) - 1) << 16) | (PM4_DRAW_INDX << 8)
     return [header] + body
 
 
-def emit_swap(w, cap, scratch):
+def emit_swap(w, cap, scratch, present="guest"):
     """Emit the swap, or say exactly why the trace will produce no image.
 
     The negative is written out deliberately. Without a swap the dump renders
@@ -324,23 +430,59 @@ def emit_swap(w, cap, scratch):
     that cannot swap says so here, at build time, rather than being discovered
     as a missing file an hour later.
     """
-    if cap.front_fetch is None:
-        return (f"NO SWAP: capture is v{cap.version}, which predates the front "
-                f"buffer's fetch constant. Xenia takes the swap texture from "
-                f"fetch slot 0, so this trace WILL render its draws and write no "
-                f"image. Re-capture with a current build.")
-    if not any(cap.front_fetch):
-        return ("NO SWAP: the capture's front-buffer fetch constant is all "
-                "zeroes -- the guest passed none, or the swap packet predates "
-                "it. No image will be written.")
-    type0, type3, width, height, physical = swap_packets(cap.front_fetch,
+    if present == "guest":
+        if cap.front_fetch is None:
+            return (f"NO SWAP: capture is v{cap.version}, which predates the "
+                    f"front buffer's fetch constant, and --present guest has "
+                    f"nothing else to describe it. Re-capture, or use "
+                    f"--present frame, which describes the buffer from the "
+                    f"frame's own resolve registers.")
+        if not any(cap.front_fetch):
+            return ("NO SWAP: the capture's front-buffer fetch constant is all "
+                    "zeroes -- the guest passed none, or the swap packet "
+                    "predates it. No image will be written.")
+    fetch = list(cap.front_fetch) if cap.front_fetch else [0] * 6
+    note_prefix = ""
+    if present == "frame":
+        # WHY THIS EXISTS, because it is a deliberate departure from what the
+        # guest said and must not be used without knowing that.
+        #
+        # VdSwap names the buffer the PREVIOUS frame resolved into -- that is
+        # what double buffering means. A capture holds ONE frame, and our
+        # runtime resolves on the host rather than into guest memory, so the
+        # named front buffer arrives at the oracle empty: measured, 34 non-zero
+        # bytes in 3.6 MiB, and the oracle correctly renders black. Presenting
+        # it answers "what did the previous frame leave in memory", which is not
+        # a question anyone is asking.
+        #
+        # So this points the swap at the address THIS frame's own last colour
+        # resolve wrote -- read from the frame's registers, not chosen -- which
+        # makes the oracle show the output of the draws it just executed. That
+        # is the comparison: same registers, same draws, whose pixels differ.
+        # It is NOT a claim about the present path, and a present-path question
+        # must use --present guest.
+        resolve = final_colour_resolve(cap)
+        if resolve is None:
+            return ("NO SWAP: --present frame, but this frame performs no "
+                    "colour resolve, so it never puts a composite in memory "
+                    "for a swap to name. No image will be written.")
+        # The descriptor is BUILT from the resolve's own registers rather than
+        # borrowed from the front buffer, so this works on captures that predate
+        # the fetch constant -- and so no field is taken on trust.
+        fetch = fetch_from_resolve(resolve)
+        note_prefix = (f"presenting THIS frame's final colour resolve "
+                       f"({resolve['base']:#x}, dest pitch {resolve['pitch']}) "
+                       f"instead of the front buffer the guest named "
+                       f"({cap.front_buffer:#x}) -- see --present. ")
+    type0, type3, width, height, physical = swap_packets(fetch,
                                                          cap.front_buffer)
     # The fetch constant and the separately-recorded front buffer address are two
     # independent statements by the guest about the same buffer. Xenia's kernel
     # asserts they agree; if they do not here, one of them is being read wrong,
     # and rendering anyway would present some other surface convincingly.
-    stated = (cap.front_fetch[1] >> 12) << 12
-    if cap.front_buffer and (cap.front_buffer & GUEST_PHYSICAL_MASK) != \
+    stated = (cap.front_fetch[1] >> 12) << 12 if cap.front_fetch else 0
+    if present == "guest" and cap.front_buffer and \
+            (cap.front_buffer & GUEST_PHYSICAL_MASK) != \
             (stated & GUEST_PHYSICAL_MASK):
         raise SystemExit(
             f"REFUSING: the capture's front buffer address {cap.front_buffer:#x} "
@@ -350,11 +492,11 @@ def emit_swap(w, cap, scratch):
     w.packet(scratch, type0)
     w.packet(scratch, type3)
     w.swap()
-    return (f"swap: front buffer {physical:#x} ({width}x{height}), fetch "
-            f"constant 0 posted as the guest's VdSwap does")
+    return (f"swap: {note_prefix}buffer {physical:#x} ({width}x{height}), "
+            f"fetch constant 0 posted as the guest's VdSwap does")
 
 
-def convert(src: Path, dst: Path, max_draws=None):
+def convert(src: Path, dst: Path, max_draws=None, present="guest"):
     cap = Capture(src)
     w = TraceWriter()
     w.header()
@@ -395,7 +537,7 @@ def convert(src: Path, dst: Path, max_draws=None):
                 last_ps = blob_i
         w.packet(scratch, draw_packet(d))
         emitted += 1
-    swap_note = emit_swap(w, cap, scratch)
+    swap_note = emit_swap(w, cap, scratch, present)
     dst.write_bytes(bytes(w.buf))
     print(f"{src.name} -> {dst.name}")
     print(f"   capture: v{cap.version} {cap.width}x{cap.height}, "
@@ -442,7 +584,13 @@ def selftest():
     check("indexed packet header", pkt[0], 0xC0000000 | (3 << 16) | (0x22 << 8))
     check("indexed initiator", pkt[2], 4 | (0 << 6) | (0 << 11) | (804 << 16))
     check("indexed dma base", pkt[3], 0xDEAD00)
+    # num_words is the INDEX COUNT, not whatever the register held: it held zero,
+    # and that zero is what made the oracle render an empty frame.
+    check("indexed dma size carries the count and the swap mode", pkt[4],
+          804 | (ENDIAN_8IN16 << 30))
     check("indexed packet length", len(pkt), 5)
+    pkt32 = draw_packet(dict(d, index32=True, index_count=96))
+    check("32-bit indices use k8in32", pkt32[4], 96 | (ENDIAN_8IN32 << 30))
 
     # Auto-index (non-indexed) draws carry no DMA registers at all.
     d2 = dict(d, indexed=False, index_count=3, index32=True)
@@ -527,6 +675,57 @@ def selftest():
     except SystemExit:
         check("mismatched front buffer refused", True, True)
 
+    # The resolve-derived descriptor, pinned against REAL captured values.
+    # These registers are swap_v3.gfr's final colour resolve, and the expected
+    # dwords are that capture's own front-buffer fetch constant as the guest
+    # posted it -- the two describe the same buffer, so agreement here is the
+    # discriminator actually run against a case whose answer is known
+    # independently. Only the address alias differs, which Xenia's kernel
+    # strips.
+    built = fetch_from_resolve(dict(base=0x311000, pitch=1280, height=720,
+                                    info=0x1000300))
+    guest_posted = [0x8A000002, 0xA0311006, 0x59E4FF, 0x1414, 0x0, 0x200]
+    for i, want in enumerate(guest_posted):
+        if i == 1:
+            want &= ~0xA0000000        # the alias, stripped
+        check(f"resolve-derived fetch dword_{i}", built[i], want)
+
+    # --present frame: the swap must move to the frame's OWN resolve
+    # destination, and must refuse when the frame performs no colour resolve.
+    # Both are checked because a silent fallback to the guest's buffer would
+    # render black and look like a renderer defect rather than a missing swap.
+    def _cap_with_resolve(mode, src_select, dest):
+        regs = [0] * REG_COUNT
+        regs[REG_RB_MODECONTROL] = mode
+        regs[REG_RB_COPY_CONTROL] = src_select
+        regs[REG_RB_COPY_DEST_BASE] = dest
+        regs[REG_RB_COPY_DEST_PITCH] = 1280 | (720 << 16)
+
+        class C:
+            version = 3
+            front_buffer = 0xC1234000
+            front_fetch = [0, (0xC1234 << 12) | 0x086,
+                           (720 - 1) << 13 | (1280 - 1), 0, 0, 0]
+            draws = [dict(regs=regs)]
+        return C()
+
+    note = emit_swap(TraceWriter(), _cap_with_resolve(6, 0, 0xC4000000), 0,
+                     present="frame")
+    check("--present frame moves the swap to the frame's resolve",
+          "0x4000000" in note, True)
+    check("--present frame says it departed from the guest's buffer",
+          "instead of the front buffer the guest named" in note, True)
+    # A DEPTH resolve is not a composite and must not be picked.
+    note = emit_swap(TraceWriter(), _cap_with_resolve(6, 4, 0xC4000000), 0,
+                     present="frame")
+    check("--present frame ignores a depth resolve", note.startswith("NO SWAP"),
+          True)
+    # A frame with no resolve at all must refuse rather than swap something.
+    note = emit_swap(TraceWriter(), _cap_with_resolve(4, 0, 0xC4000000), 0,
+                     present="frame")
+    check("--present frame refuses a frame with no colour resolve",
+          note.startswith("NO SWAP"), True)
+
     print("\nSELFTEST FAILED: " + ", ".join(failures) if failures
           else "\nselftest passed: the packing matches Xenia's headers by hand-check.")
     return 1 if failures else 0
@@ -536,6 +735,15 @@ def main(argv):
     args = argv[1:]
     if args[:1] == ["--selftest"]:
         return selftest()
+    present = "guest"
+    if "--present" in args:
+        i = args.index("--present")
+        present = args[i + 1]
+        del args[i:i + 2]
+        if present not in ("guest", "frame"):
+            print("--present takes 'guest' (what VdSwap named) or 'frame' "
+                  "(this frame's own final colour resolve)")
+            return 2
     max_draws = None
     if "--draws" in args:
         i = args.index("--draws")
@@ -548,7 +756,7 @@ def main(argv):
     if not src.is_file():
         print(f"REFUSING: {src} does not exist. Nothing was converted.")
         return 1
-    return convert(src, dst, max_draws)
+    return convert(src, dst, max_draws, present)
 
 
 if __name__ == "__main__":
