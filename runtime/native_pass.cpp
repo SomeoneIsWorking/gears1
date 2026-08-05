@@ -1,4 +1,5 @@
 #include "native_pass.h"
+#include "native_pass_gamma_spv.h"
 #include "native_pass_movie_spv.h"
 
 #include <lucent/config.h>
@@ -36,8 +37,11 @@ const std::vector<Pass>& RosterStorage()
         Pass{0xea0007942db096adull, "movie YUV composite",
              "the title's ps_ea000794 microcode; layout per gpu_draw_xlate",
              MovieYuvSpirv()},
+        // IMPLEMENTED. The pass every frame ends on: scene colour, modulated,
+        // gamma'd and exposed (runtime/shaders/scene_gamma.frag).
         Pass{0x501ac5d8692bf7b6ull, "full-screen scene composite",
-             "Engine/Shaders/PostProcessCommon.usf + MaterialTemplate.usf", {}},
+             "the title's ps_501ac5d8 microcode; UE3 Engine/Shaders/PostProcessCommon.usf",
+             SceneGammaSpirv()},
         Pass{0ull, "height fog",
              "Engine/Shaders/HeightFogCommon.usf, Src/Engine/Src/FogRendering.cpp", {}},
         Pass{0ull, "base pass",

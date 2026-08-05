@@ -30,9 +30,21 @@ mkdir -p "$out"
 # Render one arm, insisting on a FRESH screenshot.
 arm() { # arm <NATIVE_PASSES value> <capture> <destination>
     rm -f "$shots"/frame*.ppm
-    GEARS_NATIVE_PASSES=$1 "$replay" "$2" >/dev/null 2>&1 || {
+    GEARS_NATIVE_PASSES=$1 "$replay" "$2" >"$out/arm$1.log" 2>&1 || {
         echo "REFUSING to compare: the replay of $2 failed with GEARS_NATIVE_PASSES=$1" >&2
         exit 1; }
+    # THE CHECK THAT MAKES THE MATCH MEAN ANYTHING. If no pass was substituted,
+    # the two arms ran the same shaders and a perfect match is a tautology -- and
+    # that is the silent failure mode of this whole gate, because a pass whose
+    # hash never appears in the capture behaves exactly like a pass that works.
+    if [[ $1 == 1 ]] && ! grep -q "is rendering natively" "$out/arm1.log"; then
+        echo "REFUSING to report a result: NO native pass was substituted in $2." >&2
+        echo "Both arms ran the title's translated shaders, so they match for a" >&2
+        echo "reason that has nothing to do with the shader under test. The roster" >&2
+        echo "line from that run was:" >&2
+        grep "^\[native\]" "$out/arm1.log" >&2 || echo "  (none -- is the build current?)" >&2
+        exit 1
+    fi
     local produced
     produced=$(ls "$shots"/frame*.ppm 2>/dev/null | head -1 || true)
     [[ -n $produced ]] || {
@@ -45,6 +57,7 @@ arm() { # arm <NATIVE_PASSES value> <capture> <destination>
 echo "== translated microcode vs our own shader, on $capture =="
 arm 0 "$capture" "$out/xlate.ppm"
 arm 1 "$capture" "$out/native.ppm"
+grep "is rendering natively" "$out/arm1.log" | sed 's/^/  substituted: /'
 status=0
 tools/compare_frames.py "$out/xlate.ppm" "$out/native.ppm" || status=$?
 

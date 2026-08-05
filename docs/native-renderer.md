@@ -1,13 +1,13 @@
 # The native renderer
 
-Status: **seam landed, one pass implemented and bit-exact, three declared.**
+Status: **seam landed, two passes implemented and bit-exact, two declared.**
 Everything below that is not marked DONE is a plan, and this file says which is
 which so the next session does not have to guess.
 
 | Pass | Hash | State |
 |---|---|---|
 | Startup movie YUV→RGB composite | `0xea0007942db096ad` | **DONE** — `runtime/shaders/movie_yuv.frag`, bit-exact against the translated pass (2,764,800 of 2,764,800 channel samples identical on `scratch/frames/boot150.gfr`) |
-| Full-screen scene composite | `0x501ac5d8692bf7b6` | declared, not written |
+| Full-screen scene composite (gamma + exposure) | `0x501ac5d8692bf7b6` | **DONE** — `runtime/shaders/scene_gamma.frag`, bit-exact on `scratch/frames/act1.gfr` (2,764,800 of 2,764,800) |
 | Height fog | unknown | declared, not written |
 | Base pass | unknown | declared, not written |
 
@@ -117,6 +117,42 @@ wrong in the first shipped version was the *interface*, and it failed silently:
   are translated with no modification key, so they have no interpolator inputs and
   a colour write mask of zero. Trust them for *structure* (bindings, block layouts,
   arithmetic) and never for behaviour.
+
+## What the second pass added
+
+`scene_gamma.frag` was bit-exact on the first attempt, because the first pass had
+already paid for the interface knowledge. Two things it added:
+
+- **Constant registers are PACKED, not indexed by register number.** The gamma
+  shader names `c0`, `c1` and `c255`; the translator emits a *three*-entry block
+  holding exactly those in ascending register order, so `c255` is at index **2**.
+  Indexing `c[255]` reads 4 KiB past a 48-byte buffer.
+- **Swizzle chains often cancel, and saying so is the reading.** That pass permutes
+  channels three times — `saturate(rgb.yxz)`, three `log`s reading `z,x,y`, three
+  `exp`s reading `z,y,x`. Composed, the permutations are the identity, so the whole
+  predicated block is `pow(saturate(rgb), c0.x)`. Transcribing the swizzles would
+  have been correct and unreadable; reducing them is the actual understanding, and
+  the A/B is what makes the reduction safe to trust.
+
+## What two bit-exact passes tell us — and what they do NOT
+
+The most important result so far is a **negative**, and it points away from where
+this session has been looking:
+
+> Two passes, written independently from the title's microcode and from UE3's
+> semantics, agree with the Xenos→SPIR-V translation to the last bit — 2,764,800 of
+> 2,764,800 channel samples, twice, on two different captures. **The shader
+> translation is not where the graphics defect lives.**
+
+That is worth more than either pass is on its own, because it retires a suspect.
+Whatever is wrong with the picture is in state, surfaces, resolves, textures, or
+the passes not yet examined — not in the arithmetic the shaders perform.
+
+It also means, plainly: **a bit-exact native pass changes nothing on screen.** It
+cannot, by construction. The value of a native pass arrives only when it
+*disagrees* with the translation somewhere the translation is wrong. Every match is
+a suspect eliminated; only a mismatch is a fix. Anyone reading a "bit-exact" result
+here as "the renderer got better" is reading it wrong.
 
 ## How each step is verified
 
