@@ -159,3 +159,54 @@ one was still alive 27 minutes later holding the usage text.
 
 Read the cvars in the source instead. If one is left behind, kill it BY PID
 (`ps -eo pid,etimes,comm | grep zenity`) -- never by name, other things share it.
+
+### Note (2026-08-05)
+## The trace-dump tool WORKS now -- two defects in the fork, both fixed (2026-08-05)
+
+The earlier note today said it "hangs in Setup()". That was right, and the
+reason was two independent defects on the path every POSIX console tool takes.
+Neither is reachable from the windowed app, which is presumably why they
+survived. Both fixed on our fork (extern/xenia @ 346f9ba, pushed).
+
+1. `emulator.cc`: `Setup()` dereferenced `imgui_drawer_` unconditionally to call
+   `LoadInputSystem`, while its own signature lets a caller pass null -- which
+   `TraceDump::Setup` does, correctly, having no UI. `display_window` and both
+   factories beside it ARE null-checked. The fault landed in the guest exception
+   handler, which turned the crash into a SPIN, so it looked like a hang and not
+   a segfault. gdb on the live process is what separated them.
+
+2. `console_app_main_posix.cc`: `InitializeLogging()` / `ShutdownLogging()` were
+   COMMENTED OUT, while `ui/windowed_app_main_posix.cc` calls them.
+   `Logger::AppendLine` blocks when the logger was never initialised, so the
+   first thing that logs hangs the process. For the GPU tools that is the Vulkan
+   loader chattering through the debug messenger inside
+   `EnumeratePhysicalDevices` -- long before any trace file is opened, and with
+   no output to say so. This also explains the zero-byte logs: nothing could
+   ever be written.
+
+VERIFIED: given a missing trace it now prints "Could not load trace file" and
+exits 5, rather than hanging until a timeout kills it.
+
+## Running it at 720p
+
+Our captures are 1280x720 and Xenia otherwise picks up the desktop's resolution
+(it created a 2560x1440 swapchain), which would make any comparison meaningless.
+This fork has no `internal_display_resolution` enum, only the custom pair, and
+both must be non-zero to take effect (graphics_system.cc:430):
+
+    --custom_internal_display_resolution_x=1280
+    --custom_internal_display_resolution_y=720
+
+## Reproduce
+
+    cd scratch/oracle/xenia-canary
+    cmake -S . -B build -DXENIA_BUILD_MISC=ON
+    ninja -C build xenia-gpu-vulkan-trace-dump
+    build/bin/Linux/xenia-gpu-vulkan-trace-dump \
+        --target_trace_file=<trace.xtr> --trace_dump_path=<outdir> \
+        --custom_internal_display_resolution_x=1280 \
+        --custom_internal_display_resolution_y=720
+
+NOTE: scratch/oracle/xenia-canary is a SEPARATE CLONE from the submodule at
+extern/xenia, at the same commit. Patch both or you will rebuild the wrong tree
+and conclude your fix did nothing -- which happened once today.
