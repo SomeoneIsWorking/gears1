@@ -13,6 +13,11 @@
 # "correct". It also renders one frame per capture, so it says nothing about
 # anything that varies frame to frame.
 #
+# IT NEVER ENTERS A DIAGNOSTIC. No GEARS_DRAW_* knob is set here, so the whole
+# instrumented half of the renderer -- FRAME_STEP, PIXEL_TRACE, DIAG, the dumps,
+# the A/B arms -- is dead code in every run this script makes. A refactor that
+# touches one of those is NOT covered by a clean report here; run the knob.
+#
 #   tools/frame_hashes.sh [output.txt]
 set -euo pipefail
 cd "$(dirname "$0")/.."
