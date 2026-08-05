@@ -14,7 +14,11 @@ namespace
 {
 
 constexpr char kMagic[8] = {'G', 'E', 'A', 'R', 'S', 'F', 'R', '1'};
-constexpr uint32_t kVersion = 1;
+// v2 adds the front-buffer address. Without it a replay cannot reproduce the
+// PRESENT DECISION at all -- it falls back to the last-geometry-draw rule and
+// silently answers a different question than the live run does, which is how a
+// present-path defect stayed invisible to the project's main instrument.
+constexpr uint32_t kVersion = 2;
 // Guest memory is stored per block so an untouched region costs nothing. 64 KiB
 // is small enough that a texture or vertex buffer does not drag in megabytes of
 // neighbouring emptiness, and large enough that the index stays short.
@@ -119,6 +123,7 @@ bool WriteFrameCapture(const std::filesystem::path& path, const FrameDrawInputs&
     w.pod(in.width);
     w.pod(in.height);
     w.pod(in.guestPhysicalMirrorBytes);
+    w.pod(in.frontBufferAddress);
     w.pod(window);
     w.pod(int64_t(in.sequence));
     w.pod(uint32_t(in.draws.size()));
@@ -191,16 +196,22 @@ bool ReadFrameCapture(const std::filesystem::path& path, FrameCapture& out)
         return false;
     }
     const uint32_t version = r.pod<uint32_t>();
-    if (version != kVersion)
+    if (version != kVersion && version != 1)
     {
         std::fclose(r.f);
         lucent::error("draw", "frame capture: {} is version {}, this build reads {}",
                       path.string(), version, kVersion);
         return false;
     }
+    // A v1 capture predates the front-buffer address. It replays correctly in every
+    // other respect, so it is still read -- but a replay of it CANNOT answer any
+    // question about which buffer is presented, and saying so is the difference
+    // between a limitation and a wrong answer.
+    const bool haveFrontBuffer = version >= 2;
     out.inputs.width = r.pod<uint32_t>();
     out.inputs.height = r.pod<uint32_t>();
     out.inputs.guestPhysicalMirrorBytes = r.pod<uint32_t>();
+    out.inputs.frontBufferAddress = haveFrontBuffer ? r.pod<uint32_t>() : 0u;
     const uint32_t window = r.pod<uint32_t>();
     out.inputs.guestWindowBytes = window;
     out.inputs.sequence = long(r.pod<int64_t>());
@@ -282,6 +293,13 @@ bool ReadFrameCapture(const std::filesystem::path& path, FrameCapture& out)
     out.inputs.guestBase = out.guest.data();
     lucent::info("draw", "frame capture: loaded {} ({} draws, {} distinct shaders,"
         " frame {})", path.string(), drawCount, blobCount, out.inputs.sequence);
+    if (!haveFrontBuffer)
+        lucent::warn("draw", "frame capture: {} is a v1 capture with NO front-buffer"
+            " address. Everything else replays normally, but the present decision"
+            " cannot be reproduced from it: the renderer will fall back to the"
+            " last-geometry-draw rule and present a DIFFERENT buffer than the live"
+            " run did. Re-capture before drawing any conclusion about the presented"
+            " image", path.string());
     return true;
 }
 
