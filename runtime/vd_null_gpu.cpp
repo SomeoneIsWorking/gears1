@@ -193,6 +193,30 @@ constexpr uint32_t kOpEventWriteZpd = 0x5B;
 // RB_SAMPLE_COUNT_ADDR: where EVENT_WRITE_ZPD writes its sample-count record.
 constexpr uint32_t kRegSampleCountAddr = 0x2325;
 
+// ---------------------------------------------------------------------------
+// The display gamma ramp (DC_LUT_*).
+//
+// The scan-out hardware puts every presented pixel through a per-channel lookup
+// table. Nothing in this runtime did, so the frame reached the screen with
+// whatever curve the composite produced -- which is one measured difference
+// against the reference renderer (catalog #78).
+//
+// The ramp cannot be recovered from a register snapshot: it is uploaded ENTRY BY
+// ENTRY, each write landing in the same register, so only the last one survives
+// in the register file. It has to be accumulated as the writes go past, which is
+// what this does.
+//
+// Register indices and write semantics mirror extern/xenia
+// src/xenia/gpu/command_processor.cc (WriteRegister's DC_LUT cases) and
+// registers.h (DC_LUT_30_COLOR is blue:10, green:10, red:10).
+constexpr uint32_t kRegDcLutRwMode = 0x1921;
+constexpr uint32_t kRegDcLutRwIndex = 0x1922;
+constexpr uint32_t kRegDcLutSeqColor = 0x1923;
+constexpr uint32_t kRegDcLutPwlData = 0x1924;
+constexpr uint32_t kRegDcLut30Color = 0x1925;
+constexpr uint32_t kRegDcLutWriteEnMask = 0x1927;
+constexpr uint32_t kRegDcLutaControl = 0x1930;
+
 // VGT_DRAW_INITIATOR (Xenia registers.h / register_table.inc). The DRAW_INDX /
 // DRAW_INDX_2 packet carries this value in its payload; the sequencer latches it
 // into the register file on hardware. Mirroring it makes prim_type / index_size
@@ -402,6 +426,39 @@ uint32_t LoadEndian(uint32_t addressWord)
     return ReadGuest32(address);
 }
 
+// The accumulated ramp, and how it was uploaded. Both matter: an entry table
+// written through DC_LUT_30_COLOR and one written through DC_LUT_SEQ_COLOR are
+// the same ramp, but the reference renderer only implements the SEQ_COLOR path,
+// so knowing which this title uses is the difference between "we now match the
+// hardware" and "we now differ from the oracle on purpose".
+struct GammaRamp
+{
+    // 256 entries, each packed as the hardware's DC_LUT_30_COLOR:
+    // blue in bits 0..9, green in 10..19, red in 20..29.
+    uint32_t table[256] = {};
+    uint32_t seqWrites = 0;      // uploaded a component at a time
+    uint32_t directWrites = 0;   // uploaded a whole entry at a time
+    uint32_t pwlWrites = 0;      // the piecewise-linear form instead
+    uint32_t rwComponent = 0;    // which channel a sequential write targets
+    bool reported = false;        // the "none by the first frame" line
+    uint32_t reportedWrites = 0;  // what the last summary covered
+
+    // Linear, i.e. what the hardware does with no ramp programmed: entry i maps
+    // to i scaled from 8 to 10 bits. Any pixel put through this comes out
+    // unchanged, so a ramp that was never uploaded cannot alter the image --
+    // which is what makes "we apply no ramp" and "we apply this default" the
+    // same picture, and why the counters above are needed to tell them apart.
+    GammaRamp()
+    {
+        for (uint32_t i = 0; i < 256; ++i)
+        {
+            const uint32_t v = i * 0x3FF / 0xFF;
+            table[i] = v | (v << 10) | (v << 20);
+        }
+    }
+};
+GammaRamp g_gammaRamp;
+
 void WriteGpuRegister(uint32_t reg, uint32_t value)
 {
     reg &= 0x7FFF;
@@ -414,6 +471,89 @@ void WriteGpuRegister(uint32_t reg, uint32_t value)
     if (g_gpuRegisters[reg] != value)
         g_registersDirty = true;
     g_gpuRegisters[reg] = value;
+
+    // Gamma ramp uploads. The write enable mask is BLUE, GREEN, RED (bit 2 is
+    // red), which is the reverse of the order the data arrives in, and bits 0:5
+    // of a sequential value are hardwired to zero -- both per Xenia's
+    // WriteRegister, which is the contract this mirrors.
+    switch (reg)
+    {
+    case kRegDcLutRwIndex:
+        // A new index restarts the channel sequence.
+        g_gammaRamp.rwComponent = 0;
+        break;
+
+    case kRegDcLut30Color:
+    {
+        // A whole entry at once, as opposed to the component-at-a-time
+        // SEQ_COLOR form. This title uploads its entire ramp this way: measured,
+        // 256 whole-entry writes and zero sequential ones.
+        //
+        // The reference renderer implements the same path with the same
+        // auto-increment (extern/xenia command_processor.cc, WriteRegister's
+        // DC_LUT_30_COLOR case), which is a useful independent check on the
+        // semantics below -- they were worked out here from the register file's
+        // end state before that case was found.
+        const uint32_t index = g_gpuRegisters[kRegDcLutRwIndex] & 0xFF;
+        const uint32_t mask = g_gpuRegisters[kRegDcLutWriteEnMask];
+        uint32_t entry = g_gammaRamp.table[index];
+        if (mask & 4) entry = (entry & ~(0x3FFu << 20)) | (((value >> 20) & 0x3FF) << 20);
+        if (mask & 2) entry = (entry & ~(0x3FFu << 10)) | (((value >> 10) & 0x3FF) << 10);
+        if (mask & 1) entry = (entry & ~0x3FFu) | (value & 0x3FF);
+        g_gammaRamp.table[index] = entry;
+        ++g_gammaRamp.directWrites;
+        // The index AUTO-INCREMENTS, as it does for the sequential form after a
+        // full triple. Without this every write of an upload lands in the same
+        // entry: the first attempt here left 255 entries at their default and
+        // entry 0 holding the last value written, which reads as "the title's
+        // ramp is linear apart from one entry" -- a conclusion about the title
+        // that was really a defect in this code.
+        //
+        // It is also what makes the register file's end state make sense: after
+        // 256 writes an 8-bit index wraps back to 0, which is exactly what a
+        // capture taken later shows (DC_LUT_RW_INDEX = 0).
+        g_gpuRegisters[kRegDcLutRwIndex] =
+            (g_gpuRegisters[kRegDcLutRwIndex] & ~0xFFu) | ((index + 1) & 0xFF);
+        break;
+    }
+
+    case kRegDcLutSeqColor:
+    {
+        // One channel at a time, in red, green, blue order, advancing the index
+        // after the third.
+        const uint32_t index = g_gpuRegisters[kRegDcLutRwIndex] & 0xFF;
+        const uint32_t mask = g_gpuRegisters[kRegDcLutWriteEnMask];
+        const uint32_t component = g_gammaRamp.rwComponent;
+        if (mask & (1u << (2 - component)))
+        {
+            const uint32_t v = (value >> 6) & 0x3FF;   // bits 0:5 hardwired zero
+            const uint32_t shift = component == 0 ? 20 : component == 1 ? 10 : 0;
+            g_gammaRamp.table[index] =
+                (g_gammaRamp.table[index] & ~(0x3FFu << shift)) | (v << shift);
+            ++g_gammaRamp.seqWrites;
+        }
+        if (++g_gammaRamp.rwComponent >= 3)
+        {
+            g_gammaRamp.rwComponent = 0;
+            g_gpuRegisters[kRegDcLutRwIndex] =
+                (g_gpuRegisters[kRegDcLutRwIndex] & ~0xFFu) | ((index + 1) & 0xFF);
+        }
+        break;
+    }
+
+    case kRegDcLutPwlData:
+        // The piecewise-linear form. COUNTED BUT NOT DECODED: this title has not
+        // been seen to use it, and a half-implemented second path would be
+        // indistinguishable from a working one until the day a title needs it.
+        // If this counter is ever non-zero, that is the day.
+        ++g_gammaRamp.pwlWrites;
+        if (++g_gammaRamp.rwComponent >= 3)
+            g_gammaRamp.rwComponent = 0;
+        break;
+
+    default:
+        break;
+    }
 
     // Scratch write-back: the title programs SCRATCH_ADDR/SCRATCH_UMSK (seen
     // both in the system command buffer and in the stream) and then writes
@@ -1156,6 +1296,11 @@ struct CommandProcessor
         gears::FrameDrawInputs in;
         in.frontBufferAddress = frontBufferAddress;
         std::memcpy(in.frontBufferFetch, frontBufferFetch, sizeof(frontBufferFetch));
+        // Null until the title has actually uploaded one: passing the linear
+        // default instead would make "no ramp programmed" and "a ramp that
+        // happens to be linear" indistinguishable downstream.
+        in.gammaRamp = (g_gammaRamp.directWrites + g_gammaRamp.seqWrites +
+                        g_gammaRamp.pwlWrites) ? g_gammaRamp.table : nullptr;
         in.guestBase = gears::Memory().Base();
         // Mirror a generous window of low guest physical memory so per-draw
         // vertex fetches resolve. Vertex/index buffers observed so far live in
@@ -1569,12 +1714,97 @@ struct CommandProcessor
                     lucent::debug("gpu", "swap packet: front buffer {:#x} (seq {})",
                         data[0], data[1]);
                     ReportWaitStats();
+                    // Whenever the ramp changes, say what it now is. Once per
+                    // swap at most, and only on a change, so a title that
+                    // uploads once says it once.
+                    {
+                        const uint32_t writes = g_gammaRamp.directWrites +
+                            g_gammaRamp.seqWrites + g_gammaRamp.pwlWrites;
+                        if (writes != g_gammaRamp.reportedWrites)
+                        {
+                            g_gammaRamp.reportedWrites = writes;
+                            uint32_t differing = 0;
+                            lucent::Line diff;
+                            for (uint32_t i = 0; i < 256; ++i)
+                            {
+                                const uint32_t v = i * 0x3FF / 0xFF;
+                                const uint32_t linear = v | (v << 10) | (v << 20);
+                                if (g_gammaRamp.table[i] == linear)
+                                    continue;
+                                ++differing;
+                                // The entries themselves, not just a count: "one
+                                // entry differs" is compatible with a ramp that
+                                // reshapes the image and with a rounding artefact
+                                // of the linear table this compares against, and
+                                // those call for opposite conclusions.
+                                if (differing <= 4)
+                                    diff.add(" [{}] {:#010x} vs linear {:#010x}",
+                                        i, g_gammaRamp.table[i], linear);
+                            }
+                            if (differing)
+                                diff.flush(lucent::Level::Info, "gpu");
+                            lucent::info("gpu", "gamma ramp CHANGED: {} write(s)"
+                                " ({} whole-entry DC_LUT_30_COLOR, {} per-channel"
+                                " DC_LUT_SEQ_COLOR, {} PWL); {} of 256 entries now"
+                                " differ from linear, so scan-out is NOT the"
+                                " identity and a frame presented without it is"
+                                " brighter than the console's",
+                                writes, g_gammaRamp.directWrites,
+                                g_gammaRamp.seqWrites, g_gammaRamp.pwlWrites,
+                                differing);
+                        }
+                    }
                     // Whole-frame guest-draw backend: at the first swap that has
                     // accumulated draws, render them all into a persistent target.
                     TriggerCpStall();
                     // data[0] is the front buffer this swap presents. The renderer
                     // needs it BEFORE it chooses what to present.
                     SetFrontBuffer(data[0]);
+                    // Said once, at the first swap that has draws behind it:
+                    // whether this title uploads a gamma ramp at all, and by
+                    // which path. A silent renderer cannot distinguish "no ramp
+                    // was programmed" from "we never looked", and those call for
+                    // opposite work.
+                    if (!g_gammaRamp.reported)
+                    {
+                        g_gammaRamp.reported = true;
+                        const uint32_t writes = g_gammaRamp.directWrites +
+                            g_gammaRamp.seqWrites + g_gammaRamp.pwlWrites;
+                        if (!writes)
+                        {
+                            // Not the end of the story, and the line says so:
+                            // this title programs its ramp long after boot, so a
+                            // first-frame-only report would answer the wrong
+                            // question and read as a settled negative.
+                            (void)0;
+                            lucent::info("gpu", "gamma ramp: NONE programmed by"
+                                " the first presented frame. This title uploads one"
+                                " later, so this is a starting state, not a"
+                                " conclusion -- watch for the follow-up line");
+                        }
+                        else
+                        {
+                            // Non-identity is the fact that matters: a ramp equal
+                            // to the linear default changes no pixel, so uploading
+                            // one is not by itself evidence of anything.
+                            uint32_t differing = 0;
+                            for (uint32_t i = 0; i < 256; ++i)
+                            {
+                                const uint32_t v = i * 0x3FF / 0xFF;
+                                if (g_gammaRamp.table[i] != (v | (v << 10) | (v << 20)))
+                                    ++differing;
+                            }
+                            lucent::info("gpu", "gamma ramp: {} entry write(s)"
+                                " ({} whole-entry via DC_LUT_30_COLOR, {} per-channel"
+                                " via DC_LUT_SEQ_COLOR, {} PWL), and {} of 256 entries"
+                                " differ from linear. Xenia implements only the"
+                                " SEQ_COLOR path, so a ramp uploaded the other way"
+                                " is one the reference is NOT applying either",
+                                writes, g_gammaRamp.directWrites,
+                                g_gammaRamp.seqWrites, g_gammaRamp.pwlWrites,
+                                differing);
+                        }
+                    }
                     // data[2..7] is the front buffer's fetch constant, written by
                     // VdSwap. A packet from before that was added carries zeros
                     // there, and zeros are recorded as such rather than as a
