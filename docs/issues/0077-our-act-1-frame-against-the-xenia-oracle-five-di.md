@@ -69,3 +69,29 @@ replayed draws and 2 resolves dropped"), which is by design; ~24 are not
 accounted for by that line and nobody has looked at what they are. That is the
 first thing to check next, because "the character's draws" is exactly the shape
 of a couple of dozen draws that quietly do not reach the backend.
+
+### Note (2026-08-05)
+## CORRECTION: there are no unaccounted draws (2026-08-05)
+
+The note above ended by pointing at "~24 draws the tiling-collapse accounting
+does not explain ... the right size for a character pass". That was arithmetic
+done across two different frames' log lines, and it is WRONG.
+
+Checked properly on one frame, replaying courtyard.gfr offline:
+
+    552 issued + 174 dropped by the tiling collapse + 18 resolve draws = 744
+
+which is exactly the frame's draw count. Every draw is accounted for. Nothing is
+quietly failing to reach the backend, and the next session should not go looking
+for it.
+
+So the character and HUD are missing for one of two reasons, and the arithmetic
+cannot tell them apart:
+  (a) the guest never submitted those draws in this frame, or
+  (b) they were issued and rendered nothing visible -- wrong transform, culled,
+      degenerate, or written into a surface we do not present.
+
+The offline loop is what makes this cheap to pursue: `frame_replay` on
+scratch/frames/courtyard.gfr reproduces the symptom in about fifteen seconds
+(same wall, no character, no HUD, two of three windows flat grey, and the image
+pillarboxed inside a black border), so no further playthroughs are needed.
