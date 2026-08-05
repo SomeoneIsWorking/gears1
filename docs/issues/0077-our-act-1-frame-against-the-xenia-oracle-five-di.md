@@ -133,3 +133,41 @@ So the next question is a GUEST-side one -- whether the title creates and
 submits a player pawn at all -- rather than a backend one. Filed here rather
 than acted on, because it is a different area of the project from the render
 comparison this entry started as.
+
+### Note (2026-08-06)
+## A better metric for finding 5, and it points at dynamic range (2026-08-06)
+
+Counting distinct COLOURS was the wrong instrument: a colour triple count
+depends on what is in the scene, and the two sides are at different moments, so
+"5,807 against 24,000" could never separate a rendering difference from a
+content one. Counting distinct LEVELS PER CHANNEL does not have that problem --
+any lit surface produces a gradient, whatever it is a picture of.
+
+    ours, gamma ramp applied     R  53  G  61  B  61   of 256   mean 17.4
+    ours, no ramp                R  69  G  77  B  77            mean 30.3
+    oracle                       R 238  G 238  B 238            mean 22.1
+    oracle, a darker frame       R 238  G 238  B 238            mean 20.9
+
+The reference uses nearly the whole 8-bit range on both of its frames. We use
+about a quarter of it. That is a compressed DYNAMIC RANGE, not a different
+picture, and it is the same defect finding 3 describes: our windows are flat
+grey blocks where the reference shows sky, bars and light shafts through them.
+
+Where it is NOT: the scene buffer. At draw 480 the linear-light target carries
+184,909 distinct colours and the windows are saturated pure white, so the range
+is already gone BEFORE the composite -- the window pixels are clipped in the
+lit scene itself, and the composite then maps a range that no longer has
+anything at the top of it.
+
+So the next question is why the scene pass saturates where the reference does
+not: exposure applied twice, a missing sky/backdrop pass behind the windows, or
+the wrong scale on the light accumulation. That is a narrower question than
+"our colours are wrong", and the per-channel level count is the metric to judge
+a fix by -- it moves when the range is restored and does not move when the
+scene merely changes.
+
+Note the gamma ramp REDUCED the level count (77 -> 61), which is expected and
+not a regression: the ramp compresses the low end, so 8-bit input mapped through
+it lands on fewer distinct outputs. Applying it in higher precision before the
+final quantisation would keep those levels; that is a refinement, not the cause
+of the gap against the reference.
