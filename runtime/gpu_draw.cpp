@@ -1940,6 +1940,24 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                    mixed ? " (reinterpreted mid-frame; widened host format)" : "");
             nl.flush(lucent::Level::Info, "draw");
         }
+        // A LOSSY PATH THAT HAS NEVER BEEN EXERCISED, SAYING SO INSTEAD OF
+        // RENDERING QUIETLY WRONG. k_16_16 and k_16_16_16_16 hold -32..32 on the
+        // console; their host formats here are SNORM, which holds -1..1. Xenia
+        // handles this by subtracting 5 from the colour exponent bias so the
+        // shader writes value/32 and the resolve scales it back; this renderer
+        // does not, so anything outside -1..1 would truncate. No frame captured
+        // from this title has ever taken the path -- every surface that uses
+        // those formats also uses another, which widens the host format to float
+        // and makes the question moot -- so it is UNTESTED rather than known
+        // good, and a first occurrence must not look like a normal frame.
+        if (s.hostFormat == VK_FORMAT_R16G16_SNORM ||
+            s.hostFormat == VK_FORMAT_R16G16B16A16_SNORM)
+            lucent::warn("draw", "surface {:#x} has an SNORM host format: the"
+                " guest's -32..32 range is TRUNCATED to -1..1 and this renderer"
+                " does not apply the /32 remap that would preserve it (Xenia does,"
+                " via color_exp_bias -= 5). Anything this surface renders outside"
+                " -1..1 is wrong. This path has never been exercised before now",
+                base);
         out = &P.surfaceTargets.emplace(base, s).first->second;
         return true;
     };
@@ -2931,6 +2949,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // shaders that decode resolved depth, so their microcode can be read.
     std::map<std::pair<uint32_t, uint64_t>, uint64_t> depthDestSamplers;
     uint64_t currentPsHash = 0;
+    std::map<uint32_t, uint64_t> texFetchesWithSigns; // sign bits -> bindings
     std::map<uint32_t, uint64_t> texBaseCount;    // fetch base address -> bindings
     std::map<uint32_t, uint64_t> texBaseRtCount;  // ... restricted to resolve destinations
     auto selectTexView = [&](const uint32_t* R, const draw::ShaderTextureBinding& tb)
@@ -2944,6 +2963,19 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ++texBaseCount[base];
         if (isRt)
             ++texBaseRtCount[base];
+        // THE SYSTEM CONSTANT WE NEVER SET. The translated fetch reads
+        // xe_uniform_system_constants.texture_swizzled_signs to decide between the
+        // unsigned and signed views of a texture and whether to apply a sign
+        // remap; this renderer leaves that constant ZERO, so every fetch takes the
+        // unsigned path. That is correct only while no fetch constant actually
+        // asks for a signed component -- which is a claim about the title, not
+        // about the renderer, so it is counted rather than assumed.
+        {
+            const uint32_t d0 = R[0x4800 + fc * 6];
+            const uint32_t signs = (d0 >> 2) & 0xFF;   // sign_x/y/z/w, 2 bits each
+            if (signs != 0)
+                ++texFetchesWithSigns[signs];
+        }
         // A binding that names a resolve destination of THIS frame reads that
         // destination's own host image -- the surface it was resolved from, in
         // that surface's format. Each destination has its own image, so two
@@ -5505,6 +5537,24 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 lucent::warn("draw", "{} -- THE FRAME IS MISSING WORLD GEOMETRY", reach);
             else
                 lucent::info("draw", "{}", reach);
+        }
+        // A NEGATIVE THAT CARRIES ITS DENOMINATOR: "no signed fetches" has to be
+        // distinguishable from "nobody looked".
+        if (texFetchesWithSigns.empty())
+            lucent::info("draw", "frame texture signs: 0 of {} bindings ask for a"
+                " signed component, so leaving texture_swizzled_signs at zero is"
+                " correct for this frame", texBindsRt + texBindsStub + texBindsGuest);
+        else
+        {
+            lucent::Line sl;
+            sl.add("frame texture signs: {} distinct sign patterns among {} bindings"
+                   " -- these fetches want SIGNED components and this renderer reads"
+                   " them UNSIGNED, because texture_swizzled_signs is never set:",
+                   texFetchesWithSigns.size(),
+                   texBindsRt + texBindsStub + texBindsGuest);
+            for (const auto& [bits, n] : texFetchesWithSigns)
+                sl.add(" [{:#04x} x{}]", bits, n);
+            sl.flush(lucent::Level::Warn, "draw");
         }
         lucent::info("draw", "frame textures: {} distinct fetch constants, {} uploaded"
             " ({:.1f} MiB), {} samplers", texDistinct.size(), uploads.size(),
