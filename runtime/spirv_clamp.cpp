@@ -25,6 +25,8 @@ enum Op : uint16_t
     kOpFunction        = 54,
     kOpVariable        = 59,
     kOpStore           = 62,
+    kOpCompositeExtract = 81,
+    kOpCompositeInsert  = 82,
 };
 
 constexpr uint32_t kStorageClassOutput = 3;
@@ -44,7 +46,7 @@ bool NameIsGlslStd450(const uint32_t* words, size_t count)
 
 } // namespace
 
-bool ClampFragmentOutputs(std::vector<uint32_t>& spirv)
+bool ClampFragmentOutputs(std::vector<uint32_t>& spirv, ClampMode mode)
 {
     // A header is five words; anything shorter is not a module.
     if (spirv.size() < 5 || spirv[0] != kMagic)
@@ -174,16 +176,46 @@ bool ClampFragmentOutputs(std::vector<uint32_t>& spirv)
 
         if (op == kOpStore && len >= 3 && outputVars.count(spirv[i + 1]) != 0)
         {
-            const uint32_t clamped = bound++;
-            // %clamped = OpExtInst %v4float %glsl NClamp %value %zero %one
-            out.push_back((8u << 16) | kOpExtInst);
-            out.push_back(typeVec4);
-            out.push_back(clamped);
-            out.push_back(glslExt);
-            out.push_back(kGlslStd450NClamp);
-            out.push_back(spirv[i + 2]);
-            out.push_back(constVec4Zero);
-            out.push_back(constVec4One);
+            uint32_t clamped = bound++;
+            if (mode == ClampMode::kAlphaOnly)
+            {
+                // %a  = OpCompositeExtract %float %value 3
+                const uint32_t alpha = bound++;
+                out.push_back((5u << 16) | kOpCompositeExtract);
+                out.push_back(typeFloat32);
+                out.push_back(alpha);
+                out.push_back(spirv[i + 2]);
+                out.push_back(3u);
+                // %ca = OpExtInst %float %glsl NClamp %a %zero %one
+                const uint32_t clampedAlpha = bound++;
+                out.push_back((8u << 16) | kOpExtInst);
+                out.push_back(typeFloat32);
+                out.push_back(clampedAlpha);
+                out.push_back(glslExt);
+                out.push_back(kGlslStd450NClamp);
+                out.push_back(alpha);
+                out.push_back(constZero);
+                out.push_back(constOne);
+                // %clamped = OpCompositeInsert %v4float %ca %value 3
+                out.push_back((6u << 16) | kOpCompositeInsert);
+                out.push_back(typeVec4);
+                out.push_back(clamped);
+                out.push_back(clampedAlpha);
+                out.push_back(spirv[i + 2]);
+                out.push_back(3u);
+            }
+            else
+            {
+                // %clamped = OpExtInst %v4float %glsl NClamp %value %zero %one
+                out.push_back((8u << 16) | kOpExtInst);
+                out.push_back(typeVec4);
+                out.push_back(clamped);
+                out.push_back(glslExt);
+                out.push_back(kGlslStd450NClamp);
+                out.push_back(spirv[i + 2]);
+                out.push_back(constVec4Zero);
+                out.push_back(constVec4One);
+            }
             // OpStore %out %clamped, keeping any memory operands the store had.
             out.push_back(spirv[i]);
             out.push_back(spirv[i + 1]);
