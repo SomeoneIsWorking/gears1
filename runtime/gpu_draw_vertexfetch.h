@@ -47,9 +47,28 @@ void CollectFetchRanges(const uint32_t* R, const FrameDrawInputs& in,
 // reports -- position in the frame's submission order, NOT a count of draws
 // issued so far. Those diverge wherever a draw is a resolve or is skipped, and
 // reading an index off the table only to dump a different draw is a trap worth
-// not having.
+// not having. Takes a comma-separated list, so two draws can be compared from
+// one run.
 void DumpVertices(const uint32_t* R, const FrameDrawInputs& in,
                   const ShaderXlate& vsX, uint32_t issued, uint32_t diagIndex);
+
+// GEARS_DRAW_VS_CONSTS=<draw index>[,<draw index>...]: the VERTEX float
+// constants those draws actually received, as numbers and as raw bits.
+//
+// GEARS_DRAW_PS_CONSTS keys on a SHADER HASH, which cannot separate repeated
+// instances of one mesh -- and that is precisely the case this answers: when
+// several draws share a shader pair, an index count and byte-identical raster
+// state but only some of them survive clipping, the per-instance transform in
+// these constants is the remaining difference (catalog #74).
+void DumpVsConstants(const ShaderXlate& vsX, const UniformCache& uc,
+                     uint64_t vsHash, uint32_t issued, uint32_t diagIndex);
+
+// Say what the two draw-index knobs above selected, WITH THE DENOMINATOR: how
+// many draws they were offered and how many they matched, plus any index that
+// falls outside the frame and any token that was not a number at all. Call
+// once per reported frame. Without it, an index naming no draw prints exactly
+// what a draw with nothing to show prints.
+void ReportDrawSelections();
 
 // GEARS_DRAW_FRAME_LIST=1: one line per issued draw -- its primitive, its
 // shaders, the state that can zero it, where its geometry comes from and

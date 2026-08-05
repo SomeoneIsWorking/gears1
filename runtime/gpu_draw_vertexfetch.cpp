@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdlib>
+#include <limits>
 #include <string>
+#include <vector>
 
 #include <lucent/config.h>
 #include <lucent/log.h>
@@ -15,6 +17,110 @@
 
 namespace gears::draw
 {
+
+namespace
+{
+
+// The two knobs that name draws by their diag index -- GEARS_DRAW_VDUMP and
+// GEARS_DRAW_VS_CONSTS -- share this, and it exists for the negative rather
+// than the positive. `if (index == want) print()` prints NOTHING when the index
+// names no draw in the frame, and nothing is exactly what a draw with nothing
+// to show prints: an off-by-one, a typo, or an index read off a table from a
+// different capture all read as an answer. A selection carries its denominator
+// instead, so a run that matched nobody says so.
+class DrawSelection
+{
+public:
+    DrawSelection(const char* knob, const std::string& spec) : knob_(knob)
+    {
+        for (size_t i = 0; i < spec.size();)
+        {
+            size_t j = spec.find(',', i);
+            if (j == std::string::npos)
+                j = spec.size();
+            if (const std::string tok = spec.substr(i, j - i); !tok.empty())
+            {
+                char* end = nullptr;
+                const long v = std::strtol(tok.c_str(), &end, 0);
+                if (end && *end == '\0' && v >= 0)
+                    want_.push_back(uint32_t(v));
+                else
+                    // A token we could not parse must not be silently dropped:
+                    // a filter that quietly ignores what it cannot match turns
+                    // a broken instrument into a clean bill of health.
+                    bad_.push_back(tok);
+            }
+            i = j + 1;
+        }
+    }
+
+    bool Active() const { return !want_.empty() || !bad_.empty(); }
+
+    // Call for EVERY draw the knob could have selected, hit or miss -- that is
+    // what makes the denominator real rather than assumed.
+    bool Offer(uint32_t diagIndex)
+    {
+        ++offered_;
+        lowest_ = std::min(lowest_, diagIndex);
+        highest_ = std::max(highest_, diagIndex);
+        const bool hit =
+            std::find(want_.begin(), want_.end(), diagIndex) != want_.end();
+        matched_ += hit;
+        return hit;
+    }
+
+    void Report()
+    {
+        if (Active())
+        {
+            lucent::Line l;
+            l.add("{}: matched {} of {} draws offered", knob_, matched_, offered_);
+            if (offered_)
+                l.add(" (diag indices {}..{} this frame)", lowest_, highest_);
+            for (uint32_t w : want_)
+                if (offered_ && (w < lowest_ || w > highest_))
+                    l.add("; {} IS OUT OF RANGE for this frame", w);
+            for (const std::string& b : bad_)
+                l.add("; '{}' is not a draw index and was ignored", b);
+            if (matched_ == 0 || !bad_.empty())
+                l.flush(lucent::Level::Warn, "draw");
+            else
+                l.flush(lucent::Level::Info, "draw");
+        }
+        offered_ = matched_ = 0;
+        lowest_ = std::numeric_limits<uint32_t>::max();
+        highest_ = 0;
+    }
+
+private:
+    const char* knob_;
+    std::vector<uint32_t> want_;
+    std::vector<std::string> bad_;
+    uint32_t offered_ = 0, matched_ = 0;
+    uint32_t lowest_ = std::numeric_limits<uint32_t>::max(), highest_ = 0;
+};
+
+DrawSelection& VdumpSelection()
+{
+    static DrawSelection s("GEARS_DRAW_VDUMP",
+                           lucent::config::text("DRAW_VDUMP"));
+    return s;
+}
+
+DrawSelection& VsConstSelection()
+{
+    static DrawSelection s("GEARS_DRAW_VS_CONSTS",
+                           lucent::config::text("DRAW_VS_CONSTS"));
+    return s;
+}
+
+} // namespace
+
+void ReportDrawSelections()
+{
+    VdumpSelection().Report();
+    VsConstSelection().Report();
+}
 
 void CollectFetchRanges(const uint32_t* R, const FrameDrawInputs& in,
                         const ShaderXlate& vsX, const ShaderXlate& psX,
@@ -64,8 +170,10 @@ void CollectFetchRanges(const uint32_t* R, const FrameDrawInputs& in,
 void DumpVertices(const uint32_t* R, const FrameDrawInputs& in,
                   const ShaderXlate& vsX, uint32_t issued, uint32_t diagIndex)
 {
-    static const long vdump = lucent::config::number("DRAW_VDUMP", -1);
-    if (vdump >= 0 && long(diagIndex) == vdump)
+    DrawSelection& sel = VdumpSelection();
+    if (!sel.Active())
+        return;
+    if (sel.Offer(diagIndex))
     {
         for (const auto& vb : vsX.vertexBindings)
         {
@@ -94,6 +202,35 @@ void DumpVertices(const uint32_t* R, const FrameDrawInputs& in,
             }
         }
     }
+}
+
+void DumpVsConstants(const ShaderXlate& vsX, const UniformCache& uc,
+                     uint64_t vsHash, uint32_t issued, uint32_t diagIndex)
+{
+    DrawSelection& sel = VsConstSelection();
+    if (!sel.Active() || !sel.Offer(diagIndex))
+        return;
+    lucent::Line cl;
+    cl.add("draw {} (diag {}) vs {:#x} float constants ({} vec4s, in the"
+           " shader's own packed order):", issued, diagIndex, vsHash,
+           vsX.floatCount);
+    for (uint32_t i = 0;
+         i < vsX.floatCount && (i + 1) * 16 <= uc.fVs.size(); ++i)
+    {
+        float v[4]; uint32_t b[4];
+        std::memcpy(v, uc.fVs.data() + size_t(i) * 16, 16);
+        std::memcpy(b, uc.fVs.data() + size_t(i) * 16, 16);
+        cl.add(" c[{}]=({}, {}, {}, {})[{:08x} {:08x} {:08x} {:08x}]",
+               i, v[0], v[1], v[2], v[3], b[0], b[1], b[2], b[3]);
+    }
+    // The constants the shader DECLARES versus the bytes actually packed for
+    // it. If the block is short, the tail the shader reads is not in this dump
+    // and a "the transforms are identical" conclusion drawn from it would be
+    // reading a prefix.
+    if (uc.fVs.size() < size_t(vsX.floatCount) * 16)
+        cl.add("; ONLY {} of {} vec4s were packed -- the rest are not shown",
+               uc.fVs.size() / 16, vsX.floatCount);
+    cl.flush(lucent::Level::Info, "draw");
 }
 
 void ListDraw(const uint32_t* R, const FrameDrawItem& d, const FrameDrawInputs& in,
