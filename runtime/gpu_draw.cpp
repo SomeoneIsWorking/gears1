@@ -3271,6 +3271,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             {
                 PreparedDraw pd{};
                 pd.isResolve = true;
+                // The submission index, so the per-draw table can put this
+                // resolve back between the draws it separates. Without it every
+                // resolve row reads "draw 0" and the frame's pass boundaries are
+                // unordered, which is the same as not having them.
+                pd.diagIndex = uint32_t(&d - in.draws.data());
                 pd.clearsDepth = clearsDepthHere;
                 pd.depthClearValue = depthClearHere;
                 pd.surfaceBase = srcBase;
@@ -3333,6 +3338,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 {
                     PreparedDraw pd{};
                     pd.isResolve = true;
+                    pd.diagIndex = uint32_t(&d - in.draws.data());
                     pd.copyIsServed = false;
                     pd.clearsDepth = clearsDepthHere;
                     pd.depthClearValue = depthClearHere;
@@ -5244,12 +5250,51 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                          "\tvp_maxz\tsc_x\tsc_y\tsc_w\tsc_h"
                          "\tclip_cntl\tsu_sc_mode\tvte_cntl\twindow_offset"
                          "\tvport_xs\tvport_xo\tvport_ys\tvport_yo"
-                         "\tvport_zs\tvport_zo\tvs_hash\tps_hash\n";
+                         "\tvport_zs\tvport_zo\tvs_hash\tps_hash"
+                         "\tresolve_dest\tresolve_src\tresolve_dst"
+                         "\tresolve_is_depth\tresolve_clears_depth\n";
                     uint32_t row = 0;
                     for (const PreparedDraw& pd : prepared)
                     {
-                        if (pd.isResolve || row >= drawn)
-                        { if (!pd.isResolve) ++row; continue; }
+                        // RESOLVES ARE ROWS TOO. They used to be skipped, and
+                        // that made the frame's PASS STRUCTURE invisible: a
+                        // resolve is exactly where one UE3 pass ends and the
+                        // next begins (BeginRenderingSceneColor /
+                        // FinishRenderingSceneColor / ResolveSceneDepthTexture
+                        // in SceneRendering.cpp), so a table of only draws
+                        // shows a flat stream with no seams in it. The columns
+                        // a resolve has nothing to say about are left empty
+                        // rather than zeroed, so "0 primitives" and "not a
+                        // draw" cannot be confused by whatever reads this.
+                        if (pd.isResolve)
+                        {
+                            t << pd.diagIndex << '\t' << std::hex << "0x"
+                              << pd.surfaceBase << std::dec
+                              << '\t' << pd.colorFormat << '\t' << pd.edramMode
+                              << "\t\tresolve\t\t\t\t\t\t\t\tresolve"
+                              // depth/colour-mask/blend/viewport columns: a
+                              // resolve programs none of them.
+                              << "\t\t\t\t\t\t"
+                              << "\t\t\t\t\t\t"
+                              << '\t' << pd.resolveSrcRect.offset.x
+                              << '\t' << pd.resolveSrcRect.offset.y
+                              << '\t' << pd.resolveSrcRect.extent.width
+                              << '\t' << pd.resolveSrcRect.extent.height
+                              << "\t\t\t\t"          // clip/su_sc/vte/window
+                              << "\t\t\t\t\t\t"      // vport scale/offset
+                              << "\t\t"              // vs_hash / ps_hash
+                              << '\t' << std::hex << "0x" << pd.resolveDest
+                              << std::dec
+                              << '\t' << pd.resolveSrcRect.extent.width << 'x'
+                              << pd.resolveSrcRect.extent.height
+                              << '\t' << pd.resolveDstX << ',' << pd.resolveDstY
+                              << '\t' << (pd.resolveIsDepth ? 1 : 0)
+                              << '\t' << (pd.clearsDepth ? 1 : 0)
+                              << '\n';
+                            continue;
+                        }
+                        if (row >= drawn)
+                        { ++row; continue; }
                         const uint64_t* s = &st[size_t(row) * kStatCounters];
                         // The verdict is the whole point: it says which stage
                         // this draw died at, in the vocabulary the pipeline
@@ -5286,7 +5331,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                           << '\t' << pd.vportYScale << '\t' << pd.vportYOffset
                           << '\t' << pd.vportZScale << '\t' << pd.vportZOffset
                           << '\t' << std::hex << pd.vsHash << '\t' << pd.psHash
-                          << std::dec << '\n';
+                          << std::dec
+                          << "\t\t\t\t\t"   // the resolve_* columns: not a resolve
+                          << '\n';
                         ++row;
                     }
                     lucent::info("draw", "per-draw diagnostic: {} rows written to {}",
