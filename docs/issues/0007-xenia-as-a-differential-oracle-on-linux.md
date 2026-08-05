@@ -210,3 +210,32 @@ both must be non-zero to take effect (graphics_system.cc:430):
 NOTE: scratch/oracle/xenia-canary is a SEPARATE CLONE from the submodule at
 extern/xenia, at the same commit. Patch both or you will rebuild the wrong tree
 and conclude your fix did nothing -- which happened once today.
+
+### Note (2026-08-05)
+## THIRD defect in the fork's trace path: draws never reached the backend
+
+Found after the imgui and logging fixes. Trace playback could not draw AT ALL,
+and the symptom was indistinguishable from a malformed trace -- which is what
+makes it expensive, because it points every investigation at your trace.
+
+`ExecutePacket(uint32_t ptr, uint32_t count)` was NOT virtual, while the no-arg
+`ExecutePacket()` beside it is. TracePlayer holds a `CommandProcessor*`, so its
+call ran the BASE class's instantiation of pm4_command_processor_implement.h --
+and that template calls `COMMAND_PROCESSOR::IssueDraw`, a QUALIFIED call, which
+suppresses virtual dispatch even though IssueDraw is itself virtual. Every
+trace-played draw therefore went to `CommandProcessor::IssueDraw`, the base stub
+that returns false, and printed "Failed in backend".
+
+Fixed on the fork (d5f3fd0): the two-argument ExecutePacket is virtual.
+
+MEASURED: a 744-draw trace goes from 744 "Failed in backend" to ZERO, and the
+Vulkan primitive processor starts reporting on real geometry.
+
+## How it was found, because the method generalises
+
+IssueDraw has FIFTEEN `return false` paths and every one surfaced as the same
+"Failed in backend". Naming them (also on the fork) was the step that mattered:
+the answer came back "NONE of them fires", which is only possible if the
+function was never entered -- and that is what pointed at dispatch rather than
+at the trace. Without the naming, the obvious next move is to keep editing the
+trace, which would never have worked.
