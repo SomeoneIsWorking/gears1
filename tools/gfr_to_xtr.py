@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+"""Convert one of our frame captures (.gfr) into a Xenia GPU trace (.xtr).
+
+WHY. Xenia renders this title correctly, and it ships a HEADLESS renderer --
+`xenia-gpu-vulkan-trace-dump` -- that turns a trace into an image with no
+window, no controller and no playthrough. If our capture can be expressed as a
+trace, every open question of the form "what should this frame look like?"
+becomes one command instead of a play session. See catalog #7 and #62.
+
+WHAT THIS CAN AND CANNOT SETTLE -- read before trusting a run.
+
+A .gfr stores per-draw REGISTER SNAPSHOTS, not the PM4 packet stream the guest
+actually sent; we never recorded the packets. So this SYNTHESISES a command
+stream: it restores each draw's register file wholesale (Xenia's trace format
+has a command for exactly that) and emits only the DRAW_INDX packet itself.
+
+  * Sound for SHADING, RESOLVE and FORMAT questions -- everything downstream of
+    the registers. Both renderers are driven from the same register values, so a
+    difference in the output is a difference in how they were interpreted.
+  * WORTHLESS for command-stream DECODE questions. Where we misread the guest's
+    packets, this bakes our misreading into the oracle's input and it will agree
+    with us precisely where we are wrong.
+
+Say which kind of question is being asked before quoting a result.
+
+    tools/gfr_to_xtr.py <capture.gfr> <out.xtr> [--draws N] [--selftest]
+"""
+import struct
+import sys
+from pathlib import Path
+
+# --- Xenia trace format (extern/xenia/src/xenia/gpu/trace_protocol.h) --------
+TRACE_FORMAT_VERSION = 1
+(K_PRIMARY_BUFFER_START, K_PRIMARY_BUFFER_END, K_INDIRECT_BUFFER_START,
+ K_INDIRECT_BUFFER_END, K_PACKET_START, K_PACKET_END, K_MEMORY_READ,
+ K_MEMORY_WRITE, K_EDRAM_SNAPSHOT, K_EVENT, K_REGISTERS, K_GAMMA_RAMP) = range(12)
+ENCODING_NONE = 0
+EVENT_SWAP = 0
+
+# --- Xenos (extern/xenia/src/xenia/gpu/xenos.h, registers.h) ----------------
+PM4_DRAW_INDX = 0x22
+SRC_SELECT_DMA = 0
+SRC_SELECT_AUTO_INDEX = 2
+REG_VGT_DMA_BASE = 0x21FA
+REG_VGT_DMA_SIZE = 0x21FB
+REG_COUNT = 0x8000
+# Xenia's register file is SMALLER than the one we capture (register_file.h:
+# kRegisterCount). RestoreRegisters rejects the whole command when it overruns
+# -- with a warning, then renders anyway from an unset register file, which
+# looks like a backend failure rather than a format mismatch. Send the prefix
+# Xenia can hold; every register either renderer reads lives well below it.
+XENIA_REG_COUNT = 0x5003
+
+def pick_packet_scratch(cap):
+    """A guest page to place synthesised packets in, chosen per capture.
+
+    It must not overlap any page the capture occupies: a packet written over the
+    frame's own vertices would corrupt them, and the render would look plausible
+    and be wrong. A hardcoded address is not safe to assume -- the first one
+    tried (0x01000000) collided with real data in courtyard.gfr -- so the free
+    page is FOUND, and if there is none this refuses rather than picking one
+    anyway.
+    """
+    occupied = {base for base, _ in cap.blocks}
+    for guest in range(0, min(cap.window, cap.mirror), cap.block_size):
+        if guest not in occupied:
+            return guest
+    raise SystemExit(
+        "REFUSING: every page in this capture's guest window is occupied, so "
+        "there is nowhere to put a packet that would not overwrite frame data.")
+
+GFR_MAGIC = b"GEARSFR1"
+
+
+class Capture:
+    """A parsed .gfr. Mirrors runtime/frame_capture.cpp's writer exactly."""
+
+    def __init__(self, path: Path):
+        d = path.read_bytes()
+        if d[:8] != GFR_MAGIC:
+            raise ValueError(f"{path}: not a GEARSFR1 capture")
+        p = 8
+        (self.version,) = struct.unpack_from("<I", d, p); p += 4
+        if self.version not in (1, 2):
+            raise ValueError(f"{path}: capture version {self.version} unsupported")
+        (self.width, self.height, self.mirror) = struct.unpack_from("<3I", d, p); p += 12
+        if self.version >= 2:
+            (self.front_buffer,) = struct.unpack_from("<I", d, p); p += 4
+        else:
+            self.front_buffer = 0
+        (self.window,) = struct.unpack_from("<I", d, p); p += 4
+        p += 8                                    # sequence (int64)
+        (draw_count,) = struct.unpack_from("<I", d, p); p += 4
+        (self.block_size,) = struct.unpack_from("<I", d, p); p += 4
+        (block_count,) = struct.unpack_from("<I", d, p); p += 4
+        ids = struct.unpack_from(f"<{block_count}I", d, p); p += 4 * block_count
+        self.blocks = []                          # (guest_addr, bytes)
+        for b in ids:
+            guest = b * self.block_size
+            n = min(self.block_size, self.window - guest)
+            self.blocks.append((guest, d[p:p + n]))
+            p += n
+        (blob_count,) = struct.unpack_from("<I", d, p); p += 4
+        for _ in range(blob_count):               # microcode, reached via registers
+            p += 8                                # hash
+            (size,) = struct.unpack_from("<I", d, p); p += 4
+            p += size
+        self.draws = []
+        for _ in range(draw_count):
+            (reg_count,) = struct.unpack_from("<I", d, p); p += 4
+            regs = struct.unpack_from(f"<{reg_count}I", d, p) if reg_count else ()
+            p += 4 * reg_count
+            (vs, ps, prim, index_count, flags, index_base) = struct.unpack_from("<6I", d, p)
+            p += 24
+            self.draws.append(dict(regs=regs, prim=prim, index_count=index_count,
+                                   indexed=bool(flags & 1), index32=bool(flags & 2),
+                                   index_base=index_base))
+        self.trailing = len(d) - p
+
+
+class TraceWriter:
+    def __init__(self):
+        self.buf = bytearray()
+
+    def header(self, title_id=0):
+        self.buf += struct.pack("<I", TRACE_FORMAT_VERSION)
+        self.buf += b"0" * 40                     # build_commit_sha
+        self.buf += struct.pack("<I", title_id)
+
+    def memory_read(self, base, data):
+        """kMemoryRead: playback decompresses this INTO guest memory.
+
+        kMemoryWrite is a no-op on playback (trace_player.cc), so loading the
+        capture's pages must use kMemoryRead -- picking the wrong one produces a
+        trace that parses perfectly and renders from empty memory.
+        """
+        self.buf += struct.pack("<IIIII", K_MEMORY_READ, base, ENCODING_NONE,
+                                len(data), len(data))
+        self.buf += data
+
+    def registers(self, first, values, execute_callbacks=False):
+        payload = struct.pack(f"<{len(values)}I", *values)
+        # bool is one byte and the struct is 4-aligned, so the compiler pads it
+        # to a dword before encoding_format. Matching that padding is what makes
+        # the file readable at all.
+        self.buf += struct.pack("<IIIIiI", K_REGISTERS, first, len(values),
+                                1 if execute_callbacks else 0, ENCODING_NONE,
+                                len(payload))
+        self.buf += payload
+
+    def packet(self, base, dwords):
+        """A PM4 packet: copied to guest memory, then executed.
+
+        Xenia reads packets with ReadAndSwap, so they live BIG-endian in guest
+        memory while every trace command header is host-endian little.
+        """
+        self.buf += struct.pack("<III", K_PACKET_START, base, len(dwords))
+        self.buf += struct.pack(f">{len(dwords)}I", *dwords)
+        self.buf += struct.pack("<I", K_PACKET_END)
+
+    def swap(self):
+        self.buf += struct.pack("<II", K_EVENT, EVENT_SWAP)
+
+
+def draw_packet(draw):
+    """Build one PM4_DRAW_INDX, per ExecutePacketType3Draw.
+
+    The index base and size come from the draw's OWN register snapshot rather
+    than being invented here: the capture does not store the index buffer's
+    endian swap mode, but VGT_DMA_SIZE does, and inventing one would silently
+    reorder every index.
+    """
+    regs = draw["regs"]
+    src = SRC_SELECT_DMA if draw["indexed"] else SRC_SELECT_AUTO_INDEX
+    initiator = ((draw["prim"] & 0x3F) | (src << 6) |
+                 ((1 if draw["index32"] else 0) << 11) |
+                 ((draw["index_count"] & 0xFFFF) << 16))
+    body = [0, initiator]                         # viz query token, initiator
+    if draw["indexed"]:
+        dma_size = regs[REG_VGT_DMA_SIZE] if len(regs) > REG_VGT_DMA_SIZE else 0
+        body += [draw["index_base"], dma_size]
+    header = 0xC0000000 | ((len(body) - 1) << 16) | (PM4_DRAW_INDX << 8)
+    return [header] + body
+
+
+def convert(src: Path, dst: Path, max_draws=None):
+    cap = Capture(src)
+    w = TraceWriter()
+    w.header()
+    # Guest memory first: vertices, indices, textures and the shader microcode
+    # the registers point at all live here.
+    for base, data in cap.blocks:
+        w.memory_read(base, data)
+    scratch = pick_packet_scratch(cap)
+    draws = cap.draws if max_draws is None else cap.draws[:max_draws]
+    emitted = skipped_no_regs = 0
+    for d in draws:
+        if len(d["regs"]) < REG_COUNT:
+            # A draw whose snapshot is short cannot restore state; dropping it
+            # silently would make the oracle render a DIFFERENT frame and look
+            # authoritative doing it.
+            skipped_no_regs += 1
+            continue
+        w.registers(0, d["regs"][:XENIA_REG_COUNT])
+        w.packet(scratch, draw_packet(d))
+        emitted += 1
+    w.swap()
+    dst.write_bytes(bytes(w.buf))
+    print(f"{src.name} -> {dst.name}")
+    print(f"   capture: v{cap.version} {cap.width}x{cap.height}, "
+          f"{len(cap.draws)} draws, {len(cap.blocks)} guest pages "
+          f"({sum(len(b) for _, b in cap.blocks) / (1 << 20):.1f} MiB)")
+    print(f"   packets at guest {scratch:#x} (a page this capture leaves empty)")
+    print(f"   trace:   {emitted} draws emitted, {len(dst.read_bytes()) / (1 << 20):.1f} MiB")
+    if skipped_no_regs:
+        print(f"   WARNING: {skipped_no_regs} draws had no full register snapshot "
+              f"and were DROPPED -- the trace is not the whole frame")
+    if max_draws is not None and len(cap.draws) > max_draws:
+        print(f"   NOTE: --draws {max_draws} truncated {len(cap.draws) - max_draws} "
+              f"draws; this trace is a PREFIX of the frame, not the frame")
+    return 0
+
+
+def selftest():
+    """Prove the bit-packing, not just that it runs.
+
+    Every constant here is transcribed from Xenia's headers, and a transcription
+    error produces a trace that parses and renders the wrong thing -- the exact
+    failure this whole tool exists to avoid. So the packing is checked against
+    values worked out by hand.
+    """
+    failures = []
+
+    def check(what, got, want):
+        ok = got == want
+        print(f"   {'ok  ' if ok else 'FAIL'}  {what}: got {got:#x}, want {want:#x}")
+        if not ok:
+            failures.append(what)
+
+    # Indexed, 16-bit, triangle list (prim 4), 804 indices.
+    d = dict(regs=[0] * REG_COUNT, prim=4, index_count=804, indexed=True,
+             index32=False, index_base=0xDEAD00)
+    pkt = draw_packet(d)
+    # header: type3 | (count-1)<<16 | opcode<<8, body is 4 dwords
+    check("indexed packet header", pkt[0], 0xC0000000 | (3 << 16) | (0x22 << 8))
+    check("indexed initiator", pkt[2], 4 | (0 << 6) | (0 << 11) | (804 << 16))
+    check("indexed dma base", pkt[3], 0xDEAD00)
+    check("indexed packet length", len(pkt), 5)
+
+    # Auto-index (non-indexed) draws carry no DMA registers at all.
+    d2 = dict(d, indexed=False, index_count=3, index32=True)
+    pkt2 = draw_packet(d2)
+    check("auto packet header", pkt2[0], 0xC0000000 | (1 << 16) | (0x22 << 8))
+    check("auto initiator", pkt2[2],
+          4 | (SRC_SELECT_AUTO_INDEX << 6) | (1 << 11) | (3 << 16))
+    check("auto packet length", len(pkt2), 3)
+
+    # The registers command's layout is where a silent format break would live:
+    # a bool padded to a dword. 2 registers => 6 dwords of header + 2 of payload.
+    w = TraceWriter()
+    w.registers(0x2000, [0x11111111, 0x22222222])
+    check("registers command size", len(w.buf), 6 * 4 + 2 * 4)
+    check("registers command tag", struct.unpack_from("<I", w.buf, 0)[0], K_REGISTERS)
+    check("registers first index", struct.unpack_from("<I", w.buf, 4)[0], 0x2000)
+    check("registers payload length", struct.unpack_from("<I", w.buf, 20)[0], 8)
+
+    # Packets are big-endian in guest memory; trace headers are little. Getting
+    # this backwards yields a trace Xenia reads as garbage opcodes.
+    w2 = TraceWriter()
+    w2.packet(0x1000, [0xAABBCCDD])
+    check("packet payload is big-endian",
+          struct.unpack_from(">I", w2.buf, 12)[0], 0xAABBCCDD)
+
+    print("\nSELFTEST FAILED: " + ", ".join(failures) if failures
+          else "\nselftest passed: the packing matches Xenia's headers by hand-check.")
+    return 1 if failures else 0
+
+
+def main(argv):
+    args = argv[1:]
+    if args[:1] == ["--selftest"]:
+        return selftest()
+    max_draws = None
+    if "--draws" in args:
+        i = args.index("--draws")
+        max_draws = int(args[i + 1])
+        del args[i:i + 2]
+    if len(args) != 2:
+        print(__doc__)
+        return 2
+    src, dst = Path(args[0]), Path(args[1])
+    if not src.is_file():
+        print(f"REFUSING: {src} does not exist. Nothing was converted.")
+        return 1
+    return convert(src, dst, max_draws)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -223,3 +223,47 @@ we are wrong. Say which kind of question is being asked before trusting a run.
 The alternative with no such caveat is a trace RECORDED from Xenia running the
 title, which needs the game played once. Strictly better evidence, higher cost.
 Do not conflate the two arms or report one as if it were the other.
+
+### Note (2026-08-05)
+## The .gfr -> .xtr converter exists, and Xenia executes our draws
+
+`tools/gfr_to_xtr.py` (new) turns a capture into a Xenia trace. Xenia's headless
+renderer now parses it, loads the frame's 182 MiB of guest pages, restores each
+draw's registers and EXECUTES our synthesised DRAW_INDX packets. It does not yet
+produce an image; what is left is one specific, identified thing.
+
+Working, verified by Xenia's own log rather than by the file being written:
+- 744 draws converted from courtyard.gfr into a 240 MiB trace.
+- `kMemoryRead` for guest pages -- NOT `kMemoryWrite`, which trace_player.cc
+  ignores on playback; that choice would have rendered from empty memory.
+- `kRegisters` per draw, clamped to Xenia's `kRegisterCount` (0x5003). We
+  capture 0x8000, and RestoreRegisters rejects an overrun with a warning and
+  then renders from an unset register file -- which presents as a backend
+  failure, not a format mismatch. That warning is gone.
+- Packets big-endian in guest memory (Xenia reads them with ReadAndSwap) while
+  trace command headers stay little-endian.
+- The packet scratch page is CHOSEN per capture from pages the capture leaves
+  empty. The first hardcoded guess (0x01000000) collided with real data in
+  courtyard.gfr and the tool refused rather than corrupting the frame.
+
+## What is left: the shaders are never bound
+
+Every draw fails with `PM4_DRAW_INDX(...): Failed in backend`, and the reason is
+in pm4_command_processor_implement.h:1309 -- `active_vertex_shader_` and
+`active_pixel_shader_` are set ONLY by `PM4_IM_LOAD`. No register assignment
+sets them, so restoring the register file cannot bind a shader and every draw
+reaches the backend with none.
+
+The fix is to emit an IM_LOAD per shader before each draw:
+
+    addr_type  = <guest address of the microcode> | shader_type   (0x3 mask)
+    start_size = (start << 16) | size_dwords                      (start == 0)
+
+The capture stores the microcode BLOBS and each draw's blob indices, but NOT the
+guest address the microcode lived at -- so the converter must place each blob in
+a free guest page itself (the same free-page search the packet scratch already
+uses) and IM_LOAD from there. The .gfr parser currently skips over the blob
+bytes; it needs to keep them.
+
+Until that lands this produces no reference image, and nothing here should be
+quoted as an oracle result.
