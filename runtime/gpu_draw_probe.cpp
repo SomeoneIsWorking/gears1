@@ -7,12 +7,14 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <format>
 #include <string>
 
 #include <lucent/config.h>
 #include <lucent/log.h>
 
+#include "gpu_draw_formats.h"
 #include "gpu_draw_pixels.h"
 
 namespace gears::draw
@@ -304,6 +306,187 @@ void FrameProbe::Release()
     }
     checkpoints.clear();
     checkpointMem.clear();
+}
+
+
+void DrawStats::Build(VkCommandBuffer cmd, size_t nDraws)
+{
+    const std::string& dp = lucent::config::text("DRAW_DIAG");
+    diagPath = dp;
+    const bool enabled = (lucent::config::flag("DRAW_STATS") || !diagPath.empty()) &&
+                         R.hasPipelineStats &&
+                         lucent::config::number("DRAW_ONLY", -1) < 0;
+    if (!enabled)
+        return;
+    VkQueryPoolCreateInfo qpi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    qpi.queryType = VK_QUERY_TYPE_PIPELINE_STATISTICS;
+    qpi.queryCount = uint32_t(nDraws);
+    qpi.pipelineStatistics =
+        VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_VERTICES_BIT |
+        VK_QUERY_PIPELINE_STATISTIC_INPUT_ASSEMBLY_PRIMITIVES_BIT |
+        VK_QUERY_PIPELINE_STATISTIC_CLIPPING_PRIMITIVES_BIT |
+        VK_QUERY_PIPELINE_STATISTIC_FRAGMENT_SHADER_INVOCATIONS_BIT;
+    if (vkCreateQueryPool(R.device, &qpi, nullptr, &pool) != VK_SUCCESS)
+        pool = VK_NULL_HANDLE;
+    else
+        vkCmdResetQueryPool(cmd, pool, 0, uint32_t(nDraws));
+}
+
+void DrawStats::Begin(VkCommandBuffer cmd, uint32_t drawIndex)
+{
+    if (pool != VK_NULL_HANDLE)
+        vkCmdBeginQuery(cmd, pool, drawIndex, 0);
+}
+
+void DrawStats::End(VkCommandBuffer cmd, uint32_t drawIndex)
+{
+    if (pool != VK_NULL_HANDLE)
+        vkCmdEndQuery(cmd, pool, drawIndex);
+}
+
+void DrawStats::Report(uint32_t drawn, const std::vector<PreparedDraw>& prepared)
+{
+    if (pool == VK_NULL_HANDLE)
+        return;
+    std::vector<uint64_t> st(size_t(drawn) * kCounters, 0);
+    if (drawn > 0 &&
+        vkGetQueryPoolResults(R.device, pool, 0, drawn,
+            st.size() * sizeof(uint64_t), st.data(),
+            kCounters * sizeof(uint64_t),
+            VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS)
+    {
+        uint32_t noPrims = 0, noFrags = 0, shaded = 0;
+        for (uint32_t i = 0; i < drawn; ++i)
+        {
+            const uint64_t* s = &st[size_t(i) * kCounters];
+            if (s[2] == 0) ++noPrims;
+            else if (s[3] == 0) ++noFrags;
+            else ++shaded;
+            lucent::debug("draw", "  stats draw {}: {} verts, {} prims in,"
+                " {} prims after clip+cull, {} fragment invocations",
+                i, s[0], s[1], s[2], s[3]);
+        }
+        lucent::info("draw", "frame pipeline statistics: {} draws produced no"
+            " primitive after clip+cull, {} produced primitives but no fragment,"
+            " {} ran the fragment shader", noPrims, noFrags, shaded);
+        if (!diagPath.empty())
+            WriteTable(drawn, prepared, st);
+    }
+    vkDestroyQueryPool(R.device, pool, nullptr);
+    pool = VK_NULL_HANDLE;
+}
+
+void DrawStats::WriteTable(uint32_t drawn, const std::vector<PreparedDraw>& prepared,
+                           const std::vector<uint64_t>& st)
+{
+    std::error_code ec;
+    const std::filesystem::path dp(diagPath);
+    if (dp.has_parent_path())
+        std::filesystem::create_directories(dp.parent_path(), ec);
+    std::ofstream t(dp, std::ios::binary);
+    if (!t)
+    {
+        lucent::error("draw", "per-draw diagnostic: cannot write {}", diagPath);
+    }
+    else
+    {
+        t << "draw\tsurface\tcolor_fmt\tedram_mode\tprim\tprim_name"
+             "\tindexed\tcount\tfrag_stage\tia_verts\tia_prims"
+             "\tprims_after_clip\tfrag_invocations\tverdict"
+             "\tdepth_test\tdepth_write\tdepth_func\tcolor_mask"
+             "\tblend_on\tblend0\tvp_x\tvp_y\tvp_w\tvp_h\tvp_minz"
+             "\tvp_maxz\tsc_x\tsc_y\tsc_w\tsc_h"
+             "\tclip_cntl\tsu_sc_mode\tvte_cntl\twindow_offset"
+             "\tvport_xs\tvport_xo\tvport_ys\tvport_yo"
+             "\tvport_zs\tvport_zo\tvs_hash\tps_hash"
+             "\tresolve_dest\tresolve_src\tresolve_dst"
+             "\tresolve_is_depth\tresolve_clears_depth\n";
+        uint32_t row = 0;
+        for (const PreparedDraw& pd : prepared)
+        {
+            // RESOLVES ARE ROWS TOO. They used to be skipped, and
+            // that made the frame's PASS STRUCTURE invisible: a
+            // resolve is exactly where one UE3 pass ends and the
+            // next begins (BeginRenderingSceneColor /
+            // FinishRenderingSceneColor / ResolveSceneDepthTexture
+            // in SceneRendering.cpp), so a table of only draws
+            // shows a flat stream with no seams in it. The columns
+            // a resolve has nothing to say about are left empty
+            // rather than zeroed, so "0 primitives" and "not a
+            // draw" cannot be confused by whatever reads this.
+            if (pd.isResolve)
+            {
+                t << pd.diagIndex << '\t' << std::hex << "0x"
+                  << pd.surfaceBase << std::dec
+                  << '\t' << pd.colorFormat << '\t' << pd.edramMode
+                  << "\t\tresolve\t\t\t\t\t\t\t\tresolve"
+                  // depth/colour-mask/blend/viewport columns: a
+                  // resolve programs none of them.
+                  << "\t\t\t\t\t\t"
+                  << "\t\t\t\t\t\t"
+                  << '\t' << pd.resolveSrcRect.offset.x
+                  << '\t' << pd.resolveSrcRect.offset.y
+                  << '\t' << pd.resolveSrcRect.extent.width
+                  << '\t' << pd.resolveSrcRect.extent.height
+                  << "\t\t\t\t"          // clip/su_sc/vte/window
+                  << "\t\t\t\t\t\t"      // vport scale/offset
+                  << "\t\t"              // vs_hash / ps_hash
+                  << '\t' << std::hex << "0x" << pd.resolveDest
+                  << std::dec
+                  << '\t' << pd.resolveSrcRect.extent.width << 'x'
+                  << pd.resolveSrcRect.extent.height
+                  << '\t' << pd.resolveDstX << ',' << pd.resolveDstY
+                  << '\t' << (pd.resolveIsDepth ? 1 : 0)
+                  << '\t' << (pd.clearsDepth ? 1 : 0)
+                  << '\n';
+                continue;
+            }
+            if (row >= drawn)
+            { ++row; continue; }
+            const uint64_t* s = &st[size_t(row) * kCounters];
+            // The verdict is the whole point: it says which stage
+            // this draw died at, in the vocabulary the pipeline
+            // statistics can actually support.
+            const char* verdict =
+                s[1] == 0 ? "no_primitive_assembled" :
+                s[2] == 0 ? "killed_by_clip_or_cull" :
+                s[3] == 0 ? "rasterised_no_fragment" :
+                !pd.hasFragmentStage ? "depth_only_no_colour" :
+                pd.colorMask == 0 ? "colour_fully_masked" : "shaded";
+            t << pd.diagIndex << '\t' << std::hex << "0x" << pd.surfaceBase
+              << std::dec << '\t' << pd.colorFormat << '\t' << pd.edramMode
+              << '\t' << pd.primType << '\t' << PrimName(pd.primType)
+              << '\t' << (pd.indexed ? 1 : 0) << '\t' << pd.count
+              << '\t' << (pd.hasFragmentStage ? 1 : 0)
+              << '\t' << s[0] << '\t' << s[1] << '\t' << s[2] << '\t' << s[3]
+              << '\t' << verdict
+              << '\t' << ((pd.depthControl >> 1) & 1)
+              << '\t' << ((pd.depthControl >> 2) & 1)
+              << '\t' << ((pd.depthControl >> 4) & 7)
+              << '\t' << (pd.colorMask & 0xF)
+              << '\t' << (BlendIsIdentity(pd.blend0) ? 0 : 1)
+              << '\t' << std::hex << "0x" << pd.blend0 << std::dec
+              << '\t' << pd.viewport.x << '\t' << pd.viewport.y
+              << '\t' << pd.viewport.width << '\t' << pd.viewport.height
+              << '\t' << pd.viewport.minDepth << '\t' << pd.viewport.maxDepth
+              << '\t' << pd.scissor.offset.x << '\t' << pd.scissor.offset.y
+              << '\t' << pd.scissor.extent.width << '\t' << pd.scissor.extent.height
+              << '\t' << std::hex << "0x" << pd.clipCntl
+              << '\t' << "0x" << pd.suScModeCntl
+              << '\t' << "0x" << pd.vteCntl
+              << '\t' << "0x" << pd.windowOffset << std::dec
+              << '\t' << pd.vportXScale << '\t' << pd.vportXOffset
+              << '\t' << pd.vportYScale << '\t' << pd.vportYOffset
+              << '\t' << pd.vportZScale << '\t' << pd.vportZOffset
+              << '\t' << std::hex << pd.vsHash << '\t' << pd.psHash
+              << std::dec
+              << "\t\t\t\t\t"   // the resolve_* columns: not a resolve
+              << '\n';
+            ++row;
+        }
+        lucent::info("draw", "per-draw diagnostic: {} rows written to {}",
+                     row, diagPath);
+    }
 }
 
 } // namespace gears::draw
