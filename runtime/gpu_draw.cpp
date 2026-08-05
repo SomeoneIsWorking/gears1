@@ -40,11 +40,40 @@
 #include <vulkan/vulkan.h>
 
 #include "gpu_draw_xlate.h"
+#include "gpu_draw_formats.h"
+#include "gpu_draw_pixels.h"
 
 namespace gears
 {
 namespace
 {
+
+// Xenos state -> Vulkan, now in gpu_draw_formats.{h,cpp}. Pulled in by name so
+// every call site here reads the same as it did when the definitions were in
+// this file.
+using draw::BlendFactorOf;
+using draw::BlendIsIdentity;
+using draw::BlendOpOf;
+using draw::ColorFormatBytesPerPixel;
+using draw::ColorFormatName;
+using draw::CompareOpOf;
+using draw::FloatToFixed16p8;
+using draw::GuestClamp;
+using draw::GuestColorFormatClamp;
+using draw::HostColorFormat;
+using draw::HostFormatFor;
+using draw::OutputMergerState;
+using draw::PrimName;
+using draw::TopologyOf;
+
+// Guest number formats and the diagnostic writers, now in gpu_draw_pixels.{h,cpp}.
+using draw::Depth20e4To32;
+using draw::DepthUnorm24To32;
+using draw::FormatSupportsStorage;
+using draw::HalfToFloat;
+using draw::PackFloatConstants;
+using draw::VkStr;
+using draw::WritePpm;
 
 constexpr uint32_t kWidth = 1280;
 constexpr uint32_t kHeight = 720;
@@ -77,20 +106,6 @@ private:
 
 std::vector<uint8_t> g_frame; // last rendered R8G8B8A8 frame
 
-const char* VkStr(VkResult r)
-{
-    switch (r)
-    {
-    case VK_SUCCESS: return "VK_SUCCESS";
-    case VK_ERROR_OUT_OF_HOST_MEMORY: return "OUT_OF_HOST_MEMORY";
-    case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "OUT_OF_DEVICE_MEMORY";
-    case VK_ERROR_INITIALIZATION_FAILED: return "INITIALIZATION_FAILED";
-    case VK_ERROR_FEATURE_NOT_PRESENT: return "FEATURE_NOT_PRESENT";
-    case VK_ERROR_EXTENSION_NOT_PRESENT: return "EXTENSION_NOT_PRESENT";
-    case VK_ERROR_INCOMPATIBLE_DRIVER: return "INCOMPATIBLE_DRIVER";
-    default: return "VkResult";
-    }
-}
 
 #define VK_CHECK(expr)                                                       \
     do {                                                                     \
@@ -101,26 +116,6 @@ const char* VkStr(VkResult r)
         }                                                                    \
     } while (0)
 
-// Packs the float-constant UBO exactly as Xenia's UpdateBindings does: the used
-// float constants, in ascending storage index, from the vertex half (0x4000) or
-// pixel half (0x4400) of the ALU constant file.
-std::vector<uint8_t> PackFloatConstants(const uint32_t* regDwords,
-    const uint64_t bitmap[4], uint32_t floatCount, uint32_t regBase)
-{
-    std::vector<uint8_t> out(size_t(std::max(floatCount, 1u)) * 16, 0);
-    uint8_t* w = out.data();
-    for (uint32_t block = 0; block < 4; ++block) {
-        uint64_t entry = bitmap[block];
-        while (entry) {
-            uint32_t idx = uint32_t(std::countr_zero(entry));
-            entry &= ~(uint64_t(1) << idx);
-            uint32_t constant = block * 64 + idx;
-            std::memcpy(w, &regDwords[regBase + constant * 4], 16);
-            w += 16;
-        }
-    }
-    return out;
-}
 
 // -------------------------------------------------------------------------
 // Vulkan renderer, headless, one draw. Everything is torn down at the end; the
@@ -403,184 +398,6 @@ bool Renderer::MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     return true;
 }
 
-VkPrimitiveTopology TopologyOf(uint32_t primType)
-{
-    switch (primType)
-    {
-    case 1: return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-    case 2: return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-    case 3: return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
-    case 4: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    case 5: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
-    case 6: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
-    // A rectangle list has no Vulkan topology of its own: its three vertices go
-    // in as a triangle list and the geometry shader emits the two-triangle strip
-    // (see getRectGeomShader). Anything else unhandled also falls here.
-    default: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    }
-}
-
-// --- Xenos output-merger state -> Vulkan --------------------------------
-// The output-merger state is per draw and lives in the register file the draw
-// carries: RB_COLOR_MASK (0x2104), RB_BLENDCONTROL0 (0x2201) and RB_DEPTHCONTROL
-// (0x2200). Ignoring it is not a cosmetic simplification: a scene frame issues
-// depth-only passes with colour writes fully masked off, and rendering those
-// with an unconditional RGBA write paints the frame black.
-VkBlendFactor BlendFactorOf(uint32_t f)
-{
-    switch (f)
-    {
-    case 0: return VK_BLEND_FACTOR_ZERO;
-    case 1: return VK_BLEND_FACTOR_ONE;
-    case 4: return VK_BLEND_FACTOR_SRC_COLOR;
-    case 5: return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
-    case 6: return VK_BLEND_FACTOR_SRC_ALPHA;
-    case 7: return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    case 8: return VK_BLEND_FACTOR_DST_COLOR;
-    case 9: return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
-    case 10: return VK_BLEND_FACTOR_DST_ALPHA;
-    case 11: return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
-    case 12: return VK_BLEND_FACTOR_CONSTANT_COLOR;
-    case 13: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
-    case 14: return VK_BLEND_FACTOR_CONSTANT_ALPHA;
-    case 15: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
-    case 16: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
-    default: return VK_BLEND_FACTOR_ONE;
-    }
-}
-
-VkBlendOp BlendOpOf(uint32_t op)
-{
-    switch (op)
-    {
-    case 0: return VK_BLEND_OP_ADD;
-    case 1: return VK_BLEND_OP_SUBTRACT;
-    case 2: return VK_BLEND_OP_MIN;
-    case 3: return VK_BLEND_OP_MAX;
-    case 4: return VK_BLEND_OP_REVERSE_SUBTRACT;
-    default: return VK_BLEND_OP_ADD;
-    }
-}
-
-VkCompareOp CompareOpOf(uint32_t f)
-{
-    switch (f & 7)
-    {
-    case 0: return VK_COMPARE_OP_NEVER;
-    case 1: return VK_COMPARE_OP_LESS;
-    case 2: return VK_COMPARE_OP_EQUAL;
-    case 3: return VK_COMPARE_OP_LESS_OR_EQUAL;
-    case 4: return VK_COMPARE_OP_GREATER;
-    case 5: return VK_COMPARE_OP_NOT_EQUAL;
-    case 6: return VK_COMPARE_OP_GREATER_OR_EQUAL;
-    default: return VK_COMPARE_OP_ALWAYS;
-    }
-}
-
-// What the console's render target clamps in a shader's colour output before
-// blending -- the property a widened host format loses (catalog #68).
-//
-// The 7e3 formats are the case worth spelling out: RGB is a float running to 32,
-// but ALPHA is a 2-bit UNORM, so the hardware clamps alpha and leaves colour alone.
-// The 16-bit fixed formats are excluded entirely: their range is -32..32, not
-// [0,1], so clamping them would be a new defect rather than a fix.
-enum class GuestClamp { kNone, kRgba, kAlphaOnly };
-
-GuestClamp GuestColorFormatClamp(uint32_t colorFormat)
-{
-    switch (colorFormat)
-    {
-    case 0:  // k_8_8_8_8
-    case 1:  // k_8_8_8_8_GAMMA
-    case 2:  // k_2_10_10_10
-    case 10: // k_2_10_10_10_AS_10_10_10_10
-        return GuestClamp::kRgba;
-    case 3:  // k_2_10_10_10_FLOAT          (7e3 RGB, 2-bit UNORM alpha)
-    case 12: // k_2_10_10_10_FLOAT_AS_16_16_16_16
-        return GuestClamp::kAlphaOnly;
-    default:
-        return GuestClamp::kNone;
-    }
-}
-
-// RB_COLOR_INFO.color_format (a xenos::ColorRenderTargetFormat) -> the host
-// format the surface is rendered in. Ported from Xenia's
-// VulkanRenderTargetCache::GetColorOwnDrawVulkanFormat.
-//
-// This is not a cosmetic choice. UE3 on the 360 renders its scene into a
-// k_2_10_10_10_FLOAT (7e3) HDR surface whose values run to 32.0; rendering that
-// into an 8888 UNORM host target clamps every highlight to 1.0 before the
-// tonemap pass ever sees it, so the tonemap reads a flat white/black image.
-VkFormat HostColorFormat(uint32_t colorFormat)
-{
-    switch (colorFormat)
-    {
-    case 0:  // k_8_8_8_8
-    case 1:  // k_8_8_8_8_GAMMA -- gamma is applied on the way out, not stored
-        return VK_FORMAT_R8G8B8A8_UNORM;
-    case 2:  // k_2_10_10_10
-    case 10: // k_2_10_10_10_AS_10_10_10_10
-        return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
-    case 3:  // k_2_10_10_10_FLOAT (7e3, [0,32) RGB + unorm alpha)
-    case 12: // k_2_10_10_10_FLOAT_AS_16_16_16_16
-        return VK_FORMAT_R16G16B16A16_SFLOAT;
-    case 4:  // k_16_16 (fixed point -32..32)
-        return VK_FORMAT_R16G16_SNORM;
-    case 5:  // k_16_16_16_16 (fixed point -32..32)
-        return VK_FORMAT_R16G16B16A16_SNORM;
-    case 6:  // k_16_16_FLOAT
-        return VK_FORMAT_R16G16_SFLOAT;
-    case 7:  // k_16_16_16_16_FLOAT
-        return VK_FORMAT_R16G16B16A16_SFLOAT;
-    case 14: // k_32_FLOAT
-        return VK_FORMAT_R32_SFLOAT;
-    case 15: // k_32_32_FLOAT
-        return VK_FORMAT_R32G32_SFLOAT;
-    default:
-        return VK_FORMAT_UNDEFINED;
-    }
-}
-
-const char* ColorFormatName(uint32_t f)
-{
-    switch (f)
-    {
-    case 0: return "k_8_8_8_8";
-    case 1: return "k_8_8_8_8_GAMMA";
-    case 2: return "k_2_10_10_10";
-    case 3: return "k_2_10_10_10_FLOAT";
-    case 4: return "k_16_16";
-    case 5: return "k_16_16_16_16";
-    case 6: return "k_16_16_FLOAT";
-    case 7: return "k_16_16_16_16_FLOAT";
-    case 10: return "k_2_10_10_10_AS_10_10_10_10";
-    case 12: return "k_2_10_10_10_FLOAT_AS_16_16_16_16";
-    case 14: return "k_32_FLOAT";
-    case 15: return "k_32_32_FLOAT";
-    default: return "?";
-    }
-}
-
-// The output-merger registers that select a pipeline, kept together so the
-// pipeline cache is keyed on exactly the state the pipeline bakes in.
-struct OutputMergerState
-{
-    uint32_t colorMask = 0;    // RB_COLOR_MASK
-    uint32_t blend0 = 0;       // RB_BLENDCONTROL0
-    uint32_t depthControl = 0; // RB_DEPTHCONTROL
-    // PA_SU_SC_MODE_CNTL: cull_front (bit 0), cull_back (bit 1), and face
-    // (bit 2, 0 = front is counter-clockwise). Culling applies only to POLYGONAL
-    // primitives -- Xenia gates the whole block on that, and faceness is
-    // meaningless for points and lines.
-    uint32_t suScModeCntl = 0;
-    bool polygonal = false;
-
-    bool operator<(const OutputMergerState& o) const
-    {
-        return std::tie(colorMask, blend0, depthControl, suScModeCntl, polygonal) <
-               std::tie(o.colorMask, o.blend0, o.depthControl, o.suScModeCntl, o.polygonal);
-    }
-};
 
 // A host image owned for the whole run: the guest's decoded textures, and the
 // 1x1 stand-ins a binding falls back to when its fetch constant cannot be
@@ -671,72 +488,7 @@ struct ResolveTarget
     bool isDepth = false;
 };
 
-// Bytes per pixel of a resolve DESTINATION format (RB_COPY_DEST_INFO's
-// copy_dest_format, a xenos::ColorFormat). Needed to turn the byte distance
-// between two RB_COPY_DEST_BASE values into a row offset. Returns 0 for a
-// format this does not know, so the caller can report it rather than compute a
-// nonsense offset from a guessed size.
-uint32_t ColorFormatBytesPerPixel(uint32_t colorFormat)
-{
-    switch (colorFormat)
-    {
-    case 2: case 8: case 9:                       return 1; // k_8, k_8_A, k_8_B
-    case 3: case 4: case 5: case 10: case 15:
-    case 24: case 30:                             return 2; // 16-bit
-    case 6: case 7: case 14: case 16: case 17:
-    case 25: case 31: case 36:                    return 4; // 32-bit
-    case 26: case 32: case 37: case 50: case 54:
-    case 55: case 56:                             return 8; // 64-bit
-    case 38:                                      return 16;
-    default:                                      return 0;
-    }
-}
 
-// Xenia's ui::FloatToD3D11Fixed16p8, for the resolve rectangle's vertices.
-//
-// The tie-breaking differs from the D3D11 spec's round-to-nearest-even, and
-// deliberately does not matter here: a resolve rectangle is written by the CPU
-// with at most one fractional bit (the frame's are all x.5), so multiplying by
-// 256 is exact and no rounding occurs at all. The early-exit clamps are Xenia's.
-int32_t FloatToFixed16p8(float f)
-{
-    if (!(std::fabs(f) >= 1.0f / 512.0f))
-        return 0;
-    if (f >= 32768.0f - 1.0f / 256.0f)
-        return (1 << 23) - 1;
-    if (f <= -32768.0f)
-        return -32768 * 256;
-    return int32_t(std::lround(double(f) * 256.0));
-}
-
-// The host format one EDRAM base is given, from every RB_COLOR_INFO.color_format
-// the frame renders it with. A base used with a single format keeps that
-// format's own host equivalent; a base the frame reinterprets needs a container
-// that holds all of them, and R16G16B16A16_SFLOAT holds every 8/10/16-bit
-// colour format the Xenos can render (a k_8_8_8_8 value lands in [0,1] exactly,
-// a 7e3 HDR value up to 32 and a k_16_16 fixed-point value up to 32 are all far
-// inside float16's range).
-VkFormat HostFormatFor(const std::set<uint32_t>& formats, bool& mixedOut)
-{
-    mixedOut = false;
-    if (formats.empty())
-        return VK_FORMAT_UNDEFINED;
-    if (formats.size() == 1)
-        return HostColorFormat(*formats.begin());
-    mixedOut = true;
-    // GEARS_DRAW_FORCE_LDR=1 -- CONTROL ARM ONLY, never a fix. Collapses a
-    // reinterpreted surface to 8-bit UNORM to ask what the fixed-point render
-    // target's source-colour clamp would have done. It destroys every HDR pass on
-    // that surface, so it answers one question and breaks the frame.
-    if (lucent::config::flag("DRAW_FORCE_LDR"))
-        return VK_FORMAT_R8G8B8A8_UNORM;
-    // A 32-bit float surface has no common container with a 4-channel one; the
-    // caller reports that rather than this pretending otherwise.
-    for (uint32_t f : formats)
-        if (f == 14 || f == 15)
-            return VK_FORMAT_R32G32_SFLOAT;
-    return VK_FORMAT_R16G16B16A16_SFLOAT;
-}
 
 // Everything a frame render needs that does not change between frames.
 //
@@ -939,151 +691,12 @@ void Renderer::ReleasePersistent()
     persistent = nullptr;
 }
 
-// Whether the host can use a format as a STORAGE image, which the resolve
-// compute pass requires of both the surface it reads and the texture it writes.
-// Not every colour format a Xenos surface maps to is guaranteed storable --
-// R32G32_SFLOAT in particular is optional in Vulkan -- so this is queried, and
-// a resolve whose source cannot be stored is reported rather than silently
-// losing the guest's exponent bias.
-bool FormatSupportsStorage(VkPhysicalDevice physical, VkFormat format)
-{
-    if (format == VK_FORMAT_UNDEFINED)
-        return false;
-    VkFormatProperties fp{};
-    vkGetPhysicalDeviceFormatProperties(physical, format, &fp);
-    return (fp.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0;
-}
 
-// Xenos VGT_DRAW_INITIATOR prim_type names, for the frame census.
-// "src ONE, dst ZERO, add" on both colour and alpha is the blend identity, so
-// blending is only switched on when the guest actually asked for it. Shared
-// between the pipeline builder and the per-draw diagnostic table, so the table
-// reports the state the pipeline was actually built with.
-bool BlendIsIdentity(uint32_t blend0)
-{
-    const uint32_t cSrc = blend0 & 0x1F, cOp = (blend0 >> 5) & 0x7;
-    const uint32_t cDst = (blend0 >> 8) & 0x1F;
-    const uint32_t aSrc = (blend0 >> 16) & 0x1F, aOp = (blend0 >> 21) & 0x7;
-    const uint32_t aDst = (blend0 >> 24) & 0x1F;
-    return cSrc == 1 && cDst == 0 && cOp == 0 && aSrc == 1 && aDst == 0 && aOp == 0;
-}
 
-// RB_DEPTH_CLEAR holds the clear in the EDRAM depth buffer's own format, so it
-// has to be decoded before a host float depth target can be cleared with it.
-//
-// kD24FS8 is Xenos "float24": an unsigned 20e4 number (4-bit exponent, 20-bit
-// mantissa, no sign). This is a direct port of Xenia's
-// SpirvShaderTranslator::Depth20e4To32 (spirv_shader_translator_rb.cc), which is
-// itself CFloat24 from d3dref9.dll -- ported rather than approximated, because a
-// denormal clear would silently land in the wrong place otherwise.
-float Depth20e4To32(uint32_t f24)
-{
-    const uint32_t exponent = (f24 >> 20) & 0xF;
-    const uint32_t mantissa = f24 & 0xFFFFF;
-    uint32_t unbiasedExponent, f32Mantissa;
-    if (exponent != 0)
-    {
-        unbiasedExponent = exponent;
-        f32Mantissa = mantissa;
-    }
-    else if (mantissa != 0)
-    {
-        // Denormal: normalise the mantissa and pay for it in the exponent.
-        const uint32_t msb = 31u - uint32_t(__builtin_clz(mantissa));
-        unbiasedExponent = msb - 19u;             // wraps below 19, as intended
-        f32Mantissa = mantissa << (20u - msb);
-    }
-    else
-    {
-        // Zero in, zero out: -112 cancels the +112 bias below.
-        unbiasedExponent = uint32_t(-112);
-        f32Mantissa = 0;
-    }
-    const uint32_t biased = (unbiasedExponent + 112u) & 0xFFu;
-    const uint32_t bits = ((f32Mantissa & 0xFFFFFu) | (biased << 20)) << 3;
-    float out;
-    std::memcpy(&out, &bits, sizeof(out));
-    return out;
-}
 
-// kD24S8 is a plain 24-bit unorm.
-float DepthUnorm24To32(uint32_t d24)
-{
-    return float(d24 & 0xFFFFFFu) / float(0xFFFFFF);
-}
 
-const char* PrimName(uint32_t primType)
-{
-    switch (primType)
-    {
-    case 1: return "point_list";
-    case 2: return "line_list";
-    case 3: return "line_strip";
-    case 4: return "triangle_list";
-    case 5: return "triangle_fan";
-    case 6: return "triangle_strip";
-    case 7: return "triangle_w_wflags";
-    case 8: return "rectangle_list";
-    case 12: return "line_loop";
-    case 13: return "quad_list";
-    case 14: return "quad_strip";
-    case 15: return "polygon";
-    default: return "other";
-    }
-}
 
-// IEEE half to float, for reading back R16G16B16A16_SFLOAT targets.
-float HalfToFloat(uint16_t h)
-{
-    const uint32_t sign = uint32_t(h & 0x8000) << 16;
-    uint32_t exponent = (h >> 10) & 0x1F;
-    uint32_t mantissa = h & 0x3FF;
-    uint32_t bits;
-    if (exponent == 0)
-    {
-        if (mantissa == 0)
-            bits = sign;
-        else
-        {
-            // Subnormal: normalise into a float32 normal.
-            exponent = 1;
-            while ((mantissa & 0x400) == 0) { mantissa <<= 1; --exponent; }
-            mantissa &= 0x3FF;
-            bits = sign | ((exponent + (127 - 15)) << 23) | (mantissa << 13);
-        }
-    }
-    else if (exponent == 0x1F)
-        bits = sign | 0x7F800000u | (mantissa << 13); // inf / NaN
-    else
-        bits = sign | ((exponent + (127 - 15)) << 23) | (mantissa << 13);
-    float f;
-    std::memcpy(&f, &bits, sizeof(f));
-    return f;
-}
 
-bool WritePpm(const std::filesystem::path& path, const uint8_t* rgba,
-              uint32_t w, uint32_t h)
-{
-    std::error_code ec;
-    std::filesystem::create_directories(path.parent_path(), ec);
-    std::ofstream f(path, std::ios::binary);
-    if (!f)
-        return false;
-    f << "P6\n" << w << ' ' << h << "\n255\n";
-    std::vector<uint8_t> row(size_t(w) * 3);
-    for (uint32_t y = 0; y < h; ++y)
-    {
-        const uint8_t* src = rgba + size_t(y) * w * 4;
-        for (uint32_t x = 0; x < w; ++x)
-        {
-            row[x * 3 + 0] = src[x * 4 + 0];
-            row[x * 3 + 1] = src[x * 4 + 1];
-            row[x * 3 + 2] = src[x * 4 + 2];
-        }
-        f.write(reinterpret_cast<const char*>(row.data()), std::streamsize(row.size()));
-    }
-    return true;
-}
 
 // ---------------------------------------------------------------------------
 // Whole-frame rendering. Every draw of the frame is issued, in submission
