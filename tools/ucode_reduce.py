@@ -44,17 +44,33 @@ VECTOR_OPS = {'add', 'mul', 'mad', 'dp3', 'dp3_sat', 'dp2add', 'dp2add_sat',
               'frc', 'trunc'}
 SCALAR_OPS = {'rsq', 'rcp', 'log', 'exp', 'sqrt', 'adds', 'maxs', 'mins',
               'mulsc', 'muls', 'muls_prev', 'adds_prev', 'subsc', 'subsc_sat',
+              'addsc', 'addsc_sat',
               'sin', 'cos', 'rcp_sat', 'rsq_sat', 'exp_sat', 'log_sat'}
 # Structural lines that carry no arithmetic.
 STRUCTURAL = {'exec', 'exece', 'alloc', 'cnop', 'serialize', 'nop'}
 # Anything here means the shader has control flow this tool does not model.
 CONTROL = {'loop', 'endloop', 'jmp', 'call', 'ret', 'label', 'setp_ne', 'setp_eq',
-           'kill', 'killne', 'killgt'}
+           'kill', 'killne', 'killgt', 'kill_gt', 'kill_eq', 'kill_ge', 'kill_ne',
+           'kills_gt', 'kills_eq', 'kills_ge', 'kills_ne', 'pred_setne', 'pred_seteq'}
 
 
 class Reg:
     def __init__(self, comps):
         self.c = list(comps)
+
+
+def dest_mask(dst):
+    """Split a destination into (name, mask), where a BARE register is a FULL write.
+
+    `mul r9, r3.xyyz, c255.xyzx` writes all four components; there is no dot and no
+    mask. Treating the empty mask as "writes nothing" is not a parse quirk -- it
+    silently drops the instruction, every later read of that register falls back to
+    its INPUT value, and the tool prints a tidy program that is wrong. That is
+    exactly what happened on ps_d99a15450a08043a before this existed, which is why
+    read_before_write() below now reports the tell.
+    """
+    name, _, mask = dst.partition('.')
+    return name, (mask or 'xyzw')
 
 
 class Sim:
@@ -69,6 +85,8 @@ class Sim:
         self.pool = {}
         self.order = []
         self.fetches = []
+        self.written = set()   # register indices any instruction has written
+        self.read_first = []   # registers read before ever being written
 
     def const(self, n):
         if n not in self.consts:
@@ -96,6 +114,10 @@ class Sim:
             base = self.const(int(name[1:])) if name[0] == 'c' else self.regs[int(name[1:])]
         swz = swz or 'xyzw'
         swz = swz + swz[-1] * (4 - len(swz))
+        if not absv and tok[0] == 'r':
+            n = int(name[1:])
+            if n not in self.written and n not in [x for x, _ in self.read_first]:
+                self.read_first.append((n, name))
         v = base.c[IDX[swz[pos]]]
         if absv:
             v = 'abs(%s)' % v
@@ -104,7 +126,10 @@ class Sim:
         return v
 
     def target(self, name):
-        return self.oc if name.startswith('oC') else self.regs[int(name[1:])]
+        if name.startswith('oC'):
+            return self.oc
+        self.written.add(int(name[1:]))
+        return self.regs[int(name[1:])]
 
 
 def parse(path):
@@ -156,7 +181,7 @@ def run(path, inputs, allow_control=False):
             # against a translated module (OpVectorShuffle ... 6 4 5 3).
             dst, coord = args[0], args[1]
             src = args[2] if len(args) > 2 else '?'
-            name, _, mask = dst.partition('.')
+            name, mask = dest_mask(dst)
             tex = 'tex(%s, %s)' % (src, coord)
             sim.fetches.append((tex, dst))
             tgt = sim.target(name)
@@ -168,7 +193,7 @@ def run(path, inputs, allow_control=False):
             continue
         if op in SCALAR_OPS:
             dst = args[0]
-            name, _, mask = dst.partition('.')
+            name, mask = dest_mask(dst)
             srcs = args[1:]
             v = scalar(sim, op, srcs)
             v = sim.intern(v)
@@ -179,7 +204,7 @@ def run(path, inputs, allow_control=False):
             continue
         if op in VECTOR_OPS:
             dst = args[0]
-            name, _, mask = dst.partition('.')
+            name, mask = dest_mask(dst)
             srcs = args[1:]
             tgt = sim.target(name)
             new = list(tgt.c)
@@ -236,9 +261,10 @@ def scalar(sim, op, srcs):
         a, b = sim.operand(srcs[0], 0), sim.operand(srcs[0], 1)
         fn = {'adds': '(%s + %s)', 'maxs': 'max(%s, %s)', 'mins': 'min(%s, %s)'}[base]
         return sat(op, fn % (a, b))
-    if base in ('mulsc', 'subsc'):
+    if base in ('mulsc', 'subsc', 'addsc'):
         a, b = sim.operand(srcs[0], 0), sim.operand(srcs[1], 0)
-        return sat(op, ('(%s * %s)' if base == 'mulsc' else '(%s - %s)') % (a, b))
+        fmt = {'mulsc': '(%s * %s)', 'subsc': '(%s - %s)', 'addsc': '(%s + %s)'}[base]
+        return sat(op, fmt % (a, b))
     if base in ('muls_prev', 'adds_prev'):
         b = sim.operand(srcs[0], 0)
         return sat(op, ('(%s * %s)' if base == 'muls_prev' else '(%s + %s)')
@@ -266,6 +292,18 @@ def report(path, inputs):
         print('downstream of them is wrong:')
         for r in sorted(set(refused)):
             print('   - %s' % r)
+        print()
+    # THE TELL FOR A DROPPED INSTRUCTION. Every register read before it is written
+    # must be an INTERPOLATOR: the pixel shader's inputs are r0..rN and nothing
+    # else arrives unwritten. If a register appears here that the shader clearly
+    # computes, an instruction that wrote it was not modelled -- which is how a
+    # tidy, wrong program gets printed.
+    if sim.read_first:
+        names = ', '.join(n for _, n in sorted(sim.read_first))
+        print('-- read before written: %s --' % names)
+        print('   These must ALL be interpolators. If one of them is a register the')
+        print('   shader computes, an instruction that wrote it was dropped and')
+        print('   everything downstream of it is wrong.')
         print()
     print('-- straight-line program (%d expressions) --' % len(sim.order))
     for name, expr in sim.order:
@@ -339,13 +377,45 @@ def selftest():
         print('   %-4s nothing was refused on a clean shader' % ('ok' if not refused else 'FAIL'))
         bad += bool(refused)
 
+        # THE BARE DESTINATION. `mul r5, r1.xyzw, c1.xyzw` writes all four
+        # components with no dot and no mask. Treating that as "writes nothing"
+        # printed a tidy, WRONG program for ps_d99a15450a08043a -- every later
+        # read of r5 fell back to its input value -- and nothing refused. This is
+        # that bug as a test.
+        p3 = os.path.join(d, 'v.ucode.txt')
+        open(p3, 'w').write('''/*    0.0 */       exec
+/*    1   */          mul r5, r1.xyzw, c1.xyzw
+/*    0.1 */       exece
+/*    2   */          mul oC0.xyz_, r5.xyzz, c2.xyzz
+''')
+        sim3, _ = run(p3, {})
+        e3 = dict(sim3.order)
+        def expand3(e):
+            for _ in range(50):
+                names = sorted(set(re.findall(r'\bt\d+\b', e)), key=len, reverse=True)
+                if not names:
+                    break
+                for n in names:
+                    e = re.sub(r'\b%s\b' % n, '(%s)' % e3[n], e)
+            return e
+        f3 = expand3(sim3.oc.c[0])
+        okbare = 'c1.x' in f3
+        print('   %-4s a BARE destination (`mul r5, ...`) writes all four components'
+              % ('ok' if okbare else 'FAIL'))
+        bad += not okbare
+        # ...and the register must NOT then appear as read-before-written.
+        okrbw = 5 not in [n for n, _ in sim3.read_first]
+        print('   %-4s r5 is not reported read-before-written after that write'
+              % ('ok' if okrbw else 'FAIL'))
+        bad += not okrbw
+
         # MUST REFUSE: a shader with control flow.
         p2 = os.path.join(d, 'u.ucode.txt')
         open(p2, 'w').write(SELFTEST_SRC + '/*  4 */ loop i31, L8\n')
         _, refused2 = run(p2, {})
         print('   %-4s a shader with `loop` is REFUSED' % ('ok' if refused2 else 'FAIL'))
         bad += not refused2
-    print('%d of 5 cases pass' % (5 - bad))
+    print('%d of 7 cases pass' % (7 - bad))
     return 1 if bad else 0
 
 
