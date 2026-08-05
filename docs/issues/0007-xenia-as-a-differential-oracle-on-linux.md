@@ -327,3 +327,17 @@ STATUS OF THE "DO NOT RESUME" RULING: the reason for it -- an emulator that
 never ran the title -- no longer holds. Whether to build a differential harness
 on it is still the user's call and still costs what it costs; but "it cannot run
 this game here" is now FALSE and should not be cited as if it were true.
+
+### Note (2026-08-05)
+## Careful: Xenia's RENDERING of this title is intermittent (2026-08-05)
+
+Correcting the note above before it hardens into a false fact. The user observed
+the first launch of the fixed build sitting on a black screen, and only a later
+launch rendering. Counted over three launches of the same binary on the same ISO:
+canary5 = 1 swap in ~120 s (black), canary6 = 1677 swaps in 60 s, canary7 = 4749
+swaps in ~150 s. All three loaded GAME:\default.xex.
+
+So LAUNCH is reliable (3/3) and RENDERING is not (2/3), and a single swap in two
+minutes is a stall, not slow loading. Cause unknown; nothing here distinguishes a
+startup race from a first-run cost. See claim C012, which carries the same
+caveat. Quote "2 of 3" rather than "it runs".
