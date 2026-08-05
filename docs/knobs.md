@@ -32,6 +32,7 @@ the same commit that removes it.
 | `GEARS_DRAW_FRAME_COUNT=N` | Render N frames then stop. Default `0` = every frame from `_AT` onward, which is the live path; a positive count is what capture and measurement runs use |
 | `GEARS_DRAW_FRAME_REPORT_EVERY=N` | Census + screenshot every N rendered frames (~40 ms each, so a visible hitch by design) |
 | `GEARS_DRAW_DIR=<dir>` | Where screenshots, dumps and diagnostics are written |
+| `GEARS_NATIVE_PASSES=1` | Render the passes in `runtime/native_pass.cpp`'s roster with **our own** shaders instead of the title's translated microcode. Off by default. The log names every pass and says which are implemented and which are only declared, and warns when this changes nothing because no pass has a module. Gate: `tools/verify_native_pass.sh` |
 | `GEARS_WATCH_FREE=<guest address>` | Reports the moment that address is released through the pool, with the caller that did it. For a use-after-free whose object address is known from a core file: a raw SIGSEGV leaves no clean exit to dump a table at, so the report happens live |
 | `GEARS_INPUT_SCRIPT=<steps>` | Timed pad input, e.g. `25000:START,25300:,150000:LY+`. Buttons and stick deflections (`LX/LY/RX/RY` with `+`/`-`), combined with `&`. Only advances when the guest polls, so a headless run is reproducible |
 | `GEARS_SAVE_DIR=<dir>` | Where saves live. Defaults to `$XDG_DATA_HOME/gears1`, then `~/.local/share/gears1` — where a Linux game keeps user data, not next to the executable |

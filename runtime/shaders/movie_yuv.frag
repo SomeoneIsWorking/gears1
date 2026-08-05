@@ -1,46 +1,138 @@
 #version 450
 // Native pass: the startup movie's YUV -> RGB composite.
 //
-// Written from the title's own microcode, which is 33 dwords and fully decoded:
-//   tfetch2D r2.x, r0.xy, tf0      // Y plane
-//   tfetch2D r2.y, r0.xy, tf1      // U plane
-//   tfetch2D r2.z, r0.xy, tf2      // V plane
-//   dp3 r1.x, r2.zxy, c0.zxy   +   const offset from c3.x * c1.w  etc
-//   dp3 r1.y, r2.zxy, c1.zxy
-//   dp3 r1.z, r2.zxy, c2.zxy
-//   add oC0.xyz, r1.xyz, r0.xyz    // the per-channel offsets
-//   maxs oC0.w, c3.ww
+// THE OPERATION IS THE TITLE'S, THE VALUES ARE THE GAME'S. Written from the
+// title's own microcode (33 dwords, fully decoded below) rather than translated
+// from it. Every constant this shader multiplies by is read from the guest's own
+// float-constant UBO -- a native pass reproduces the arithmetic, not the numbers.
 //
-// The matrix and the offsets are the GUEST'S, read from its float-constant UBO --
-// this pass reproduces the arithmetic, not the numbers. That is the whole point of
-// a native pass: the operation comes from the engine, the values come from the game.
-layout(set = 3, binding = 0) uniform texture2D Tex0;
-layout(set = 3, binding = 1) uniform texture2D Tex1;
-layout(set = 3, binding = 2) uniform texture2D Tex2;
-layout(set = 3, binding = 3) uniform sampler Samp0;
-layout(set = 3, binding = 4) uniform sampler Samp1;
-layout(set = 3, binding = 5) uniform sampler Samp2;
+//   /*  2 */ tfetch2D r2.x___, r0.xy, tf0          // Y plane
+//   /*  3 */ tfetch2D r2._x__, r0.xy, tf1          // U plane
+//   /*  4 */ tfetch2D r2.__x_, r0.xy, tf2          // V plane
+//   /*  5 */ mul  r0._y__, c1.wwww, c3.xxxx    + maxs r0._,      c0.ww
+//   /*  6 */ dp3  r1.x___, r2.zxyy, c0.zxyy    + muls_prev r0.x, c3.x
+//   /*  7 */ dp3  r1._y__, r2.zxyy, c1.zxyy    + maxs r0._,      c2.ww
+//   /*  8 */ dp3  r1.__z_, r2.zxyy, c2.zxyy    + muls_prev r0.z, c3.x
+//   /*  9 */ add  oC0.xyz_, r1.xyzz, r0.xyzz   + maxs oC0.___w,  c3.ww
+//
+// The scalar pipe is a chain through the previous-scalar register: `maxs c0.ww`
+// leaves c0.w in PS, the next `muls_prev c3.x` multiplies it, so the three colour
+// offsets are (c0.w, c1.w, c2.w) * c3.x -- r0.y is computed by the vector pipe and
+// r0.x/r0.z by the scalar pipe, which is why they look asymmetric in the listing.
+//
+// THE BINDINGS ARE NOT A CHOICE. They are the layout the translator emits for a
+// shader with three texture fetches, and this module is substituted into a
+// pipeline built for that layout, so it must match exactly:
+//   set 3: binding 0/1 = texture0 unsigned/signed, 2/3 = texture1, 4/5 = texture2,
+//          bindings 6,7,8 = the three samplers.
+//   set 1: binding 0 = system constants, binding 2 = pixel float constants.
+// Getting this wrong is not a compile error -- it samples a different image and
+// still draws a plausible picture, which is exactly how the first version of this
+// shader shipped with the right geometry and the wrong colours.
+layout(set = 3, binding = 0) uniform texture2D TexY;
+layout(set = 3, binding = 2) uniform texture2D TexU;
+layout(set = 3, binding = 4) uniform texture2D TexV;
+layout(set = 3, binding = 6) uniform sampler SampY;
+layout(set = 3, binding = 7) uniform sampler SampU;
+layout(set = 3, binding = 8) uniform sampler SampV;
 
-layout(set = 1, binding = 2) uniform PixelConstants { vec4 c[4]; } Consts;
+// The system constants, declared by explicit offset rather than by repeating all
+// 32 members: only the two the epilogue needs are named, and an offset that ever
+// stops matching the translator's block is a mismatch the A/B comparison catches.
+layout(set = 1, binding = 0) uniform XeSystemConstants {
+    layout(offset = 0)   uint flags;
+    layout(offset = 192) vec4 color_exp_bias;   // one per render target; .x is colour 0
+} Sys;
 
-layout(location = 0) in vec2 InUV;
+// Sized to FOUR, not 256: the translator emits exactly the constants the shader
+// touches (c0..c3 here), so the buffer really is 64 bytes and a larger array would
+// read past it.
+layout(set = 1, binding = 2) uniform XeFloatConstants { vec4 c[4]; } Consts;
+
+// Interpolator 0. The guest's vertex shader puts the movie's texture coordinate in
+// r0.xy of the pixel shader, which is interpolator 0's xy.
+layout(location = 0) in vec4 InInterpolator0;
 layout(location = 0) out vec4 OutColor;
+
+// kSysFlag_ConvertColor0ToGamma. The render target is a gamma-space format, so the
+// shader's linear output is encoded on the way out -- with the 360's piecewise
+// linear curve, NOT sRGB. Skipping this does not fail; it just makes every pixel
+// the wrong brightness, so it belongs in the native pass and not in a later "fix".
+const uint kConvertColor0ToGamma = 0x4000u;
+
+vec3 EncodePwlGamma(vec3 linear)
+{
+    vec3 v = clamp(linear, 0.0, 1.0);
+    // Four segments, selected by two comparisons: the same breakpoints and scales
+    // the hardware's gamma ramp uses.
+    bvec3 hi   = greaterThanEqual(v, vec3(0.500488758));
+    bvec3 mid  = greaterThanEqual(v, vec3(0.0625610948));
+    bvec3 upper = greaterThanEqual(v, vec3(0.12512219));
+    vec3 scaleHi   = mix(vec3(255.75), vec3(127.875), vec3(hi));
+    vec3 offsetHi  = mix(vec3(0.250980407), vec3(0.501960814), vec3(hi));
+    vec3 scaleLo   = mix(vec3(1023.0), vec3(511.5), vec3(mid));
+    vec3 offsetLo  = mix(vec3(0.0), vec3(0.125490203), vec3(mid));
+    vec3 scale  = mix(scaleLo, scaleHi, vec3(upper));
+    vec3 offset = mix(offsetLo, offsetHi, vec3(upper));
+    return trunc(v * scale) * (1.0 / 255.0) + offset;
+}
+
+// The Xenos samples at texel centres; a normalised coordinate landing exactly on a
+// texel boundary must round the same way the console did, so a fixed fraction of a
+// texel is added before sampling. This mirrors what the translator emits (it reads
+// the size from the fetch constant; textureSize is the same number). It changed no
+// pixel on the capture this pass is verified against, so it is carried for
+// faithfulness, not because it was measured to matter.
+const float kTexelRoundingOffset = 0.75 / 512.0;
+
+// dp3, in the Xenos's association and with no contraction.
+//
+// `dot()` would be the obvious spelling and is WRONG here by one part in 2^24: the
+// compiler may fuse or reassociate it, the sequencer may not, and the difference
+// crosses an 8-bit rounding boundary on a few pixels per frame. Four, measured, on
+// the capture this pass is checked against -- small enough to dismiss as noise,
+// which is exactly why it is worth spelling out instead. `precise` forbids both
+// transforms, so this evaluates as (x*a + y*b) + z*c, the order the microcode does.
+float Dp3(vec3 a, vec3 b)
+{
+    precise vec3 product = a * b;
+    precise float sum = (product.x + product.y) + product.z;
+    return sum;
+}
+
+vec2 RoundedCoord(texture2D tex, sampler samp, vec2 uv)
+{
+    return uv + kTexelRoundingOffset / vec2(textureSize(sampler2D(tex, samp), 0));
+}
 
 void main()
 {
-    float y = texture(sampler2D(Tex0, Samp0), InUV).x;
-    float u = texture(sampler2D(Tex1, Samp1), InUV).x;
-    float v = texture(sampler2D(Tex2, Samp2), InUV).x;
+    vec2 uv = InInterpolator0.xy;
 
-    // The microcode's dp3 operands are r2.zxy = (v, y, u), against c0/c1/c2.zxy.
-    vec3 yuv = vec3(v, y, u);
-    vec3 rgb;
-    rgb.x = dot(yuv, Consts.c[0].zxy);
-    rgb.y = dot(yuv, Consts.c[1].zxy);
-    rgb.z = dot(yuv, Consts.c[2].zxy);
+    // ASSUMPTION, STATED SO IT CAN FAIL LOUDLY: the three planes are fetched
+    // unsigned, with no exponent bias and no integer scale. The translated shader
+    // carries all three as branches on the fetch constants; this pass takes the
+    // straight path. If that is wrong for this draw the A/B difference against the
+    // translated pass will not reach zero, which is the only reason to believe it.
+    float y = texture(sampler2D(TexY, SampY), RoundedCoord(TexY, SampY, uv)).x;
+    float u = texture(sampler2D(TexU, SampU), RoundedCoord(TexU, SampU, uv)).x;
+    float v = texture(sampler2D(TexV, SampV), RoundedCoord(TexV, SampV, uv)).x;
 
-    // The offsets the microcode adds: c1.w * c3.x on green, c3.x on red and blue,
-    // each already scaled by the guest.
-    vec3 offset = vec3(Consts.c[0].w, Consts.c[1].w, Consts.c[2].w) * Consts.c[3].x;
-    OutColor = vec4(rgb + offset, Consts.c[3].w);
+    // dp3 against r2.zxyy: the operand order is (V, Y, U), matched by c*.zxy.
+    vec3 vyu = vec3(v, y, u);
+    vec3 rgb = vec3(Dp3(vyu, Consts.c[0].zxy),
+                    Dp3(vyu, Consts.c[1].zxy),
+                    Dp3(vyu, Consts.c[2].zxy));
+
+    rgb += vec3(Consts.c[0].w, Consts.c[1].w, Consts.c[2].w) * Consts.c[3].x;
+
+    // The epilogue every pixel shader gets: the render target's exponent bias,
+    // then the gamma encode when the target is a gamma format.
+    float alpha = Consts.c[3].w;
+    rgb *= Sys.color_exp_bias.x;
+    alpha *= Sys.color_exp_bias.x;
+    if ((Sys.flags & kConvertColor0ToGamma) != 0u)
+        rgb = EncodePwlGamma(rgb);
+
+    OutColor = vec4(rgb, alpha);
 }

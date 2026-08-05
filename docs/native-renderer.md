@@ -1,8 +1,21 @@
 # The native renderer
 
-Status: **design + seam, no passes implemented yet.** Everything below that is not
-marked DONE is a plan, and this file says which is which so the next session does
-not have to guess.
+Status: **seam landed, one pass implemented and bit-exact, three declared.**
+Everything below that is not marked DONE is a plan, and this file says which is
+which so the next session does not have to guess.
+
+| Pass | Hash | State |
+|---|---|---|
+| Startup movie YUV→RGB composite | `0xea0007942db096ad` | **DONE** — `runtime/shaders/movie_yuv.frag`, bit-exact against the translated pass (2,764,800 of 2,764,800 channel samples identical on `scratch/frames/boot150.gfr`) |
+| Full-screen scene composite | `0x501ac5d8692bf7b6` | declared, not written |
+| Height fog | unknown | declared, not written |
+| Base pass | unknown | declared, not written |
+
+Run the gate with `tools/verify_native_pass.sh`. It renders the capture through
+both paths and refuses to report a match it cannot back: it deletes the screenshot
+before each arm (a stale file compares a frame against itself and reports a perfect
+match — this already happened once), and it runs a second capture as a negative
+control so the comparison is shown reporting a difference in the same run.
 
 ## Why
 
@@ -57,19 +70,53 @@ What is known about that seam, measured rather than assumed:
 
 ## The order to build it in
 
-1. **Identify the draw emitter.** Nothing native can attach to the draw stream until
-   the function that emits `DRAW_INDX` is known. Address-guessing is exhausted;
-   the method that replaces it is the write-watch already in `hle_d3d.cpp`
-   (`WatchArm`/`WatchProtect` mprotects a guest page and reads the faulting
-   context) pointed at the ring pages, which names the writer from its LR.
-2. **Recover the pass structure**, not the draws: which draw ranges belong to which
+Step 1 as originally written — "identify the draw emitter" — turned out **not to be
+a prerequisite**, and that is the most useful thing this file records. The emitter
+is still unidentified (catalog #58, eleven functions ruled out by per-frame rate),
+and a native pass shipped anyway. By the time a draw reaches `gpu_draw.cpp` it
+already carries the thing that identifies a UE3 pass: the hash of the microcode the
+title bound. Substitution keys on that. The emitter hunt is now optional work for
+pass-level structure, not a blocker.
+
+1. **~~Identify the draw emitter~~ — not needed.** Key on the pixel-shader hash.
+   DONE, `runtime/native_pass.h`.
+2. **Write one pass and make it bit-exact.** DONE for the movie composite. The
+   method that worked, in order: disassemble the microcode
+   (`scratch/shaders/bound_out/<hash>.ucode.txt`), read the *translated* module's
+   interface with `spirv-dis` for the descriptor bindings and block layouts,
+   write the GLSL, `tools/gen_native_spv.sh`, `tools/verify_native_pass.sh`.
+3. **Recover the pass structure**, not the draws: which draw ranges belong to which
    UE3 pass. `SceneRendering.cpp` gives the order; the per-draw diag table already
    groups draws by surface and shader pair, so the two can be aligned.
-3. **Implement one pass natively** — height fog first. It is a single full-screen
-   pass with maths that fits on a page (`HeightFogCommon.usf`), it reads scene
-   colour and depth which the renderer already produces, and it can be A/B'd
-   against the translated version pixel for pixel on a captured frame.
-4. **Then the base pass**, which is where the frame's content actually is.
+4. **Height fog**, a single full-screen pass whose maths fits on a page
+   (`HeightFogCommon.usf`), reading scene colour and depth the renderer already
+   produces.
+5. **Then the base pass**, which is where the frame's content actually is.
+
+## What the first pass cost, and what it teaches
+
+Reading the microcode was the easy half and I got it right first time. What was
+wrong in the first shipped version was the *interface*, and it failed silently:
+
+- **Descriptor bindings are not a choice.** The translator emits, for three texture
+  fetches, `set 3: 0/1 = texture0 unsigned/signed, 2/3 = texture1, 4/5 = texture2,
+  6,7,8 = the samplers`. Guessing 0,1,2 for textures and 3,4,5 for samplers is not
+  a validation error — it samples different images and still draws a recognisable
+  picture with wrong colours. Read the bindings off the translated module.
+- **Block sizes are not a choice either.** `XeFloatConstants` is sized to the
+  constants the shader actually touches (four vec4s here, not 256), and
+  `color_exp_bias` is a `vec4` at offset 192, not a float array.
+- **The epilogue is part of the pass.** Every translated pixel shader ends with the
+  render target's exponent bias and, when system-constant flag bit 14 is set, a
+  piecewise-linear gamma encode (the 360's curve, *not* sRGB). A native pass that
+  omits it is uniformly the wrong brightness.
+- **`dot()` is wrong by one ULP.** The compiler may fuse or reassociate it; the
+  sequencer does `(x·a + y·b) + z·c`. The difference crossed an 8-bit rounding
+  boundary on four pixels of the test frame. `precise` forbids both transforms.
+- **The offline translations in `scratch/shaders/bound_out/` are degenerate.** They
+  are translated with no modification key, so they have no interpolator inputs and
+  a colour write mask of zero. Trust them for *structure* (bindings, block layouts,
+  arithmetic) and never for behaviour.
 
 ## How each step is verified
 
@@ -85,7 +132,12 @@ to the screen), and the per-run presented-frame check.
 
 ## What this file is not
 
-It is not a claim that a native renderer is close. Step 1 is unsolved. The value of
-writing it down now is that the next session starts from a seam that is measured,
-a source tree that is located, and an order of work whose first step is a
-measurement rather than a guess.
+It is not a claim that a native renderer is close. One pass of four is written, and
+it is the smallest one — a full-screen composite with three texture fetches and a
+3×3 matrix. The passes that carry the frame's content are the base pass and the
+material shaders, and there are hundreds of the latter, one per material. Nothing
+here yet addresses the user's actual complaint that the game's rendering is wrong.
+
+What it IS: a seam that is measured, a source tree that is located, a gate that has
+been shown to fail as well as pass, and one pass proved bit-exact — so the next
+pass is the same procedure again rather than a fresh argument about method.
