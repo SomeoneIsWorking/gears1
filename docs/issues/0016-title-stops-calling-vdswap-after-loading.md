@@ -1,11 +1,11 @@
 ---
 id: 16
 title: title stops calling VdSwap after loading
-status: open
+status: resolved
 symptom: post-load: guest VdSwap calls freeze (572, delta 0 over 40s) while the command processor keeps executing swap packets at ~12/s; guest threads still executing engine code, not blocked
 tags: gpu,presentation
 created: 2026-07-22
-updated: 2026-07-22
+updated: 2026-08-05
 ---
 
 ## Root cause
@@ -466,3 +466,35 @@ CANDIDATE (b) FROM THE PREVIOUS NOTE -- the stale-packet defect -- was NOT neede
 and is not currently supported by evidence: with predication honoured the per
 frame counts collapse to the exact recorded unit, leaving no unexplained
 re-execution.
+
+### Note (2026-08-05)
+## The "NEW FRONTIER" note above is STALE -- that heap exhaustion is fixed
+
+That note ends by pointing the next session at "the physical heap exhausted --
+90x out of guest heap ... after which the title takes SIGSEGV" at frame ~4740.
+Re-measured on today's build, it does not happen.
+
+Headless run, `./run.sh --headless --menu-walk`, 480 s:
+
+    13,860 frames submitted, sustained 29.2-29.4 fps to the end of the run
+    0 occurrences of "out of guest heap"
+    no SIGSEGV; the run ended because the timeout killed it, not the title
+
+That is ~3x past the frame at which this note says the title dies.
+
+**It was already fixed, in catalog #17**, whose free-list replaced a bump
+allocator whose Free reclaimed nothing. #17 also CORRECTS the attribution this
+note repeats: the heap that used to exhaust was the TITLE heap
+(0x40000000..0x60000000), not the physical heap -- "the physical heap's live
+set at that moment was 204 MiB of 512 MiB and it was never close to full".
+
+So the frontier note was written against the pre-#17 behaviour and carried its
+already-corrected framing. Left in place above rather than deleted, because the
+predication analysis around it is still correct and worth reading; this note is
+what stops the last paragraph being acted on.
+
+**Incidental datapoint for #44** (guest stops progressing ~70 s in): this run
+went 480 s with no stall. One clean sample, not a rate.
+
+### Resolution (2026-08-05)
+The entry's own defect -- the title stopping VdSwap -- was fixed by the EVENT_WRITE_ZPD/EXT implementation, and the frame-rate frontier by honouring predication (both above, both measured). The heap-exhaustion frontier it ended on is fixed too, in #17, and re-measured absent today: 13,860 frames at ~29.3 fps with zero heap errors. Nothing in this entry is outstanding.

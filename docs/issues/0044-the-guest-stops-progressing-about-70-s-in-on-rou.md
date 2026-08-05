@@ -1245,3 +1245,6 @@ VdSwap totals: 4380, 1800 (the crash), 4380, 3060, 3000, 3060. Zero KeBugCheck l
 **The one failure was #50, not this issue.** Run 2 aborted at 1800 frames with the fault reporter naming it: `a host pointer outside the guest mapping (0x3e8000fbd00)`, `context: #50`. So the crash this harness was originally built for is still live at roughly 1 in 6 here.
 
 **What to do with this:** do not re-derive the two-in-three rate from the header — it predates the KeBugCheck implementation and the #45 fix. Re-measure with the fixed harness before sizing any work on this issue, and use more than 6 runs if the answer matters.
+
+### Note (2026-08-05)
+One clean 480 s headless run (--menu-walk) on today's build reached 13,860 frames at a sustained ~29.3 fps with no stall. One sample, recorded so it can be pooled with others -- it is not a rate and does not move the estimate on its own.
