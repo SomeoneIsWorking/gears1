@@ -1138,9 +1138,27 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (!translated)
                 return false;
             xit = xlate.emplace(key, std::move(x)).first;
+            // A NATIVE PASS STANDS IN HERE, and only here: the translation still
+            // ran, so its binding layout, constant map and texture list are what
+            // the rest of the frame uses -- the native module implements the same
+            // interface with our own arithmetic. Substituting at the module keeps
+            // every other property of the draw the guest's.
+            const gears::native::Pass* nat =
+                isVertex ? nullptr : gears::native::Find(hash);
             VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-            mi.codeSize = xit->second.spirv.size();
-            mi.pCode = reinterpret_cast<const uint32_t*>(xit->second.spirv.data());
+            if (nat != nullptr)
+            {
+                mi.codeSize = nat->spirv.size() * sizeof(uint32_t);
+                mi.pCode = nat->spirv.data();
+                lucent::info("native", "pass \"{}\" is rendering natively for pixel"
+                    " shader {:#018x} ({} SPIR-V words, from {})", nat->name, hash,
+                    nat->spirv.size(), nat->derivedFrom);
+            }
+            else
+            {
+                mi.codeSize = xit->second.spirv.size();
+                mi.pCode = reinterpret_cast<const uint32_t*>(xit->second.spirv.data());
+            }
             VkShaderModule m = VK_NULL_HANDLE;
             if (vkCreateShaderModule(device, &mi, nullptr, &m) != VK_SUCCESS)
                 return false;
