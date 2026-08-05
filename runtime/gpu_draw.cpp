@@ -14,6 +14,7 @@
 #include "gpu_device_features.h"
 #include "guest_texture_hash.h"
 #include "native_pass.h"
+#include "spirv_clamp.h"
 #include "gpu_shared_device.h"
 #include "gpu_queue_family.h"
 
@@ -484,6 +485,25 @@ VkCompareOp CompareOpOf(uint32_t f)
 // k_2_10_10_10_FLOAT (7e3) HDR surface whose values run to 32.0; rendering that
 // into an 8888 UNORM host target clamps every highlight to 1.0 before the
 // tonemap pass ever sees it, so the tonemap reads a flat white/black image.
+// Whether a guest colour format is FIXED-POINT, i.e. whether the console's render
+// target clamps a shader's colour output to its range before blending. This is the
+// property the widened host format loses; see runtime/spirv_clamp.h.
+bool GuestColorFormatIsFixedPoint(uint32_t colorFormat)
+{
+    switch (colorFormat)
+    {
+    case 0:  // k_8_8_8_8
+    case 1:  // k_8_8_8_8_GAMMA
+    case 2:  // k_2_10_10_10
+    case 10: // k_2_10_10_10_AS_10_10_10_10
+        return true;
+    default:
+        // The 7e3 float formats, the 16-bit fixed formats (which are -32..32, so a
+        // [0,1] clamp would be wrong) and the float ones: no [0,1] clamp.
+        return false;
+    }
+}
+
 VkFormat HostColorFormat(uint32_t colorFormat)
 {
     switch (colorFormat)
@@ -697,6 +717,12 @@ VkFormat HostFormatFor(const std::set<uint32_t>& formats, bool& mixedOut)
     if (formats.size() == 1)
         return HostColorFormat(*formats.begin());
     mixedOut = true;
+    // GEARS_DRAW_FORCE_LDR=1 -- CONTROL ARM ONLY, never a fix. Collapses a
+    // reinterpreted surface to 8-bit UNORM to ask what the fixed-point render
+    // target's source-colour clamp would have done. It destroys every HDR pass on
+    // that surface, so it answers one question and breaks the frame.
+    if (lucent::config::flag("DRAW_FORCE_LDR"))
+        return VK_FORMAT_R8G8B8A8_UNORM;
     // A 32-bit float surface has no common container with a 4-channel one; the
     // caller reports that rather than this pretending otherwise.
     for (uint32_t f : formats)
@@ -722,9 +748,11 @@ struct RendererPersistent
     bool built = false;
     uint32_t width = 0, height = 0;
 
-    // (microcode hash, modification) -> translation and module.
-    std::map<std::pair<uint64_t, uint64_t>, draw::ShaderXlate> xlate;
-    std::map<std::pair<uint64_t, uint64_t>, VkShaderModule> modules;
+    // (microcode hash, modification, output clamped) -> translation and module.
+    // The clamp belongs in the key because a widened host surface makes it a
+    // property of the DRAW's guest colour format, not of the microcode.
+    std::map<std::tuple<uint64_t, uint64_t, bool>, draw::ShaderXlate> xlate;
+    std::map<std::tuple<uint64_t, uint64_t, bool>, VkShaderModule> modules;
     std::map<draw::RectangleGeometryShaderKey, VkShaderModule> geomShaders;
 
     std::map<std::string, VkDescriptorSetLayout> texLayouts;
@@ -1120,13 +1148,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // the modification carries the interpolator mask the vertex and pixel
     // shaders exchange for THIS draw, so one microcode can legitimately need
     // several translations across a frame.
-    using ShaderKey = std::pair<uint64_t, uint64_t>; // (hash, modification)
+    // (hash, modification, output clamped). The clamp is part of the KEY, not a
+    // property of the draw: two draws can share a microcode and a modification and
+    // still need different modules, because they target the same widened host
+    // surface through different guest colour formats.
+    using ShaderKey = std::tuple<uint64_t, uint64_t, bool>;
     std::map<ShaderKey, draw::ShaderXlate>& xlate = P.xlate;
     std::map<ShaderKey, VkShaderModule>& modules = P.modules;
     auto getShader = [&](bool isVertex, const uint8_t* uc, size_t sz, uint64_t hash,
-                         uint64_t modification, draw::ShaderXlate*& outX,
-                         VkShaderModule& outM) -> bool {
-        const ShaderKey key{hash, modification};
+                         uint64_t modification, bool clampOutput,
+                         draw::ShaderXlate*& outX, VkShaderModule& outM) -> bool {
+        const ShaderKey key{hash, modification, clampOutput};
         auto xit = xlate.find(key);
         if (xit == xlate.end())
         {
@@ -1158,6 +1190,30 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             {
                 mi.codeSize = xit->second.spirv.size();
                 mi.pCode = reinterpret_cast<const uint32_t*>(xit->second.spirv.data());
+            }
+            // THE CLAMP THE HOST RENDER TARGET NO LONGER PERFORMS. Applied to the
+            // module, not the draw, so it is cached with it.
+            // It applies to a NATIVE module too. Exempting native passes would
+            // make them diverge from the translated shader on exactly the draws
+            // this fixes -- and the A/B gate would then compare two different
+            // things and call the difference a native-pass bug.
+            std::vector<uint32_t> clampedCode;
+            if (clampOutput)
+            {
+                clampedCode.assign(static_cast<const uint32_t*>(mi.pCode),
+                                   static_cast<const uint32_t*>(mi.pCode) +
+                                       mi.codeSize / sizeof(uint32_t));
+                if (draw::ClampFragmentOutputs(clampedCode))
+                {
+                    mi.codeSize = clampedCode.size() * sizeof(uint32_t);
+                    mi.pCode = clampedCode.data();
+                }
+                else
+                    // Refusal is not silent: the draw renders unclamped, which is
+                    // the defect this exists to fix, so it has to be visible.
+                    lucent::warn("draw", "pixel shader {:#018x} could not be clamped"
+                        " to its fixed-point render target's range; this draw blends"
+                        " as if the target were HDR", hash);
             }
             VkShaderModule m = VK_NULL_HANDLE;
             if (vkCreateShaderModule(device, &mi, nullptr, &m) != VK_SUCCESS)
@@ -3283,8 +3339,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // number of draws -- which is the quantity a per-draw cache has to
             // justify and which nothing was measuring.
             ScopedMs lookupTime(msShaderLookup);
-            if (!getShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification, vsX, vsMod) ||
-                !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification, psX, psMod))
+            // Does this draw need the clamp its render target used to do for it?
+            // Only when the guest's format is fixed-point AND the host image was
+            // widened to a float container to hold a reinterpreted surface.
+            bool clampPs = false;
+            if (GuestColorFormatIsFixedPoint((R[0x2001] >> 16) & 0xF))
+            {
+                auto sit = P.surfaceTargets.find(R[0x2001] & 0xFFF);
+                if (sit != P.surfaceTargets.end())
+                    clampPs = sit->second.hostFormat == VK_FORMAT_R16G16B16A16_SFLOAT ||
+                              sit->second.hostFormat == VK_FORMAT_R32G32_SFLOAT ||
+                              sit->second.hostFormat == VK_FORMAT_R16G16_SFLOAT;
+            }
+            if (!getShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification, false, vsX, vsMod) ||
+                !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification, clampPs, psX, psMod))
             { ++skipped; ++skipReasons[2]; continue; }
             if (!getPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
             { ++skipped; ++skipReasons[3]; continue; }
