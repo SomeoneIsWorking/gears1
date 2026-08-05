@@ -1953,6 +1953,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             double maxSeen = -std::numeric_limits<double>::infinity();
             double minSeen = std::numeric_limits<double>::infinity();
             uint64_t nonZero = 0, samples = 0;
+            // PER CHANNEL, in float and before the clamp. Catalog #62 is a
+            // frame-wide red deficit (R/G = 0.77) plus a ceiling, and the one
+            // thing that would localise it is WHICH STAGE the ratio first
+            // departs from the next one's -- a question the merged range above
+            // cannot answer, because a max over all three channels is identical
+            // whether red is short or not. The PPM cannot answer it either: it
+            // clamps at 1.0 and an HDR scene target spends most of its range
+            // above that.
+            double chanSum[3] = {0, 0, 0};
+            uint64_t chanCount[3] = {0, 0, 0};
             if (rd.isDepth)
             {
                 // R32_SFLOAT depth, written as greyscale. Reverse-Z puts the
@@ -1984,6 +1994,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                             minSeen = std::min(minSeen, double(v));
                             ++samples;
                             if (v != 0.0f) ++nonZero;
+                            // NaN would silently poison a sum and print as
+                            // -nan, which says nothing about how many samples
+                            // were bad. Counted per channel instead.
+                            if (v == v)
+                            {
+                                chanSum[c] += double(v);
+                                ++chanCount[c];
+                            }
                         }
                         rgba[i * 4 + c] = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
                     }
@@ -2008,6 +2026,32 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                           " the PPM is black and tells you nothing. This is what a"
                           " velocity or similar sub-unit buffer looks like"
                         : "");
+                // The per-channel means, and the ratio catalog #62 is about.
+                // A depth target has no channels to compare, and a target whose
+                // green mean is zero has no ratio at all -- both say so rather
+                // than printing a number that reads like a measurement.
+                if (!rd.isDepth)
+                {
+                    const double mr = chanCount[0] ? chanSum[0] / double(chanCount[0]) : 0.0;
+                    const double mg = chanCount[1] ? chanSum[1] / double(chanCount[1]) : 0.0;
+                    const double mb = chanCount[2] ? chanSum[2] / double(chanCount[2]) : 0.0;
+                    lucent::Line cl;
+                    cl.add("  channel means R {:.6f} G {:.6f} B {:.6f}", mr, mg, mb);
+                    if (mg > 0.0)
+                        cl.add("; R/G {:.4f} B/G {:.4f}", mr / mg, mb / mg);
+                    else
+                        cl.add("; NO RATIO: green sums to zero here, so this target"
+                               " cannot say anything about a per-channel deficit");
+                    // Samples dropped for being NaN are a defect in the target,
+                    // not a rounding detail -- an unreported NaN count is how a
+                    // mean quietly becomes a mean of the survivors.
+                    const uint64_t perChan = samples / 3;
+                    for (int c = 0; c < 3; ++c)
+                        if (chanCount[c] != perChan)
+                            cl.add("; channel {} had {} NaN samples of {}",
+                                   c, perChan - chanCount[c], perChan);
+                    cl.flush(lucent::Level::Info, "draw");
+                }
             }
             vkUnmapMemory(device, rd.mem);
         }
