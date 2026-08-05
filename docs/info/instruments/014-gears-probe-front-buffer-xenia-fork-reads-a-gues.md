@@ -13,6 +13,24 @@ created: 2026-08-06
 
 Run against BOTH classes on 4D5307D5_13457.xtr. Positive: it sees 39,000,806 non-zero bytes across the 512 MiB buffer and names the 16 MiB blocks they are in, so it can report data when data is there. Negative: it reports 0 for the 3.6 MB at the front buffer 1F606000 in the same run and the same moment. Its whole-buffer block map is the built-in control -- it caught two of its own blind spots: probing CPU-side guest memory (which no resolve ever writes) and probing mid-frame (before the command processor's deferred work is submitted, when the whole buffer reads empty). It says 'the probe sees nothing anywhere, so it says nothing' in words rather than printing a bare zero. Cannot distinguish a resolve's output from a texture upload into the same range -- it claims presence only, never provenance.
 
+## Also validated on a LIVE run (2026-08-06)
+
+The stronger control: the same probe, on the same title running live rather than
+replaying, reports the front buffer at **74.0% non-zero, mean 25.2**, and every
+resolve destination populated (137A0000: 3,746,188 bytes; 1F606000: 2,759,966),
+steady across four samples 200 swaps apart. So it reports a full buffer as full
+and an empty one as empty, on the same address, in the same build.
+
+It is now an INT rather than a bool -- the number is how many swaps to skip
+between probes, because a 512 MiB readback and a queue wait per swap is not
+something a 30 fps run can pay. Each line names the swap it came from; a probe
+line with no swap number would read as "this is the frame".
+
 ## Known failure modes
 
-(none recorded yet)
+  * **Cannot distinguish a resolve's output from a texture upload** into the
+    same range. Presence only, never provenance.
+  * **Says nothing useful mid-frame.** It submits its own command buffer, so
+    called before the command processor's deferred work is submitted it reads
+    the buffer as it was BEFORE the frame -- which is empty. Only meaningful
+    after `EndSubmission`, i.e. at the swap.
