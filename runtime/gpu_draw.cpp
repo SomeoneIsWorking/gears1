@@ -1672,7 +1672,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
         VkImageCreateInfo si{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         si.imageType = VK_IMAGE_TYPE_2D;
-        si.format = VK_FORMAT_R8G8B8A8_UNORM;
+        // B8G8R8A8, not R8G8B8A8: a raw vkCmdCopyImage from the R8G8B8A8 surface
+        // into this exchanges red and blue, which is the guest's copy_dest_swap.
+        si.format = VK_FORMAT_B8G8R8A8_UNORM;
         si.extent = {W, H, 1};
         si.mipLevels = 1;
         si.arrayLayers = 1;
@@ -4625,6 +4627,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // surface's resolve destination is where its pixels land in guest memory, so the
     // surface whose destination IS the front buffer is the one being shown. That is
     // a statement, not a rule of thumb.
+    // Whether the copy that produces the SCANOUT buffer exchanges red and blue.
+    // The guest renders into EDRAM in one channel order and asks for the swap on
+    // the way to memory (copy_dest_swap), so the bytes it scans out are the swapped
+    // ones -- and presenting the surface without that swap shows the whole game in
+    // the wrong channel order. Measured: the resolve destination for a gameplay
+    // frame averaged R 0.0991 G 0.0981 B 0.0708 while the surface we presented
+    // averaged R 0.0708 G 0.0981 B 0.0991 -- the same frame, red and blue
+    // exchanged, which is a rust-coloured game rendered cold grey-blue.
+    bool presentNeedsSwapRB = false;
     if (in.frontBufferAddress != 0)
     {
         const uint32_t front = in.frontBufferAddress & 0x1FFFFFFFu; // drop the alias
@@ -4635,6 +4646,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if ((pd.resolveDest & 0x1FFFFFFFu) != front)
                 continue;
             presentBase = pd.surfaceBase;
+            presentNeedsSwapRB = pd.resolveSwapRB;
             havePresent = true;
             break;
         }
@@ -4704,7 +4716,39 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // frame into it. The blit below is one 1280x720 copy into this frame's half
         // of an alternating pair, so what the presenter shows is finished and stays
         // finished until two frames later.
-        if (presentStage != VK_NULL_HANDLE)
+        if (presentStage != VK_NULL_HANDLE && presentNeedsSwapRB)
+        {
+            // The swap, done as a raw byte copy: the stage is B8G8R8A8_UNORM and
+            // the surface is R8G8B8A8_UNORM, and vkCmdCopyImage between
+            // size-compatible formats moves bytes without conversion -- so the
+            // channels land exchanged, which is exactly the copy_dest_swap the
+            // guest asked for. No shader, no pass, no per-pixel work.
+            VkImageSubresourceRange one{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            b.srcAccessMask = 0; b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = presentStage; b.subresourceRange = one;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+            VkImageCopy copy{};
+            copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.extent = {W, H, 1};
+            vkCmdCopyImage(cmd, presentTarget->color,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                presentStage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+            VkImageMemoryBarrier r = b;
+            r.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            r.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            r.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &r);
+            source = presentStage;
+        }
+        else if (presentStage != VK_NULL_HANDLE)
         {
             VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
