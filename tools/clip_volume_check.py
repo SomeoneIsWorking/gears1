@@ -62,8 +62,18 @@ for n, d in draws.items():
 
 # The layout is only worth anything if it agrees with the GPU on the draw that
 # DID rasterise. Say so explicitly rather than leaving the reader to notice.
-c288 = [clip(world(v, draws[288])) for v in verts]
-if any(c[3] > 0 and all(abs(c[i]) <= c[3] for i in range(3)) for c in c288):
+#
+# This doubles as the script's self-test, which is why it EXITS NON-ZERO on
+# failure: every number here is inline, so the check needs no capture and runs
+# in the test suite. It also has to be able to fail -- the negative arm below
+# feeds the same arithmetic a layout that is deliberately wrong and requires it
+# to be rejected, because a check that has only ever passed has not been shown
+# to be a check at all.
+def inside_clip(cs):
+    return any(c[3] > 0 and all(abs(c[i]) <= c[3] for i in range(3)) for c in cs)
+
+ok = inside_clip([clip(world(v, draws[288])) for v in verts])
+if ok:
     print("LAYOUT CHECK PASSES: draw 288, which the GPU rasterised, comes out inside\n"
           "the clip volume under this layout -- so the same arithmetic putting 286 and\n"
           "287 outside is evidence, not an artefact of guessing the constant order.")
@@ -71,3 +81,18 @@ else:
     print("LAYOUT CHECK FAILS: draw 288 rasterised 87 primitives on the GPU but this\n"
           "layout puts every one of its vertices outside the clip volume. The constant\n"
           "order above is WRONG and NOTHING on this page may be used as evidence.")
+
+# THE NEGATIVE ARM. Swap the world matrix' rotation rows for the projection's,
+# which is a plausible-looking misreading of the constant order, and require the
+# check to REJECT it. If this ever passes, the check accepts anything and its
+# agreement with the GPU above means nothing.
+bogus = dict(c0=c7[:3], c1=c8[:3], c2=c9[:3], c3=c10[:3])
+if inside_clip([clip(world(v, bogus)) for v in verts]):
+    print("SELF-TEST FAILED: a deliberately wrong constant layout also came out inside\n"
+          "the clip volume, so this check cannot tell a right layout from a wrong one.")
+    ok = False
+else:
+    print("self-test: a deliberately wrong constant layout is rejected, so the check\n"
+          "above is capable of reporting both answers.")
+
+raise SystemExit(0 if ok else 1)
