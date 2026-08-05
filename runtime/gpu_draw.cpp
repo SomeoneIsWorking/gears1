@@ -49,6 +49,7 @@
 #include "gpu_draw_targets.h"
 #include "gpu_draw_arena.h"
 #include "gpu_draw_pipelines.h"
+#include "gpu_draw_probe.h"
 #include "gpu_draw_shaders.h"
 
 namespace gears
@@ -2415,20 +2416,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         clears[1].depthStencil =
             {dc.empty() ? guestDepthClear : float(std::atof(dc.c_str())), 0};
     }
-    // Checkpoint dumps (GEARS_DRAW_FRAME_STEP=N): after every N draws the colour
-    // target is copied to its own readback buffer and written out, so the frame
-    // can be attributed to individual draws instead of guessed at.
-    const long stepEvery = lucent::config::number("DRAW_FRAME_STEP", 0);
-    const long stepFrom = lucent::config::number("DRAW_FRAME_STEP_FROM", 0);
-    // draws-so-far -> (buffer, EDRAM surface base). THE SURFACE IS NOT OPTIONAL:
-    // a checkpoint dumps whichever surface is bound at that moment, and a frame
-    // switches between several. Without the base in the line, a checkpoint that
-    // goes from 900k non-black pixels to zero reads as "something wiped the
-    // frame" when it is only the render target changing to a small bloom buffer
-    // -- which is exactly how it was misread once.
-    struct Checkpoint { uint32_t draws; VkBuffer buffer; uint32_t surface; };
-    std::vector<Checkpoint> checkpoints;
-    std::vector<VkDeviceMemory> checkpointMem;
+    // The mid-render probes -- GEARS_DRAW_FRAME_STEP's checkpoint images and
+    // GEARS_DRAW_PIXEL_TRACE's per-draw texel -- live in gpu_draw_probe.{h,cpp},
+    // where each one's recording half sits next to the half that reports it.
+    draw::FrameProbe PB(*this, W, H);
+    PB.Build(prepared.size(), rbBytes);
 
     // A surface's colour image leaves a render pass in TRANSFER_SRC_OPTIMAL, so
     // a resolve is: end the pass -> blit the source surface into the
@@ -2443,167 +2435,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // The two resolve dispatches live on the render-target cache, in
     // gpu_draw_resolve.cpp: it already owns the descriptor sets they consume
     // and the counters that report a resolve it could not serve.
-    // Each checkpoint costs a full-frame readback buffer, so STEP=1 on a
-    // 170-draw frame is capped rather than allocating 170 of them.
-    const size_t kMaxCheckpoints = 48;
-    // Its OWN staging image, not one of the present pair: those are the frames the
-    // presenter thread may still be blitting, and a diagnostic must never be able
-    // to corrupt what the user sees.
-    VkImage checkpointStage = VK_NULL_HANDLE;
-    VkDeviceMemory checkpointStageMem = VK_NULL_HANDLE;
-    if (stepEvery > 0)
-    {
-        VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        ci.imageType = VK_IMAGE_TYPE_2D;
-        ci.format = VK_FORMAT_R8G8B8A8_UNORM;
-        ci.extent = {W, H, 1};
-        ci.mipLevels = 1;
-        ci.arrayLayers = 1;
-        ci.samples = VK_SAMPLE_COUNT_1_BIT;
-        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-        ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        uint32_t type = 0;
-        VkMemoryRequirements req{};
-        if (vkCreateImage(device, &ci, nullptr, &checkpointStage) == VK_SUCCESS)
-        {
-            vkGetImageMemoryRequirements(device, checkpointStage, &req);
-            if (!FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
-                FindMemory(req.memoryTypeBits, 0, type);
-            VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-            ai.allocationSize = req.size;
-            ai.memoryTypeIndex = type;
-            if (vkAllocateMemory(device, &ai, nullptr, &checkpointStageMem) != VK_SUCCESS ||
-                vkBindImageMemory(device, checkpointStage, checkpointStageMem, 0) != VK_SUCCESS)
-            {
-                vkDestroyImage(device, checkpointStage, nullptr);
-                checkpointStage = VK_NULL_HANDLE;
-                lucent::warn("draw", "GEARS_DRAW_FRAME_STEP: no staging image, so"
-                    " checkpoints of non-8888 surfaces will be skipped");
-            }
-        }
-    }
-    // A checkpoint dumps the surface that was being rendered into at that
-    // point, and only when that surface is 8888 -- the readback path is 8-bit
-    // RGBA, and an HDR surface's bytes are not pixels.
-    // WHY THIS BLITS RATHER THAN REFUSING. The old version returned unless the
-    // surface was already 8888, and said nothing when it did. Every surface in
-    // this title's frames is R16G16B16A16_SFLOAT, so GEARS_DRAW_FRAME_STEP was a
-    // SILENT NO-OP: it wrote no images, logged no lines, and looked exactly like a
-    // frame with nothing to report. An HDR surface's bytes are indeed not pixels --
-    // so convert them, the same way the presented frame already is.
-    uint32_t checkpointsSkipped = 0;
-    auto checkpointHere = [&](uint32_t drawsSoFar, const SurfaceTarget* t,
-                              uint32_t surfaceBase) {
-        // SAY SO. A checkpoint that produces nothing must not look like a
-        // checkpoint that found nothing -- the run's log is the only place the
-        // difference is visible.
-        if (!t || !t->begunThisFrame)
-        {
-            lucent::info("draw", "  checkpoint after {} draws: NOT TAKEN -- {}",
-                drawsSoFar, t ? "the surface has not been rendered to this frame"
-                              : "no surface has been opened yet");
-            return;
-        }
-        if (checkpoints.size() >= kMaxCheckpoints)
-        {
-            ++checkpointsSkipped;
-            return;
-        }
-        VkBuffer b = 0; VkDeviceMemory m = 0;
-        if (!MakeBuffer(rbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m))
-            return;
-        VkImage source = t->color;
-        if (t->hostFormat != VK_FORMAT_R8G8B8A8_UNORM && checkpointStage != VK_NULL_HANDLE)
-        {
-            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            VkImageMemoryBarrier bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-            bar.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            bar.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            bar.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            bar.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            bar.srcQueueFamilyIndex = bar.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            bar.image = checkpointStage; bar.subresourceRange = range;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &bar);
-            VkImageBlit bl{};
-            bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            bl.srcOffsets[1] = {int32_t(W), int32_t(H), 1};
-            bl.dstOffsets[1] = {int32_t(W), int32_t(H), 1};
-            vkCmdBlitImage(cmd, t->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                checkpointStage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl,
-                VK_FILTER_NEAREST);
-            VkImageMemoryBarrier rb = bar;
-            rb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            rb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            rb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            rb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb);
-            source = checkpointStage;
-        }
-        VkBufferImageCopy rg{};
-        rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        rg.imageExtent = {W, H, 1};
-        vkCmdCopyImageToBuffer(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            b, 1, &rg);
-        checkpoints.push_back(Checkpoint{drawsSoFar, b, surfaceBase});
-        checkpointMem.push_back(m);
-    };
 
-    // GEARS_DRAW_PIXEL_TRACE=<x>,<y>: WHICH DRAW PAINTED THIS PIXEL.
-    //
-    // Attributing a visible defect to a draw is the question this renderer asks
-    // most, and until now the only answer was GEARS_DRAW_FRAME_STEP -- whole
-    // images, capped at 48, and read back through an 8-bit blit that clamps. On a
-    // base pass whose HDR target is mostly above 1.0 that blit reports 255 for
-    // every pixel of interest, so the instrument cannot separate two draws at all.
-    // This copies ONE texel after every draw, uncapped, in the surface's own
-    // format, and prints the draws where it CHANGED -- with the denominator, so a
-    // trace that never changes is distinguishable from a trace that never ran.
-    struct PixelSample { uint32_t draws; uint32_t surface; VkFormat format; };
-    std::vector<PixelSample> pixelSamples;
-    VkBuffer pixelBuf = VK_NULL_HANDLE;
-    VkDeviceMemory pixelMem = VK_NULL_HANDLE;
-    int32_t traceX = -1, traceY = -1;
-    if (const std::string& spec = lucent::config::text("DRAW_PIXEL_TRACE"); !spec.empty())
-    {
-        const size_t comma = spec.find(',');
-        if (comma == std::string::npos)
-            lucent::warn("draw", "GEARS_DRAW_PIXEL_TRACE: cannot parse '{}',"
-                " expected <x>,<y>; NOT tracing", spec);
-        else
-        {
-            traceX = std::atoi(spec.c_str());
-            traceY = std::atoi(spec.c_str() + comma + 1);
-            if (traceX < 0 || traceY < 0 || uint32_t(traceX) >= W || uint32_t(traceY) >= H)
-            {
-                lucent::warn("draw", "GEARS_DRAW_PIXEL_TRACE: ({},{}) is outside the"
-                    " {}x{} surface; NOT tracing", traceX, traceY, W, H);
-                traceX = traceY = -1;
-            }
-            // 16 bytes per sample covers the widest surface format here.
-            else if (!MakeBuffer(16ull * (prepared.size() + 2),
-                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT, pixelBuf, pixelMem, true))
-            {
-                lucent::warn("draw", "GEARS_DRAW_PIXEL_TRACE: no readback buffer;"
-                    " NOT tracing");
-                traceX = traceY = -1;
-            }
-        }
-    }
-    auto tracePixel = [&](uint32_t drawsSoFar, const SurfaceTarget* t, uint32_t surfaceBase) {
-        if (traceX < 0 || !t || !t->begunThisFrame)
-            return;
-        VkBufferImageCopy rg{};
-        rg.bufferOffset = VkDeviceSize(pixelSamples.size()) * 16;
-        rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        rg.imageOffset = {traceX, traceY, 0};
-        rg.imageExtent = {1, 1, 1};
-        vkCmdCopyImageToBuffer(cmd, t->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            pixelBuf, 1, &rg);
-        pixelSamples.push_back(PixelSample{drawsSoFar, surfaceBase, t->hostFormat});
-    };
 
     // Per-draw pipeline statistics: how far each draw actually got through the
     // pipeline. Four counters per draw, in this order:
@@ -2787,14 +2619,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
         if (onlyDraw >= 0 && long(drawn) != onlyDraw)
         { ++drawn; continue; }
-        // GEARS_DRAW_FRAME_STEP_FROM=N aims the (capped) window of checkpoints at
-        // the draws that matter. Without it the cap always lands on the FIRST 48
-        // steps, so a defect introduced late in a frame -- the UI, the post chain --
-        // can never be attributed no matter what step size is chosen.
-        const bool needCheckpoint = stepEvery > 0 && drawn > 0 &&
-                                    long(drawn) >= stepFrom &&
-                                    (drawn % uint32_t(stepEvery)) == 0;
-        if (needCheckpoint)
+        if (PB.CheckpointDue(drawn))
         {
             // THE TARGET MUST BE READ BEFORE endPass(), which nulls it. Taking the
             // checkpoint afterwards passed a null every single time, so this knob
@@ -2807,16 +2632,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             SurfaceTarget* const checkpointTarget = openTarget ? openTarget : lastTarget;
             const uint32_t checkpointBase = openTarget ? openSurface : lastSurface;
             endPass();
-            checkpointHere(drawn, checkpointTarget, checkpointBase);
+            PB.Checkpoint(cmd, drawn, checkpointTarget, checkpointBase);
         }
         // One texel, every draw. Same pass-boundary requirement as a checkpoint:
         // the copy cannot happen inside a render pass.
-        if (traceX >= 0)
+        if (PB.Tracing())
         {
             SurfaceTarget* const t = openTarget ? openTarget : lastTarget;
             const uint32_t base = openTarget ? openSurface : lastSurface;
             endPass();
-            tracePixel(drawn, t, base);
+            PB.TracePixel(cmd, drawn, t, base);
         }
         // Open a pass if there is none, or re-open on a different surface.
         if (!inPass || openSurface != pd.surfaceBase)
@@ -3787,114 +3612,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
     summarise(ab, "per-draw viewport census");
     summarise(abUntile, "EDRAM tiling collapsed");
-    // Checkpoint images, each labelled with how many draws had run.
-    const std::string& checkpointDirStr = lucent::config::text("DRAW_DIR");
-    const char* checkpointDir = checkpointDirStr.empty() ? nullptr
-                                                         : checkpointDirStr.c_str();
-    const std::filesystem::path outDir = checkpointDir
-        ? std::filesystem::path(checkpointDir)
-        : std::filesystem::path("scratch/screenshots");
-    std::vector<uint8_t> cp(rbBytes);
-    for (size_t i = 0; i < checkpoints.size(); ++i)
-    {
-        void* p = nullptr;
-        if (vkMapMemory(device, checkpointMem[i], 0, rbBytes, 0, &p) != VK_SUCCESS)
-            continue;
-        std::memcpy(cp.data(), p, rbBytes);
-        vkUnmapMemory(device, checkpointMem[i]);
-        uint64_t cpLit = 0, cpNonBlack = 0;
-        for (uint32_t k = 0; k < W * H; ++k)
-        {
-            const uint8_t* px = &cp[size_t(k) * 4];
-            if (!(px[0] == 13 && px[1] == 13 && px[2] == 20))
-                ++cpLit;
-            if (px[0] || px[1] || px[2])
-                ++cpNonBlack;
-        }
-        const std::string name = std::format("frame_after{:04}.ppm", checkpoints[i].draws);
-        WritePpm(outDir / name, cp.data(), W, H);
-        lucent::info("draw", "  checkpoint after {} draws on surface {:#x}:"
-            " {} px != clear, {} px non-black -> {}", checkpoints[i].draws,
-            checkpoints[i].surface, cpLit, cpNonBlack, name);
-    }
-    // The pixel trace. Printed as CHANGES, because 650 identical rows hide the
-    // handful that matter -- but with the denominator and the final value, so
-    // "nothing changed it" cannot be confused with "nothing was traced".
-    if (traceX >= 0)
-    {
-        std::vector<uint8_t> raw(16ull * (pixelSamples.size() + 1), 0);
-        void* p = nullptr;
-        if (!pixelSamples.empty() &&
-            vkMapMemory(device, pixelMem, 0, raw.size(), 0, &p) == VK_SUCCESS)
-        {
-            std::memcpy(raw.data(), p, raw.size());
-            vkUnmapMemory(device, pixelMem);
-        }
-        auto decode = [&](size_t i) {
-            std::array<float, 4> v{0, 0, 0, 0};
-            const uint8_t* b = raw.data() + i * 16;
-            if (pixelSamples[i].format == VK_FORMAT_R8G8B8A8_UNORM)
-                for (int k = 0; k < 4; ++k) v[k] = float(b[k]) / 255.0f;
-            else  // R16G16B16A16_SFLOAT, this title's every surface
-                for (int k = 0; k < 4; ++k)
-                {
-                    uint16_t h; std::memcpy(&h, b + k * 2, 2);
-                    v[k] = HalfToFloat(h);
-                }
-            return v;
-        };
-        lucent::Line tl;
-        tl.add("pixel trace ({},{}): {} sample(s), one after every draw. Rows are"
-               " the draws that CHANGED it:", traceX, traceY, pixelSamples.size());
-        uint32_t changes = 0;
-        std::array<float, 4> prev{-1, -1, -1, -1};
-        for (size_t i = 0; i < pixelSamples.size(); ++i)
-        {
-            const std::array<float, 4> v = decode(i);
-            if (i != 0 && v == prev)
-                continue;
-            prev = v;
-            ++changes;
-            const uint32_t n = pixelSamples[i].draws;
-            // The draw that produced this value is the one issued just before the
-            // sample, i.e. prepared[n-1]; naming prepared[n] would blame the next.
-            const PreparedDraw* by = (n >= 1 && n <= prepared.size())
-                                   ? &prepared[n - 1] : nullptr;
-            tl.add("\n  after {} draws (surface {:#x}) = ({}, {}, {}, {}){}",
-                   n, pixelSamples[i].surface, v[0], v[1], v[2], v[3],
-                   by ? std::format(" <- draw {} ps {:#x}", by->diagIndex, by->psHash)
-                      : std::string(" <- (before any draw)"));
-        }
-        if (changes <= 1)
-            tl.add("\n  NOTHING after the first sample changed it. That is a real"
-                   " negative only if the trace ran: {} samples were taken.",
-                   pixelSamples.size());
-        tl.flush(lucent::Level::Info, "draw");
-    }
-    if (pixelBuf != VK_NULL_HANDLE)
-    {
-        vkDestroyBuffer(device, pixelBuf, nullptr);
-        vkFreeMemory(device, pixelMem, nullptr);
-    }
-    // NO SILENT TRUNCATION. A capped census that does not say it was capped reads
-    // as full coverage of the frame.
-    if (checkpointsSkipped != 0)
-        lucent::warn("draw", "GEARS_DRAW_FRAME_STEP: {} further checkpoints were"
-            " DROPPED at the {}-checkpoint cap -- the images above stop partway"
-            " through the frame, they do not cover it", checkpointsSkipped,
-            kMaxCheckpoints);
+    PB.Report(prepared);
 
     // --- teardown --------------------------------------------------------
-    if (checkpointStage != VK_NULL_HANDLE)
-    {
-        vkDestroyImage(device, checkpointStage, nullptr);
-        vkFreeMemory(device, checkpointStageMem, nullptr);
-    }
-    for (size_t i = 0; i < checkpoints.size(); ++i)
-    {
-        vkDestroyBuffer(device, checkpoints[i].buffer, nullptr);
-        vkFreeMemory(device, checkpointMem[i], nullptr);
-    }
+    PB.Release();
     // Only this frame's own transients are destroyed here. The render target,
     // passes, layouts, PC.pipelines, shader modules, textures and samplers belong
     // to RendererPersistent and are released by ReleasePersistent.
