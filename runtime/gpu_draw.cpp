@@ -4640,7 +4640,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // can be attributed to individual draws instead of guessed at.
     const long stepEvery = lucent::config::number("DRAW_FRAME_STEP", 0);
     const long stepFrom = lucent::config::number("DRAW_FRAME_STEP_FROM", 0);
-    std::vector<std::pair<uint32_t, VkBuffer>> checkpoints; // draws-so-far -> buffer
+    // draws-so-far -> (buffer, EDRAM surface base). THE SURFACE IS NOT OPTIONAL:
+    // a checkpoint dumps whichever surface is bound at that moment, and a frame
+    // switches between several. Without the base in the line, a checkpoint that
+    // goes from 900k non-black pixels to zero reads as "something wiped the
+    // frame" when it is only the render target changing to a small bloom buffer
+    // -- which is exactly how it was misread once.
+    struct Checkpoint { uint32_t draws; VkBuffer buffer; uint32_t surface; };
+    std::vector<Checkpoint> checkpoints;
     std::vector<VkDeviceMemory> checkpointMem;
 
     // A surface's colour image leaves a render pass in TRANSFER_SRC_OPTIMAL, so
@@ -4954,7 +4961,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // frame with nothing to report. An HDR surface's bytes are indeed not pixels --
     // so convert them, the same way the presented frame already is.
     uint32_t checkpointsSkipped = 0;
-    auto checkpointHere = [&](uint32_t drawsSoFar, const SurfaceTarget* t) {
+    auto checkpointHere = [&](uint32_t drawsSoFar, const SurfaceTarget* t,
+                              uint32_t surfaceBase) {
         if (!t || !t->begunThisFrame)
             return;
         if (checkpoints.size() >= kMaxCheckpoints)
@@ -5000,7 +5008,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         rg.imageExtent = {W, H, 1};
         vkCmdCopyImageToBuffer(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             b, 1, &rg);
-        checkpoints.emplace_back(drawsSoFar, b);
+        checkpoints.push_back(Checkpoint{drawsSoFar, b, surfaceBase});
         checkpointMem.push_back(m);
     };
 
@@ -5190,8 +5198,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // has never written an image or logged a line -- it looked exactly like
             // a frame with nothing to check.
             SurfaceTarget* const checkpointTarget = openTarget;
+            const uint32_t checkpointBase = openSurface;
             endPass();
-            checkpointHere(drawn, checkpointTarget);
+            checkpointHere(drawn, checkpointTarget, checkpointBase);
         }
         // Open a pass if there is none, or re-open on a different surface.
         if (!inPass || openSurface != pd.surfaceBase)
@@ -6197,10 +6206,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (px[0] || px[1] || px[2])
                 ++cpNonBlack;
         }
-        const std::string name = std::format("frame_after{:04}.ppm", checkpoints[i].first);
+        const std::string name = std::format("frame_after{:04}.ppm", checkpoints[i].draws);
         WritePpm(outDir / name, cp.data(), W, H);
-        lucent::info("draw", "  checkpoint after {} draws: {} px != clear, {} px non-black"
-            " -> {}", checkpoints[i].first, cpLit, cpNonBlack, name);
+        lucent::info("draw", "  checkpoint after {} draws on surface {:#x}:"
+            " {} px != clear, {} px non-black -> {}", checkpoints[i].draws,
+            checkpoints[i].surface, cpLit, cpNonBlack, name);
     }
     // NO SILENT TRUNCATION. A capped census that does not say it was capped reads
     // as full coverage of the frame.
@@ -6218,7 +6228,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     }
     for (size_t i = 0; i < checkpoints.size(); ++i)
     {
-        vkDestroyBuffer(device, checkpoints[i].second, nullptr);
+        vkDestroyBuffer(device, checkpoints[i].buffer, nullptr);
         vkFreeMemory(device, checkpointMem[i], nullptr);
     }
     // Only this frame's own transients are destroyed here. The render target,
