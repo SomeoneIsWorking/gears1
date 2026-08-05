@@ -1131,6 +1131,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // ones were the runs with the census already removed. See runtime/frame_ab.h.
     static AbTest ab(lucent::config::flag("DRAW_AB_CENSUS"));
     ab.BeginFrame();
+    // GEARS_DRAW_AB_UNTILE=1 does the same for the EDRAM-tiling collapse: the
+    // arm with tiling collapsed and the arm without it alternate frame by frame
+    // inside one run. The collapse removes a QUARTER of a gameplay frame's draws,
+    // and the honest thing to say about a saving that large is still a measured
+    // number rather than two replay timings -- one of which came out slower.
+    static AbTest abUntile(lucent::config::flag("DRAW_AB_UNTILE"));
+    abUntile.BeginFrame();
+    if (ab.Enabled() && abUntile.Enabled())
+        lucent::error("draw", "GEARS_DRAW_AB_CENSUS and GEARS_DRAW_AB_UNTILE are"
+            " both on. They alternate independently and both record the same frame"
+            " cost, so neither result would mean anything. Enable ONE.");
+    // Off by default; the A/B arm overrides the plain knob when it is running.
+    const bool untileThisFrame = abUntile.Enabled()
+        ? abUntile.Arm() : lucent::config::flag("DRAW_UNTILE");
     double msTranslate = 0, msPipeline = 0, msTexture = 0, msSsboUpload = 0;
     auto accumulate = [](double& into, Clock::time_point from) {
         into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
@@ -4139,7 +4153,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // blend, depth control) on every one of them. Anything else is left alone
     // and reported, because a "collapse" that silently dropped draws the guest
     // meant differently would look like a performance win and be a corruption.
-    if (lucent::config::flag("DRAW_UNTILE"))
+    if (untileThisFrame)
     {
         // A tile group is a maximal run of consecutive draws on one surface
         // sharing a window offset. Resolves delimit them.
@@ -6094,37 +6108,59 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // The draw loop rather than the whole frame, and NOT on report frames: a
     // report frame reads the image back and writes a PPM, which costs more than
     // anything being compared and would land on whichever arm it fell on.
-    if (ab.Enabled() && !in.report)
+    //
+    // AND NOT THE WARM-UP EITHER, which frame_ab.h says are "simply not recorded"
+    // -- but that is the CALLER's job and this call site was not doing it. The
+    // first render of a scene pays for every shader translation and every
+    // pipeline in it, hundreds of milliseconds that appear in no later frame, and
+    // including them inflates the arms' variance enough to bury a real effect:
+    // an 81-frame replay reported the collapsed arm 15 ms faster and NOT RESOLVED
+    // against a 30 ms noise floor. Skipping a fixed count cannot bias the result
+    // because the arms keep alternating through it, so each loses the same number.
+    static uint64_t renderedFrames = 0;
+    ++renderedFrames;
+    constexpr uint64_t kAbWarmupFrames = 12;
+    const bool recordable = !in.report && renderedFrames > kAbWarmupFrames;
+    if (abUntile.Enabled() && recordable)
+        abUntile.RecordFrame(msDrawLoop);
+    if (ab.Enabled() && recordable)
         ab.RecordFrame(msDrawLoop);
-    if (ab.Enabled() && in.report)
-    {
-        AbSummary s;
-        if (!ab.Summarise(s))
+    // One reporter for whichever A/B is running. Both arms are summarised the
+    // same way, including the case it must not get wrong: a difference smaller
+    // than the run's own resolution is noise and is printed as such.
+    auto summarise = [&](AbTest& t, const char* what) {
+        if (!t.Enabled() || !in.report)
+            return;
+        AbSummary sm;
+        if (!t.Summarise(sm))
         {
-            lucent::info("draw", "A/B: nothing recorded yet -- every frame so far"
-                " was a report frame, which is excluded");
+            lucent::info("draw", "A/B ({}): nothing recorded yet -- every frame so"
+                " far was a report frame, which is excluded", what);
+            return;
         }
-        else if (s.resolved)
+        if (sm.resolved)
         {
-            lucent::info("draw", "A/B: the experimental arm is {:+.2f} ms"
+            lucent::info("draw", "A/B ({}): the experimental arm is {:+.2f} ms"
                 " ({:.2f} vs {:.2f} ms over {} and {} frames), and that is"
-                " larger than the {:.2f} ms this run can resolve",
-                s.differenceMs, s.armMs, s.baselineMs, s.armFrames,
-                s.baselineFrames, s.noiseMs);
+                " larger than the {:.2f} ms this run can resolve", what,
+                sm.differenceMs, sm.armMs, sm.baselineMs, sm.armFrames,
+                sm.baselineFrames, sm.noiseMs);
         }
         else
         {
             // THE NEGATIVE, WITH ITS DENOMINATOR. "No difference" from a run that
             // could not have seen one is not a measurement, so the resolution is
             // printed next to the difference every time.
-            lucent::info("draw", "A/B: NOT RESOLVED. The arms differ by {:+.2f} ms"
-                " ({:.2f} vs {:.2f} over {} and {} frames) but this run can only"
-                " resolve {:.2f} ms, so that number is noise -- do not read it as"
-                " a small effect in either direction",
-                s.differenceMs, s.armMs, s.baselineMs, s.armFrames,
-                s.baselineFrames, s.noiseMs);
+            lucent::info("draw", "A/B ({}): NOT RESOLVED. The arms differ by"
+                " {:+.2f} ms ({:.2f} vs {:.2f} over {} and {} frames) but this run"
+                " can only resolve {:.2f} ms, so that number is noise -- do not"
+                " read it as a small effect in either direction", what,
+                sm.differenceMs, sm.armMs, sm.baselineMs, sm.armFrames,
+                sm.baselineFrames, sm.noiseMs);
         }
-    }
+    };
+    summarise(ab, "per-draw viewport census");
+    summarise(abUntile, "EDRAM tiling collapsed");
     // Checkpoint images, each labelled with how many draws had run.
     const std::string& checkpointDirStr = lucent::config::text("DRAW_DIR");
     const char* checkpointDir = checkpointDirStr.empty() ? nullptr
