@@ -8,8 +8,8 @@ which so the next session does not have to guess.
 |---|---|---|
 | Startup movie YUV→RGB composite | `0xea0007942db096ad` | **DONE** — `runtime/shaders/movie_yuv.frag`, bit-exact against the translated pass (2,764,800 of 2,764,800 channel samples identical on `scratch/frames/boot150.gfr`) |
 | Full-screen scene composite (gamma + exposure) | `0x501ac5d8692bf7b6` | **DONE** — `runtime/shaders/scene_gamma.frag`, bit-exact on `scratch/frames/act1.gfr` (2,764,800 of 2,764,800) |
-| Height fog | unknown | declared, not written |
-| Base pass | unknown | declared, not written |
+| Height fog | **none — the pass is not in any frame we have** | withdrawn, see below |
+| Base pass | many (one per material) | declared, not written. `tools/pass_structure.py --draws BASEPASS` now names the draws |
 
 Run the gate with `tools/verify_native_pass.sh`. It renders the capture through
 both paths and refuses to report a match it cannot back: it deletes the screenshot
@@ -85,13 +85,12 @@ pass-level structure, not a blocker.
    (`scratch/shaders/bound_out/<hash>.ucode.txt`), read the *translated* module's
    interface with `spirv-dis` for the descriptor bindings and block layouts,
    write the GLSL, `tools/gen_native_spv.sh`, `tools/verify_native_pass.sh`.
-3. **Recover the pass structure**, not the draws: which draw ranges belong to which
-   UE3 pass. `SceneRendering.cpp` gives the order; the per-draw diag table already
-   groups draws by surface and shader pair, so the two can be aligned.
-4. **Height fog**, a single full-screen pass whose maths fits on a page
-   (`HeightFogCommon.usf`), reading scene colour and depth the renderer already
-   produces.
-5. **Then the base pass**, which is where the frame's content actually is.
+3. **Recover the pass structure**, not the draws. **DONE** —
+   `tools/pass_structure.py`, and `GEARS_DRAW_DIAG` now emits a row per resolve so
+   the boundaries are visible at all. See "The frame, recovered" below.
+4. ~~**Height fog**~~ — **WITHDRAWN, and the withdrawal is the finding.** See below.
+5. **The base pass**, which is where the frame's content actually is. This is now
+   the next step, and step 3 says exactly which draws it is.
 
 ## What the first pass cost, and what it teaches
 
@@ -177,3 +176,79 @@ here yet addresses the user's actual complaint that the game's rendering is wron
 What it IS: a seam that is measured, a source tree that is located, a gate that has
 been shown to fail as well as pass, and one pass proved bit-exact — so the next
 pass is the same procedure again rather than a fresh argument about method.
+
+
+## The frame, recovered
+
+`tools/pass_structure.py` attributes every row of a `GEARS_DRAW_DIAG` table to a
+UE3 render phase. Run on the Act 1 courtyard capture (726 draws + 18 resolves):
+
+```
+CLEAR         draw 0
+PREPASS       draws 1-167     x167   (1 pixel shader: the pass-through one)
+OCCLUSION     draws 168-257   x90
+CLEAR         draw 258
+BASEPASS      draws 259-432   x174   (44 distinct pixel shaders)   <-- EDRAM tile 1
+RESOLVE       draws 433-434          0x400->0xbdf0000 1280x512@0,0
+                                     depth 0x0->0xba50000 1280x512@0,0
+BASEPASS      draws 435-608   x174   (the same 44 shaders again)   <-- EDRAM tile 2
+RESOLVE       draws 609-610          0x400->0xbdf0000 1280x208@0,512
+                                     depth 0x0->0xba50000 1280x208@0,512
+...           the post chain, then FULLSCREEN 9610bf8038af9aaf and 629226076307234e
+```
+
+That is UE3-on-360 exactly as `SceneRendering.cpp` describes it: `RenderPrePass`
+(depth only, colour writes off), then `BeginRenderingSceneColor` +
+`RenderBasePass`, replayed once per predicated EDRAM tile, each tile resolved to
+the scene-colour and scene-depth textures at its own destination offset. The two
+base-pass blocks are the SAME 174 draws with the SAME 44 pixel shaders in the same
+order — which is what predicated tiling means, and is a self-check the tool
+reports rather than an assumption it makes.
+
+**What it will not tell you**, printed with every run: UE3 emits lights
+(`RenderDPGLights`), decals (`RenderDecals`), distortion and translucency
+(`RenderTranslucency`) with identical register state — colour writes on, blending
+on, depth writes off. They are one `BLENDED` band here. Splitting them needs
+evidence the register file does not carry: the bound texture set per draw, or the
+guest call site (still unidentified, catalog #58).
+
+Verified on four captures — `act1_v2` (157 draws), `courtyard` (726), `bright`
+(826), `play_v2` (849) — with **zero rows unattributed** in any of them, and a
+`--selftest` that includes a case the classifier must REJECT, because a rule set
+that only ever says yes is not a rule set.
+
+## Height fog: withdrawn, with the measurement that withdrew it
+
+The roster declared a height-fog pass and this file put it before the base pass
+because "its maths fits on a page". **There is no such pass in this title's
+frames.** UE3's `FSceneRenderer::RenderFog` (`FogRendering.cpp:614`) has an
+unmistakable signature: a 2-primitive full-screen triangle list, depth test on,
+`BO_Add / BF_One / BF_SourceAlpha` blending, and — the distinctive part —
+`RHISetColorWriteMask(CW_RED|CW_GREEN|CW_BLUE)`, alpha writes off. It is the only
+place in UE3 that sets that mask.
+
+Across all four captures — 2,558 draws — exactly **four** draws have colour mask
+RGB, one per capture, and every one of them is the same pixel shader
+`0x629226076307234e`, whose microcode is a depth fetch, a reprojection through a
+4x4 matrix, a perspective divide, a clamped screen-space velocity and a sampling
+LOOP: that is `RenderVelocities`/motion blur, not fog. **Zero draws match
+`RenderFog`.**
+
+Why, from the sources: `BasePassCommon.usf` gates vertex fog on
+`NEEDS_BASEPASS_FOGGING`, which is
+`MATERIALBLENDING_TRANSLUCENT || ADDITIVE || MODULATE || MODULATEANDADD` — so
+opaque geometry never carries it, and the full-screen `RenderFog` pass is the only
+other producer. If these Act 1 interiors have no fog actor, neither path emits
+anything, and that is consistent with everything observed.
+
+**So the entry is withdrawn rather than written.** Writing a fog shader now would
+mean picking a hash it does not have, against a draw that does not exist, with
+nothing to A/B it against — which is precisely the RE sin this project tracks
+(`docs/re-frontier.md`: faking a step's output before its RE is done). If a capture
+ever contains a draw with colour mask RGB and `BF_SourceAlpha` blending,
+`tools/pass_structure.py` will surface it and the entry comes back.
+
+The general lesson is worth more than the fog: **the order of work was picked from
+UE3's source and not from the title's frames, and it was wrong.** Step 3 should
+always have come first, because it is what says which passes this game actually
+runs.

@@ -11,10 +11,11 @@ namespace gears::native
 namespace
 {
 
-// THE ROSTER. One entry per UE3 pass this renderer intends to own, in the order
-// docs/native-renderer.md gives: fog first because it is a single full-screen pass
-// whose maths fits on a page and can be compared pixel for pixel, then the base
-// pass, which is where the frame's content is.
+// THE ROSTER. One entry per UE3 pass this renderer intends to own. The order it
+// used to give -- fog, then the base pass -- came from UE3's source rather than
+// from this title's frames, and the fog pass turned out not to exist here at all
+// (see the withdrawal below). Which draws are which UE3 pass is now a measurement:
+// tools/pass_structure.py over a GEARS_DRAW_DIAG table.
 //
 // The hashes are the title's own, taken from the shader census on a captured
 // gameplay frame (`GEARS_DRAW_FRAME_LIST=1` reports the bound pair per draw).
@@ -42,8 +43,13 @@ const std::vector<Pass>& RosterStorage()
         Pass{0x501ac5d8692bf7b6ull, "full-screen scene composite",
              "the title's ps_501ac5d8 microcode; UE3 Engine/Shaders/PostProcessCommon.usf",
              SceneGammaSpirv()},
-        Pass{0ull, "height fog",
-             "Engine/Shaders/HeightFogCommon.usf, Src/Engine/Src/FogRendering.cpp", {}},
+        // WITHDRAWN: height fog. UE3's RenderFog (FogRendering.cpp:614) is the
+        // only pass in the engine that draws with colour mask RGB and
+        // BF_One/BF_SourceAlpha blending, and NO draw in any capture this
+        // project has matches it -- 2,558 draws across four captures, four
+        // candidates by colour mask, all four the motion-blur shader
+        // 0x629226076307234e with blending off. Declaring it kept a pass on
+        // this roster that the title does not run. Claim C004, catalog #71.
         Pass{0ull, "base pass",
              "Engine/Shaders/BasePassPixelShader.usf, Src/Engine/Src/BasePassRendering.cpp", {}},
     };
