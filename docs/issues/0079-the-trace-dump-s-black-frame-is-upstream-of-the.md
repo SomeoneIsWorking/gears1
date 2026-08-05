@@ -132,3 +132,60 @@ That is the one remaining question, it is the same question for both traces, and
 it is no longer about the presenter, the gamma ramp, the swap, the index buffer,
 the resolve, or the dump: it is about what the colour attachment holds when the
 draws have run.
+
+### Note (2026-08-06)
+## The live positive control, and the readback hypothesis REFUTED (2026-08-06)
+
+With the disc image available, the arm that was missing all along.
+
+### Live, headless, `--readback_resolve=full`, the probe sampling every 200 swaps
+
+    front buffer 1F606000: 2,729,246 of 3,686,400 bytes non-zero (74.0%), mean 25.2
+    resolve destinations: EVERY ONE non-zero --
+      137A0000:3,746,188  13ED8000:1,963,277  13CA0000:1,526,200  14158000:796,776
+      1312F000:2,764,592  134C7000:1,119,237  1F557000:55,187     1F606000:2,759,966
+    whole buffer: 91.6 MB non-zero
+    draws: 1280 recorded, 0 dropped
+
+So the instrument reports a full front buffer and full colour destinations when
+they are full. Steady across four samples 200 swaps apart.
+
+### The same title, one of ITS OWN traces, played back
+
+Captured at 150 s in that run, 42 MB, complete:
+
+    front buffer 1F606000: 747 of 3,686,400 bytes non-zero (0.0%), mean 0.03
+    DEPTH   13ED8000:1,962,383  14158000:797,064  134C7000:1,119,197 -- correct,
+            and within 0.1% of the LIVE numbers for the same destinations
+    COLOUR  137A0000:774  13CA0000:570  12D97000:0  1312F000:0  1F606000:747
+    whole buffer: 39.3 MB non-zero
+    draws: 1286 recorded, 0 dropped by either silent success path
+
+Playback reproduces the frame's GEOMETRY to within a rounding error -- the depth
+destinations match the live run's byte counts -- and produces no colour at all.
+
+### REFUTED: `readback_resolve=full` at capture time does not fix it
+
+That was this entry's stated next step, and it is wrong. The trace above was
+captured under `--readback_resolve=full` and dumps exactly as black as one
+captured without it. So the stale CPU-side front-buffer snapshot is REAL (it is
+still 1.22% non-zero in the older trace) but it is NOT the cause of the black
+dump -- the colour never gets into the shared-memory buffer in the first place,
+which is upstream of anything a snapshot could fix.
+
+### Ruled out: the captured frame being a black one
+
+Checked rather than assumed, because it would make all of the above vacuous. The
+live run's own frames either side of the capture are a lit scene: 120 s mean
+R23.0 G23.5 B17.0 at 100% non-black, 180 s mean R25.2 G25.5 B18.6 at 99.8%.
+
+### Where that leaves it
+
+The question is now sharp and has both arms measured: **why do Xenia's colour
+resolves write nothing during trace playback when the same code writes megabytes
+live, on the same title, from a trace of a real lit frame whose geometry replays
+correctly?** Depth through the same resolve path is right; the draws are all
+recorded; the dumps all find their render targets; the copies all have shaders.
+
+The trace carries 68.1 MiB of MemoryRead, spread across every 16 MiB block, so
+it is not obviously missing guest memory wholesale.
