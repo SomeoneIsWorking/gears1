@@ -5,7 +5,7 @@ status: open
 symptom: the audio pump stops at exactly 11250 callback invocations and VdSwap plateaus at 1860-1920 frames, while the process stays alive and the renderer keeps drawing; other runs sail past the same point
 tags: hang,nondeterministic,guest,audio,blocker
 created: 2026-07-28
-updated: 2026-07-30
+updated: 2026-08-05
 ---
 
 > ## STATE AS OF THE LATEST NOTE — READ THIS FIRST
@@ -1227,3 +1227,21 @@ HOW TO TEST IT: #45 is deterministic and #44 is intermittent, so fix or suppress
 #45 first and see whether #44 survives. If it does not, they were one bug. Do NOT
 add validation to the consumer in the meantime -- that would mask the very signal
 this test depends on.
+
+### Note (2026-08-05)
+## Note (2026-08-05) — MEASURED AGAIN, with a harness that could finally see the symptom
+
+**First: the tool was blind.** `tools/repro_rate.sh` classified by exit code only. This issue's symptom is the guest ceasing to progress while the process stays ALIVE, so `timeout` returns 124 and the harness counted it CLEAN. Every rate it ever produced for this issue was measuring something else. It now has three outcomes and reads the stall detector's own verdict, with a `--selftest` that proves the STALLED path fires (both of wait_probe's two wordings) and fails when broken.
+
+**The measurement, on the fixed harness:** 6 runs, 170 s cap, 3 at a time, the standard menu-walk input script.
+
+    1 crashed, 0 stalled, 5 clean, 0 not observed
+    0 stalled across 6 run(s) that armed the stall detector
+
+VdSwap totals: 4380, 1800 (the crash), 4380, 3060, 3000, 3060. Zero KeBugCheck lines in any of the six.
+
+**So the 'roughly two in three' figure at the top of this issue no longer describes the runs I can produce.** 0 of 6 stalled where the historical rate predicts about 4. That is not proof it is gone — 6 runs is a small sample, and at a true 1-in-8 (the later, more pessimistic estimate in this issue) seeing zero is unremarkable — but it IS now a real negative rather than a blind one, because the classifier was shown to produce a positive on a synthetic stall before this number was believed.
+
+**The one failure was #50, not this issue.** Run 2 aborted at 1800 frames with the fault reporter naming it: `a host pointer outside the guest mapping (0x3e8000fbd00)`, `context: #50`. So the crash this harness was originally built for is still live at roughly 1 in 6 here.
+
+**What to do with this:** do not re-derive the two-in-three rate from the header — it predates the KeBugCheck implementation and the #45 fix. Re-measure with the fixed harness before sizing any work on this issue, and use more than 6 runs if the answer matters.
