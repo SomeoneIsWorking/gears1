@@ -110,3 +110,49 @@ post-process setting, not at the renderer.
   exactly the checkpoints that say whether a pass's output survived to its
   resolve. It now falls back to the last opened surface, and when it still
   cannot take one it says so instead of printing nothing.
+
+### Note (2026-08-05)
+## The fatal constants were in GUEST MEMORY, so the renderer is out of it
+
+#73's "Next" asked where the guest computes c7 and c8. A capture stores guest
+memory (not the ring), so part of that is answerable offline, and
+`tools/find_const_block.py` answers it: search the capture's bytes for the
+constants as big-endian dwords.
+
+Run against BOTH classes, which is the only reason the result means anything:
+
+    play_v2.gfr    (black)    c7=(0,0,0,0.5) || c8=(NaN,NaN,NaN,0)   FOUND 7x
+                              the working pattern                     found 4x
+    courtyard.gfr  (renders)  the play_v2 pattern                     ABSENT
+                              the working pattern                     found 13x
+    act1_v2.gfr    (renders)  the play_v2 pattern                     ABSENT
+                              the working pattern                     found 16x
+
+So the words `ffc00000 ffc00000 ffc00000` were sitting in the guest's own
+memory in the frame that renders black, and are nowhere in either frame that
+renders. **The renderer's constant packing did not manufacture them** -- it
+read what was there. That closes the half of #73 that the renderer could be
+blamed for, and it cost no live run.
+
+The seven copies are at guest 0x1d1b0, 0x73aa0, 0xe5830, 0x1576a0, 0x1c9530,
+0x23b4a0, 0x2ad430 -- a regular ~0x71e00 stride through low physical memory,
+which is the shape of a per-frame buffer reused round-robin. The working
+captures' copies sit in the same low region at their own regular stride.
+
+## What is NOT established, so nobody re-derives it as fact
+
+Whether that region is the PM4 ring (values inline in a SET_CONSTANT payload)
+or a CPU-side constant array that LOAD_ALU_CONSTANT pulls from. I scanned
+backwards from a hit for type-3 packet headers and it produced 37 overlapping
+"packets" in 0x800 bytes -- that is what scanning for a bit pattern at
+arbitrary alignment produces, not a parse. Discriminating needs a real walk
+from the ring base, which the capture does not carry.
+
+## Next
+
+The seven guest addresses are the actionable output: watch one on a live run
+and catch the store. `GEARS_WATCH_FREE` is the existing shape for "report the
+moment this address is touched, with the caller". Two cautions: the addresses
+come from one capture and a fresh run may place the buffer elsewhere, so
+re-derive them from that run's own capture rather than trusting these; and
+#44 means roughly one live run in three does not reach gameplay.
