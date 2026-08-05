@@ -48,6 +48,7 @@
 #include "gpu_draw_textures.h"
 #include "gpu_draw_targets.h"
 #include "gpu_draw_arena.h"
+#include "gpu_draw_census.h"
 #include "gpu_draw_descriptors.h"
 #include "gpu_draw_pipelines.h"
 #include "gpu_draw_probe.h"
@@ -764,40 +765,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
     using draw::PreparedDraw;
     std::vector<PreparedDraw> prepared;
-    uint32_t issued = 0, skipped = 0;
-
-    // Per-EDRAM-surface census. A draw's RB_COLOR_INFO (0x2001) names the EDRAM
-    // tile base it renders into; distinct bases are distinct surfaces (scene
-    // colour, light attenuation, shadow depth, the post chain...). UE3-on-360
-    // renders each surface in predicated TILES, so several draws share a base.
-    // The whole-frame backend currently renders every draw into ONE host target
-    // regardless of this base, which is why a deferred in-game frame -- many
-    // surfaces -- comes out black while a one-surface menu does not. This tally
-    // is the ground truth for the render-target cache (re-frontier gameplay-scene).
-    // The mode breakdown is PER SURFACE, not just per frame: "353 draws target
-    // the HDR world surface" and "how many of those can write colour at all"
-    // are different questions, and only the second one explains an empty
-    // surface. A frame-wide mode tally cannot answer it.
-    struct SurfaceStat
-    {
-        uint32_t draws = 0; uint32_t format = 0; uint32_t mode = 0;
-        uint32_t colorDepth = 0, depthOnly = 0, otherMode = 0;
-    };
-    std::map<uint32_t, SurfaceStat> surfaces; // RB_COLOR_INFO color_base -> stat
-    // RB_MODECONTROL.edram_mode (0x2208, bits 0..2) per draw. This is NOT a
-    // detail: on Xenos a draw with edram_mode == kCopy (6) is not geometry at
-    // all, it is a RESOLVE -- the primitive selects the region of the EDRAM
-    // surface to copy out to main memory (Xenia: VulkanCommandProcessor::
-    // IssueDraw dispatches straight to IssueCopy on that mode). Rendering one
-    // as if it were geometry paints the resolve rectangle's shader output into
-    // the colour target. Counted here before anything acts on it.
-    //   0 kNoOperation  4 kColorDepth  5 kDepthOnly  6 kCopy
-    std::map<uint32_t, uint32_t> edramModes;
-    // Draws issued with NO fragment stage because their edram_mode is not
-    // kColorDepth. Counted, because "the frame got darker" and "36% of the
-    // frame's draws stopped writing colour they should never have written" are
-    // the same observation and only this number tells them apart.
-    uint32_t drawsNoPixelShader = 0;
+    uint32_t issued = 0;
+    // What the frame CONTAINED -- the per-surface, per-mode, reach, viewport and
+    // skip tallies -- is in gpu_draw_census.{h,cpp}, with the report lines that
+    // consume it.
+    draw::FrameCensus CN;
     // Every resolve of the frame, decoded per the Xenia contract: which colour
     // surface it reads (RB_COPY_CONTROL.copy_src_select indexes RB_COLOR_INFO
     // 0x2001/0x2003/0x2004/0x2005; >= 4 means depth) and where it writes
@@ -842,16 +814,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         uint32_t destEndian = 0, destSwap = 0, destNumber = 0;
     };
     std::vector<ResolveEvent> resolves;
-    std::set<uint32_t> depthBases;              // distinct RB_DEPTH_INFO.depth_base
-    std::map<std::pair<uint32_t, uint32_t>, uint64_t> surfaceDepthPairs;
-    uint32_t issuedResolves = 0, skippedResolves = 0;
-    std::map<uint64_t, uint64_t> skipReasons; // reason code -> count (for a summary)
-    // Geometry reach: how many draws fetch vertices from outside the SSBO
-    // mirror. Such a fetch reads zero, so every primitive collapses -- and the
-    // result looks exactly like "shaded black", which is why it is counted.
-    uint64_t vfDrawsPastMirror = 0, vfDrawsInMirror = 0;
-    uint32_t vfHighestByte = 0;
-    std::map<std::string, uint64_t> viewportCensus; // guest viewport/scissor -> draws
     // Upload is on by default; GEARS_DRAW_NOTEX=1 is the control arm that
     // restores the stub-only frame for an A/B comparison.
     const bool texUploadEnabled = !lucent::config::flag("DRAW_NOTEX");
@@ -1114,7 +1076,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         const double stateBegin = sinceStartMs();
         const uint32_t* R = d.registers();
         if (!R)
-        { ++skipped; ++skipReasons[1]; continue; }
+        { CN.Skip(1); continue; }
 
         // Which EDRAM surface this draw targets (RB_COLOR_INFO: color_base is
         // the low 12 bits in tiles, color_format bits 16..19), and what the
@@ -1122,16 +1084,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // early exit so the census covers every draw, resolves included.
         const uint32_t surfaceBase = R[0x2001] & 0xFFF;
         const uint32_t edramMode = R[0x2208] & 0x7;
-        {
-            SurfaceStat& st = surfaces[surfaceBase];
-            ++st.draws;
-            st.format = (R[0x2001] >> 16) & 0xF;
-            st.mode = edramMode;
-            if (edramMode == 4) ++st.colorDepth;
-            else if (edramMode == 5) ++st.depthOnly;
-            else ++st.otherMode;
-        }
-        ++edramModes[edramMode];
+        CN.NoteDraw(surfaceBase, (R[0x2001] >> 16) & 0xF, edramMode);
         if (edramMode == 6 /*kCopy*/)
         {
             ResolveEvent re;
@@ -1198,12 +1151,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // How many distinct depth surfaces the frame uses. One host depth image
         // is shared by every colour target; this is the number that says when
         // that stops being faithful.
-        depthBases.insert(R[0x2002] & 0xFFF);
+        
         // Which (colour surface, depth base) pairs the frame actually uses, and
         // how many draws each. One shared host depth image is only wrong if a
         // surface's draws span more than one depth base, or two surfaces share
         // one -- this says which, instead of assuming.
-        ++surfaceDepthPairs[{R[0x2001] & 0xFFF, R[0x2002] & 0xFFF}];
+        CN.NoteDepth(R[0x2001] & 0xFFF, R[0x2002] & 0xFFF);
 
         // A resolve is not geometry. It copies an EDRAM surface out to main
         // memory, and the primitive only selects the region; issuing it as a
@@ -1283,11 +1236,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                         pd.resolveSwapRB = false;
                 }
                 prepared.push_back(pd);
-                ++issuedResolves;
+                ++CN.issuedResolves;
             }
             else
             {
-                ++skippedResolves;
+                ++CN.skippedResolves;
                 // The copy cannot be served -- a depth resolve, with no host
                 // depth texture chain yet -- but its CLEAR still has to happen,
                 // at this point in the stream and with the guest's value.
@@ -1325,7 +1278,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             continue;
         }
         if (!d.vsUcode || !d.psUcode)
-        { ++skipped; ++skipReasons[1]; continue; }
+        { CN.Skip(1); continue; }
 
         draw::ShaderXlate *vsX = nullptr, *psX = nullptr;
         VkShaderModule vsMod = VK_NULL_HANDLE, psMod = VK_NULL_HANDLE;
@@ -1342,7 +1295,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (!draw::DeriveShaderModifications(R, d.vsUcode, d.vsUcodeSize,
                     d.vsHash, d.psUcode, d.psUcodeSize, d.psHash, vsModification,
                     psModification))
-            { ++skipped; ++skipReasons[2]; continue; }
+            { CN.Skip(2); continue; }
         }
         // Set before ANY texture binding of this draw is resolved: TextureBinder::SelectView
         // runs while the descriptor sets are built, which is earlier than the
@@ -1383,24 +1336,24 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                               false, draw::ClampMode::kRgba, vsX, vsMod) ||
                 !SC.GetShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification,
                               clampPs, clampMode, psX, psMod))
-            { ++skipped; ++skipReasons[2]; continue; }
+            { CN.Skip(2); continue; }
             if (!PC.GetPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
-            { ++skipped; ++skipReasons[3]; continue; }
+            { CN.Skip(3); continue; }
         }
         // GEARS_DRAW_ONLY_BASE=<hex>: render only draws targeting one EDRAM
         // surface. A DIAGNOSTIC control arm -- it isolates one surface's
         // contribution -- never a fix.
         static const long onlyBase = lucent::config::number("DRAW_ONLY_BASE", -1);
         if (onlyBase >= 0 && surfaceBase != uint32_t(onlyBase))
-        { ++skipped; ++skipReasons[0]; continue; }
+        { CN.Skip(0); continue; }
         // This draw's own host render target, and the render pass its pipeline
         // must be built against.
         SurfaceTarget* target = nullptr;
         if (!RT.GetSurfaceTarget(surfaceBase, target))
-        { ++skipped; ++skipReasons[8]; continue; }
+        { CN.Skip(8); continue; }
         std::pair<VkRenderPass, VkRenderPass>* rp = nullptr;
         if (!RT.GetPasses(target->hostFormat, rp))
-        { ++skipped; ++skipReasons[8]; continue; }
+        { CN.Skip(8); continue; }
         OutputMergerState om;
         om.colorMask = R[0x2104];
         om.blend0 = R[0x2201];
@@ -1429,11 +1382,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             lucent::config::flag("DRAW_DEPTHONLY_PS");
         const bool pixelShaderUsed = edramMode == 4 /*kColorDepth*/ || depthOnlyRunsPs;
         if (!pixelShaderUsed)
-            ++drawsNoPixelShader;
+            ++CN.drawsNoPixelShader;
         VkPipeline pipe = VK_NULL_HANDLE;
         if (!PC.GetPipeline(vsMod, pixelShaderUsed ? psMod : VK_NULL_HANDLE, gsMod,
                          d.primType, om, rp->first, pipeLayout, pipe))
-        { ++skipped; ++skipReasons[3]; continue; }
+        { CN.Skip(3); continue; }
 
         // The five per-draw constant blocks and the cache that keeps consecutive
         // draws from repacking identical bytes live in gpu_draw_uniforms.{h,cpp}.
@@ -1441,7 +1394,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         msState += uniformsBegin - stateBegin;
         const draw::UniformCache::Result ur = UC.Update(R, d, *vsX, *psX);
         if (ur == draw::UniformCache::Result::kFailed)
-        { ++skipped; ++skipReasons[4]; continue; }
+        { CN.Skip(4); continue; }
         VkDescriptorBufferInfo biSys = UC.biSys, biFvs = UC.biFvs;
         VkDescriptorBufferInfo biFps = UC.biFps, biBl = UC.biBl;
         VkDescriptorBufferInfo biFetch = UC.biFetch;
@@ -1455,9 +1408,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         switch (draw::PrepareIndices(AR, in, d, idx))
         {
             case draw::IndexResult::kEmptyQuad:
-                ++skipped; ++skipReasons[7]; continue;
+                CN.Skip(7); continue;
             case draw::IndexResult::kArenaFull:
-                ++skipped; ++skipReasons[5]; continue;
+                CN.Skip(5); continue;
             case draw::IndexResult::kOk: break;
         }
         const VkBuffer ibuf = idx.buffer;
@@ -1480,7 +1433,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkDescriptorSet sets[4] = {};
         if (!DB.Build(R, d, RT.resolveGeneration, *vsX, *psX,
                       vsTexLayout, psTexLayout, UC, sets))
-        { ++skipped; ++skipReasons[6]; continue; }
+        { CN.Skip(6); continue; }
 
         // Building the PreparedDraw and deriving this draw's viewport/scissor.
         // Runs to the end of the body, which has no further `continue`.
@@ -1542,7 +1495,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (in.report || ab.Arm())
             {
                 ScopedMs censusTime(msCensus);
-                ++viewportCensus[std::format("{},{} {}x{} scissor {},{} {}x{}",
+                ++CN.viewportCensus[std::format("{},{} {}x{} scissor {},{} {}x{}",
                     gv.x, gv.y, gv.w, gv.h, gv.scissorX, gv.scissorY,
                     gv.scissorW, gv.scissorH)];
             }
@@ -1612,7 +1565,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 anyBinding = true;
                 const uint64_t begin = uint64_t((d0 >> 2) << 2);
                 const uint64_t end = begin + ((d1 >> 2) & 0xFFFFFF) * 4ull;
-                vfHighestByte = std::max<uint32_t>(vfHighestByte, uint32_t(std::min<uint64_t>(end, 0xFFFFFFFFull)));
+                CN.vfHighestByte = std::max<uint32_t>(CN.vfHighestByte, uint32_t(std::min<uint64_t>(end, 0xFFFFFFFFull)));
                 if (end > in.guestPhysicalMirrorBytes)
                     anyPast = true;
                 // This is the range the GPU will fetch from, so it is also
@@ -1621,7 +1574,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     fetchRanges.emplace_back(begin, end);
             }
             if (anyBinding)
-                (anyPast ? vfDrawsPastMirror : vfDrawsInMirror) += 1;
+                (anyPast ? CN.vfDrawsPastMirror : CN.vfDrawsInMirror) += 1;
             // A pixel shader may carry vertex fetches of its own. They are not
             // part of the geometry-reach census (which is about whether this
             // draw's GEOMETRY resolves), but they are still memory the GPU will
@@ -2545,7 +2498,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             " {} pipeline layouts; {} texture bindings ({} guest textures,"
             " {} from the rendered RT, {} from a stub); {}/{} px non-black"
             " ({:.1f}%), {} px changed from the clear ({:.1f}%)",
-            issued, in.draws.size(), skipped, pairs.size(), SC.modules.size(), PC.pipelines.size(),
+            issued, in.draws.size(), CN.skipped, pairs.size(), SC.modules.size(), PC.pipelines.size(),
             PC.texLayouts.size(), PC.pipeLayouts.size(),
             TB.Binds(), TB.bindsGuest, TB.bindsRt,
             TB.bindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
@@ -2608,26 +2561,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 " geometry shader ({} distinct)", PC.rectDrawsExpanded, PC.rectDraws,
                 PC.geomShaders.size());
         {
-            lucent::Line sl;
-            sl.add("frame EDRAM surfaces: {} distinct RB_COLOR_INFO bases"
-                " (draws@base:fmt colour/depth-only/other):", surfaces.size());
-            for (const auto& [base, st] : surfaces)
-                sl.add(" {}@{:#x}:f{} {}/{}/{}", st.draws, base, st.format,
-                       st.colorDepth, st.depthOnly, st.otherMode);
-            sl.flush(lucent::Level::Info, "draw");
+            CN.ReportSurfaces();
         }
         {
-            lucent::Line ml;
-            ml.add("frame EDRAM modes (RB_MODECONTROL.edram_mode):");
-            for (const auto& [mode, n] : edramModes)
-            {
-                const char* name =
-                    mode == 0 ? "no_op" : mode == 4 ? "color_depth" :
-                    mode == 5 ? "depth_only" : mode == 6 ? "COPY(resolve)" : "?";
-                ml.add(" {}={}", name, n);
-            }
-            ml.add("; {} draws issued with no fragment stage", drawsNoPixelShader);
-            ml.flush(lucent::Level::Info, "draw");
+            CN.ReportModes();
         }
         {
             lucent::Line rl;
@@ -2658,13 +2595,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                                            : "the LAST-GEOMETRY-DRAW FALLBACK (no"
                                              " front-buffer address in this frame)",
                 in.frontBufferAddress,
-                issuedResolves, skippedResolves, depthBases.size());
+                CN.issuedResolves, CN.skippedResolves, CN.depthBases.size());
             {
-                lucent::Line sd;
-                sd.add("frame (colour surface, depth base) pairs:");
-                for (const auto& [k, n] : surfaceDepthPairs)
-                    sd.add(" {:#x}/{:#x}x{}", k.first, k.second, n);
-                sd.flush(lucent::Level::Info, "draw");
+                CN.ReportDepthPairs();
             }
         }
         {
@@ -2724,16 +2657,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // how a 64 MiB mirror once passed for a rendering bug and how a stale
         // capture later passed for a broken renderer (catalog #30, #57).
         {
-            const std::string reach = std::format(
-                "frame geometry reach: {} draws fetch vertices inside the {:#x}-byte"
-                " SSBO mirror, {} draws fetch PAST it (those read zero and collapse);"
-                " highest vertex-buffer end seen {:#x}",
-                vfDrawsInMirror, in.guestPhysicalMirrorBytes, vfDrawsPastMirror,
-                vfHighestByte);
-            if (vfDrawsPastMirror != 0)
-                lucent::warn("draw", "{} -- THE FRAME IS MISSING WORLD GEOMETRY", reach);
-            else
-                lucent::info("draw", "{}", reach);
+            CN.ReportReach(in.guestPhysicalMirrorBytes);
         }
         // A NEGATIVE THAT CARRIES ITS DENOMINATOR: "no signed fetches" has to be
         // distinguishable from "nobody looked".
@@ -2775,8 +2699,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             lucent::warn("draw", "  NOT uploaded, {} distinct fetches: {}", n, why);
         for (const auto& [what, n] : TX.texFormatCensus)
             lucent::info("draw", "  texture {} x{}", what, n);
-        for (const auto& [what, n] : viewportCensus)
-            lucent::info("draw", "  guest viewport {} x{} draws", what, n);
+        CN.ReportViewports();
         {
             std::map<uint32_t, uint32_t> prims;
             for (const FrameDrawItem& d : in.draws)
@@ -2787,23 +2710,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 pl.add(" {}x{}", PrimName(p), n);
             pl.flush(lucent::Level::Info, "draw");
         }
-        if (skipped)
-        {
-            for (const auto& [code, n] : skipReasons)
-            {
-                const char* why =
-                    code == 1 ? "no snapshot/ucode" :
-                    code == 2 ? "shader translate failed" :
-                    code == 3 ? "pipeline create failed" :
-                    code == 4 ? "UBO alloc failed" :
-                    code == 5 ? "index buffer failed" :
-                    code == 6 ? "descriptor alloc failed" :
-                    code == 7 ? "quad list with fewer than 4 vertices" :
-                    code == 8 ? "no host target for the draw's EDRAM surface format"
-                              : "unknown";
-                lucent::warn("draw", "  skipped {}x: {}", n, why);
-            }
-        }
+        CN.ReportSkips(in.draws.size());
 
         {
             lucent::Line tb;
