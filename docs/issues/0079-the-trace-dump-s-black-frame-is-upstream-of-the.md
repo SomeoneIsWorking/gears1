@@ -93,3 +93,42 @@ It needed that control twice:
     buffer mid-frame runs before the command processor's deferred work is
     submitted. The whole-buffer control is what exposed that; the range count
     alone would have read as "the resolve wrote nothing".
+
+### Note (2026-08-06)
+## OUR trace: the draws run, and the COLOUR targets are black (2026-08-06)
+
+The earlier reading of our own trace was wrong in a way worth recording: it was
+built by an OLD `gfr_to_xtr`. Regenerated with the current one, from
+`scratch/frames/courtyard.gfr`:
+
+  * **The index-count defect is gone.** 0 "index buffer only containing 0"
+    warnings, against 665 before. Every draw fetches its indices.
+  * **726 of 744 draws are RECORDED as real `vkCmdDrawIndexed` calls.** The 18
+    missing are exactly this frame's 18 resolves, which go to `IssueCopy`. So
+    the accounting is complete and no draw is lost.
+  * `IssueDraw` has TWO paths that drop a draw and return SUCCESS ("no effect",
+    "nothing to draw"); both are now counted and both are ZERO here. That
+    matters because a frame taking either path renders nothing and logs nothing.
+  * Every resolve finds a render target to dump (0 "NO render target owns") and
+    every copy has a shader. Both of those were silent early-outs that write
+    ZEROS over the destination rather than skipping, so they looked identical to
+    a resolve of a black target from the destination memory.
+
+And yet, measured at the swap on the same run:
+
+    DEPTH  destinations: 0BA50000+2621440:1960979   0BCD0000+1146880:796626
+    COLOUR destinations: 0BDF0000, 0C2F0000, 0CB91000, 0C520000, 0C7F9000,
+                         006E4000, 00311000  -- every one of them ZERO
+
+**The same colour/depth split is in Xenia's OWN trace** (`4D5307D5_13457.xtr`):
+its two depth destinations carry 1,962,412 and 796,909 bytes, and its front
+buffer and several colour destinations carry nothing.
+
+So the resolve machinery is working -- it resolves depth correctly through the
+same code -- and the colour render targets are BLACK at resolve time. The draws
+execute and write no colour.
+
+That is the one remaining question, it is the same question for both traces, and
+it is no longer about the presenter, the gamma ramp, the swap, the index buffer,
+the resolve, or the dump: it is about what the colour attachment holds when the
+draws have run.
