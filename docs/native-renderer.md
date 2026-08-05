@@ -381,9 +381,12 @@ textures fetched with destination swizzle `zxy_`, and a normal that lives in
 `r1` as `(z, x, y)`.
 
 Composing that by hand is how a native pass ships subtly wrong. Instead the
-register file was **symbolically simulated**: every instruction applied to named
-expressions, with common subexpressions interned, producing a 140-line
-straight-line program. Every one of those permutations cancels — the shader is
+register file was **symbolically simulated** — `tools/ucode_reduce.py`, which
+shipped out of this pass: every instruction applied to named expressions, with
+common subexpressions interned, producing a 156-line straight-line program. It
+**refuses** rather than approximating when it meets control flow, predication or
+an instruction it does not model, because a reduction that quietly skipped one
+would read exactly like a correct one. Every one of those permutations cancels — the shader is
 per-channel arithmetic in the original channel order. What does *not* cancel is
 the **order of the six accumulation steps**, and that is preserved literally,
 because the sequencer rounds after each one.
