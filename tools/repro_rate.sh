@@ -11,11 +11,61 @@
 # Each instance gets its own XDG_DATA_HOME, because the title's content mount lives
 # under it and concurrent runs sharing one would fight over the same save.
 #
+# THREE OUTCOMES, NOT TWO. A run that reaches the cap is not automatically a
+# clean one: #44's failure is the guest ceasing to make progress while the
+# process stays alive and the renderer keeps drawing, so `timeout` returns 124
+# and an exit-code-only classifier calls it clean. It was counting the project's
+# top blocker as a pass. runtime/wait_probe.cpp already detects and names that
+# state, so this reads ITS verdict rather than guessing from a frame threshold.
+#
 # Usage: tools/repro_rate.sh [runs] [seconds] [parallel]
 #
 # The timeout is REPORTED in the summary, because a crash that happens later than
 # the cap is counted as clean and the number is meaningless without it.
 set -e
+
+# --selftest: prove the STALLED classifier can actually produce a positive.
+#
+# It exists because the first real measurement returned "0 stalled" and that
+# result was worthless: a classifier that has never fired cannot tell "no run
+# stalled" from "this script cannot see a stall". So the shipping artifact
+# carries a case that MUST come out STALLED and one that MUST NOT.
+if [ "${1:-}" = "--selftest" ]; then
+    t=$(mktemp -d "${SCRATCH:-scratch}/repro_selftest.XXXXXX")
+    trap 'rm -rf "$t"' EXIT
+    fail=0
+
+    # Case 1: reached the cap, detector reported a stall -> must be STALLED.
+    printf '[stall] stall detector armed: reports after 8 s\n' > "$t/a.log"
+    printf '[draw] VdSwap: 1860 frames submitted\n' >> "$t/a.log"
+    printf '[stall:warn] audio has made no progress for 9 s. The guest made 0\n' >> "$t/a.log"
+    # Case 2: reached the cap, no stall reported -> must be clean.
+    printf '[stall] stall detector armed: reports after 8 s\n' > "$t/b.log"
+    printf '[draw] VdSwap: 4380 frames submitted\n' >> "$t/b.log"
+    # Case 3: the "never started" wording, which is a different message and
+    # must ALSO be caught -- it was written as a separate string in wait_probe.
+    printf '[stall] stall detector armed: reports after 8 s\n' > "$t/c.log"
+    printf '[stall:warn] xma has NEVER made progress in the 40 s since\n' >> "$t/c.log"
+
+    for case in a:STALLED b:clean c:STALLED; do
+        f=${case%%:*}; want=${case##*:}
+        msg=$(grep -oE '[a-z_]+ has (made no progress for [0-9]+ s|NEVER made progress)' \
+              "$t/$f.log" 2>/dev/null | head -1 || true)
+        if [ -n "$msg" ]; then got=STALLED; else got=clean; fi
+        if [ "$got" = "$want" ]; then
+            echo "  ok   $f.log -> $got"
+        else
+            echo "  FAIL $f.log -> $got, expected $want"
+            fail=1
+        fi
+    done
+    if [ "$fail" = "0" ]; then
+        echo "3 of 3 classifier cases pass"
+        exit 0
+    fi
+    echo "the STALLED classifier is broken -- do not trust a rate from it"
+    exit 1
+fi
 
 runs="${1:-8}"
 seconds="${2:-170}"
@@ -78,6 +128,7 @@ for p in $pids; do wait "$p" 2>/dev/null || true; done
 
 crashed=0
 clean=0
+stalled=0
 unobserved=0
 n=1
 while [ "$n" -le "$runs" ]; do
@@ -95,7 +146,17 @@ while [ "$n" -le "$runs" ]; do
     fi
     frames=$(grep -oE 'VdSwap: [0-9]+ frames' "$outdir/run$n.log" 2>/dev/null | tail -1 | grep -oE '[0-9]+' || true)
     restore=$(grep -c 'checkpoint restore:' "$outdir/run$n.log" 2>/dev/null || echo 0)
-    if [ "$rc" = "124" ]; then
+    # The stall detector's OWN verdict, not a frame-count threshold. A threshold
+    # would need a healthy-frame number to compare against, and that number moves
+    # with the host, the build and where the scripted input got to.
+    stallmsg=$(grep -oE '[a-z_]+ has (made no progress for [0-9]+ s|NEVER made progress)' \
+               "$outdir/run$n.log" 2>/dev/null | head -1 || true)
+    if [ "$rc" = "124" ] && [ -n "$stallmsg" ]; then
+        stalled=$((stalled + 1))
+        echo "  run $n: STALLED (alive at the ${seconds}s cap, but not progressing)"
+        echo "      $stallmsg"
+        echo "      frames=${frames:-?} restore=$restore"
+    elif [ "$rc" = "124" ]; then
         clean=$((clean + 1))
         echo "  run $n: clean (reached the ${seconds}s cap) frames=${frames:-?} restore=$restore"
     else
@@ -110,7 +171,7 @@ while [ "$n" -le "$runs" ]; do
 done
 
 echo
-echo "$crashed crashed, $clean clean, $unobserved not observed, out of $runs runs"
+echo "$crashed crashed, $stalled stalled, $clean clean, $unobserved not observed, out of $runs runs"
 echo "at ${seconds}s each, ${parallel} at a time."
 if [ "$unobserved" -gt 0 ]; then
     echo "WARNING: $unobserved run(s) produced no exit code. The rate above is not"
@@ -118,3 +179,15 @@ if [ "$unobserved" -gt 0 ]; then
 fi
 echo "Logs in $outdir. The cap matters: a crash later than ${seconds}s counts as clean"
 echo "here, so this is a lower bound on the true rate, not an estimate of it."
+if [ "$stalled" = "0" ] && [ "$clean" -gt 0 ]; then
+    # SAY WHAT THE ZERO MEANS. "0 stalled" is only evidence if the detector was
+    # armed and had time to fire; a run shorter than its arming delay reports no
+    # stall whether or not one happened.
+    armed=$(grep -c 'stall detector armed' "$outdir"/run*.log 2>/dev/null | \
+            awk -F: '{n+=$2} END{print n+0}')
+    echo "0 stalled across $armed run(s) that armed the stall detector."
+    if [ "$armed" -lt "$runs" ]; then
+        echo "  WARNING: only $armed of $runs runs armed it, so the rest could not"
+        echo "  have reported a stall either way."
+    fi
+fi
