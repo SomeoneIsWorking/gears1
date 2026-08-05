@@ -1,6 +1,6 @@
 # The native renderer
 
-Status: **seam landed, four passes implemented and bit-exact, none merely declared.**
+Status: **seam landed, five passes implemented and bit-exact, none merely declared.**
 Everything below that is not marked DONE is a plan, and this file says which is
 which so the next session does not have to guess.
 
@@ -10,6 +10,7 @@ which so the next session does not have to guess.
 | Full-screen scene composite (gamma + exposure) | `0x501ac5d8692bf7b6` | **DONE** — `runtime/shaders/scene_gamma.frag`, bit-exact on `scratch/frames/act1.gfr` (2,764,800 of 2,764,800) |
 | Uber post-process blend (DOF + colour transform) | `0x9610bf8038af9aaf` | **DONE** — `runtime/shaders/uber_post_blend.frag`, bit-exact on `scratch/frames/courtyard.gfr` and `scratch/frames/act1_v2.gfr` (2,764,800 of 2,764,800 each) |
 | Base pass — directional-lightmap material | `0x1f1a3f779667a02a` | **DONE** — `runtime/shaders/base_pass_lightmap.frag`, bit-exact on `scratch/frames/courtyard.gfr` and `scratch/frames/bright.gfr` (2,764,800 of 2,764,800 each). **One of 44 base-pass materials in that frame**, and the hottest — 36 of its 348 base-pass draws |
+| Base pass — lightmap + specular exponent | `0xd99a15450a08043a` | **DONE** — `runtime/shaders/base_pass_lightmap_spec.frag`, bit-exact on `courtyard.gfr` and `bright.gfr` (2,764,800 of 2,764,800 each). The same family as the row above; 2 of 44 materials now |
 | Height fog | **none — the pass is not in any frame we have** | withdrawn, see below |
 
 Run the gate with `tools/verify_native_pass.sh`. It has three arms and refuses to
@@ -408,3 +409,34 @@ across the game. What it establishes is that a base-pass material is tractable b
 the same procedure as a post pass — dump the module, read the interface, simulate
 the register file, write the reduction, gate it — and that the procedure now
 includes a simulation step for anything with this much channel rotation.
+
+
+## Two materials of the family, and what the second one settles
+
+`0xd99a15450a08043a` is the same directional-lightmap base pass as the material
+above, and having **two** is what separates UE3's base pass from one material's
+own choices. Everything structural survived: the three lightmap textures scaled by
+`LightMapScale[i]`, three basis weights for the shading normal and three for the
+reflection, a six-step alternating diffuse/specular accumulation in a fixed order,
+two dynamic wrap terms, an ambient constant and an output scale. What changed is
+entirely material parameters:
+
+| | `1f1a3f779667a02a` | `d99a15450a08043a` |
+|---|---|---|
+| Reflection weight | squared | raised to `c255.x`, a specular exponent |
+| Specular colour | its own texture (tf3) | the albedo, scaled by `c255.w` |
+| Normal | base map **plus** a detail map at a scaled UV | one map, scale-and-biased |
+| Basis A/B differ in | the **first** coefficient (`c255.x` vs `c255.w`) | the **second** (`c254.y` vs `c254.w`) |
+| Basis/lightmap pairing | LM0×basis2, LM1×basis1, LM2×basis0 | LM0×basisC, LM1×basisA, LM2×basisB |
+
+The last two rows are the useful warning: the basis coefficients and the pairing
+are **register packing chosen per material**, not a property of the engine.
+Carrying either assumption from one material to the next would produce a shader
+that is plausible, close, and wrong — so each is read off the microcode.
+
+Both were reduced with `tools/ucode_reduce.py` and both were bit-exact on the
+first attempt, which is the first evidence that this family is a *procedure*
+rather than a series of one-offs. And both have their control arm: breaking the
+shader deliberately changes 473,625 channel samples for the first material and
+58,907 for the second, so neither zero-difference result is a pass that never
+reached the image.

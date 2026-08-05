@@ -1,4 +1,5 @@
 #include "native_pass.h"
+#include "native_pass_basepass_spec_spv.h"
 #include "native_pass_basepass_spv.h"
 #include "native_pass_gamma_spv.h"
 #include "native_pass_movie_spv.h"
@@ -69,6 +70,16 @@ const std::vector<Pass>& RosterStorage()
              "the title's ps_1f1a3f779667a02a microcode; UE3"
              " Engine/Shaders/BasePassPixelShader.usf and BasePassCommon.usf",
              BasePassLightmapSpirv()},
+        // IMPLEMENTED. The same family, second material: a specular EXPONENT
+        // instead of a squared reflection weight, no separate specular map, and
+        // one normal texture instead of two -- runtime/shaders/
+        // base_pass_lightmap_spec.frag. Having two of the family is what says
+        // which parts of the first were UE3's base pass and which were one
+        // material's own choices.
+        Pass{0xd99a15450a08043aull, "base pass, directional-lightmap + specular exponent",
+             "the title's ps_d99a15450a08043a microcode; UE3"
+             " Engine/Shaders/BasePassPixelShader.usf and BasePassCommon.usf",
+             BasePassLightmapSpecSpirv()},
     };
     return roster;
 }
