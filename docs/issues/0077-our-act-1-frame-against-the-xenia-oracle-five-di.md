@@ -171,3 +171,21 @@ not a regression: the ramp compresses the low end, so 8-bit input mapped through
 it lands on fewer distinct outputs. Applying it in higher precision before the
 final quantisation would keep those levels; that is a refinement, not the cause
 of the gap against the reference.
+
+### Note (2026-08-06)
+### Correction to the note above, same day
+
+I wrote that applying the gamma ramp "in higher precision before the final
+quantisation would keep those levels; that is a refinement". That is wrong about
+the hardware.
+
+The front buffer this title presents is k_8_8_8_8 (measured, from the fetch
+constant the guest hands VdSwap). Scan-out therefore indexes the 256-entry LUT
+with an EIGHT-BIT value -- the same quantisation our implementation performs --
+and emits ten bits to the display. So there is no higher precision to apply the
+ramp at on the input side; the only thing we lose that the console has is the
+10-bit output, and that is lost in writing an 8-bit PNG, not in the ramp.
+
+Our ramp application is faithful. The reduced level count after applying it is
+what the console's own pipeline produces at 8-bit output precision, and is not
+part of the dynamic-range gap this entry is about.
