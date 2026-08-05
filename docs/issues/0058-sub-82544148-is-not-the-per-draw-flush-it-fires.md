@@ -82,3 +82,29 @@ takes the faulting context, which is how the worker's queue head was pinned down
 Point it at the ring pages where the command processor sees DRAW_INDX arrive, read
 the LR out of the faulting context, and the emitter names itself. That is a
 measurement, not a guess, and it works no matter how the draw is dispatched.
+
+### Note (2026-08-05)
+### Note (2026-08-05, later): the emitter is probably not worth finding
+
+Before spending a third session on the ring-page watch, someone should ask what
+having the emitter would buy. Working through it:
+
+- the DRAW ITSELF -- primitive type, index count, buffers, whole register state --
+  already arrives intact in the PM4 stream;
+- WHICH UE3 PASS a draw belongs to is now recovered from that same stream by
+  `tools/pass_structure.py`, with no emitter;
+- WHICH MATERIAL it is, is the pixel-shader hash the renderer already keys on;
+- TEXTURE SLOT BINDINGS are already cross-checked from the seam via the wrapped
+  SetTexture (the 122-bases agreement above).
+
+A static shot was also tried and missed: the recompiled corpus (192 TUs, 177 MB)
+contains no PM4 TYPE3 header constant carrying opcode 0x22 (DRAW_INDX) or 0x36
+(DRAW_INDX_2), so the packet header is assembled at runtime from a variable count
+and cannot be found by grepping for the opcode.
+
+What the emitter WOULD carry that PM4 does not is mesh and material identity at
+the engine level. That is real but narrow, and nothing on the native-renderer
+roadmap currently depends on it -- the EDRAM-tiling collapse did not need it, and
+neither would render-target ownership or resolution scaling. The ring-watch method
+above is still the right method IF the emitter is wanted; the point of this note is
+that it should stop being described as the blocker.

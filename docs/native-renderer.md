@@ -77,6 +77,36 @@ stays clean (see the rule in CLAUDE.md about copyrighted material). Point
 | `Engine/Shaders/HeightFogCommon.usf`, `HeightFogPixelShader.usf` | The fog maths |
 | `Development/Src/Core/Inc/Color.h`, `Src/Color.cpp` | `FLinearColor`, gamma, and the sRGB conversions — the exact place this session's colour questions belong |
 
+## The draw emitter is probably NOT the blocker, and saying so retires a roadmap item
+
+`docs/d3d-seam.md` and catalog #58 leave "find the per-draw emitter" as the open
+prerequisite for attaching a native renderer at the guest's D3D calls. Two sessions
+have hunted it: eleven functions probed by per-frame rate, none within two orders
+of magnitude of the frame's draw count, and a documented method for next time
+(mprotect the ring pages and read the faulting context).
+
+**It is worth asking what having it would buy, and the answer is less than it
+looks.** The D3D seam would give a draw's *engine-level* call. But:
+
+- the **draw itself** — primitive type, index count, buffers, and the whole
+  register state — already arrives intact in the PM4 stream;
+- **which UE3 pass** a draw belongs to is now recovered from that same stream by
+  `tools/pass_structure.py`, without the emitter;
+- **which material** it is, is the pixel-shader hash, which the renderer already
+  has;
+- **texture slot bindings** are already cross-checked from the seam via the
+  wrapped `SetTexture` (122 distinct bases both sides, catalog #58).
+
+So the emitter's marginal value is narrow, and the cost of finding it is a live
+run plus signal-handler work that has already failed twice. **Nothing in this
+file's remaining plan depends on it.** The tiling collapse below did not need it;
+neither would render-target ownership or resolution scaling.
+
+That is not a claim it is worthless — the engine-level call would carry mesh and
+material identity that PM4 does not. It is a claim that it should stop being
+described as the thing blocking a native renderer, because it is not blocking
+anything that is actually next.
+
 ## Where it attaches
 
 `docs/d3d-seam.md` has the reconnaissance. The title calls D3D directly (`bl`, not
@@ -520,10 +550,20 @@ changes 473,625, 58,907 and 564,754 channel samples respectively — so no
 zero-difference result here is a pass that never reached the image.
 
 
-## Stop emulating EDRAM tiling
+## Stop emulating EDRAM tiling — now the DEFAULT
 
-`GEARS_DRAW_UNTILE=1`. **The first change here that is a renderer rather than a
-shader port.**
+**The first change here that is a renderer rather than a shader port, and since
+this section was written it has become the default.** `GEARS_DRAW_TILED=1` puts
+the console's per-tile replay back, for an A/B or a bisect.
+
+Flipping the default is a change of **posture**, not an optimisation, and it was
+made on evidence that is deliberately not presented as unanimous: the collapsed
+path is bit-exact against the tiled one on three of four captures and differs by
+one level on 197 of 2,764,800 samples on the fourth, and it costs no measurable
+time either way. What it does is stop the renderer doing something the host has
+no reason to do. Verified after the flip: the default output is byte-identical to
+the previously-collapsed output on all four captures, and `GEARS_DRAW_TILED=1`
+reproduces the original tiled render byte for byte.
 
 The Xbox 360 has 10 MiB of EDRAM. A 1280×720 colour-plus-depth surface does not
 fit, so UE3-on-360 splits it into tiles and **replays the whole command buffer once
