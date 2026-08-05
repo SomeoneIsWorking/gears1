@@ -47,6 +47,7 @@
 #include "gpu_draw_renderer.h"
 #include "gpu_draw_textures.h"
 #include "gpu_draw_targets.h"
+#include "gpu_draw_arena.h"
 #include "gpu_draw_pipelines.h"
 #include "gpu_draw_shaders.h"
 
@@ -743,113 +744,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         P.descriptorPoolDraws = nDraws;
     }
 
-    // Per-draw resources, kept alive until after the submit completes. The
-    // fallback path only runs when a frame outgrows the arena.
-    std::vector<VkBuffer> keepBuffers;
-    std::vector<VkDeviceMemory> keepMem;
-
-    // Size the arena to the previous frame's high-water mark before the frame
-    // starts, so the common case never allocates. The first frame has no mark
-    // to go on and estimates from the draw count; if the estimate is short the
-    // overflow path covers the rest and the real mark sizes the next frame.
-    if (P.arenaHighWater == 0)
-        P.arenaHighWater = VkDeviceSize(nDraws) * 16384;
-    if (P.arenaHighWater > P.arenaBytes)
-    {
-        if (P.arenaMapped)
-            vkUnmapMemory(device, P.arenaMem);
-        vkDestroyBuffer(device, P.arena, nullptr);
-        vkFreeMemory(device, P.arenaMem, nullptr);
-        P.arena = VK_NULL_HANDLE; P.arenaMem = VK_NULL_HANDLE; P.arenaMapped = nullptr;
-        const VkDeviceSize want = P.arenaHighWater + P.arenaHighWater / 4 + 0x10000;
-        if (MakeBuffer(want, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT |
-                             VK_BUFFER_USAGE_INDEX_BUFFER_BIT, P.arena, P.arenaMem))
-        {
-            P.arenaBytes = want;
-            VK_CHECK(vkMapMemory(device, P.arenaMem, 0, want, 0, &P.arenaMapped));
-            lucent::info("draw", "per-draw arena grown to {} KiB", want / 1024);
-        }
-        else
-        {
-            P.arenaBytes = 0;
-        }
-    }
-    VkDeviceSize arenaCursor = 0;
-    uint32_t arenaOverflows = 0;
-    // Bytes that did NOT fit. This is the number the next frame's arena has to be
-    // sized from, and its absence was a self-perpetuating bug: the high-water mark
-    // was taken from arenaCursor, which only advances for allocations that FIT, so it
-    // could never exceed the current arena size -- and the growth test
-    // (arenaHighWater > arenaBytes) could therefore never be true. The arena stayed at
-    // its first size forever while 2618 blocks a frame took the fallback that creates,
-    // maps, copies and unmaps a VkBuffer each, which is where 104 of a 170 ms frame
-    // went. The log even said "next frame will fit" every frame, and it never did.
-    VkDeviceSize arenaWanted = 0;
-
-    // Copies `size` bytes into the arena and reports where they landed, or
-    // returns false when the arena is full (the caller then falls back).
-    auto arenaWrite = [&](const void* data, size_t size, VkDeviceSize alignment,
-                          VkDeviceSize& outOffset) -> bool {
-        if (!P.arenaMapped)
-            return false;
-        const VkDeviceSize offset = (arenaCursor + alignment - 1) & ~(alignment - 1);
-        if (offset + size > P.arenaBytes)
-        {
-            // Remember what was asked for, so next frame's arena can actually hold it.
-            arenaWanted += (size + alignment - 1) & ~(alignment - 1);
-            return false;
-        }
-        std::memcpy(static_cast<uint8_t*>(P.arenaMapped) + offset, data, size);
-        arenaCursor = offset + size;
-        outOffset = offset;
-        return true;
-    };
-
-    // An index buffer for one draw, from the same arena. Index offsets need
-    // 4-byte alignment; the buffer is bound with that offset.
-    auto makeIndexBuffer = [&](const void* data, size_t bytes, VkBuffer& outBuf,
-                               VkDeviceSize& outOffset) -> bool {
-        if (arenaWrite(data, bytes, 4, outOffset))
-        {
-            outBuf = P.arena;
-            return true;
-        }
-        ++arenaOverflows;
-        VkDeviceMemory m = VK_NULL_HANDLE;
-        if (!MakeBuffer(bytes, VK_BUFFER_USAGE_INDEX_BUFFER_BIT, outBuf, m))
-            return false;
-        void* p = nullptr;
-        VK_CHECK(vkMapMemory(device, m, 0, bytes, 0, &p));
-        std::memcpy(p, data, bytes);
-        vkUnmapMemory(device, m);
-        keepBuffers.push_back(outBuf); keepMem.push_back(m);
-        outOffset = 0;
-        return true;
-    };
-
-    // A uniform block for one draw: (buffer, offset, range) rather than a whole
-    // VkBuffer of its own.
-    auto makeUbo = [&](const void* data, size_t size,
-                       VkDescriptorBufferInfo& out) -> bool {
-        const size_t bytes = std::max<size_t>(size, 16);
-        VkDeviceSize offset = 0;
-        if (arenaWrite(data, bytes, uniformOffsetAlignment, offset))
-        {
-            out = {P.arena, offset, bytes};
-            return true;
-        }
-        ++arenaOverflows;
-        VkBuffer b = VK_NULL_HANDLE; VkDeviceMemory m = VK_NULL_HANDLE;
-        if (!MakeBuffer(bytes, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, b, m))
-            return false;
-        void* p = nullptr;
-        VK_CHECK(vkMapMemory(device, m, 0, bytes, 0, &p));
-        std::memcpy(p, data, size);
-        vkUnmapMemory(device, m);
-        keepBuffers.push_back(b); keepMem.push_back(m);
-        out = {b, 0, bytes};
-        return true;
-    };
+    // The per-draw arena -- uniform blocks and expanded index buffers
+    // suballocated from one persistently-mapped buffer -- lives in
+    // gpu_draw_arena.{h,cpp}, with the fallback a frame takes when it outgrows
+    // it and the high-water mark that sizes the next one.
+    draw::FrameArena AR(*this, P);
+    if (!AR.Build(nDraws))
+        return false;
 
     using draw::PreparedDraw;
     std::vector<PreparedDraw> prepared;
@@ -1745,11 +1646,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             fetchBuf.resize(sizeof(uint32_t) * 6 * 32);
             std::memcpy(fetchBuf.data(), &R[0x4800], fetchBuf.size());
 
-            if (!makeUbo(syscBuf.data(), syscBuf.size(), biSysCache) ||
-                !makeUbo(fVsBuf.data(), fVsBuf.size(), biFvsCache) ||
-                !makeUbo(fPsBuf.data(), fPsBuf.size(), biFpsCache) ||
-                !makeUbo(boolLoopBuf.data(), boolLoopBuf.size(), biBlCache) ||
-                !makeUbo(fetchBuf.data(), fetchBuf.size(), biFetchCache))
+            if (!AR.MakeUbo(syscBuf.data(), syscBuf.size(), biSysCache) ||
+                !AR.MakeUbo(fVsBuf.data(), fVsBuf.size(), biFvsCache) ||
+                !AR.MakeUbo(fPsBuf.data(), fPsBuf.size(), biFpsCache) ||
+                !AR.MakeUbo(boolLoopBuf.data(), boolLoopBuf.size(), biBlCache) ||
+                !AR.MakeUbo(fetchBuf.data(), fetchBuf.size(), biFetchCache))
             { uboCacheValid = false; ++skipped; ++skipReasons[4]; continue; }
 
             if (measureHeadroom && !prevSysc.empty())
@@ -1833,7 +1734,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 *dst++ = v[0]; *dst++ = v[1]; *dst++ = v[2];
                 *dst++ = v[0]; *dst++ = v[2]; *dst++ = v[3];
             }
-            if (!makeIndexBuffer(expanded.data(), triIndices * 4u, ibuf, ibufOffset))
+            if (!AR.MakeIndexBuffer(expanded.data(), triIndices * 4u, ibuf, ibufOffset))
             { ++skipped; ++skipReasons[5]; continue; }
             drawCount = triIndices;
             drawIndexed = true;
@@ -1873,7 +1774,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     dst[i] = v;
                 }
             }
-            if (!makeIndexBuffer(widened.data(), idxBytes, ibuf, ibufOffset))
+            if (!AR.MakeIndexBuffer(widened.data(), idxBytes, ibuf, ibufOffset))
             { ++skipped; ++skipReasons[5]; continue; }
         }
 
@@ -3399,18 +3300,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
     VK_CHECK(vkEndCommandBuffer(cmd));
 
-    // What this frame NEEDED, not what it managed to fit.
-    P.arenaHighWater = std::max(P.arenaHighWater, arenaCursor + arenaWanted);
-    if (arenaOverflows)
-        // Says what it will grow TO, rather than promising a fit. The old wording --
-        // "next frame will fit" -- was printed every frame for thousands of frames
-        // while nothing grew, because the size it would have grown to was measured
-        // from what fit rather than from what was asked for.
-        lucent::info("draw", "per-draw arena overflowed on {} allocation(s):"
-            " {} KiB fitted, {} KiB more was wanted, arena is {} KiB and will be"
-            " sized to {} KiB", arenaOverflows, arenaCursor / 1024,
-            arenaWanted / 1024, P.arenaBytes / 1024,
-            (P.arenaHighWater + P.arenaHighWater / 4 + 0x10000) / 1024);
+    AR.EndFrame();
     msDrawLoop = sinceStartMs() - msSetup;
     const auto tSubmit = Clock::now();
     VkFence& fence = P.fence;
@@ -4262,11 +4152,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vkDestroyBuffer(device, stagingBufs[i], nullptr);
         vkFreeMemory(device, stagingMems[i], nullptr);
     }
-    for (size_t i = 0; i < keepBuffers.size(); ++i)
-    {
-        vkDestroyBuffer(device, keepBuffers[i], nullptr);
-        vkFreeMemory(device, keepMem[i], nullptr);
-    }
+    AR.Release();
     // Textures evicted this frame because the guest overwrote their bytes. The
     // fence above has been waited on, so no draw of this frame still references
     // them; they were kept alive until here precisely because earlier draws did.
