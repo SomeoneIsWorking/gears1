@@ -1,6 +1,6 @@
 # The native renderer
 
-Status: **seam landed, two passes implemented and bit-exact, two declared.**
+Status: **seam landed, three passes implemented and bit-exact, one declared.**
 Everything below that is not marked DONE is a plan, and this file says which is
 which so the next session does not have to guess.
 
@@ -8,14 +8,25 @@ which so the next session does not have to guess.
 |---|---|---|
 | Startup movie YUV→RGB composite | `0xea0007942db096ad` | **DONE** — `runtime/shaders/movie_yuv.frag`, bit-exact against the translated pass (2,764,800 of 2,764,800 channel samples identical on `scratch/frames/boot150.gfr`) |
 | Full-screen scene composite (gamma + exposure) | `0x501ac5d8692bf7b6` | **DONE** — `runtime/shaders/scene_gamma.frag`, bit-exact on `scratch/frames/act1.gfr` (2,764,800 of 2,764,800) |
+| Uber post-process blend (DOF + colour transform) | `0x9610bf8038af9aaf` | **DONE** — `runtime/shaders/uber_post_blend.frag`, bit-exact on `scratch/frames/courtyard.gfr` and `scratch/frames/act1_v2.gfr` (2,764,800 of 2,764,800 each) |
 | Height fog | **none — the pass is not in any frame we have** | withdrawn, see below |
 | Base pass | many (one per material) | declared, not written. `tools/pass_structure.py --draws BASEPASS` now names the draws |
 
-Run the gate with `tools/verify_native_pass.sh`. It renders the capture through
-both paths and refuses to report a match it cannot back: it deletes the screenshot
-before each arm (a stale file compares a frame against itself and reports a perfect
-match — this already happened once), and it runs a second capture as a negative
-control so the comparison is shown reporting a difference in the same run.
+Run the gate with `tools/verify_native_pass.sh`. It has three arms and refuses to
+report a match it cannot back:
+
+- **pixels** — the capture rendered through both paths and compared channel for
+  channel. It deletes the screenshot before each arm (a stale file compares a
+  frame against itself and reports a perfect match — this already happened once)
+  and refuses if no native pass was actually substituted.
+- **interface** — the same capture under `GEARS_DRAW_VALIDATE=1`, failing on any
+  descriptor/shader-interface warning. A pixel comparison audits a *result*: two
+  passes here were bit-exact for two sessions while declaring the wrong image view
+  type, and only validation could see it (catalog #72). Shown to fire: with the
+  defect deliberately reintroduced the gate exits 1 while the pixel arm still
+  reports a perfect match; with it fixed, 0.
+- **negative control** — a second capture, which must NOT match, so the comparison
+  is shown reporting a difference in the same run.
 
 ## Why
 
@@ -252,3 +263,78 @@ The general lesson is worth more than the fog: **the order of work was picked fr
 UE3's source and not from the title's frames, and it was wrong.** Step 3 should
 always have come first, because it is what says which passes this game actually
 runs.
+
+
+## The third pass, and the interface lesson that came with it
+
+`0x9610bf8038af9aaf` is UE3's uber post-process blend: the depth-of-field
+composite of a blurred copy against the sharp scene, then the scene colour
+transform (shadows, highlights, midtones, a desaturation written as a luminance
+dot product), then the output gamma. It is the last thing that touches the
+frame's colour before motion blur, so it is where "the picture is the wrong
+colour" would live if it lived in a shader. `tools/pass_structure.py` found it:
+the final `FULLSCREEN` draw of the post chain in every gameplay capture.
+
+It shipped first with **20 of 2,764,800 channel samples off by one**, every one a
+dark pixel where the output gamma's `trunc` sits next to a boundary. The
+arithmetic was right. **The fetch interface was not**, in three ways, and each one
+is a rule the first two passes had been getting away with:
+
+- **The texture size is the GUEST's, not the host image's.** The translator reads
+  width and height out of the fetch constant's dword 2 (two 13-bit fields holding
+  `size - 1`) and scales the texel rounding offset by that. `textureSize()`
+  returns the host image's extent, and the two agree only until something pads or
+  re-rounds an allocation.
+- **The gradients are EXPLICIT and COARSE.** The translator emits
+  `OpDPdxCoarse`/`OpDPdyCoarse`, scales them by `exp2(lodBias / 32)` from the
+  fetch constant, and calls `OpImageSampleExplicitLod ... Grad`. An implicit-LOD
+  `texture()` lets the driver pick its own derivative precision — a different
+  function, and the one that produced those 20 samples.
+- **The images are 2D ARRAYS.** The translator declares
+  `OpTypeImage %float 2D 0 1 0 1` — `Arrayed = 1` — and this renderer binds guest
+  textures as `VK_IMAGE_VIEW_TYPE_2D_ARRAY`. All three shaders declared
+  `texture2D`.
+
+The third one is worth dwelling on, because of **how it was found and how it was
+not**. `movie_yuv.frag` and `scene_gamma.frag` had the same wrong view type and
+were bit-exact anyway — the driver tolerates the mismatch, so the A/B gate, which
+compares pixels, could not see it and never would have. `GEARS_DRAW_VALIDATE=1`
+says it in one line:
+
+```
+vkCmdDrawIndexed(): the sampled image descriptor [Set 3, Binding 0, "SceneColor"]
+VkImageViewType is VK_IMAGE_VIEW_TYPE_2D_ARRAY but the OpTypeImage has
+(Dim = 2D) and (Arrayed = 0).
+```
+
+**A pixel-comparison gate cannot audit an interface**, only a result. Both earlier
+shaders were corrected and re-verified — still 2,764,800 of 2,764,800 on their own
+captures, and the validation warning is gone. Run `GEARS_DRAW_VALIDATE=1` on any
+new native pass; the gate is necessary and it is not sufficient.
+
+A wrong guess along the way, recorded so it is not repeated: the first suspect for
+the 20 samples was compiler contraction of instruction 29's `mad` into an FMA, and
+splitting it under `precise` changed nothing. That split is still in the shader
+because it is what the microcode does, and it is commented as unmeasured so nobody
+cites it as the fix.
+
+**`GEARS_DRAW_SPV_DUMP=<dir>` is what made all of this readable**: it writes the
+translated module as the runtime actually built it for a draw's modification key.
+The offline modules in `scratch/shaders/bound_out/` are translated with no
+modification, so they have no interpolator inputs and a colour write mask of zero
+— trustworthy for block layouts and arithmetic, and for nothing else.
+
+### A binding order that is not fetch-constant order
+
+Also worth writing down, because it reads as a typo and is not: the translator
+numbers texture bindings by **order of first use in the shader**, not by fetch
+constant. This pass fetches `tf2` first, so:
+
+```
+set 3: 0/1 = texture2 unsigned/signed, 2/3 = texture0, 4/5 = texture1,
+       6 = sampler2, 7 = sampler0, 8 = sampler1
+```
+
+The movie pass fetches `tf0` first, which is the only reason its layout looks like
+`0 = texture0`. Copying that pattern into a shader that fetches in a different
+order samples the wrong images and still draws a plausible picture.

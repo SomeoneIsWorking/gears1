@@ -32,8 +32,21 @@
 // THE SATURATE ONLY HAPPENS ON THE GAMMA PATH. When no gamma is configured the
 // colour passes through unclamped and can exceed 1 -- so the branch is not an
 // optimisation that could be flattened away, it changes the result.
-layout(set = 3, binding = 0) uniform texture2D SceneColor;   // unsigned view
+// A 2D ARRAY, not a 2D image. The translator declares
+// `OpTypeImage %float 2D 0 1 0 1` (Arrayed = 1) and this renderer binds guest
+// textures as VK_IMAGE_VIEW_TYPE_2D_ARRAY, so `texture2D` here was the wrong view
+// type for the descriptor it was handed. It produced bit-identical pixels anyway
+// -- the driver tolerates it -- which is exactly why the A/B gate could not see
+// it and Vulkan validation could: "VkImageViewType is VK_IMAGE_VIEW_TYPE_2D_ARRAY
+// but the OpTypeImage has (Dim = 2D) and (Arrayed = 0)".
+layout(set = 3, binding = 0) uniform texture2DArray SceneColor;   // unsigned view
 layout(set = 3, binding = 2) uniform sampler SceneSampler;
+
+// The fetch constants, for the texture size the GUEST programmed. The translator
+// scales the texel rounding offset by that, not by the host image's extent.
+// Constant k's dword d is at [(6k+d)/4][(6k+d)%4]; the size is dword 6k+2, two
+// 13-bit fields holding (size - 1). This pass samples fetch constant 0.
+layout(set = 1, binding = 4) uniform XeFetchConstants { uvec4 f[48]; } Fetch_;
 
 layout(set = 1, binding = 0) uniform XeSystemConstants {
     layout(offset = 0)   uint  flags;
@@ -108,9 +121,20 @@ vec3 EncodePwlGamma(vec3 linear)
 
 void main()
 {
-    vec2 uv = InTexCoord.xy
-            + kTexelRoundingOffset / vec2(textureSize(sampler2D(SceneColor, SceneSampler), 0));
-    vec4 sampled = texture(sampler2D(SceneColor, SceneSampler), uv);
+    const uint sizeWord = Fetch_.f[0][2];
+    const vec2 texSize = vec2(float(bitfieldExtract(sizeWord, 0, 13) + 1u),
+                              float(bitfieldExtract(sizeWord, 13, 13) + 1u));
+    vec2 uv = InTexCoord.xy + kTexelRoundingOffset / texSize;
+    // Explicit COARSE gradients scaled by the fetch constant's LOD bias, which is
+    // what the translator emits (OpDPdxCoarse/OpDPdyCoarse into
+    // OpImageSampleExplicitLod ... Grad). An implicit-LOD `texture()` lets the
+    // driver choose its own derivative precision -- a different function, and the
+    // one that cost the uber-post pass 20 off-by-one samples before it was fixed.
+    const float lodScale = exp2(float(bitfieldExtract(int(Fetch_.f[1][0]), 12, 10))
+                                * 0.03125);
+    vec4 sampled = textureGrad(sampler2DArray(SceneColor, SceneSampler),
+                               vec3(uv, 0.0),
+                               dFdxCoarse(uv) * lodScale, dFdyCoarse(uv) * lodScale);
     // Fetch constant 0's signs: byte 0 of element 0, two bits per component.
     const uint signs = Sys.texture_swizzled_signs[0].x & 0xFFu;
     sampled.x = ApplyTextureSign(sampled.x, (signs >> 0) & 3u);

@@ -29,9 +29,14 @@
 // Getting this wrong is not a compile error -- it samples a different image and
 // still draws a plausible picture, which is exactly how the first version of this
 // shader shipped with the right geometry and the wrong colours.
-layout(set = 3, binding = 0) uniform texture2D TexY;
-layout(set = 3, binding = 2) uniform texture2D TexU;
-layout(set = 3, binding = 4) uniform texture2D TexV;
+//
+// AND THEY ARE 2D ARRAYS. The translator declares `OpTypeImage %float 2D 0 1 0 1`
+// (Arrayed = 1) and this renderer binds guest textures as
+// VK_IMAGE_VIEW_TYPE_2D_ARRAY. `texture2D` drew identical pixels and was still the
+// wrong view type, which only Vulkan validation could see.
+layout(set = 3, binding = 0) uniform texture2DArray TexY;
+layout(set = 3, binding = 2) uniform texture2DArray TexU;
+layout(set = 3, binding = 4) uniform texture2DArray TexV;
 layout(set = 3, binding = 6) uniform sampler SampY;
 layout(set = 3, binding = 7) uniform sampler SampU;
 layout(set = 3, binding = 8) uniform sampler SampV;
@@ -48,6 +53,12 @@ layout(set = 1, binding = 0) uniform XeSystemConstants {
 // touches (c0..c3 here), so the buffer really is 64 bytes and a larger array would
 // read past it.
 layout(set = 1, binding = 2) uniform XeFloatConstants { vec4 c[4]; } Consts;
+
+// The fetch constants, for the texture size the GUEST programmed rather than the
+// host image's extent. Constant k's dword d is at [(6k+d)/4][(6k+d)%4]: the size
+// is dword 6k+2 (two 13-bit fields holding size-1) and the LOD bias is dword
+// 6k+4, bits 12..21, signed, in 1/32 steps.
+layout(set = 1, binding = 4) uniform XeFetchConstants { uvec4 f[48]; } Fetch_;
 
 // Interpolator 0. The guest's vertex shader puts the movie's texture coordinate in
 // r0.xy of the pixel shader, which is interpolator 0's xy.
@@ -100,9 +111,29 @@ float Dp3(vec3 a, vec3 b)
     return sum;
 }
 
-vec2 RoundedCoord(texture2D tex, sampler samp, vec2 uv)
+vec2 FetchSize(uint k)
 {
-    return uv + kTexelRoundingOffset / vec2(textureSize(sampler2D(tex, samp), 0));
+    const uint d = 6u * k + 2u;
+    const uint w = Fetch_.f[d >> 2][d & 3u];
+    return vec2(float(bitfieldExtract(w, 0, 13) + 1u),
+                float(bitfieldExtract(w, 13, 13) + 1u));
+}
+
+float FetchLodScale(uint k)
+{
+    const uint d = 6u * k + 4u;
+    return exp2(float(bitfieldExtract(int(Fetch_.f[d >> 2][d & 3u]), 12, 10))
+                * 0.03125);
+}
+
+// Explicit COARSE gradients, as the translator emits them. `texture()` would let
+// the driver pick its own derivative precision instead.
+float SampleR(texture2DArray tex, sampler samp, vec2 uv, uint k)
+{
+    const vec2 c = uv + kTexelRoundingOffset / FetchSize(k);
+    const float s = FetchLodScale(k);
+    return textureGrad(sampler2DArray(tex, samp), vec3(c, 0.0),
+                       dFdxCoarse(c) * s, dFdyCoarse(c) * s).x;
 }
 
 void main()
@@ -114,9 +145,9 @@ void main()
     // carries all three as branches on the fetch constants; this pass takes the
     // straight path. If that is wrong for this draw the A/B difference against the
     // translated pass will not reach zero, which is the only reason to believe it.
-    float y = texture(sampler2D(TexY, SampY), RoundedCoord(TexY, SampY, uv)).x;
-    float u = texture(sampler2D(TexU, SampU), RoundedCoord(TexU, SampU, uv)).x;
-    float v = texture(sampler2D(TexV, SampV), RoundedCoord(TexV, SampV, uv)).x;
+    float y = SampleR(TexY, SampY, uv, 0u);
+    float u = SampleR(TexU, SampU, uv, 1u);
+    float v = SampleR(TexV, SampV, uv, 2u);
 
     // dp3 against r2.zxyy: the operand order is (V, Y, U), matched by c*.zxy.
     vec3 vyu = vec3(v, y, u);

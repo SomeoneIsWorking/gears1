@@ -1,6 +1,7 @@
 #include "native_pass.h"
 #include "native_pass_gamma_spv.h"
 #include "native_pass_movie_spv.h"
+#include "native_pass_uber_spv.h"
 
 #include <lucent/config.h>
 #include <lucent/log.h>
@@ -43,6 +44,15 @@ const std::vector<Pass>& RosterStorage()
         Pass{0x501ac5d8692bf7b6ull, "full-screen scene composite",
              "the title's ps_501ac5d8 microcode; UE3 Engine/Shaders/PostProcessCommon.usf",
              SceneGammaSpirv()},
+        // IMPLEMENTED. UE3's uber post-process blend: the depth-of-field
+        // composite against a blurred copy of the scene, then the scene colour
+        // transform (shadows, highlights, midtones, desaturation), then the
+        // output gamma. The last pass to touch the frame's colour before motion
+        // blur -- runtime/shaders/uber_post_blend.frag.
+        Pass{0x9610bf8038af9aafull, "uber post-process blend (DOF + colour transform)",
+             "the title's ps_9610bf8038af9aaf microcode; UE3 CalcUnfocusedPercent"
+             " and the scene colour transform",
+             UberPostBlendSpirv()},
         // WITHDRAWN: height fog. UE3's RenderFog (FogRendering.cpp:614) is the
         // only pass in the engine that draws with colour mask RGB and
         // BF_One/BF_SourceAlpha blending, and NO draw in any capture this
