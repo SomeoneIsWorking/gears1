@@ -2006,7 +2006,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                         rgba[i * 4 + c] = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
                     }
             }
-            const std::string& dirStr = lucent::config::text("DRAW_DIR");
+        const std::string& dirStr = lucent::config::text("DRAW_DIR");
         const char* dir = dirStr.empty() ? nullptr : dirStr.c_str();
             const std::filesystem::path out =
                 (dir ? std::filesystem::path(dir)
@@ -2093,6 +2093,38 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     {
         g_frame.resize(rbBytes);
         std::memcpy(g_frame.data(), P.readbackMapped, rbBytes);
+
+        // Scan-out gamma. The console puts every presented pixel through the
+        // guest's DC_LUT ramp; without it the image is brighter than the
+        // console's, and this title's ramp is markedly non-linear (measured: 254
+        // of 256 entries differ from linear, darkening the low end -- input 4 of
+        // 255 maps to 6 of 1023 where linear would give 16).
+        //
+        // Applied here, on the way to host pixels, which covers the screenshot,
+        // the census and the presenter's UPLOAD path. It does NOT cover the
+        // shared-device path, where the presenter blits the rendered image
+        // straight to the swapchain and never reads these bytes -- that one needs
+        // the LUT in the blit itself, which is a shader pass this does not add.
+        // Said out loud below rather than left as a difference between what a
+        // screenshot shows and what a window shows.
+        if (in.gammaRamp)
+        {
+            uint8_t lut[3][256];
+            for (uint32_t i = 0; i < 256; ++i)
+            {
+                const uint32_t e = in.gammaRamp[i];
+                // 10-bit per channel, packed blue/green/red, back down to 8.
+                lut[0][i] = uint8_t(((e >> 20) & 0x3FF) >> 2);   // red
+                lut[1][i] = uint8_t(((e >> 10) & 0x3FF) >> 2);   // green
+                lut[2][i] = uint8_t((e & 0x3FF) >> 2);           // blue
+            }
+            for (size_t i = 0; i + 3 < g_frame.size(); i += 4)
+            {
+                g_frame[i + 0] = lut[0][g_frame[i + 0]];
+                g_frame[i + 1] = lut[1][g_frame[i + 1]];
+                g_frame[i + 2] = lut[2][g_frame[i + 2]];
+            }
+        }
     }
     // The per-frame census -- a full per-pixel scan, a dozen summary lines and a
     // PPM write -- costs ~40 ms, which is most of a warm frame. It answers
@@ -2397,6 +2429,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         lucent::info("draw", "frame render pass: {} segments across {} surface"
             " switches, {} resolves executed (RT link {})", segments,
             surfaceSwitches, resolvesDone, TB.rtLinkEnabled ? "on" : "off");
+
+        lucent::info("draw", "scan-out gamma: {}", in.gammaRamp
+            ? "the guest's ramp WAS applied to these host pixels (screenshot,"
+              " census and the presenter's upload path). The shared-device BLIT"
+              " path does not go through it, so a window can look brighter than"
+              " this screenshot until the LUT moves into the blit"
+            : "no ramp programmed by the guest yet, so none applied -- this image"
+              " is the composite's own output");
 
         const std::string& dirStr = lucent::config::text("DRAW_DIR");
         const char* dir = dirStr.empty() ? nullptr : dirStr.c_str();

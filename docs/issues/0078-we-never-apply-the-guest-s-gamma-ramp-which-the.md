@@ -5,7 +5,7 @@ status: open
 symptom: our presented frame is flatter than the reference: a third of the distinct colours, and brightness that does not match
 tags: render,colour,present,oracle
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 ---
 
 Found by walking the oracle comparison (#77) inward with the frame-step probe,
@@ -61,3 +61,61 @@ own reasons as well.
     a ramp block, as Xenia's trace format has one);
   * the present path must sample it, per channel, with the table/PWL choice made
     by the front buffer format as the hardware does.
+
+### Note (2026-08-06)
+## IMPLEMENTED, and the claim about Xenia was WRONG (2026-08-06)
+
+Two corrections to the entry above, then the result.
+
+CORRECTION 1. "Xenia implements only the SEQ_COLOR path" is FALSE. It handles
+DC_LUT_30_COLOR too, in command_processor.cc's WriteRegister, with the same
+index auto-increment. The error came from a grep truncated at ten hits that cut
+off before that case. It matters because the entry used it to argue the oracle
+was not applying this title's ramp either -- the opposite is true, and that is
+exactly why implementing the ramp moved our output TOWARD the reference.
+
+CORRECTION 2. The first implementation here reported "1 of 256 entries differs
+from linear", which read as "this title's ramp is a no-op". That was a defect in
+this code: DC_LUT_30_COLOR AUTO-INCREMENTS the write index, and without that
+every write of an upload landed in entry 0, leaving 255 entries at their default
+and entry 0 holding the last value. With the increment: 254 of 256 entries
+differ. The register file's end state is what gives the increment away -- an
+8-bit index wraps to 0 after exactly 256 writes, which is what a capture taken
+later shows. Xenia's own case, found afterwards, does the same thing.
+
+## What the title actually uploads
+
+Measured on a live headless run: 256 writes, ALL whole-entry via
+DC_LUT_30_COLOR, zero sequential, zero PWL. Not programmed at boot -- it appears
+later, so an instrument that only looks at the first presented frame reports a
+confident "none" (the first version of this one did, and now says so).
+
+The ramp is markedly non-linear and darkens the low end: entry 1 maps to 1 of
+1023 where linear gives 4, entry 4 to 6 where linear gives 16 -- roughly a
+gamma of 1.24 on top of the composite's own output.
+
+## Implemented, and the effect measured
+
+The command processor accumulates the ramp as the writes go past (it cannot be
+recovered from a register snapshot) and hands it to the renderer, which applies
+it per channel on the way to host pixels. On the same scripted walk, our own
+gameplay frames:
+
+    before   mean 30.3   6,711 colours   95.1% of pixels above 8/255
+    after    mean 17.4   5,807 colours   71.6%
+    oracle   mean 22.1  24,497 colours   75.8%
+
+So the brightness difference against the reference is largely accounted for, and
+the image is not crushed -- wall texture, moss and window frames keep their
+detail.
+
+WHAT THIS DOES NOT FIX, stated because the entry above guessed it might: the
+COLOUR VARIETY gap is untouched (5,807 against ~24,000). Whatever flattens our
+composite is a separate defect, and the gamma ramp is no longer a candidate for
+it.
+
+NOT COVERED: the shared-device present path, where the presenter blits the
+rendered image straight to the swapchain without going through these host
+pixels. Headless runs, screenshots and the census all get the ramp; a window can
+still look brighter. The renderer says so in its per-frame report rather than
+leaving the two paths silently different.

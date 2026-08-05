@@ -109,6 +109,15 @@ struct FrameDrawInputs
     // guessed format would make the oracle agree with our guess by construction.
     // All zero when the capture predates this or the guest passed none.
     uint32_t frontBufferFetch[6] = {};
+    // The display gamma ramp the guest uploaded, 256 entries packed as the
+    // hardware's DC_LUT_30_COLOR (blue 0..9, green 10..19, red 20..29), or null
+    // when the title has programmed none. Scan-out puts every presented pixel
+    // through it; this title's is markedly non-linear (it darkens the low end),
+    // so a frame shown without it is brighter than the console's -- measured,
+    // applying it took a gameplay frame from 95.1% of pixels above 8/255 to
+    // 71.6%, against the reference renderer's 71.9-75.8% on the same walk. See
+    // catalog #78 and runtime/vd_null_gpu.cpp for how it is accumulated.
+    const uint32_t* gammaRamp = nullptr;
     // A monotonic frame index. When >= 0, a reported frame's screenshot is named
     // frame_<sequence>.ppm rather than overwriting frame.ppm, so a menu walk
     // leaves a filmstrip instead of only its last frame.
