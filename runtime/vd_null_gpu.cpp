@@ -557,6 +557,9 @@ struct CommandProcessor
     // the renderer so it presents the surface the GUEST named rather than the one a
     // rule of thumb picks.
     uint32_t frontBufferAddress = 0;
+    // The same swap packet's fetch constant: the guest's own statement of that
+    // buffer's format, size and tiling. See FrameDrawInputs::frontBufferFetch.
+    uint32_t frontBufferFetch[6] = {};
 
     // Predication (Xenos PFP bin mask/select). Bit 0 of a TYPE3 header marks the
     // packet predicated; hardware skips it when (bin_select & bin_mask) == 0.
@@ -1118,6 +1121,10 @@ struct CommandProcessor
     // every shader and building every pipeline, and says nothing about the
     // steady state.
     void SetFrontBuffer(uint32_t address) { frontBufferAddress = address; }
+    void SetFrontBufferFetch(const uint32_t* six)
+    {
+        std::memcpy(frontBufferFetch, six, sizeof(frontBufferFetch));
+    }
 
     void TriggerFrameRender()
     {
@@ -1148,6 +1155,7 @@ struct CommandProcessor
 
         gears::FrameDrawInputs in;
         in.frontBufferAddress = frontBufferAddress;
+        std::memcpy(in.frontBufferFetch, frontBufferFetch, sizeof(frontBufferFetch));
         in.guestBase = gears::Memory().Base();
         // Mirror a generous window of low guest physical memory so per-draw
         // vertex fetches resolve. Vertex/index buffers observed so far live in
@@ -1567,6 +1575,12 @@ struct CommandProcessor
                     // data[0] is the front buffer this swap presents. The renderer
                     // needs it BEFORE it chooses what to present.
                     SetFrontBuffer(data[0]);
+                    // data[2..7] is the front buffer's fetch constant, written by
+                    // VdSwap. A packet from before that was added carries zeros
+                    // there, and zeros are recorded as such rather than as a
+                    // fetch constant describing address 0.
+                    if (count >= 8)
+                        SetFrontBufferFetch(&data[2]);
                     TriggerFrameRender();
                     // The frame boundary is here, at the point in the stream
                     // where the hardware would flip -- so this is where the
@@ -2187,7 +2201,17 @@ void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
             | (kOpRuntimeSwap << 8));
         StoreGuest32(block + 4, frontBuffer);
         StoreGuest32(block + 8, uint32_t(frame)); // sequence, see kOpRuntimeSwap
-        for (uint32_t i = 3; i < kSwapReservationDwords; i++)
+        // r4 is the front buffer's Direct3D 9 texture header fetch constant, six
+        // dwords. The real kernel posts them to the sequencer as a TYPE0 write to
+        // SHADER_CONSTANT_FETCH_00 immediately before the swap, because the
+        // hardware takes the front buffer's format, size and tiling from fetch
+        // slot 0 rather than from the address. Carrying them in the swap packet
+        // keeps that statement of the guest's alongside the address it belongs
+        // to, and behind the same stale-sequence filter.
+        for (uint32_t i = 0; i < 6; i++)
+            StoreGuest32(block + 12 + i * 4,
+                ctx.r4.u32 != 0 ? ReadGuest32(ctx.r4.u32 + i * 4) : 0);
+        for (uint32_t i = 9; i < kSwapReservationDwords; i++)
             StoreGuest32(block + i * 4, 0);
 
         lucent::debug("gpu", "VdSwap: swap packet at {:#x}, front buffer {:#x}",

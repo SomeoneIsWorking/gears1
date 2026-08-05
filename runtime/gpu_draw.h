@@ -97,6 +97,18 @@ struct FrameDrawInputs
     // scene's linear-light HDR surface instead of the tonemapped one, say, which
     // looks like flat unlit grey with all the texture detail present.
     uint32_t frontBufferAddress = 0;
+    // The front buffer's TEXTURE FETCH CONSTANT, the six dwords the guest hands
+    // VdSwap in its Direct3D 9 texture header (host order). This is the only
+    // statement of the front buffer's FORMAT, size, tiling and swizzle that the
+    // guest makes -- the address alone does not say how to read the bytes.
+    //
+    // Captured because an oracle needs it: Xenia's swap path takes the front
+    // buffer from fetch constant 0 (vulkan_texture_cache.cc RequestSwapTexture),
+    // exactly as its kernel's VdSwap posts it, so a replayed frame with no fetch
+    // constant produces no image at all. Deriving one from the address plus a
+    // guessed format would make the oracle agree with our guess by construction.
+    // All zero when the capture predates this or the guest passed none.
+    uint32_t frontBufferFetch[6] = {};
     // A monotonic frame index. When >= 0, a reported frame's screenshot is named
     // frame_<sequence>.ppm rather than overwriting frame.ppm, so a menu walk
     // leaves a filmstrip instead of only its last frame.

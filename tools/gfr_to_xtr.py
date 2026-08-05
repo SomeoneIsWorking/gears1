@@ -40,6 +40,23 @@ EVENT_SWAP = 0
 # --- Xenos (extern/xenia/src/xenia/gpu/xenos.h, registers.h) ----------------
 PM4_DRAW_INDX = 0x22
 PM4_IM_LOAD_IMMEDIATE = 0x2B
+# The Xenia-private packet its own kernel's VdSwap posts to trigger a swap
+# (xenos.h PM4_XE_SWAP, xboxkrnl_video.cc VdSwap_entry). Nothing else makes
+# Xenia produce an image: the trace format's kEvent/kSwap marker is only a
+# playback break hint (trace_player.cc), so a trace carrying only that renders
+# every draw and then writes no file.
+PM4_XE_SWAP = 0x64
+SWAP_SIGNATURE = 0x53574150            # make_fourcc("SWAP")
+# XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 (register_table.inc). Xenia's swap takes
+# the front buffer from FETCH CONSTANT 0, not from the address in the packet
+# (vulkan_texture_cache.cc RequestSwapTexture), exactly as the hardware does.
+REG_FETCH_CONSTANT_00 = 0x4800
+# The console maps physical RAM through several virtual aliases; the fetch
+# constant names one of them. Xenia's kernel translates to physical before
+# posting, because the GPU works in physical addresses -- and our capture's
+# memory blocks are stored at physical offsets too, so the same translation is
+# what makes the address land on the captured bytes.
+GUEST_PHYSICAL_MASK = 0x1FFFFFFF
 SHADER_TYPE_VERTEX = 0
 SHADER_TYPE_PIXEL = 1
 # A PM4 count field is 14 bits, so a packet cannot carry more than this many
@@ -57,6 +74,28 @@ REG_COUNT = 0x8000
 # Xenia can hold; every register either renderer reads lives well below it.
 XENIA_REG_COUNT = 0x5003
 
+def front_buffer_extent(cap):
+    """The guest bytes the swap will read as the presented image, [lo, hi).
+
+    Sized from the fetch constant the guest itself posted, not from the frame's
+    1280x720: a tiled surface is stored at its row PITCH and padded to whole
+    32-pixel tiles, so the buffer is larger than the visible image and the tail
+    is exactly the part that looks free. Empty when the capture cannot say,
+    which excludes nothing -- the caller is then no worse off than before.
+    """
+    if not cap.front_fetch or not any(cap.front_fetch):
+        return (0, 0)
+    base = (((cap.front_fetch[1] >> 12) << 12) & GUEST_PHYSICAL_MASK)
+    pitch = ((cap.front_fetch[0] >> 22) & 0x1FF) * 32
+    width = (cap.front_fetch[2] & 0x1FFF) + 1
+    height = ((cap.front_fetch[2] >> 13) & 0x1FFF) + 1
+    row_pixels = pitch if pitch else width
+    rows = (height + 31) & ~31
+    # Every format the front buffer can take is 32 bits per pixel: the kernel
+    # accepts only k_8_8_8_8 and k_2_10_10_10_AS_16_16_16_16 (VdSwap_entry).
+    return (base, base + row_pixels * rows * 4)
+
+
 def pick_packet_scratch(cap):
     """A guest page to place synthesised packets in, chosen per capture.
 
@@ -66,11 +105,22 @@ def pick_packet_scratch(cap):
     tried (0x01000000) collided with real data in courtyard.gfr -- so the free
     page is FOUND, and if there is none this refuses rather than picking one
     anyway.
+
+    A page being all-zero in the capture is NOT enough on its own. The front
+    buffer is several megabytes and much of it can be zero at capture time --
+    0x320000 sat inside a front buffer based at 0x311000 -- and packets written
+    there are read back by the swap as pixels, so the oracle's image would carry
+    a block of garbage that looks like a rendering defect. Its whole extent is
+    therefore excluded, zero or not.
     """
     occupied = {base for base, _ in cap.blocks}
+    lo, hi = front_buffer_extent(cap)
     for guest in range(0, min(cap.window, cap.mirror), cap.block_size):
-        if guest not in occupied:
-            return guest
+        if guest in occupied:
+            continue
+        if guest < hi and guest + cap.block_size > lo:
+            continue
+        return guest
     raise SystemExit(
         "REFUSING: every page in this capture's guest window is occupied, so "
         "there is nowhere to put a packet that would not overwrite frame data.")
@@ -87,13 +137,21 @@ class Capture:
             raise ValueError(f"{path}: not a GEARSFR1 capture")
         p = 8
         (self.version,) = struct.unpack_from("<I", d, p); p += 4
-        if self.version not in (1, 2):
+        if self.version not in (1, 2, 3):
             raise ValueError(f"{path}: capture version {self.version} unsupported")
         (self.width, self.height, self.mirror) = struct.unpack_from("<3I", d, p); p += 12
         if self.version >= 2:
             (self.front_buffer,) = struct.unpack_from("<I", d, p); p += 4
         else:
             self.front_buffer = 0
+        if self.version >= 3:
+            self.front_fetch = list(struct.unpack_from("<6I", d, p)); p += 24
+        else:
+            # Not "no fetch constant" but "this capture cannot say". Kept
+            # distinct so the swap is REFUSED rather than synthesised from a
+            # guessed format -- an invented one would make the oracle agree with
+            # our guess about the front buffer by construction.
+            self.front_fetch = None
         (self.window,) = struct.unpack_from("<I", d, p); p += 4
         p += 8                                    # sequence (int64)
         (draw_count,) = struct.unpack_from("<I", d, p); p += 4
@@ -187,6 +245,36 @@ class TraceWriter:
         self.buf += struct.pack("<II", K_EVENT, EVENT_SWAP)
 
 
+def swap_packets(fetch, front_buffer):
+    """The two packets Xenia's own VdSwap posts, in its order.
+
+    Mirrored from xboxkrnl_video.cc VdSwap_entry, which is the contract the GPU
+    side reads: a TYPE0 write of the six-dword front-buffer fetch constant into
+    fetch slot 0, then PM4_XE_SWAP carrying the signature, the front buffer's
+    PHYSICAL address, and its size.
+
+    The width and height are taken from the fetch constant's own size_2d rather
+    than carried separately: Xenia's kernel asserts the two are equal
+    (`*width == 1 + gpu_fetch.size_2d.width`), so reading them from the fetch is
+    the same number by the hardware's own definition -- and its Vulkan backend
+    ignores these packet fields anyway, sizing the swap image from the texture.
+
+    Returns (type0_dwords, type3_dwords, width, height, physical_address).
+    """
+    fetch = list(fetch)
+    virtual = (fetch[1] >> 12) << 12       # base_address is dword_1 bits 12..31
+    physical = virtual & GUEST_PHYSICAL_MASK
+    fetch[1] = (fetch[1] & 0xFFF) | ((physical >> 12) << 12)
+    # size_2d: width-1 in bits 0..12 and height-1 in 13..25 of dword_2.
+    width = (fetch[2] & 0x1FFF) + 1
+    height = ((fetch[2] >> 13) & 0x1FFF) + 1
+
+    type0 = [(0 << 30) | ((6 - 1) << 16) | REG_FETCH_CONSTANT_00] + fetch
+    type3 = [0xC0000000 | ((4 - 1) << 16) | (PM4_XE_SWAP << 8),
+             SWAP_SIGNATURE, physical, width, height]
+    return type0, type3, width, height, physical
+
+
 def im_load_packet(shader_type, ucode):
     """PM4_IM_LOAD_IMMEDIATE: bind a shader by embedding its microcode.
 
@@ -225,6 +313,45 @@ def draw_packet(draw):
         body += [draw["index_base"], dma_size]
     header = 0xC0000000 | ((len(body) - 1) << 16) | (PM4_DRAW_INDX << 8)
     return [header] + body
+
+
+def emit_swap(w, cap, scratch):
+    """Emit the swap, or say exactly why the trace will produce no image.
+
+    The negative is written out deliberately. Without a swap the dump renders
+    every draw, exits 1 and writes NOTHING -- which is indistinguishable from a
+    trace whose draws all failed, and cost a session once already. So a trace
+    that cannot swap says so here, at build time, rather than being discovered
+    as a missing file an hour later.
+    """
+    if cap.front_fetch is None:
+        return (f"NO SWAP: capture is v{cap.version}, which predates the front "
+                f"buffer's fetch constant. Xenia takes the swap texture from "
+                f"fetch slot 0, so this trace WILL render its draws and write no "
+                f"image. Re-capture with a current build.")
+    if not any(cap.front_fetch):
+        return ("NO SWAP: the capture's front-buffer fetch constant is all "
+                "zeroes -- the guest passed none, or the swap packet predates "
+                "it. No image will be written.")
+    type0, type3, width, height, physical = swap_packets(cap.front_fetch,
+                                                         cap.front_buffer)
+    # The fetch constant and the separately-recorded front buffer address are two
+    # independent statements by the guest about the same buffer. Xenia's kernel
+    # asserts they agree; if they do not here, one of them is being read wrong,
+    # and rendering anyway would present some other surface convincingly.
+    stated = (cap.front_fetch[1] >> 12) << 12
+    if cap.front_buffer and (cap.front_buffer & GUEST_PHYSICAL_MASK) != \
+            (stated & GUEST_PHYSICAL_MASK):
+        raise SystemExit(
+            f"REFUSING: the capture's front buffer address {cap.front_buffer:#x} "
+            f"and its fetch constant's base {stated:#x} name different buffers. "
+            f"One of the two is being read wrong; a trace built from either "
+            f"would present a surface the guest did not name.")
+    w.packet(scratch, type0)
+    w.packet(scratch, type3)
+    w.swap()
+    return (f"swap: front buffer {physical:#x} ({width}x{height}), fetch "
+            f"constant 0 posted as the guest's VdSwap does")
 
 
 def convert(src: Path, dst: Path, max_draws=None):
@@ -268,7 +395,7 @@ def convert(src: Path, dst: Path, max_draws=None):
                 last_ps = blob_i
         w.packet(scratch, draw_packet(d))
         emitted += 1
-    w.swap()
+    swap_note = emit_swap(w, cap, scratch)
     dst.write_bytes(bytes(w.buf))
     print(f"{src.name} -> {dst.name}")
     print(f"   capture: v{cap.version} {cap.width}x{cap.height}, "
@@ -276,6 +403,7 @@ def convert(src: Path, dst: Path, max_draws=None):
           f"({sum(len(b) for _, b in cap.blocks) / (1 << 20):.1f} MiB)")
     print(f"   packets at guest {scratch:#x} (a page this capture leaves empty)")
     print(f"   trace:   {emitted} draws emitted, {len(dst.read_bytes()) / (1 << 20):.1f} MiB")
+    print(f"   {swap_note}")
     if too_big:
         print(f"   WARNING: {len(too_big)} shaders exceed a PM4 packet's 14-bit "
               f"count and were NOT bound, so some draws used whatever shader was "
@@ -358,6 +486,46 @@ def selftest():
     w2.packet(0x1000, [0xAABBCCDD])
     check("packet payload is big-endian",
           struct.unpack_from(">I", w2.buf, 12)[0], 0xAABBCCDD)
+
+    # The swap packets, whose absence was the whole reason a trace rendered 744
+    # draws and produced no file. Every field is checked against Xenia's own
+    # VdSwap_entry, because a swap that parses but names the wrong buffer would
+    # present something plausible.
+    #   dword_1: format/endian/etc in the low 12 bits, base_address>>12 above.
+    #   The base is a VIRTUAL address in the 0xC0000000 alias; the kernel posts
+    #   the physical one.
+    fetch = [0, (0xC1234 << 12) | 0x086, (720 - 1) << 13 | (1280 - 1), 0, 0, 0]
+    type0, type3, w_, h_, phys = swap_packets(fetch, 0xC1234000)
+    check("swap type0 header", type0[0], (5 << 16) | 0x4800)
+    check("swap type0 carries six dwords", len(type0) - 1, 6)
+    check("swap fetch base translated to physical", type0[2] >> 12, 0x01234)
+    check("swap fetch low bits untouched", type0[2] & 0xFFF, 0x086)
+    check("swap physical address", phys, 0x01234000)
+    check("swap width from size_2d", w_, 1280)
+    check("swap height from size_2d", h_, 720)
+    check("swap type3 header", type3[0], 0xC0000000 | (3 << 16) | (0x64 << 8))
+    check("swap signature is 'SWAP'", type3[1],
+          int.from_bytes(b"SWAP", "big"))
+    check("swap packet address", type3[2], 0x01234000)
+
+    # And the negative: a capture that cannot state the front buffer must REFUSE
+    # to swap and SAY so, not quietly emit a trace that renders nothing.
+    class _Cap:
+        version, front_buffer, front_fetch = 2, 0x1234000, None
+    note = emit_swap(TraceWriter(), _Cap(), 0)
+    check("v2 capture refuses to swap", note.startswith("NO SWAP"), True)
+    _Cap.version, _Cap.front_fetch = 3, [0] * 6
+    check("all-zero fetch refuses to swap",
+          emit_swap(TraceWriter(), _Cap(), 0).startswith("NO SWAP"), True)
+    # Disagreement between the two statements of the front buffer must stop the
+    # build, not pick one.
+    _Cap.front_fetch = [0, (0xC1234 << 12) | 0x086, 0, 0, 0, 0]
+    _Cap.front_buffer = 0x5678000
+    try:
+        emit_swap(TraceWriter(), _Cap(), 0)
+        check("mismatched front buffer refused", False, True)
+    except SystemExit:
+        check("mismatched front buffer refused", True, True)
 
     print("\nSELFTEST FAILED: " + ", ".join(failures) if failures
           else "\nselftest passed: the packing matches Xenia's headers by hand-check.")
