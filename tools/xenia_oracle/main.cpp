@@ -77,6 +77,18 @@ DEFINE_int32(oracle_interval, 10,
 // screen or its storage-device dialog on its own -- it waits, and every frame
 // captured is black for as long as it waits. The default is what a person does
 // to get in: START once the title screen is up, then A over and over.
+// Ask Xenia to capture ONE of its own frames as a .xtr at this many seconds
+// in, 0 to never. Written under --trace_gpu_prefix.
+//
+// This is the control arm for our synthesised traces (tools/gfr_to_xtr.py): a
+// trace XENIA produced, dumped by the same xenia-gpu-vulkan-trace-dump that
+// renders ours black. If Xenia's own trace renders, the dump path is sound and
+// the fault is in what we synthesise; if it is also black, no comparison built
+// on that tool means anything. Neither answer is available by inspection.
+DEFINE_int32(oracle_trace_at, 0,
+             "Seconds in at which to capture a Xenia GPU trace of one frame.",
+             "Oracle");
+
 DEFINE_string(oracle_input, "START@25+8,A@30+2",
               "Scripted controller presses, BUTTON@SECONDS[+REPEAT_SECONDS], "
               "comma separated. Empty disables input entirely.",
@@ -204,9 +216,21 @@ int oracle_main(const std::vector<std::string>& args) {
   const int32_t seconds = std::max(1, cvars::oracle_seconds);
   const int32_t interval = std::max(1, cvars::oracle_interval);
   int captured = 0, attempted = 0;
+  bool trace_requested = false;
   for (int32_t elapsed = interval; elapsed <= seconds; elapsed += interval) {
     std::this_thread::sleep_for(std::chrono::seconds(interval));
     ++attempted;
+    if (cvars::oracle_trace_at > 0 && !trace_requested &&
+        elapsed >= cvars::oracle_trace_at) {
+      trace_requested = true;
+      // NOT YET WORKING, and said so here rather than in a commit message
+      // nobody reads: the request is issued and no .xtr appears, with no
+      // message from the trace writer either. RequestFrameTrace queues work for
+      // the command processor, so the next thing to check is what that queue
+      // does with it when tracing was never begun -- not to request it harder.
+      XELOGI("oracle: requesting a Xenia frame trace at {}s", elapsed);
+      emulator->graphics_system()->RequestFrameTrace();
+    }
     if (WriteFramePng(emulator->graphics_system(),
                       out_dir / fmt::format("frame_{:04d}s.png", elapsed))) {
       ++captured;

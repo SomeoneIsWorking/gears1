@@ -341,3 +341,47 @@ So LAUNCH is reliable (3/3) and RENDERING is not (2/3), and a single swap in two
 minutes is a stall, not slow loading. Cause unknown; nothing here distinguishes a
 startup race from a first-run cost. See claim C012, which carries the same
 caveat. Quote "2 of 3" rather than "it runs".
+
+### Note (2026-08-05)
+## The oracle is HEADLESS now, and what the black screen actually was (2026-08-05)
+
+`tools/xenia_oracle` drives Xenia's emulator core directly -- our code, Xenia's
+libraries via its own CMake, no window in the path. Driving `xenia_canary` is
+retired: it opens a GTK window whatever `--headless` says.
+
+Three fork defects blocked a windowless run, each invisible from the windowed
+app (all on extern/xenia, pushed):
+  * `CompleteLaunch` dereferenced `display_window_` before logging anything, so
+    the launch faulted and the guest-exception handler turned it into a spin --
+    presenting as the DISC MOUNT hanging, which is where July's investigation
+    went;
+  * console apps reported argument errors through a zenity dialog, because
+    `has_console_attached()` is isatty(stdin) and every scripted invocation
+    redirects it;
+  * a guest crash was PAUSED before it was logged, and Pause() waits on a fence
+    only a UI can resume -- so a crash left an empty log and looked like a hang.
+
+That third one is what cracked the black screen. With the dump moved ahead of
+the pause: guest PC 0x825F39F4, access violation reading 0x10000003C, on the
+main thread -- and 0x825F3450 is the callback the guest had just handed
+XAudioRegisterRenderDriverClient. It was crashing inside its own audio
+render-driver callback, driven by the NOP audio backend. With SDL audio
+(SDL_AUDIODRIVER=dummy, no sound device needed) the same run goes from 124 swaps
+plus a crash to 6254 swaps and none.
+
+The other half is input: a headless run has no operator and this title waits.
+`scripted_input.{h,cc}` presses on a schedule (BUTTON@SECONDS[+REPEAT]),
+defaulting to START then A repeatedly. Xenia's own nop HID driver carries the
+TODO saying why "no device connected" is not enough.
+
+RESULT: seven of seven captures, Act 1 gameplay from 120s on (22k-36k distinct
+colours, ~76% of pixels above 8/255). Claim C013.
+
+STILL OPEN, both recorded so they are not rediscovered:
+  * our SYNTHESISED traces (gfr_to_xtr) still render black in trace_dump even
+    though all 18 resolves execute and write 3.7 MB. The index-count bug (665 of
+    744 draws claiming empty index buffers) is fixed and was not the whole
+    story.
+  * `RequestFrameTrace()` from the harness issues the request and writes no
+    .xtr, with nothing from the trace writer either. That would be the control
+    arm for the point above.
