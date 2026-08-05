@@ -42,38 +42,21 @@
 #include "gpu_draw_xlate.h"
 #include "gpu_draw_formats.h"
 #include "gpu_draw_pixels.h"
+#include "gpu_draw_prepared.h"
+#include "gpu_draw_untile.h"
+#include "gpu_draw_renderer.h"
 
 namespace gears
 {
-namespace
+// Everything below is in gears::draw, the namespace the renderer's own headers
+// use. It was an anonymous namespace until this file was split: a member of a
+// class in an anonymous namespace can only be defined in the translation unit
+// that declared it, which is precisely what made the 5300-line frame function
+// impossible to take apart. Internal linkage is kept where it belongs -- on the
+// file-local objects, with `static`.
+namespace draw
 {
 
-// Xenos state -> Vulkan, now in gpu_draw_formats.{h,cpp}. Pulled in by name so
-// every call site here reads the same as it did when the definitions were in
-// this file.
-using draw::BlendFactorOf;
-using draw::BlendIsIdentity;
-using draw::BlendOpOf;
-using draw::ColorFormatBytesPerPixel;
-using draw::ColorFormatName;
-using draw::CompareOpOf;
-using draw::FloatToFixed16p8;
-using draw::GuestClamp;
-using draw::GuestColorFormatClamp;
-using draw::HostColorFormat;
-using draw::HostFormatFor;
-using draw::OutputMergerState;
-using draw::PrimName;
-using draw::TopologyOf;
-
-// Guest number formats and the diagnostic writers, now in gpu_draw_pixels.{h,cpp}.
-using draw::Depth20e4To32;
-using draw::DepthUnorm24To32;
-using draw::FormatSupportsStorage;
-using draw::HalfToFloat;
-using draw::PackFloatConstants;
-using draw::VkStr;
-using draw::WritePpm;
 
 constexpr uint32_t kWidth = 1280;
 constexpr uint32_t kHeight = 720;
@@ -104,7 +87,7 @@ private:
     std::chrono::steady_clock::time_point begin_;
 };
 
-std::vector<uint8_t> g_frame; // last rendered R8G8B8A8 frame
+std::vector<uint8_t> g_frame; // last rendered R8G8B8A8 frame (file-local)
 
 
 #define VK_CHECK(expr)                                                       \
@@ -115,43 +98,6 @@ std::vector<uint8_t> g_frame; // last rendered R8G8B8A8 frame
             return false;                                                    \
         }                                                                    \
     } while (0)
-
-
-// -------------------------------------------------------------------------
-// Vulkan renderer, headless, one draw. Everything is torn down at the end; the
-// hot draw fires once (the caller latches), so there is no pipeline caching to
-// justify keeping the device alive.
-struct Renderer
-{
-    VkInstance instance = VK_NULL_HANDLE;
-    VkPhysicalDevice physical = VK_NULL_HANDLE;
-    VkDevice device = VK_NULL_HANDLE;
-    uint32_t queueFamily = 0;
-    VkQueue queue = VK_NULL_HANDLE;
-    VkDebugUtilsMessengerEXT messenger = VK_NULL_HANDLE;
-    VkPhysicalDeviceMemoryProperties memProps{};
-    // Whether this renderer CREATED the device or adopted the presenter's. An
-    // adopter must not destroy what it does not own, and destroying a device the
-    // presenter is still drawing to would take the window down with it.
-    bool ownsDevice = true;
-    bool hasPipelineStats = false; // pipelineStatisticsQuery feature enabled
-    bool hasGeometryShader = false;
-    bool hasStorageImageWithoutFormat = false;
-    VkDeviceSize uniformOffsetAlignment = 256;
-
-    // Built on the first frame, reused by every frame after it; released only on
-    // a target-size change. A raw pointer rather than a unique_ptr so the type can stay
-    // incomplete here: it names OutputMergerState and the texture structs,
-    // which are declared further down.
-    struct RendererPersistent* persistent = nullptr;
-
-    bool Init();
-    bool FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_t& out);
-    bool MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf,
-                    VkDeviceMemory& mem, bool wantCached = false);
-    bool RenderFrameImpl(const FrameDrawInputs& in);
-    void ReleasePersistent();
-};
 
 bool Renderer::Init()
 {
@@ -399,216 +345,6 @@ bool Renderer::MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 }
 
 
-// A host image owned for the whole run: the guest's decoded textures, and the
-// 1x1 stand-ins a binding falls back to when its fetch constant cannot be
-// decoded (which is always COUNTED, never quietly substituted).
-struct GuestTex
-{
-    VkImage image = 0;
-    VkDeviceMemory mem = 0;
-    VkImageView view = 0;
-};
-struct StubTex
-{
-    VkImage image = 0;
-    VkDeviceMemory mem = 0;
-    VkImageView view = 0;
-};
-
-// --- the render-target cache -------------------------------------------
-// One host colour target per EDRAM colour surface, keyed by the surface's
-// RB_COLOR_INFO.color_base. A UE3 frame on this title uses four of them: the
-// 7e3 HDR world, the 8888 tonemap/UI output that is presented, a 16-bit float
-// light accumulation buffer and a small 8888 one. Rendering them all into a
-// single 8888 target -- what this backend did before -- means the tonemap
-// draws, which run last, paint over the world they were supposed to composite.
-//
-// THE KEY IS THE BASE ALONE, not (base, format). An EDRAM tile base is a
-// location in EDRAM; the format is how the draw currently interprets the bytes
-// there, and a frame changes it. Measured on an Act 1 frame, base 0x2d0 is
-// rendered as k_8_8_8_8 (103 draws), k_2_10_10_10_FLOAT (26),
-// k_2_10_10_10_FLOAT_AS_16_16_16_16 (17) and k_16_16 (2) -- all the same
-// surface, reinterpreted. Keying on the pair would split it across four host
-// images that cannot see each other's output, which is the same defect one
-// level down from the one this cache exists to fix. Instead each base gets ONE
-// host image in a format wide enough for every format the frame uses there
-// (HostFormatFor below), so a reinterpretation accumulates the way EDRAM does.
-//
-// The console also renders each surface in PREDICATED TILES, re-binding the
-// same base once per tile. Tiles therefore ACCUMULATE into that one target: a
-// surface is CLEARED the first time a frame touches it and LOADED every time
-// after, which is what `begunThisFrame` tracks.
-struct SurfaceTarget
-{
-    VkFormat hostFormat = VK_FORMAT_UNDEFINED;
-    VkImage color = VK_NULL_HANDLE;
-    VkDeviceMemory colorMem = VK_NULL_HANDLE;
-    VkImageView colorView = VK_NULL_HANDLE;
-    // A plain 2D view of the same image, for the resolve compute shader. The
-    // attachment view cannot serve: a storage image binding must be 2D, and
-    // colorView is what the framebuffer holds.
-    VkImageView storageView = VK_NULL_HANDLE;
-    VkFramebuffer fb = VK_NULL_HANDLE;
-    bool begunThisFrame = false;
-    uint32_t drawsThisFrame = 0;
-};
-
-// A resolve destination: the main-memory address the guest copies an EDRAM
-// surface out to (RB_COPY_DEST_BASE), given a host image of its own. A later
-// draw whose texture fetch constant names that address is sampling this frame's
-// render target, and this is what it reads -- the real chain the tonemap pass
-// needs, replacing the single global snapshot the RT link used to bind for
-// every resolve destination at once.
-struct ResolveTarget
-{
-    VkFormat hostFormat = VK_FORMAT_UNDEFINED;
-    VkImage image = VK_NULL_HANDLE;
-    VkDeviceMemory mem = VK_NULL_HANDLE;
-    VkImageView view = VK_NULL_HANDLE;
-    VkImageView storageView = VK_NULL_HANDLE; // 2D, for the resolve dispatch
-    uint32_t sourceBase = 0; // the EDRAM base it is a copy of
-    uint32_t copies = 0;     // resolves into it this frame
-    // A resolve destination is a REGION OF A TEXTURE, not a texture. This one
-    // is the whole texture: the guest's RB_COPY_DEST_BASE/_PITCH describe it,
-    // and a resolve whose base lands inside it writes at an offset rather than
-    // minting an image of its own. That distinction is what assembles a frame
-    // rendered in predicated tiles -- see catalog #32, where one 1280x720
-    // half-float target was being split into two unrelated images because the
-    // guest folds the second tile's row offset into RB_COPY_DEST_BASE.
-    uint32_t base = 0;       // RB_COPY_DEST_BASE of the texture's first row
-    uint32_t pitch = 0, height = 0; // in pixels, from RB_COPY_DEST_PITCH
-    uint32_t bpp = 0;        // bytes per pixel of the guest destination format
-    uint32_t width = 0, imageHeight = 0; // what the host image was created with
-    bool everWritten = false; // whether a resolve has landed in it yet
-    // A DEPTH destination. It is not a copy of a colour surface: the guest reads
-    // it back as k_24_8_FLOAT and its shaders take .x, so the host image holds
-    // the depth as a float. R16G16B16A16_SFLOAT would be wrong here -- half
-    // float carries about 11 mantissa bits near 1.0 against the guest's 20, so
-    // depth would band where it matters most.
-    bool isDepth = false;
-};
-
-
-
-// Everything a frame render needs that does not change between frames.
-//
-// RenderFrameImpl used to build all of this per call and tear it down again,
-// which is why one frame cost ~300 ms while the GPU work inside it was 6 ms:
-// 116 ms translating shaders it had already translated, 21 ms creating
-// pipelines it had already created, plus the render target, render passes and
-// descriptor set layouts. Held here, it is paid once.
-//
-// Note the coupling: a VkPipeline is only valid against a compatible
-// VkRenderPass, and the cached texture views only outlive the frame because the
-// images they view are owned here too -- so these cannot be made persistent one
-// at a time.
-struct RendererPersistent
-{
-    bool built = false;
-    uint32_t width = 0, height = 0;
-
-    // (microcode hash, modification, output clamped) -> translation and module.
-    // The clamp belongs in the key because a widened host surface makes it a
-    // property of the DRAW's guest colour format, not of the microcode.
-    std::map<std::tuple<uint64_t, uint64_t, int>, draw::ShaderXlate> xlate;
-    std::map<std::tuple<uint64_t, uint64_t, int>, VkShaderModule> modules;
-    std::map<draw::RectangleGeometryShaderKey, VkShaderModule> geomShaders;
-
-    std::map<std::string, VkDescriptorSetLayout> texLayouts;
-    std::map<std::pair<std::string, std::string>, VkPipelineLayout> pipeLayouts;
-    // The render pass is part of the key: a pipeline is only valid against a
-    // render pass it is compatible with, and each colour format now has its own.
-    std::map<std::tuple<VkShaderModule, VkShaderModule, VkShaderModule, uint32_t,
-                        OutputMergerState, VkRenderPass>, VkPipeline> pipelines;
-    VkDescriptorSetLayout set0 = VK_NULL_HANDLE, set1 = VK_NULL_HANDLE;
-
-    // Guest textures, their views by fetch key, and their samplers. Keyed rather
-    // than a flat list because an entry whose GUEST BYTES changed has to be found
-    // and destroyed, not just replaced in the view map -- see the eviction in
-    // uploadTexture.
-    std::map<std::array<uint32_t, 4>, GuestTex> guestTextures;
-    std::map<std::array<uint32_t, 4>, VkImageView> texCache;
-    // The hash of the GUEST bytes each cached texture was built from. The cache key
-    // is the fetch constant, which does not change when the guest overwrites the
-    // pixels at the same address, so this is the only thing that can notice.
-    std::map<std::array<uint32_t, 4>, uint64_t> texContentHash;
-    std::map<uint64_t, VkSampler> samplerCache;
-    StubTex stub2D{}, stub3D{}, stubCube{};
-    VkSampler stubSampler = VK_NULL_HANDLE;
-
-    // The render-target cache: one host target per EDRAM colour surface, one
-    // host image per resolve destination, and a pair of render passes (clear
-    // and load) per host colour format.
-    std::map<uint32_t, SurfaceTarget> surfaceTargets; // EDRAM color_base -> target
-    std::map<uint32_t, ResolveTarget> resolveTargets; // RB_COPY_DEST_BASE -> image
-    std::map<VkFormat, std::pair<VkRenderPass, VkRenderPass>> passes; // clear, load
-
-    // The resolve compute pipeline. A resolve is not a blit: it applies the
-    // guest's copy_dest_exp_bias and copy_dest_swap, which a blit cannot do.
-    VkShaderModule resolveModule = VK_NULL_HANDLE;
-    VkDescriptorSetLayout resolveSetLayout = VK_NULL_HANDLE;
-    VkPipelineLayout resolveLayout = VK_NULL_HANDLE;
-    VkPipeline resolvePipeline = VK_NULL_HANDLE;
-    VkDescriptorPool resolveDescPool = VK_NULL_HANDLE;
-    uint32_t resolveDescCapacity = 0;
-    // The DEPTH resolve: its own pipeline, because its source is a sampled
-    // image (a depth image cannot be a storage image) rather than a storage one.
-    VkShaderModule resolveDepthModule = VK_NULL_HANDLE;
-    VkDescriptorSetLayout resolveDepthSetLayout = VK_NULL_HANDLE;
-    VkPipelineLayout resolveDepthLayout = VK_NULL_HANDLE;
-    VkPipeline resolveDepthPipeline = VK_NULL_HANDLE;
-    VkImageView depthSampledView = VK_NULL_HANDLE;
-
-    // Depth is shared by every surface for now; the frame's distinct
-    // RB_DEPTH_INFO bases are counted per frame so the moment that stops being
-    // faithful is visible rather than assumed.
-    VkImage depth = VK_NULL_HANDLE; VkDeviceMemory depthMem = VK_NULL_HANDLE;
-    VkImageView depthView = VK_NULL_HANDLE;
-
-    // The image the finished frame is handed to the presenter in: 8888, one blit
-    // from whatever surface the frame ended on.
-    //
-    // TWO OF THEM, ALTERNATING, and that is the whole point. The presenter runs on
-    // its own thread and the renderer on another, so publishing the live render
-    // target meant the presenter could blit a surface the renderer had already
-    // started drawing the next frame into. Alternating means the image being shown
-    // is never the image being written.
-    VkImage presentStage[2]{};
-    VkDeviceMemory presentStageMem[2]{};
-    uint32_t presentStageIndex = 0;
-
-    // The guest-memory mirror the translated shaders fetch through. The buffer
-    // is persistent; its CONTENTS are refreshed every frame, because guest
-    // memory is exactly what changes between frames.
-    VkBuffer ssbo = VK_NULL_HANDLE; VkDeviceMemory ssboMem = VK_NULL_HANDLE;
-    VkDeviceSize ssboBytes = 0;
-
-    // One persistently-mapped buffer the per-draw uniform blocks and expanded
-    // index buffers are suballocated from, reset at the start of every frame.
-    // They used to be a VkBuffer plus a VkDeviceMemory each -- five uniform
-    // blocks per draw, created and destroyed every frame, which is 870
-    // allocations on a 174-draw frame and where ~40 ms of a warm frame went.
-    // It grows to the previous frame's high-water mark; a frame that outgrows
-    // it mid-way falls back to standalone buffers for the remainder rather than
-    // dropping draws, and the next frame is sized to fit.
-    VkBuffer arena = VK_NULL_HANDLE; VkDeviceMemory arenaMem = VK_NULL_HANDLE;
-    void* arenaMapped = nullptr;
-    VkDeviceSize arenaBytes = 0;
-    VkDeviceSize arenaHighWater = 0;
-
-    // The frame's own command recording and pixel readback. These were created
-    // and destroyed every frame too; the descriptor pool is RESET each frame
-    // rather than rebuilt.
-    VkCommandPool cmdPool = VK_NULL_HANDLE;
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    VkFence fence = VK_NULL_HANDLE;
-    VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-    uint32_t descriptorPoolDraws = 0; // what it was sized for
-    VkBuffer readback = VK_NULL_HANDLE; VkDeviceMemory readbackMem = VK_NULL_HANDLE;
-    void* readbackMapped = nullptr;
-    VkDeviceSize readbackBytes = 0;
-    void* ssboMapped = nullptr;
-};
 
 void Renderer::ReleasePersistent()
 {
@@ -2302,68 +2038,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         return true;
     };
 
-    struct PreparedDraw
-    {
-        VkPipeline pipeline;
-        VkPipelineLayout layout;
-        VkDescriptorSet sets[4];
-        VkBuffer ibuf;       // VK_NULL_HANDLE for a non-indexed (auto) draw
-        VkDeviceSize ibufOffset; // where in the arena this draw's indices live
-        uint32_t count;      // index count, or vertex count when !indexed
-        bool indexed;
-        VkViewport viewport; // the guest's own, per draw
-        VkRect2D scissor;
-        // Which EDRAM surface this draw renders into. The recording pass below
-        // walks these in submission order and re-binds the render pass whenever
-        // the surface changes.
-        uint32_t surfaceBase = 0;
-        // A resolve (RB_MODECONTROL.edram_mode == kCopy) is not geometry: it
-        // copies `surface`'s host target out to `resolveDest`'s host image, and
-        // issues no draw at all.
-        bool isResolve = false;
-        uint32_t resolveDest = 0;
-        // The guest's resolve rectangle, in EDRAM/surface pixels, and where it
-        // lands in the destination texture. Without these a resolve copies the
-        // whole surface to the origin, which is why the frame's two predicated
-        // tiles overwrote each other instead of assembling (catalog #32).
-        VkRect2D resolveSrcRect{};
-        int32_t resolveDstX = 0, resolveDstY = 0;
-        // RB_COPY_DEST_INFO's copy_dest_exp_bias as a factor, and its
-        // copy_dest_swap. Ignoring the bias left the HDR scene texture eight
-        // times too bright for the tonemap that samples it (catalog #33).
-        float resolveScale = 1.0f;
-        bool resolveSwapRB = false;
-        // A resolve can also CLEAR the EDRAM it copied out of, and on this
-        // title's tiled frame the DEPTH clear rides on each tile's depth
-        // resolve -- twice per frame, once per tile. Clearing depth only at the
-        // start of the frame leaves the second tile rendering against the first
-        // tile's depth buffer.
-        bool clearsDepth = false;
-        float depthClearValue = 0.0f;
-        bool copyIsServed = true;   // false: this entry only clears
-        bool resolveIsDepth = false; // a depth resolve, not a colour copy
-        // --- diagnostic only (GEARS_DRAW_DIAG), never read by the renderer ---
-        // Everything that can make a draw contribute nothing, recorded next to
-        // the draw that did nothing. A summary cannot answer "which stage did
-        // this surface's draws die at" -- only the join of per-draw state with
-        // per-draw pipeline statistics can, and that join is this table.
-        uint32_t diagIndex = 0;      // index in the frame's submission order
-        uint32_t edramMode = 0;
-        uint32_t primType = 0;
-        uint64_t vsHash = 0, psHash = 0;
-        bool hasFragmentStage = false;
-        uint32_t colorMask = 0, depthControl = 0, blend0 = 0;
-        uint32_t colorFormat = 0;    // RB_COLOR_INFO color_format
-        // The state that decides whether a primitive survives to rasterisation,
-        // which is where this frame's world geometry dies. Raw, so the table
-        // shows what the guest programmed rather than our interpretation of it.
-        uint32_t clipCntl = 0;       // PA_CL_CLIP_CNTL   0x2204
-        uint32_t suScModeCntl = 0;   // PA_SU_SC_MODE_CNTL 0x2205
-        uint32_t vteCntl = 0;        // PA_CL_VTE_CNTL    0x206C
-        uint32_t windowOffset = 0;   // PA_SC_WINDOW_OFFSET 0x2080
-        float vportXScale = 0, vportXOffset = 0, vportYScale = 0, vportYOffset = 0;
-        float vportZScale = 0, vportZOffset = 0;
-    };
+    using draw::PreparedDraw;
     std::vector<PreparedDraw> prepared;
     uint32_t issued = 0, skipped = 0;
 
@@ -3790,277 +3465,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ++issued;
     }
 
-    // --- collapse the console's predicated EDRAM tiling ------------------
-    // GEARS_DRAW_UNTILE=1. THIS IS THE FIRST STEP THAT IS ACTUALLY A NATIVE
-    // RENDERER RATHER THAN AN EMULATOR, so it is worth saying what it does and
-    // why the console did the other thing.
-    //
-    // The Xbox 360 has 10 MiB of EDRAM. A 1280x720 colour+depth surface does not
-    // fit, so UE3-on-360 splits it into TILES and replays the whole command
-    // buffer once per tile: the same draws, the same shaders, the same geometry,
-    // with a different scissor band and a PA_SC_WINDOW_OFFSET that shifts the
-    // world so the tile's rows land at the top of EDRAM. Each tile is then
-    // resolved out to its own rows of the destination texture.
-    //
-    // MEASURED on the Act 1 courtyard frame: the base pass appears twice, 174
-    // draws each, and 40 of the 46 columns of the per-draw table are IDENTICAL
-    // across all 174 pairs -- same pixel shader, same vertex shader, same index
-    // count, same blend, same depth state, same surface. Only three PROGRAMMED
-    // values differ: viewport height (720 vs 208), scissor height (512 vs 208)
-    // and the window offset (0 vs y = -512). The other three differences are
-    // outcomes, not inputs (primitives surviving clip, fragments, the verdict).
-    //
-    // A host renderer targeting a full-resolution image has no 10 MiB budget and
-    // no reason to do any of it. Tile 0 already carries the FULL viewport height
-    // and a window offset of zero -- only its scissor clips it to the first band
-    // -- so widening that scissor to the whole surface draws the identical
-    // picture in ONE pass. The replay tiles are then redundant and are dropped,
-    // and their resolves collapse into one covering the union.
-    //
-    // WHAT IT REFUSES TO DO. It collapses only when the replay is provably a
-    // replay: the same number of draws, in the same order, with the same
-    // (vertex shader, pixel shader, index count, primitive type, colour mask,
-    // blend, depth control) on every one of them. Anything else is left alone
-    // and reported, because a "collapse" that silently dropped draws the guest
-    // meant differently would look like a performance win and be a corruption.
+    // The EDRAM-tiling collapse lives in gpu_draw_untile.{h,cpp}; the reasoning
+    // for it, and for what it refuses to do, is on that header.
     if (untileThisFrame)
-    {
-        // A tile group is a maximal run of consecutive draws on one surface
-        // sharing a window offset. Resolves delimit them.
-        struct Group
-        {
-            uint32_t surface = 0;
-            uint32_t windowOffset = 0;
-            size_t first = 0, last = 0;   // indices into `prepared`
-            size_t drawCount = 0;
-        };
-        std::vector<Group> groups;
-        for (size_t i = 0; i < prepared.size(); ++i)
-        {
-            const PreparedDraw& pd = prepared[i];
-            if (pd.isResolve)
-                continue;
-            if (!groups.empty() && groups.back().surface == pd.surfaceBase &&
-                groups.back().windowOffset == pd.windowOffset &&
-                groups.back().last + 1 >= i)
-            {
-                groups.back().last = i;
-                ++groups.back().drawCount;
-                continue;
-            }
-            Group g;
-            g.surface = pd.surfaceBase;
-            g.windowOffset = pd.windowOffset;
-            g.first = g.last = i;
-            g.drawCount = 1;
-            groups.push_back(g);
-        }
-
-        // Does group `b` replay group `a` exactly? On failure it says WHY --
-        // "10 candidates rejected" with no reason is a diagnostic that cannot
-        // distinguish "this frame is not tiled" from "my grouping is wrong",
-        // and the first version of this code could not tell those apart.
-        std::map<std::string, uint32_t> rejectWhy;
-        auto isReplayOf = [&](const Group& a, const Group& b) {
-            if (a.surface != b.surface)
-            { ++rejectWhy["different surface"]; return false; }
-            if (a.drawCount == 0)
-            { ++rejectWhy["empty group"]; return false; }
-            if (a.windowOffset == b.windowOffset)
-            { ++rejectWhy["same window offset (not a tile replay)"]; return false; }
-            // A SUFFIX MATCH, not an equal-length one. The base tile's group
-            // also carries the frame's one-off setup -- on the Act 1 courtyard
-            // frame it starts with the colour clear, so it is 175 draws against
-            // the replay's 174. Requiring equal counts rejected the only real
-            // tiled surface in the frame, which is what the reject-reason line
-            // was added to reveal.
-            if (b.drawCount > a.drawCount)
-            {
-                ++rejectWhy["replay longer than base (" + std::to_string(b.drawCount) +
-                            " vs " + std::to_string(a.drawCount) + ")"];
-                return false;
-            }
-            // Walk A from the point where its trailing b.drawCount draws begin.
-            size_t ia = a.first, ib = b.first;
-            for (size_t skip = a.drawCount - b.drawCount; skip != 0; --skip)
-            {
-                while (ia <= a.last && prepared[ia].isResolve) ++ia;
-                ++ia;
-            }
-            for (size_t n = 0; n < b.drawCount; ++n)
-            {
-                while (ia <= a.last && prepared[ia].isResolve) ++ia;
-                while (ib <= b.last && prepared[ib].isResolve) ++ib;
-                if (ia > a.last || ib > b.last)
-                    return false;
-                const PreparedDraw& x = prepared[ia];
-                const PreparedDraw& y = prepared[ib];
-                if (x.vsHash != y.vsHash || x.psHash != y.psHash ||
-                    x.count != y.count || x.primType != y.primType ||
-                    x.indexed != y.indexed || x.colorMask != y.colorMask ||
-                    x.blend0 != y.blend0 || x.depthControl != y.depthControl)
-                {
-                    ++rejectWhy["state differs at pair " + std::to_string(n)];
-                    return false;
-                }
-                ++ia; ++ib;
-            }
-            return true;
-        };
-
-        std::vector<bool> drop(prepared.size(), false);
-        uint32_t collapsedGroups = 0, droppedDraws = 0, mergedResolves = 0;
-        uint32_t examined = 0, rejected = 0;
-        for (size_t gi = 0; gi + 1 < groups.size(); ++gi)
-        {
-            if (groups[gi].windowOffset != 0)
-                continue;
-            // Collect the consecutive groups on this surface that replay it.
-            std::vector<size_t> replays;
-            for (size_t gj = gi + 1; gj < groups.size(); ++gj)
-            {
-                if (groups[gj].surface != groups[gi].surface)
-                    break;
-                ++examined;
-                if (!isReplayOf(groups[gi], groups[gj]))
-                { ++rejected; break; }
-                replays.push_back(gj);
-            }
-            if (replays.empty())
-                continue;
-
-            // The union of every tile's resolve destination is what the base
-            // tile must now cover. Resolves between/after the groups name it.
-            int32_t dstBottom = 0;
-            uint32_t dest = 0;
-            size_t unionEnd = groups[replays.back()].last;
-            while (unionEnd + 1 < prepared.size() && prepared[unionEnd + 1].isResolve)
-                ++unionEnd;
-            for (size_t i = groups[gi].first; i <= unionEnd && i < prepared.size(); ++i)
-            {
-                const PreparedDraw& r = prepared[i];
-                if (!r.isResolve || r.resolveIsDepth || r.resolveDest == 0)
-                    continue;
-                dest = r.resolveDest;
-                dstBottom = std::max(dstBottom,
-                    r.resolveDstY + int32_t(r.resolveSrcRect.extent.height));
-            }
-            if (dest == 0 || dstBottom <= 0)
-            {
-                ++rejectWhy["no colour resolve destination spanning the tiles"];
-                ++rejected;
-                continue;
-            }
-
-            // Widen the base tile's scissor to the full height it now draws.
-            for (size_t i = groups[gi].first; i <= groups[gi].last; ++i)
-            {
-                if (prepared[i].isResolve)
-                    continue;
-                prepared[i].scissor.extent.height =
-                    std::max(prepared[i].scissor.extent.height,
-                             uint32_t(dstBottom) - prepared[i].scissor.offset.y);
-            }
-            // Widen the base tile's colour and depth resolves to the union, and
-            // drop the replays' draws and resolves.
-            bool widened = false;
-            uint32_t droppedHere = 0, mergedHere = 0;
-            // THE BASE TILE'S RESOLVES COME AFTER ITS DRAWS -- they are what ends
-            // the tile. So "belongs to the base tile" is everything before the
-            // first REPLAY draw, not everything up to the base group's last draw.
-            // Getting that boundary wrong made the collapse reject itself with
-            // "no resolve at destination row 0" while having correctly identified
-            // the replay, which is the sort of failure only a per-reason
-            // diagnostic finds.
-            const size_t firstReplay = groups[replays.front()].first;
-            // ...and by the same token the LAST replay's resolves come after its
-            // last draw. Stopping the scan at that draw left tile 2's resolves in
-            // the stream, copying tile 1's top rows over the destination's bottom
-            // band: the collapse reported success and the picture went dark.
-            size_t scanEnd = groups[replays.back()].last;
-            while (scanEnd + 1 < prepared.size() && prepared[scanEnd + 1].isResolve)
-                ++scanEnd;
-            for (size_t i = groups[gi].first; i <= scanEnd && i < prepared.size(); ++i)
-            {
-                PreparedDraw& r = prepared[i];
-                const bool inBase = i < firstReplay;
-                if (r.isResolve)
-                {
-                    if (inBase && r.resolveDstY == 0)
-                    {
-                        r.resolveSrcRect.extent.height = uint32_t(dstBottom);
-                        widened = true;
-                    }
-                    else if (!inBase)
-                    {
-                        drop[i] = true;
-                        ++mergedHere;
-                    }
-                    continue;
-                }
-                if (!inBase)
-                {
-                    drop[i] = true;
-                    ++droppedHere;
-                }
-            }
-            if (!widened)
-            {
-                // The base tile has no resolve at the origin to widen, so the
-                // collapse would lose the replays' output. Undo and leave it.
-                for (size_t i = groups[gi].first;
-                     i <= scanEnd && i < prepared.size(); ++i)
-                    drop[i] = false;
-                ++rejectWhy["base tile has no resolve at destination row 0"];
-                ++rejected;
-                continue;
-            }
-            // Only now are the counters real. Incrementing them before the undo
-            // above reported "0 collapsed, 174 dropped" -- a line that cannot be
-            // true and that hid which of the two numbers was wrong.
-            droppedDraws += droppedHere;
-            mergedResolves += mergedHere;
-            ++collapsedGroups;
-            gi = replays.back();
-        }
-
-        if (collapsedGroups != 0)
-        {
-            std::vector<PreparedDraw> kept;
-            kept.reserve(prepared.size());
-            for (size_t i = 0; i < prepared.size(); ++i)
-                if (!drop[i])
-                    kept.push_back(std::move(prepared[i]));
-            prepared.swap(kept);
-            issued -= droppedDraws;
-        }
-        lucent::info("draw", "untile: {} tile group(s) collapsed, {} replayed draws"
-            " and {} resolves dropped; {} candidate group(s) examined, {} REJECTED"
-            " as not provable replays and left tiled", collapsedGroups, droppedDraws,
-            mergedResolves, examined, rejected);
-        if (!rejectWhy.empty())
-        {
-            lucent::Line rl;
-            rl.add("untile: why candidates were rejected:");
-            for (const auto& kv : rejectWhy)
-                rl.add(" [{} x{}]", kv.first, kv.second);
-            rl.flush(lucent::Level::Info, "draw");
-        }
-        // The group census, so "not a provable replay" can be checked against
-        // what the grouping actually saw rather than believed.
-        {
-            lucent::Line gl;
-            gl.add("untile: {} draw group(s):", groups.size());
-            for (const Group& g : groups)
-                gl.add(" [surf {:#x} wo {:#x} x{}]", g.surface, g.windowOffset,
-                       g.drawCount);
-            gl.flush(lucent::Level::Info, "draw");
-        }
-        if (collapsedGroups == 0)
-            lucent::warn("draw", "untile: nothing was collapsed. Either this frame"
-                " is not tiled, or every candidate failed the replay test -- the"
-                " counts above say which, and NOT collapsing is the safe outcome");
-    }
+        draw::CollapseEdramTiling(prepared, issued);
 
     // --- deferred range upload into the shared SSBO ----------------------
     // Only the memory this frame's draws fetch is copied. The mirror SPANS the
@@ -6059,7 +5467,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     return true;
 }
 
-} // namespace
+} // namespace draw
+
+using draw::kWidth;
+using draw::kHeight;
+using draw::Renderer;
 
 // The renderer is built once and kept. Rebuilding it per frame was what made a
 // frame cost ~300 ms; the device, render target, shader translations, pipelines
@@ -6077,16 +5489,16 @@ bool RenderFrame(const FrameDrawInputs& in)
     Renderer& r = FrameRenderer();
     if (r.device == VK_NULL_HANDLE)
     {
-        g_frame.clear();
+        draw::g_frame.clear();
         return false;
     }
     const bool ok = r.RenderFrameImpl(in);
     if (!ok)
-        g_frame.clear();
+        draw::g_frame.clear();
     return ok;
 }
 
-const std::vector<uint8_t>& GuestFramePixels() { return g_frame; }
+const std::vector<uint8_t>& GuestFramePixels() { return draw::g_frame; }
 uint32_t GuestFrameWidth() { return kWidth; }
 uint32_t GuestFrameHeight() { return kHeight; }
 
