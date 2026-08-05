@@ -47,6 +47,7 @@
 #include "gpu_draw_renderer.h"
 #include "gpu_draw_textures.h"
 #include "gpu_draw_targets.h"
+#include "gpu_draw_pipelines.h"
 
 namespace gears
 {
@@ -434,7 +435,7 @@ void Renderer::ReleasePersistent()
 // order, into ONE persistent colour+depth target inside a single render pass so
 // the geometry accumulates. Each draw carries its own register-file snapshot
 // (constants live at that draw) and its own bound shader pair; distinct shader
-// pairs are translated and their pipelines/modules cached across the frame.
+// pairs are translated and their PC.pipelines/modules cached across the frame.
 bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 {
     const uint32_t W = in.width ? in.width : kWidth;
@@ -501,7 +502,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // console thing on request.
     const bool untileThisFrame = abUntile.Enabled()
         ? abUntile.Arm() : !lucent::config::flag("DRAW_TILED");
-    double msTranslate = 0, msPipeline = 0, msTexture = 0, msSsboUpload = 0;
+    double msTranslate = 0, msTexture = 0, msSsboUpload = 0;
     auto accumulate = [](double& into, Clock::time_point from) {
         into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
     };
@@ -827,280 +828,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     draw::RenderTargetCache RT(*this, P, in, W, H, depthFormat, depthView);
     RT.BuildResolvePipeline();
 
-    // --- descriptor set layouts (same as the hot-draw path) --------------
-    auto makeSetLayout = [&](const std::vector<VkDescriptorSetLayoutBinding>& b,
-                             VkDescriptorSetLayout& l) -> bool {
-        VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        ci.bindingCount = uint32_t(b.size());
-        ci.pBindings = b.empty() ? nullptr : b.data();
-        VK_CHECK(vkCreateDescriptorSetLayout(device, &ci, nullptr, &l));
-        return true;
-    };
-    const VkShaderStageFlags allStages =
-        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    VkDescriptorSetLayout& set0 = P.set0;
-    VkDescriptorSetLayout& set1 = P.set1;
-    if (firstFrame &&
-        (!makeSetLayout({{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, allStages, nullptr}}, set0) ||
-        !makeSetLayout({
-            {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
-            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
-            {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
-            {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
-            {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr}}, set1)))
+    // Descriptor set layouts, pipeline layouts, rectangle geometry shaders and
+    // the graphics PC.pipelines are in gpu_draw_pipelines.{h,cpp}.
+    draw::PipelineCache PC(*this, P);
+    if (firstFrame && !PC.Build())
         return false;
-
-    // --- per-shader texture descriptor set layouts (sets 2 and 3) --------
-    // Sets 2/3 are Xenia's kDescriptorSetTexturesVertex/Pixel: their contents
-    // are decided by the SHADER (N images at bindings 0..N-1, then M samplers at
-    // bindings N..N+M-1), so one fixed layout cannot serve every draw. Build a
-    // layout per distinct (image dimensions, sampler count) signature, cached.
-    // Getting this wrong is not a validation warning -- it is undefined
-    // behaviour that crashed the RADV compiler inside lower_immediate_samplers.
-    auto texSignature = [](const draw::ShaderXlate& x, VkShaderStageFlags stage) {
-        std::string s;
-        s.reserve(x.textures.size() * 2 + 8);
-        for (const auto& t : x.textures)
-            s.push_back(char('0' + (t.dimension & 3)));
-        s.push_back('|');
-        s += std::to_string(x.samplerCount);
-        s.push_back('|');
-        s += std::to_string(stage);
-        return s;
-    };
-    std::map<std::string, VkDescriptorSetLayout>& texLayouts = P.texLayouts;
-    auto getTexLayout = [&](const draw::ShaderXlate& x, VkShaderStageFlags stage,
-                            VkDescriptorSetLayout& out) -> bool {
-        const std::string key = texSignature(x, stage);
-        auto it = texLayouts.find(key);
-        if (it != texLayouts.end()) { out = it->second; return true; }
-        std::vector<VkDescriptorSetLayoutBinding> b;
-        for (uint32_t i = 0; i < uint32_t(x.textures.size()); ++i)
-            b.push_back({i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, stage, nullptr});
-        for (uint32_t j = 0; j < x.samplerCount; ++j)
-            b.push_back({uint32_t(x.textures.size()) + j, VK_DESCRIPTOR_TYPE_SAMPLER, 1,
-                         stage, nullptr});
-        VkDescriptorSetLayout l = 0;
-        if (!makeSetLayout(b, l))
-            return false;
-        texLayouts[key] = l;
-        out = l;
-        return true;
-    };
-
-    // A pipeline layout per (vertex texture signature, pixel texture signature).
-    std::map<std::pair<std::string, std::string>, VkPipelineLayout>& pipeLayouts =
-        P.pipeLayouts;
-    auto getPipeLayout = [&](const draw::ShaderXlate& vsX, const draw::ShaderXlate& psX,
-                             VkDescriptorSetLayout& outVsTex,
-                             VkDescriptorSetLayout& outPsTex,
-                             VkPipelineLayout& out) -> bool {
-        if (!getTexLayout(vsX, VK_SHADER_STAGE_VERTEX_BIT, outVsTex) ||
-            !getTexLayout(psX, VK_SHADER_STAGE_FRAGMENT_BIT, outPsTex))
-            return false;
-        auto key = std::make_pair(texSignature(vsX, VK_SHADER_STAGE_VERTEX_BIT),
-                                  texSignature(psX, VK_SHADER_STAGE_FRAGMENT_BIT));
-        auto it = pipeLayouts.find(key);
-        if (it != pipeLayouts.end()) { out = it->second; return true; }
-        VkDescriptorSetLayout sets[4] = {set0, set1, outVsTex, outPsTex};
-        VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        pi.setLayoutCount = 4;
-        pi.pSetLayouts = sets;
-        VkPipelineLayout pl = 0;
-        if (vkCreatePipelineLayout(device, &pi, nullptr, &pl) != VK_SUCCESS)
-            return false;
-        pipeLayouts[key] = pl;
-        out = pl;
-        return true;
-    };
-
-    // --- rectangle-list geometry shaders, cached by their derived shape ---
-    // A rectangle list carries three vertices per rectangle and the hardware
-    // infers the fourth by mirroring one across the longest edge. The fourth
-    // vertex's ATTRIBUTES are mirrored the same way, so it cannot be synthesized
-    // in the index buffer ahead of the vertex shader -- the expansion has to see
-    // shaded vertices. draw::BuildRectangleGeometryShader is the port of the
-    // shader Xenia uses for exactly this.
-    std::map<draw::RectangleGeometryShaderKey, VkShaderModule>& geomShaders =
-        P.geomShaders;
-    uint32_t rectDraws = 0, rectDrawsExpanded = 0;
-    auto getRectGeomShader = [&](uint64_t vsModification, VkShaderModule& out) -> bool {
-        out = VK_NULL_HANDLE;
-        if (!hasGeometryShader)
-            return false;
-        draw::RectangleGeometryShaderKey key;
-        if (!draw::DeriveRectangleGeometryShaderKey(vsModification, key))
-            return false;
-        auto it = geomShaders.find(key);
-        if (it != geomShaders.end())
-        { out = it->second; return out != VK_NULL_HANDLE; }
-        std::vector<uint32_t> spirv;
-        VkShaderModule mod = VK_NULL_HANDLE;
-        if (draw::BuildRectangleGeometryShader(key, spirv))
-        {
-            VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-            ci.codeSize = spirv.size() * sizeof(uint32_t);
-            ci.pCode = spirv.data();
-            if (vkCreateShaderModule(device, &ci, nullptr, &mod) != VK_SUCCESS)
-                mod = VK_NULL_HANDLE;
-            else
-                lucent::info("draw", "rectangle geometry shader: {} interpolators,"
-                    " {} clip, {} cull distances, {} SPIR-V words",
-                    key.interpolatorCount, key.clipDistanceCount,
-                    key.cullDistanceCount, spirv.size());
-        }
-        if (mod == VK_NULL_HANDLE)
-            lucent::warn("draw", "rectangle geometry shader build failed");
-        geomShaders[key] = mod;
-        out = mod;
-        return mod != VK_NULL_HANDLE;
-    };
-
-    // --- pipeline cache keyed on (vs,ps,gs,prim,output-merger state) ------
-    // Keyed on the MODULE HANDLES, not the microcode hashes: one microcode now
-    // translates to several distinct shaders (one per modification), so a hash
-    // does not identify a stage.
-    auto& pipelines = P.pipelines;
-    auto getPipeline = [&](VkShaderModule vsMod, VkShaderModule psMod,
-                           VkShaderModule gsMod, uint32_t primType,
-                           const OutputMergerState& om, VkRenderPass renderPass,
-                           VkPipelineLayout pipeLayout, VkPipeline& out) -> bool {
-        auto key = std::make_tuple(vsMod, psMod, gsMod, primType, om, renderPass);
-        auto it = pipelines.find(key);
-        if (it != pipelines.end()) { out = it->second; return true; }
-        VkPipelineShaderStageCreateInfo stages[3]{};
-        uint32_t stageCount = 0;
-        stages[stageCount] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-        stages[stageCount].stage = VK_SHADER_STAGE_VERTEX_BIT;
-        stages[stageCount].module = vsMod; stages[stageCount].pName = "main";
-        ++stageCount;
-        if (gsMod != VK_NULL_HANDLE)
-        {
-            stages[stageCount] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-            stages[stageCount].stage = VK_SHADER_STAGE_GEOMETRY_BIT;
-            stages[stageCount].module = gsMod; stages[stageCount].pName = "main";
-            ++stageCount;
-        }
-        // A null psMod means this draw has NO fragment stage. That is not an
-        // optimisation: RB_MODECONTROL.edram_mode decides whether the pixel
-        // shader runs at all, and a depth-only draw that runs one writes colour
-        // the hardware would never have written. See the call site.
-        if (psMod != VK_NULL_HANDLE)
-        {
-            stages[stageCount] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
-            stages[stageCount].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-            stages[stageCount].module = psMod; stages[stageCount].pName = "main";
-            ++stageCount;
-        }
-        VkPipelineVertexInputStateCreateInfo vin{
-            VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
-        VkPipelineInputAssemblyStateCreateInfo ia{
-            VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
-        ia.topology = TopologyOf(primType);
-        // Viewport and scissor are the GUEST's, per draw (PA_CL_VPORT_* /
-        // PA_SC_*), so they are dynamic state rather than baked in -- a
-        // host-fixed full-target viewport put this frame's geometry in the
-        // top-left corner at the wrong scale.
-        VkPipelineViewportStateCreateInfo vps{
-            VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
-        vps.viewportCount = 1;
-        vps.scissorCount = 1;
-        const VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT,
-                                            VK_DYNAMIC_STATE_SCISSOR};
-        VkPipelineDynamicStateCreateInfo dyn{
-            VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-        dyn.dynamicStateCount = 2;
-        dyn.pDynamicStates = dynStates;
-        VkPipelineRasterizationStateCreateInfo rs{
-            VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
-        rs.polygonMode = VK_POLYGON_MODE_FILL;
-        rs.cullMode = VK_CULL_MODE_NONE;
-        rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        static const bool noCull = lucent::config::flag("DRAW_NOCULL");
-        static const bool invertFace = lucent::config::flag("DRAW_CULL_INVERT");
-        if (om.polygonal && !noCull)
-        {
-            if (om.suScModeCntl & 1) rs.cullMode |= VK_CULL_MODE_FRONT_BIT;
-            if (om.suScModeCntl & 2) rs.cullMode |= VK_CULL_MODE_BACK_BIT;
-            // face: 0 = front is counter-clockwise. GEARS_DRAW_CULL_INVERT is a
-            // control arm for the one thing not settled by the register: our
-            // Y-flip lives in the shader's ndc_scale, and a Y flip reverses
-            // screen-space winding.
-            const bool cw = ((om.suScModeCntl >> 2) & 1) != 0;
-            rs.frontFace = (cw != invertFace) ? VK_FRONT_FACE_CLOCKWISE
-                                              : VK_FRONT_FACE_COUNTER_CLOCKWISE;
-        }
-        rs.lineWidth = 1.0f;
-        VkPipelineMultisampleStateCreateInfo ms{
-            VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-        ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-        VkPipelineDepthStencilStateCreateInfo ds{
-            VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-        // Depth from RB_DEPTHCONTROL: z_enable +1, z_write_enable +2, zfunc +4.
-        // GEARS_DRAW_NODEPTH=1 is a DIAGNOSTIC control arm only: it separates
-        // "this draw is depth-rejected" from "this draw shades black". It is
-        // never a fix -- the depth state below is the guest's own.
-        static const bool noDepth = lucent::config::flag("DRAW_NODEPTH");
-        ds.depthTestEnable =
-            (!noDepth && ((om.depthControl >> 1) & 1)) ? VK_TRUE : VK_FALSE;
-        ds.depthWriteEnable = ((om.depthControl >> 2) & 1) ? VK_TRUE : VK_FALSE;
-        ds.depthCompareOp = CompareOpOf(om.depthControl >> 4);
-        // Colour write mask from RB_COLOR_MASK's RT0 nibble (r,g,b,a in bits
-        // 0..3), and blending from RB_BLENDCONTROL0. A draw the guest masked off
-        // entirely writes nothing, as on hardware.
-        VkPipelineColorBlendAttachmentState cba{};
-        if (om.colorMask & 1) cba.colorWriteMask |= VK_COLOR_COMPONENT_R_BIT;
-        if (om.colorMask & 2) cba.colorWriteMask |= VK_COLOR_COMPONENT_G_BIT;
-        if (om.colorMask & 4) cba.colorWriteMask |= VK_COLOR_COMPONENT_B_BIT;
-        if (om.colorMask & 8) cba.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
-        const uint32_t cSrc = om.blend0 & 0x1F;
-        const uint32_t cOp = (om.blend0 >> 5) & 0x7;
-        const uint32_t cDst = (om.blend0 >> 8) & 0x1F;
-        const uint32_t aSrc = (om.blend0 >> 16) & 0x1F;
-        const uint32_t aOp = (om.blend0 >> 21) & 0x7;
-        const uint32_t aDst = (om.blend0 >> 24) & 0x1F;
-        const bool blendIsIdentity = BlendIsIdentity(om.blend0);
-        // GEARS_DRAW_NOBLEND=1 is a DIAGNOSTIC control arm only, never a fix: it
-        // disables blending so the pixel shader's own output lands in the target
-        // unmodified. It separates "this draw shades black" from "this draw
-        // shades something the blend equation multiplies away" -- every world
-        // draw of this frame uses colour src factor kSrcAlpha, so an output
-        // alpha of zero would erase it whatever its RGB is.
-        static const bool noBlend = lucent::config::flag("DRAW_NOBLEND");
-        cba.blendEnable = (noBlend || blendIsIdentity) ? VK_FALSE : VK_TRUE;
-        cba.srcColorBlendFactor = BlendFactorOf(cSrc);
-        cba.dstColorBlendFactor = BlendFactorOf(cDst);
-        cba.colorBlendOp = BlendOpOf(cOp);
-        cba.srcAlphaBlendFactor = BlendFactorOf(aSrc);
-        cba.dstAlphaBlendFactor = BlendFactorOf(aDst);
-        cba.alphaBlendOp = BlendOpOf(aOp);
-        VkPipelineColorBlendStateCreateInfo cb{
-            VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-        cb.attachmentCount = 1; cb.pAttachments = &cba;
-        VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-        gp.stageCount = stageCount; gp.pStages = stages;
-        gp.pVertexInputState = &vin;
-        gp.pInputAssemblyState = &ia;
-        gp.pViewportState = &vps;
-        gp.pRasterizationState = &rs;
-        gp.pMultisampleState = &ms;
-        gp.pDepthStencilState = &ds;
-        gp.pColorBlendState = &cb;
-        gp.pDynamicState = &dyn;
-        gp.layout = pipeLayout;
-        gp.renderPass = renderPass;
-        gp.subpass = 0;
-        VkPipeline pipe = VK_NULL_HANDLE;
-        const auto tPipe = Clock::now();
-        const VkResult pipeResult =
-            vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &gp, nullptr, &pipe);
-        accumulate(msPipeline, tPipe);
-        if (pipeResult != VK_SUCCESS)
-            return false;
-        pipelines[key] = pipe;
-        out = pipe;
-        return true;
-    };
 
     // --- descriptor pool sized for every draw ----------------------------
     msSetup = sinceStartMs();
@@ -1983,7 +1715,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification, clampPs,
                            clampMode, psX, psMod))
             { ++skipped; ++skipReasons[2]; continue; }
-            if (!getPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
+            if (!PC.GetPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
             { ++skipped; ++skipReasons[3]; continue; }
         }
         // GEARS_DRAW_ONLY_BASE=<hex>: render only draws targeting one EDRAM
@@ -2011,9 +1743,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkShaderModule gsMod = VK_NULL_HANDLE;
         if (d.primType == 8 /*kRectangleList*/)
         {
-            ++rectDraws;
-            if (getRectGeomShader(vsModification, gsMod))
-                ++rectDrawsExpanded;
+            ++PC.rectDraws;
+            if (PC.GetRectGeomShader(vsModification, gsMod))
+                ++PC.rectDrawsExpanded;
         }
         // The pixel shader runs ONLY when edram_mode is kColorDepth. This is
         // Xenia's contract (xenos.h EdramMode, vulkan_command_processor.cc
@@ -2030,7 +1762,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (!pixelShaderUsed)
             ++drawsNoPixelShader;
         VkPipeline pipe = VK_NULL_HANDLE;
-        if (!getPipeline(vsMod, pixelShaderUsed ? psMod : VK_NULL_HANDLE, gsMod,
+        if (!PC.GetPipeline(vsMod, pixelShaderUsed ? psMod : VK_NULL_HANDLE, gsMod,
                          d.primType, om, rp->first, pipeLayout, pipe))
         { ++skipped; ++skipReasons[3]; continue; }
 
@@ -2310,7 +2042,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // Sets 0 and 1 are always this draw's own; 2 and 3 come from the cache
         // when some earlier draw in this frame bound the same textures.
         {
-            VkDescriptorSetLayout uboLayouts[2] = {set0, set1};
+            VkDescriptorSetLayout uboLayouts[2] = {P.set0, P.set1};
             VkDescriptorSetAllocateInfo uai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
             uai.descriptorPool = pool;
             uai.descriptorSetCount = 2;
@@ -4107,12 +3839,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         for (const FrameDrawItem& d : in.draws)
             pairs.emplace(d.vsHash, d.psHash);
         lucent::info("draw", "frame: {} of {} draws issued, {} skipped; {} distinct shader"
-            " pairs, {} distinct shaders, {} pipelines, {} texture layouts,"
+            " pairs, {} distinct shaders, {} PC.pipelines, {} texture layouts,"
             " {} pipeline layouts; {} texture bindings ({} guest textures,"
             " {} from the rendered RT, {} from a stub); {}/{} px non-black"
             " ({:.1f}%), {} px changed from the clear ({:.1f}%)",
-            issued, in.draws.size(), skipped, pairs.size(), modules.size(), pipelines.size(),
-            texLayouts.size(), pipeLayouts.size(),
+            issued, in.draws.size(), skipped, pairs.size(), modules.size(), PC.pipelines.size(),
+            PC.texLayouts.size(), PC.pipeLayouts.size(),
             texBindsRt + texBindsStub + texBindsGuest, texBindsGuest, texBindsRt,
             texBindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
             changed, 100.0 * double(changed) / (double(W) * H));
@@ -4169,10 +3901,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                   " all, so this says NOTHING about staleness"
                 : "");
 
-        if (rectDraws)
+        if (PC.rectDraws)
             lucent::info("draw", "frame rectangle lists: {} of {} draws expanded by a"
-                " geometry shader ({} distinct)", rectDrawsExpanded, rectDraws,
-                geomShaders.size());
+                " geometry shader ({} distinct)", PC.rectDrawsExpanded, PC.rectDraws,
+                PC.geomShaders.size());
         {
             lucent::Line sl;
             sl.add("frame EDRAM surfaces: {} distinct RB_COLOR_INFO bases"
@@ -4456,7 +4188,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // msTranslate is inside msShaderLookup (a cache miss translates) and
     // msPipeline is inside the pipeline lookup that follows, so neither is
     // subtracted again.
-    const double msStateOwn = msState - msModify - msShaderLookup - msPipeline;
+    const double msStateOwn = msState - msModify - msShaderLookup - PC.msPipeline;
     // The census is INSIDE the prepare span (the viewport block), and the
     // descriptor update is inside the descriptor-write span, so neither is
     // subtracted here -- subtracting a child twice is how a residual goes
@@ -4474,7 +4206,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         " {:.0f} + descriptor writes {:.0f} of which texture upload {:.0f} and the"
         " driver's update {:.0f}, so own {:.0f} + prepare {:.0f} of which viewport"
         " census {:.0f} + own {:.0f}) + unattributed {:.0f}",
-        msDrawLoop, msState, msTranslate, msPipeline, msModify, msShaderLookup,
+        msDrawLoop, msState, msTranslate, PC.msPipeline, msModify, msShaderLookup,
         msStateOwn,
         msUniforms, msIndex, msRecord, msDescAlloc, msDescWrite, msTexture,
         msDescUpdate, msDescWrite - msTexture - msDescUpdate,
@@ -4645,7 +4377,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vkFreeMemory(device, checkpointMem[i], nullptr);
     }
     // Only this frame's own transients are destroyed here. The render target,
-    // passes, layouts, pipelines, shader modules, textures and samplers belong
+    // passes, layouts, PC.pipelines, shader modules, textures and samplers belong
     // to RendererPersistent and are released by ReleasePersistent.
     for (size_t i = 0; i < stagingBufs.size(); ++i)
     {
@@ -4677,7 +4409,7 @@ using draw::kHeight;
 using draw::Renderer;
 
 // The renderer is built once and kept. Rebuilding it per frame was what made a
-// frame cost ~300 ms; the device, render target, shader translations, pipelines
+// frame cost ~300 ms; the device, render target, shader translations, PC.pipelines
 // and textures all survive from one frame to the next now.
 Renderer& FrameRenderer()
 {

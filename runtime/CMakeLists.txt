@@ -173,7 +173,7 @@ endif()
 # about a second, with no guest, no menu walk and no 200-second boot; see
 # frame_capture.h. gears1 links it exactly as before.
 add_library(gears_draw STATIC gpu_draw.cpp gpu_draw_formats.cpp
-                              gpu_draw_pixels.cpp gpu_draw_untile.cpp gpu_draw_textures.cpp gpu_draw_targets.cpp
+                              gpu_draw_pixels.cpp gpu_draw_untile.cpp gpu_draw_textures.cpp gpu_draw_targets.cpp gpu_draw_pipelines.cpp
                               frame_capture.cpp spirv_clamp.cpp
                               gpu_queue_family.cpp gpu_instance.cpp
                               gpu_shared_device.cpp
