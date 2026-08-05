@@ -267,3 +267,42 @@ bytes; it needs to keep them.
 
 Until that lands this produces no reference image, and nothing here should be
 quoted as an oracle result.
+
+### Note (2026-08-05)
+## Shaders bind correctly; the failure is further into IssueDraw
+
+The converter now emits `PM4_IM_LOAD_IMMEDIATE` (0x2B) per shader before each
+draw, with the microcode embedded in the packet. Two things this pins down:
+
+**The packet stream is read correctly.** Exactly 744 "Failed in backend"
+messages for exactly 744 draws -- no extra packets, none dropped. And the
+message decodes as (num_indices, prim_type, source_select), so
+`PM4_DRAW_INDX(3, 8, 2)` is draw 0, which the capture independently says is
+prim 8, 3 indices, auto-index. The synthesised packets are being parsed as
+intended.
+
+**The shaders ARE bound.** I added an XELOGE to IssueDraw's first early-out
+(`!vertex_shader`, previously a silent `return false`) on our fork, rebuilt,
+and it does NOT fire. So `IM_LOAD_IMMEDIATE` works and the draw dies later.
+Recording this as a NEGATIVE worth keeping: without it the next session would
+re-suspect shader binding, which is the obvious suspect and is wrong.
+
+Encoding notes, since they cost time: the count field covers the two body
+dwords PLUS the inline microcode, and the microcode must NOT be byte-swapped --
+IM_LOAD_IMMEDIATE reads it through read_ptr() directly while the packet's own
+dwords go through ReadAndSwap. A shader too large for the 14-bit count is
+refused rather than truncated (a truncated shader translates to something
+plausible and wrong).
+
+## Next: name the remaining early-outs
+
+`IssueDraw` has about a dozen silent `return false`s and they all surface as one
+message. The survivors, in order, are: BeginSubmission,
+primitive_processor_->Process, host_draw_vertex_count == 0,
+EnsureShadersTranslated, render_target_cache_->Update, ConfigurePipeline.
+Do what was done for the first one -- give each an XELOGE on the fork and rerun
+`--draws 1`. Do NOT guess between them; one rebuild answers it.
+
+Draw 0 being prim 8 with 3 vertices (a rectangle list -- UE3's full-screen
+clear) makes `host_draw_vertex_count == 0` a reasonable first suspect, but that
+is a hypothesis and the log will say.

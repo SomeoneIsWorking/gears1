@@ -39,6 +39,12 @@ EVENT_SWAP = 0
 
 # --- Xenos (extern/xenia/src/xenia/gpu/xenos.h, registers.h) ----------------
 PM4_DRAW_INDX = 0x22
+PM4_IM_LOAD_IMMEDIATE = 0x2B
+SHADER_TYPE_VERTEX = 0
+SHADER_TYPE_PIXEL = 1
+# A PM4 count field is 14 bits, so a packet cannot carry more than this many
+# dwords. A shader bigger than that needs the pointer-based PM4_IM_LOAD instead.
+PM4_MAX_COUNT = 0x3FFF
 SRC_SELECT_DMA = 0
 SRC_SELECT_AUTO_INDEX = 2
 REG_VGT_DMA_BASE = 0x21FA
@@ -101,9 +107,13 @@ class Capture:
             self.blocks.append((guest, d[p:p + n]))
             p += n
         (blob_count,) = struct.unpack_from("<I", d, p); p += 4
-        for _ in range(blob_count):               # microcode, reached via registers
+        # The microcode blobs. KEPT, not skipped: Xenia binds a shader only via
+        # an IM_LOAD packet, so the bytes have to be replayed into the trace.
+        self.blobs = []
+        for _ in range(blob_count):
             p += 8                                # hash
             (size,) = struct.unpack_from("<I", d, p); p += 4
+            self.blobs.append(d[p:p + size])
             p += size
         self.draws = []
         for _ in range(draw_count):
@@ -114,7 +124,7 @@ class Capture:
             p += 24
             self.draws.append(dict(regs=regs, prim=prim, index_count=index_count,
                                    indexed=bool(flags & 1), index32=bool(flags & 2),
-                                   index_base=index_base))
+                                   index_base=index_base, vs=vs, ps=ps))
         self.trailing = len(d) - p
 
 
@@ -158,8 +168,42 @@ class TraceWriter:
         self.buf += struct.pack(f">{len(dwords)}I", *dwords)
         self.buf += struct.pack("<I", K_PACKET_END)
 
+    def packet_with_payload(self, base, dwords, payload):
+        """A packet whose tail is raw guest bytes rather than dwords.
+
+        IM_LOAD_IMMEDIATE reads its microcode through read_ptr() directly, NOT
+        through ReadAndSwap like the packet's own dwords -- so the microcode must
+        stay in the byte order it has in guest memory, which is how the capture
+        stored it. Swapping it here as well would hand Xenia a shader with every
+        instruction word reversed.
+        """
+        total = len(dwords) + len(payload) // 4
+        self.buf += struct.pack("<III", K_PACKET_START, base, total)
+        self.buf += struct.pack(f">{len(dwords)}I", *dwords)
+        self.buf += payload
+        self.buf += struct.pack("<I", K_PACKET_END)
+
     def swap(self):
         self.buf += struct.pack("<II", K_EVENT, EVENT_SWAP)
+
+
+def im_load_packet(shader_type, ucode):
+    """PM4_IM_LOAD_IMMEDIATE: bind a shader by embedding its microcode.
+
+    Xenia sets active_vertex_shader_/active_pixel_shader_ ONLY from an IM_LOAD
+    (pm4_command_processor_implement.h). No register assignment binds a shader,
+    so a trace built purely from register snapshots draws with none and every
+    draw fails in the backend -- which is exactly what happened before this.
+
+    Returns (header_dwords, payload_bytes); the payload stays in guest order.
+    """
+    size_dwords = len(ucode) // 4
+    body = [shader_type, size_dwords]             # start == 0, so no high half
+    count = len(body) + size_dwords
+    if count > PM4_MAX_COUNT:
+        return None                               # caller reports it
+    header = 0xC0000000 | ((count - 1) << 16) | (PM4_IM_LOAD_IMMEDIATE << 8)
+    return [header] + body, ucode[:size_dwords * 4]
 
 
 def draw_packet(draw):
@@ -194,6 +238,8 @@ def convert(src: Path, dst: Path, max_draws=None):
     scratch = pick_packet_scratch(cap)
     draws = cap.draws if max_draws is None else cap.draws[:max_draws]
     emitted = skipped_no_regs = 0
+    too_big = set()
+    last_vs = last_ps = None
     for d in draws:
         if len(d["regs"]) < REG_COUNT:
             # A draw whose snapshot is short cannot restore state; dropping it
@@ -202,6 +248,24 @@ def convert(src: Path, dst: Path, max_draws=None):
             skipped_no_regs += 1
             continue
         w.registers(0, d["regs"][:XENIA_REG_COUNT])
+        # Bind this draw's shaders. Re-emitted only when they CHANGE: the bind
+        # is sticky in Xenia, and re-sending every shader for all 744 draws
+        # doubled the trace for no effect.
+        for slot, kind, blob_i in ((0, SHADER_TYPE_VERTEX, d["vs"]),
+                                   (1, SHADER_TYPE_PIXEL, d["ps"])):
+            prev = last_vs if slot == 0 else last_ps
+            if blob_i == prev or blob_i >= len(cap.blobs):
+                continue
+            built = im_load_packet(kind, cap.blobs[blob_i])
+            if built is None:
+                too_big.add(blob_i)
+                continue
+            dwords, payload = built
+            w.packet_with_payload(scratch, dwords, payload)
+            if slot == 0:
+                last_vs = blob_i
+            else:
+                last_ps = blob_i
         w.packet(scratch, draw_packet(d))
         emitted += 1
     w.swap()
@@ -212,6 +276,10 @@ def convert(src: Path, dst: Path, max_draws=None):
           f"({sum(len(b) for _, b in cap.blocks) / (1 << 20):.1f} MiB)")
     print(f"   packets at guest {scratch:#x} (a page this capture leaves empty)")
     print(f"   trace:   {emitted} draws emitted, {len(dst.read_bytes()) / (1 << 20):.1f} MiB")
+    if too_big:
+        print(f"   WARNING: {len(too_big)} shaders exceed a PM4 packet's 14-bit "
+              f"count and were NOT bound, so some draws used whatever shader was "
+              f"bound before them. Those draws are WRONG, not missing.")
     if skipped_no_regs:
         print(f"   WARNING: {skipped_no_regs} draws had no full register snapshot "
               f"and were DROPPED -- the trace is not the whole frame")
@@ -233,7 +301,8 @@ def selftest():
 
     def check(what, got, want):
         ok = got == want
-        print(f"   {'ok  ' if ok else 'FAIL'}  {what}: got {got:#x}, want {want:#x}")
+        fmt = (lambda v: f"{v:#x}") if isinstance(got, int) and isinstance(want, int) else repr
+        print(f"   {'ok  ' if ok else 'FAIL'}  {what}: got {fmt(got)}, want {fmt(want)}")
         if not ok:
             failures.append(what)
 
@@ -263,6 +332,25 @@ def selftest():
     check("registers command tag", struct.unpack_from("<I", w.buf, 0)[0], K_REGISTERS)
     check("registers first index", struct.unpack_from("<I", w.buf, 4)[0], 0x2000)
     check("registers payload length", struct.unpack_from("<I", w.buf, 20)[0], 8)
+
+    # IM_LOAD_IMMEDIATE: the count covers the two body dwords PLUS the inline
+    # microcode, and the microcode must NOT be byte-swapped.
+    ucode = bytes(range(16))                      # 4 dwords
+    dwords, payload = im_load_packet(SHADER_TYPE_PIXEL, ucode)
+    check("im_load header", dwords[0],
+          0xC0000000 | ((2 + 4 - 1) << 16) | (0x2B << 8))
+    check("im_load shader type", dwords[1], SHADER_TYPE_PIXEL)
+    check("im_load size dwords", dwords[2], 4)
+    w3 = TraceWriter()
+    w3.packet_with_payload(0x1000, dwords, payload)
+    # count must be body + microcode, or Xenia reads the next command as opcodes
+    check("im_load packet count", struct.unpack_from("<I", w3.buf, 8)[0], 3 + 4)
+    check("microcode kept in guest byte order",
+          w3.buf[12 + 3 * 4:12 + 3 * 4 + 4], ucode[:4])
+    # A shader too large for a 14-bit count must be REFUSED, not truncated: a
+    # truncated shader translates to something plausible and wrong.
+    check("oversized shader refused",
+          im_load_packet(SHADER_TYPE_VERTEX, b"\0" * (PM4_MAX_COUNT * 4)), None)
 
     # Packets are big-endian in guest memory; trace headers are little. Getting
     # this backwards yields a trace Xenia reads as garbage opcodes.
