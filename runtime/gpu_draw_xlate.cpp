@@ -147,8 +147,28 @@ bool TranslateOne(SpirvShaderTranslator& translator, xenos::ShaderType type,
 // tools/xenos_translate uses and the one the verified .spv were built for.
 SpirvShaderTranslator MakeTranslator()
 {
+    // Features(all=true) claims EVERY optional feature, and we enable none that
+    // need asking for. That is not a harmless over-claim: told it has
+    // demote_to_helper_invocation, the translator emits pixel kill as
+    // OpDemoteToHelperInvocationEXT and declares the capability and the
+    // SPV_EXT_demote_to_helper_invocation extension -- so every alpha-tested
+    // pixel shader was an INVALID module on our device, which enables neither
+    // (VUID-VkShaderModuleCreateInfo-pCode-08740/08742, on 5 of the 8 captures).
+    // This driver ran them; a stricter one refuses, and the draws vanish.
+    //
+    // So the translator is told the truth and emits OpKill instead, which needs
+    // nothing. THE BETTER FIX IS TO ENABLE THE FEATURE -- demote keeps the
+    // invocation alive so neighbouring pixels' derivatives stay valid, which is
+    // why Xenia prefers it -- but it is a VkPhysicalDeviceShaderDemoteTo
+    // HelperInvocationFeatures in the device pNext chain plus, below Vulkan 1.3,
+    // a device extension; and the device here may be created by EITHER
+    // gpu_draw.cpp (apiVersion 1.2) or gpu_present.cpp (1.1), so it has to be
+    // done on both paths at once or the adopting side gets a device without it.
+    // Not folded into a refactor.
+    SpirvShaderTranslator::Features features(/*all=*/true);
+    features.demote_to_helper_invocation = false;
     return SpirvShaderTranslator(
-        SpirvShaderTranslator::Features(/*all=*/true),
+        features,
         /*native_2x_msaa_with_attachments=*/true,
         /*native_2x_msaa_no_attachments=*/true,
         /*edram_fragment_shader_interlock=*/false);
