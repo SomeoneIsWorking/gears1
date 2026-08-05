@@ -239,3 +239,91 @@ the answer came back "NONE of them fires", which is only possible if the
 function was never entered -- and that is what pointed at dispatch rather than
 at the trace. Without the naming, the obvious next move is to keep editing the
 trace, which would never have worked.
+
+### Note (2026-08-05)
+## FOURTH defect: the headless trace dump can never have a presenter (2026-08-05)
+
+After the imgui, logging and ExecutePacket fixes, the trace rendered every draw
+and still wrote NO file. TWO independent causes, both found by reading the path
+rather than by trying more traces, and each producing the IDENTICAL symptom --
+so fixing either alone still looks like no progress.
+
+1. OUR TRACE HAD NO SWAP. tools/gfr_to_xtr.py emitted the trace format's
+   kEvent/kSwap marker, which trace_player.cc treats ONLY as a playback break
+   hint -- it calls nothing. Xenia's own kernel triggers a swap with PM4 packets:
+   VdSwap_entry (xboxkrnl_video.cc) posts a TYPE0 write of the front buffer's
+   six-dword texture fetch constant into fetch slot 0, then PM4_XE_SWAP (0x64)
+   carrying 'SWAP', the PHYSICAL front buffer address and the size. Without them
+   IssueSwap is never called, guest output is never refreshed, and
+   TraceDump::Run's CaptureGuestOutput returns false -> exit 1, no PNG.
+
+2. AND EVEN WITH THE SWAP, THERE IS NO PRESENTER. emulator.cc gates presentation
+   on `display_window_ != nullptr`, while trace_dump.cc passes a null window
+   (correctly -- it is a console tool). graphics_system.cc's own comment
+   contemplates this case ("May be needed for offscreen use, such as capturing
+   the guest output image") but the branch was unreachable from Emulator::Setup.
+   Fixed on the fork by adding an `offscreen_presentation` parameter that
+   trace_dump passes as true. IssueSwap's early-outs are now named, for the same
+   reason IssueDraw's were.
+
+Captured on our side too: the front buffer's FETCH CONSTANT. The address alone
+does not say how to read the bytes, and Xenia takes the swap texture from fetch
+slot 0. Our VdSwap now carries r4's six dwords in its swap packet, the command
+processor records them, and .gfr is v3. A capture older than v3 makes
+gfr_to_xtr REFUSE to emit a swap and say why, rather than inventing a fetch
+constant -- an invented one would make the oracle agree with our guess about the
+front buffer's format by construction.
+
+Also fixed while here: pick_packet_scratch chose a page that was all-zero in the
+capture, which put the synthesised packets INSIDE the front buffer (0x320000 in
+a buffer based at 0x311000). Harmless while nothing presented; now it would be
+read back as a block of garbage pixels. The front buffer's whole extent, sized
+from the fetch constant's pitch and 32-row padding, is excluded.
+
+### Note (2026-08-05)
+## XENIA EXECUTES THIS TITLE. The disc mount was never the problem (2026-08-05)
+
+The July conclusion -- "~12 iterations, never once executed the title, so Xenia
+is not reliable enough to be an oracle" -- rested on a fault that had nothing to
+do with discs, arguments, headless mode, detachment or Xvfb, all of which were
+eliminated at the time and none of which was the cause.
+
+ONE fault explains every symptom. `ImGuiDrawer::InitializeFonts` MERGES a CJK
+font chosen by fontconfig. A font the rasteriser cannot parse does not fail when
+it is added -- adding only reads the file -- it fails inside
+`ImFontAtlas::Build()`, and a failed build leaves the atlas EMPTY. Xenia then
+asks for a 0x0 texture; that is an invalid VkImage, and radv answers a
+zero-extent bind with a deliberate `unreachable()` trap (`mov 0x18,%eax; ud2`).
+The SIGSEGV lands on the UI thread inside Xenia's guest-exception handler, which
+blocks in `IsDebuggerAttached()` and never returns. So:
+
+  * the window has no working menus and the compositor calls it Not Responding;
+  * `app_context().CallInUIThread(RunTitle)` -- the ONLY path that launches a
+    title -- never runs, so no target of any spelling ever launched;
+  * and headless made no difference because the UI thread was already dead.
+
+On this machine fontconfig's best CJK match is NotoSansCJK-VF.ttc, a
+variable-weight collection with CFF outlines, which stb_truetype rejects
+(imgui_draw.cpp, stbtt_InitFont). Vulkan validation named the consequence in one
+line: "vkCreateImage(): pCreateInfo->extent.width is zero".
+
+Fixed on the fork (9946714) at three levels: the atlas is built explicitly and a
+failed build costs the merged CJK font rather than every glyph; SetupFontTexture
+refuses a 0x0 atlas; VulkanImmediateDrawer::CreateTexture refuses zero extents
+where the caller is still named.
+
+MEASURED AFTER THE FIX: the disc mounts, `Loading module GAME:\default.xex`, the
+title's own content resolves under \WarGame, fourteen guest threads run, audio
+plays, and in a 60 s window the GPU issued 1677 swaps (~28 fps) while loading
+this title's real surfaces -- 864x864 k_24_8 depth, 322x182 and 128x128
+k_16_16_16_16_FLOAT. The user confirms the game runs with correct graphics.
+
+WHAT FOUND IT: the window being unclickable was treated as EVIDENCE rather than
+as an annoyance. gdb on the live process showed the UI thread parked in a signal
+handler, and Vulkan validation turned "crash in the driver" into a named API
+misuse. Guessing at launch arguments could never have reached this.
+
+STATUS OF THE "DO NOT RESUME" RULING: the reason for it -- an emulator that
+never ran the title -- no longer holds. Whether to build a differential harness
+on it is still the user's call and still costs what it costs; but "it cannot run
+this game here" is now FALSE and should not be cited as if it were true.

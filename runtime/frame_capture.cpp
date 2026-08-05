@@ -18,7 +18,11 @@ constexpr char kMagic[8] = {'G', 'E', 'A', 'R', 'S', 'F', 'R', '1'};
 // PRESENT DECISION at all -- it falls back to the last-geometry-draw rule and
 // silently answers a different question than the live run does, which is how a
 // present-path defect stayed invisible to the project's main instrument.
-constexpr uint32_t kVersion = 2;
+// v3 adds the front buffer's FETCH CONSTANT. The address says where the buffer
+// is; only the fetch constant says how to read it -- format, size, tiling and
+// swizzle -- and an oracle handed the frame without it cannot present anything
+// at all (Xenia takes the swap texture from fetch slot 0).
+constexpr uint32_t kVersion = 3;
 // Guest memory is stored per block so an untouched region costs nothing. 64 KiB
 // is small enough that a texture or vertex buffer does not drag in megabytes of
 // neighbouring emptiness, and large enough that the index stays short.
@@ -124,6 +128,8 @@ bool WriteFrameCapture(const std::filesystem::path& path, const FrameDrawInputs&
     w.pod(in.height);
     w.pod(in.guestPhysicalMirrorBytes);
     w.pod(in.frontBufferAddress);
+    for (uint32_t d : in.frontBufferFetch)
+        w.pod(d);
     w.pod(window);
     w.pod(int64_t(in.sequence));
     w.pod(uint32_t(in.draws.size()));
@@ -196,10 +202,10 @@ bool ReadFrameCapture(const std::filesystem::path& path, FrameCapture& out)
         return false;
     }
     const uint32_t version = r.pod<uint32_t>();
-    if (version != kVersion && version != 1)
+    if (version > kVersion || version == 0)
     {
         std::fclose(r.f);
-        lucent::error("draw", "frame capture: {} is version {}, this build reads {}",
+        lucent::error("draw", "frame capture: {} is version {}, this build reads 1..{}",
                       path.string(), version, kVersion);
         return false;
     }
@@ -208,10 +214,17 @@ bool ReadFrameCapture(const std::filesystem::path& path, FrameCapture& out)
     // question about which buffer is presented, and saying so is the difference
     // between a limitation and a wrong answer.
     const bool haveFrontBuffer = version >= 2;
+    // v1 and v2 predate the front buffer's fetch constant, so a replay of one
+    // cannot say how the presented buffer is FORMATTED. Left zeroed, which
+    // consumers test for, rather than filled with a plausible default.
+    const bool haveFrontBufferFetch = version >= 3;
     out.inputs.width = r.pod<uint32_t>();
     out.inputs.height = r.pod<uint32_t>();
     out.inputs.guestPhysicalMirrorBytes = r.pod<uint32_t>();
     out.inputs.frontBufferAddress = haveFrontBuffer ? r.pod<uint32_t>() : 0u;
+    if (haveFrontBufferFetch)
+        for (uint32_t& d : out.inputs.frontBufferFetch)
+            d = r.pod<uint32_t>();
     const uint32_t window = r.pod<uint32_t>();
     out.inputs.guestWindowBytes = window;
     out.inputs.sequence = long(r.pod<int64_t>());

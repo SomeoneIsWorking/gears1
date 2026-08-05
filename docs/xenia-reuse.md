@@ -112,3 +112,31 @@ And it does not touch the finding that decides sequencing: in the post-load
 state the title calls no D3D entry points at all. A shader translator cannot fix
 a title that is not drawing, and building the backend first would leave us
 unable to tell a broken backend from a game that never called it.
+
+## The fork's second use: a headless oracle
+
+Beyond the translator, the same fork answers "what should this frame look
+like?". `xenia-gpu-vulkan-trace-dump` renders a GPU trace to a PNG with no
+window and no playthrough, and `tools/gfr_to_xtr.py` turns one of our frame
+captures into such a trace. What that can and cannot settle is written at the
+top of that tool; the defects that had to be fixed before it produced anything
+are in `catalog.py show 7`.
+
+**Build it from `extern/xenia`, and only from there.** For a while a second
+clone under `scratch/oracle/xenia-canary` held the same fixes as uncommitted
+working-tree edits, and a fix applied to one tree while the other was rebuilt
+produced the conclusion that the fix did nothing. The submodule is the fork,
+with the fixes as commits; the clone is not the source of anything.
+
+    # version.h: the CMake path has no rule for it (premake generates it)
+    scratch/oracle/xenia-build/generated/version.h   <- from the pinned commit
+    CC=clang CXX=clang++ cmake -S extern/xenia -B scratch/oracle/xenia-build \
+        -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DXENIA_BUILD_MISC=ON \
+        -DCMAKE_CXX_FLAGS=-I<abs>/scratch/oracle/xenia-build/generated \
+        -DCMAKE_EXE_LINKER_FLAGS=-L<abs>/scratch/oracle/localdev
+    ninja -C scratch/oracle/xenia-build xenia-gpu-vulkan-trace-dump
+
+`RelWithDebInfo` rather than `Release` on purpose: the Release config forces
+`-flto=thin` and `-fuse-ld=lld`, and lld is not installed here. That sidesteps
+the CMakeLists edit the earlier build needed, leaving `liblz4.so` (a symlink in
+`scratch/oracle/localdev`) as the only local workaround besides `version.h`.

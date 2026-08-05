@@ -7,3 +7,6 @@ build/
 # /home/<user> through every clone until 2026-08-05.
 __pycache__/
 *.pyc
+
+# Xenia writes this beside its working directory when run from the repo root
+xconfig.settings
