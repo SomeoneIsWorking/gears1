@@ -29,6 +29,7 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | `tools/xenos_translate/` | Offline driver: container (or, with `--raw`, bare captured microcode) → Xenos microcode → SPIR-V + microcode disassembly. Measurement tool, not part of the runtime |
 | `tools/system_constants/` | Offline driver: a register-file snapshot (`GEARS_CONST_DUMP` → `scratch/bin/regfile_hotpair.bin`) → the 528-byte `xe_uniform_system_constants` UBO. Ports Xenia's `UpdateSystemConstantValues` (non-FSI) reading our tracked registers; reuses Xenia `draw_util::GetHostViewportInfo` for NDC scale/offset. Verified byte-exact against the bound shader's SPIR-V member offsets. Optional at configure time, links `xenia_gpu` |
 | `tools/compare_bound_shaders.py` | Compares runtime-captured microcode against the offline container corpus and ranks the captured set by bind count |
+| `tools/xenia_oracle/` | **The reference emulator, headless.** A windowless Xenia built on the `extern/xenia` fork: it runs the title from the ISO, drives a scripted pad, and writes frames as PNGs, with no window and no desktop session (`xenia_canary` creates a GTK window whatever `--headless` says). `tools/oracle_compare.sh` runs it and our runtime on the same walk. Needs `GEARS_ISO`. **Its limit is the moment, not the picture**: the two sides reach different points in the game, so a metric taken across them measures content as well as rendering — the fix for that is the trace path, which is blocked (`catalog.py show 79`) |
 | `runtime/` | The PC-side runtime. See below |
 | `tests/` | `test_vmx_instructions` (fork's instruction implementations) and `test_runtime_logic` (kernel object semantics, path translation). Both mutation-checked |
 | `tools/decode_bc.py` | Decodes a raw BC1/BC3 blob dumped by `GEARS_DRAW_TEX_DUMP=1` to a PNG. Exists to check the guest-texture **decode** (detiling + endian + block layout) independently of the renderer — if these look like game art, any remaining blackness is downstream |
@@ -181,8 +182,25 @@ Several of these have each cost more than one session:
   matched, a device register written in the wrong byte order, alias folding that
   made overrides no-ops, and a missing predicate bit that cost 70x frame rate.
 
-A differential harness against Xenia was tried and **abandoned** -- it never
-executed the title, and an unreliable oracle is worse than none. See
-`catalog.py show 7`. Do not resume it. This is unrelated to `extern/xenia`,
-which is used as a *reference for hardware contracts* and has been good for
-exactly that.
+**The Xenia oracle RUNS the title, headless** (`tools/xenia_oracle`, claim
+C013): a windowless emulator built on the `extern/xenia` fork, driven by a
+scripted pad, writing frames as PNGs. `tools/oracle_compare.sh` runs it and our
+runtime on the same walk. Its limit is that the two sides reach a *different
+game moment*, so every colour metric taken across them compares content as much
+as rendering.
+
+The fix for that limit -- replaying ONE captured frame through Xenia
+(`tools/gfr_to_xtr.py` → `xenia-gpu-vulkan-trace-dump`) -- is **still blocked**.
+The dump renders a trace Xenia itself captured as uniform black (instrument
+I013, DISTRUSTED). The blackness is now narrowed rather than mysterious:
+`catalog.py show 79` measures the front buffer as empty in the GPU's
+shared-memory buffer at the swap, and the trace's own snapshot of that page as
+1.22% non-zero, with `readback_resolve=none` as the reason a capture cannot see
+a GPU-written front buffer. Use `--gears_probe_front_buffer` (instrument I014)
+when working on it.
+
+The much older CPU-side differential harness against Xenia -- per-instruction
+PPC tracing -- was tried and **abandoned** before any of the above; see
+`catalog.py show 7`. Do not resume that one. Both are separate from
+`extern/xenia` being used as a *reference for hardware contracts*, which it has
+been good for throughout.
