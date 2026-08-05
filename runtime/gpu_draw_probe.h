@@ -43,6 +43,24 @@ struct FrameProbe
     bool CheckpointDue(uint32_t drawn) const;
     bool Tracing() const { return traceX >= 0; }
 
+    // GEARS_DRAW_SURFACE=<hex>: restrict BOTH probes to one EDRAM surface.
+    //
+    // Without it each probe samples whatever target is bound at that moment, and
+    // a frame switches between several. That is right for "what does the frame
+    // look like as it builds" and WRONG for "which draw changed this pixel": the
+    // rows then interleave several buffers, a target switch reads as a change,
+    // and a value can appear to come from a draw that never touched it. Chasing
+    // a colour through a frame that way attributed a window's brightness to a
+    // one-point draw and to a shader that was writing DISTANCE into a buffer
+    // being reused as a depth encode.
+    //
+    // -1 means every surface, which is the old behaviour and still the default.
+    int64_t onlySurface = -1;
+    bool SurfaceWanted(uint32_t base) const
+    {
+        return onlySurface < 0 || uint32_t(onlySurface) == base;
+    }
+
     // Both must be called with NO render pass open -- an image copy cannot
     // happen inside one -- and with the target read BEFORE the pass was ended,
     // since ending it nulls the caller's openTarget.
