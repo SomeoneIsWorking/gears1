@@ -2950,6 +2950,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     std::map<std::pair<uint32_t, uint64_t>, uint64_t> depthDestSamplers;
     uint64_t currentPsHash = 0;
     std::map<uint32_t, uint64_t> texFetchesWithSigns; // sign bits -> bindings
+    std::map<uint32_t, uint64_t> texSignedBases;      // base -> bindings wanting kSigned
     std::map<uint32_t, uint64_t> texBaseCount;    // fetch base address -> bindings
     std::map<uint32_t, uint64_t> texBaseRtCount;  // ... restricted to resolve destinations
     auto selectTexView = [&](const uint32_t* R, const draw::ShaderTextureBinding& tb)
@@ -2974,7 +2975,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             const uint32_t d0 = R[0x4800 + fc * 6];
             const uint32_t signs = (d0 >> 2) & 0xFF;   // sign_x/y/z/w, 2 bits each
             if (signs != 0)
+            {
                 ++texFetchesWithSigns[signs];
+                // WHICH textures, not just how many. A sign mode this renderer
+                // cannot serve properly (kSigned needs the signed view, and only
+                // the unsigned one is bound) has to name the texture it affects,
+                // or the count is a number nobody can act on.
+                if (((signs >> 0) & 3) == 1 || ((signs >> 2) & 3) == 1 ||
+                    ((signs >> 4) & 3) == 1 || ((signs >> 6) & 3) == 1)
+                    ++texSignedBases[base];
+            }
         }
         // A binding that names a resolve destination of THIS frame reads that
         // destination's own host image -- the surface it was resolved from, in
@@ -5542,19 +5552,32 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // distinguishable from "nobody looked".
         if (texFetchesWithSigns.empty())
             lucent::info("draw", "frame texture signs: 0 of {} bindings ask for a"
-                " signed component, so leaving texture_swizzled_signs at zero is"
-                " correct for this frame", texBindsRt + texBindsStub + texBindsGuest);
+                " signed or gamma component, so the decode is a no-op on this frame"
+                " -- printed with its denominator so it is not mistaken for nobody"
+                " having looked", texBindsRt + texBindsStub + texBindsGuest);
         else
         {
             lucent::Line sl;
             sl.add("frame texture signs: {} distinct sign patterns among {} bindings"
-                   " -- these fetches want SIGNED components and this renderer reads"
-                   " them UNSIGNED, because texture_swizzled_signs is never set:",
+                   " (0x3f is kGamma on RGB, 0x55 is kSigned on all four). These are"
+                   " decoded per the fetch constant; GEARS_DRAW_NO_TEX_SIGNS=1 is the"
+                   " control arm that reads them all unsigned:",
                    texFetchesWithSigns.size(),
                    texBindsRt + texBindsStub + texBindsGuest);
             for (const auto& [bits, n] : texFetchesWithSigns)
                 sl.add(" [{:#04x} x{}]", bits, n);
-            sl.flush(lucent::Level::Warn, "draw");
+            sl.flush(lucent::Level::Info, "draw");
+        }
+        if (!texSignedBases.empty())
+        {
+            lucent::Line bl;
+            bl.add("frame kSigned textures: {} distinct bases want the SIGNED view,"
+                   " which this renderer does not create -- the unsigned view is"
+                   " bound to both slots, so these fetches read 0..1 where the"
+                   " shader expects -1..1:", texSignedBases.size());
+            for (const auto& [b, n] : texSignedBases)
+                bl.add(" [{:#x} x{}]", b, n);
+            bl.flush(lucent::Level::Warn, "draw");
         }
         lucent::info("draw", "frame textures: {} distinct fetch constants, {} uploaded"
             " ({:.1f} MiB), {} samplers", texDistinct.size(), uploads.size(),
