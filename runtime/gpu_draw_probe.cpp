@@ -400,7 +400,16 @@ void DrawStats::WriteTable(uint32_t drawn, const std::vector<PreparedDraw>& prep
              "\tvport_xs\tvport_xo\tvport_ys\tvport_yo"
              "\tvport_zs\tvport_zo\tvs_hash\tps_hash"
              "\tresolve_dest\tresolve_src\tresolve_dst"
-             "\tresolve_is_depth\tresolve_clears_depth\n";
+             "\tresolve_is_depth\tresolve_clears_depth"
+             // What the guest asked this resolve to DO to the colour on its
+             // way out of EDRAM. RB_COPY_DEST_INFO's red/blue swap decides
+             // whether the destination holds the surface's channel order or
+             // the reverse, and it is per-resolve: one frame sets it on one
+             // destination and not another. Without it in the table, "which
+             // buffer is swapped relative to which" is a question you can
+             // only answer by toggling a knob and diffing images, which is
+             // how catalog #62 stayed open.
+             "\tresolve_swap_rb\tresolve_scale\n";
         uint32_t row = 0;
         for (const PreparedDraw& pd : prepared)
         {
@@ -438,6 +447,8 @@ void DrawStats::WriteTable(uint32_t drawn, const std::vector<PreparedDraw>& prep
                   << '\t' << pd.resolveDstX << ',' << pd.resolveDstY
                   << '\t' << (pd.resolveIsDepth ? 1 : 0)
                   << '\t' << (pd.clearsDepth ? 1 : 0)
+                  << '\t' << (pd.resolveSwapRB ? 1 : 0)
+                  << '\t' << pd.resolveScale
                   << '\n';
                 continue;
             }
@@ -480,7 +491,7 @@ void DrawStats::WriteTable(uint32_t drawn, const std::vector<PreparedDraw>& prep
               << '\t' << pd.vportZScale << '\t' << pd.vportZOffset
               << '\t' << std::hex << pd.vsHash << '\t' << pd.psHash
               << std::dec
-              << "\t\t\t\t\t"   // the resolve_* columns: not a resolve
+              << "\t\t\t\t\t\t\t"   // the resolve_* columns: not a resolve
               << '\n';
             ++row;
         }

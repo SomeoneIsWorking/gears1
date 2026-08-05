@@ -103,3 +103,60 @@ readback at ~1866 actually copies from.
 
 Do not re-open the tonemap, the exponent bias or the 7e3 packing on this
 evidence: a per-pixel 100% match cannot be produced by any of them.
+
+### Note (2026-08-05)
+## RETRACTED: the note above is WRONG where it concludes a swap DEFECT
+
+The measurements in it are right. The inference from them is not, and the
+entry must not be read as "the present path swaps channels".
+
+**What is still true.** The presented frame is byte-identical to resolve target
+0xc7f9000 and an exact R/B exchange of resolve target 0x311000, per pixel,
+100.0% both ways. Those numbers stand.
+
+**What is false.** That this shows a defect, and that it explains R/G = 0.7688.
+
+Three things refute it, each measured after the fact:
+
+1. **Both resolves ask for the swap.** The diag table now carries
+   `resolve_swap_rb` (new column): draw 717 -> 0xc7f9000 and draw 743 ->
+   0x311000 BOTH have swap_rb = 1. The earlier reading -- "the guest asks for
+   the swap on one and not the other" -- came from the NOSWAP control arm
+   moving only one of the two, and that is not what it means.
+2. **Nothing fell back to the blit.** `resolvesUnstorable` is 0 on this frame,
+   so no resolve silently dropped the swap; every one ran the compute path.
+3. **The guest exchanges the channels itself, mid-frame.**
+   `GEARS_DRAW_PIXEL_TRACE=835,258` on consecutive draws:
+
+       after 527 draws (surface 0x2d0) = (0.296875, 0.296875, 0.2685547, 0) <- draw 702
+       after 528 draws (surface 0x2d0) = (0.2685547, 0.296875, 0.296875, 0) <- draw 703
+
+   Same pixel, same surface, R and B exchanged by ONE of the title's own draws.
+
+That closes the loop consistently: 0xc7f9000 resolves the surface before draw
+703, 0x311000 resolves it after, both applying the swap, and the presented
+surface is the later state. Every relationship I measured follows from the
+guest's own stream, and none of it requires a defect. It also agrees with the
+present path's own reasoning in gpu_draw.cpp (~line 1797), which says
+presenting the source surface rather than the front buffer is deliberate and
+was settled against the boot movie -- I should have read that BEFORE concluding.
+
+## So where #62 stands
+
+Unchanged from before that note. R/G = 0.7688 and the ~0.30 ceiling both still
+reproduce on today's build (courtyard.gfr: R 0.0594 G 0.0773 B 0.0768, p99
+0.29), and the cause is NOT established. **The tonemap, the exponent bias and
+the 7e3 packing are NOT ruled out** -- the previous note said they were, and
+that exclusion rested on the same bad inference.
+
+The oracle comparison the original entry asked for is still the thing that
+would settle it, and nothing since has replaced it.
+
+## What the detour did leave behind
+
+Two instruments that stay useful and are validated:
+- `GEARS_DRAW_RESOLVE_DUMP=1` reports per-channel means and R/G, B/G per
+  target. The old line's range was a max across all three channels and reads
+  identically whether one channel is short.
+- The diag table has `resolve_swap_rb` and `resolve_scale`, so what a resolve
+  was ASKED to do is readable without toggling a knob and diffing images.
