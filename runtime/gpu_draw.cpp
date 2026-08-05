@@ -1179,6 +1179,51 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (!translated)
                 return false;
             xit = xlate.emplace(key, std::move(x)).first;
+            // GEARS_DRAW_SPV_DUMP=<dir>: the TRANSLATED module, as the runtime
+            // actually built it for THIS draw's modification key.
+            //
+            // WHY IT HAD TO EXIST. Writing a native pass means implementing the
+            // translator's interface exactly -- descriptor bindings, uniform block
+            // sizes, interpolator locations -- and getting any of it wrong is not
+            // a validation error, it samples a different image and still draws a
+            // plausible picture (docs/native-renderer.md). The only modules on
+            // disk were the offline ones in scratch/shaders/bound_out/, translated
+            // with NO modification key, so they carry no interpolator inputs and a
+            // colour write mask of zero. This writes the real one.
+            //
+            // Always the TRANSLATED module, never the native substitute: the
+            // reference is the thing being matched, and dumping our own output
+            // instead would let a native pass "verify" against itself.
+            {
+                static const std::string& spvDir = lucent::config::text("DRAW_SPV_DUMP");
+                if (!spvDir.empty())
+                {
+                    std::error_code ec;
+                    std::filesystem::create_directories(spvDir, ec);
+                    char name[128];
+                    std::snprintf(name, sizeof name, "%s_%016llx_mod%016llx.spv",
+                                  isVertex ? "vs" : "ps",
+                                  static_cast<unsigned long long>(hash),
+                                  static_cast<unsigned long long>(modification));
+                    const std::filesystem::path out =
+                        std::filesystem::path(spvDir) / name;
+                    std::ofstream f(out, std::ios::binary);
+                    if (f)
+                    {
+                        f.write(reinterpret_cast<const char*>(xit->second.spirv.data()),
+                                std::streamsize(xit->second.spirv.size()));
+                        lucent::debug("draw", "translated module -> {} ({} bytes)",
+                                      out.string(), xit->second.spirv.size());
+                    }
+                    else
+                    {
+                        // A dump that silently writes nothing is worse than none:
+                        // the next reader concludes the shader was never bound.
+                        lucent::error("draw", "GEARS_DRAW_SPV_DUMP: cannot write {}",
+                                      out.string());
+                    }
+                }
+            }
             // A NATIVE PASS STANDS IN HERE, and only here: the translation still
             // ran, so its binding layout, constant map and texture list are what
             // the rest of the frame uses -- the native module implements the same

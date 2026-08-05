@@ -64,6 +64,41 @@ grep "is rendering natively" "$out/arm1.log" | sed 's/^/  substituted: /'
 status=0
 tools/compare_frames.py "$out/xlate.ppm" "$out/native.ppm" || status=$?
 
+# THE INTERFACE ARM. A pixel comparison audits a RESULT, not an interface: two of
+# this project's native passes were bit-exact for two sessions while declaring
+# their sampled images as texture2D against VK_IMAGE_VIEW_TYPE_2D_ARRAY
+# descriptors. The driver tolerates that and samples layer 0, so the comparison
+# above could never have reported it -- Vulkan validation reports it in one line
+# per draw (catalog #72). Necessary AND sufficient needs both arms.
+echo
+echo "== interface: Vulkan validation, native passes on =="
+rm -f "$shots"/frame*.ppm
+GEARS_DRAW_VALIDATE=1 GEARS_NATIVE_PASSES=1 "$replay" "$capture" \
+    >"$out/validate.log" 2>&1 || {
+    echo "REFUSING to report: the validation run of $capture failed" >&2; exit 1; }
+# Count them rather than grepping for a pattern that might match nothing because
+# the run died early: a zero that cannot be distinguished from "never ran" is the
+# failure mode this whole script exists to avoid.
+draws_seen=$(grep -c "is rendering natively" "$out/validate.log" || true)
+if [[ $draws_seen -eq 0 ]]; then
+    echo "REFUSING to report an interface result: no native pass was substituted" >&2
+    echo "in the validation run, so validation had nothing of ours to check." >&2
+    exit 1
+fi
+iface=$(grep -c "VkImageViewType\|OpTypeImage" "$out/validate.log" || true)
+echo "  $draws_seen native substitutions under validation;" \
+     "$iface descriptor/shader-interface warnings"
+if [[ $iface -ne 0 ]]; then
+    echo
+    echo "INTERFACE MISMATCH: the pixels match and the interface does not. The" >&2
+    echo "native module does not describe the descriptors it is handed:" >&2
+    grep "VkImageViewType\|OpTypeImage" "$out/validate.log" | sort -u | head -5 >&2
+    status=1
+else
+    echo "  the native modules describe the descriptors they are handed -- so the" \
+         "match above is a match on the interface as well as on the pixels"
+fi
+
 if [[ -f $control ]]; then
     echo
     echo "== negative control: $control must NOT match =="
