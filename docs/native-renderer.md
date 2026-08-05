@@ -1,6 +1,6 @@
 # The native renderer
 
-Status: **seam landed, five passes implemented and bit-exact, none merely declared.**
+Status: **seam landed, six passes implemented and bit-exact, none merely declared.**
 Everything below that is not marked DONE is a plan, and this file says which is
 which so the next session does not have to guess.
 
@@ -11,6 +11,7 @@ which so the next session does not have to guess.
 | Uber post-process blend (DOF + colour transform) | `0x9610bf8038af9aaf` | **DONE** — `runtime/shaders/uber_post_blend.frag`, bit-exact on `scratch/frames/courtyard.gfr` and `scratch/frames/act1_v2.gfr` (2,764,800 of 2,764,800 each) |
 | Base pass — directional-lightmap material | `0x1f1a3f779667a02a` | **DONE** — `runtime/shaders/base_pass_lightmap.frag`, bit-exact on `scratch/frames/courtyard.gfr` and `scratch/frames/bright.gfr` (2,764,800 of 2,764,800 each). **One of 44 base-pass materials in that frame**, and the hottest — 36 of its 348 base-pass draws |
 | Base pass — lightmap + specular exponent | `0xd99a15450a08043a` | **DONE** — `runtime/shaders/base_pass_lightmap_spec.frag`, bit-exact on `courtyard.gfr` and `bright.gfr` (2,764,800 of 2,764,800 each). The same family as the row above; 2 of 44 materials now |
+| Base pass — lightmap + blended diffuse | `0xffdafff8542ddcd6` | **DONE** — `runtime/shaders/base_pass_lightmap_blend.frag`, bit-exact on `courtyard.gfr` and `bright.gfr` (2,764,800 of 2,764,800 each). Nine texture fetches, eleven constant registers; 3 of 44 materials now |
 | Height fog | **none — the pass is not in any frame we have** | withdrawn, see below |
 
 Run the gate with `tools/verify_native_pass.sh`. It has three arms and refuses to
@@ -429,7 +430,7 @@ the register file, write the reduction, gate it — and that the procedure now
 includes a simulation step for anything with this much channel rotation.
 
 
-## Two materials of the family, and what the second one settles
+## Three materials of the family, and what they settle
 
 `0xd99a15450a08043a` is the same directional-lightmap base pass as the material
 above, and having **two** is what separates UE3's base pass from one material's
@@ -452,9 +453,25 @@ are **register packing chosen per material**, not a property of the engine.
 Carrying either assumption from one material to the next would produce a shader
 that is plausible, close, and wrong — so each is read off the microcode.
 
-Both were reduced with `tools/ucode_reduce.py` and both were bit-exact on the
-first attempt, which is the first evidence that this family is a *procedure*
-rather than a series of one-offs. And both have their control arm: breaking the
-shader deliberately changes 473,625 channel samples for the first material and
-58,907 for the second, so neither zero-difference result is a pass that never
-reached the image.
+A third, `0xffdafff8542ddcd6`, confirms both halves of that. The skeleton survived
+again — three lightmaps, three basis weights squared for the normal and
+exponentiated for the reflection, the six-step alternating accumulation, two wrap
+terms, ambient, output scale. And it added three more material-level things:
+
+- a **two-layer diffuse**, the albedo blended toward a second colour map through a
+  single-channel mask (`mask*(blend − albedo) + albedo`),
+- its own **specular colour map**, where material 1 used a separate texture and
+  material 2 re-used its albedo,
+- **two different specular exponents** — basis A and C raised to `c254.x`, basis B
+  to `c253.w`. That asymmetry is transcribed, not tidied. A native pass that
+  "fixes" an asymmetry it does not understand is guessing.
+
+The pairing changed a third time (LM(c3)↔basis C, LM(c4)↔basis B, LM(c5)↔basis A).
+**Three materials, three pairings.** Nothing about a material's parameters
+transfers.
+
+All three were reduced with `tools/ucode_reduce.py` and all three were bit-exact
+**on the first attempt**, which is what makes this a procedure rather than a series
+of one-offs. All three have their control arm — breaking the shader deliberately
+changes 473,625, 58,907 and 564,754 channel samples respectively — so no
+zero-difference result here is a pass that never reached the image.

@@ -1,4 +1,5 @@
 #include "native_pass.h"
+#include "native_pass_basepass_blend_spv.h"
 #include "native_pass_basepass_spec_spv.h"
 #include "native_pass_basepass_spv.h"
 #include "native_pass_gamma_spv.h"
@@ -80,6 +81,14 @@ const std::vector<Pass>& RosterStorage()
              "the title's ps_d99a15450a08043a microcode; UE3"
              " Engine/Shaders/BasePassPixelShader.usf and BasePassCommon.usf",
              BasePassLightmapSpecSpirv()},
+        // IMPLEMENTED. The same family, third material and the biggest: nine
+        // texture fetches, a two-layer diffuse blended through a mask, its own
+        // specular colour map, and TWO different specular exponents --
+        // runtime/shaders/base_pass_lightmap_blend.frag.
+        Pass{0xffdafff8542ddcd6ull, "base pass, directional-lightmap + blended diffuse",
+             "the title's ps_ffdafff8542ddcd6 microcode; UE3"
+             " Engine/Shaders/BasePassPixelShader.usf and BasePassCommon.usf",
+             BasePassLightmapBlendSpirv()},
     };
     return roster;
 }
