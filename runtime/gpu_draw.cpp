@@ -650,8 +650,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         ci.tiling = VK_IMAGE_TILING_OPTIMAL;
         // SAMPLED as well: the depth resolve reads this image in a compute
         // pass, and a depth image cannot be a storage image.
+        // TRANSFER_DST as well: the guest's own mid-frame depth clear is a
+        // vkCmdClearDepthStencilImage, which REQUIRES it -- without the flag
+        // the clear and its two layout barriers are undefined behaviour that
+        // this driver happens to execute (VUID-vkCmdClearDepthStencilImage-
+        // pRanges-02660/02659, VUID-VkImageMemoryBarrier-oldLayout-01213).
+        // That clear is load-bearing: it is what makes reverse-Z draws pass
+        // the depth test at all (catalog #31).
         ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                   VK_IMAGE_USAGE_SAMPLED_BIT;
+                   VK_IMAGE_USAGE_SAMPLED_BIT |
+                   VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         VK_CHECK(vkCreateImage(device, &ci, nullptr, &depth));
         VkMemoryRequirements req{};
         vkGetImageMemoryRequirements(device, depth, &req);
