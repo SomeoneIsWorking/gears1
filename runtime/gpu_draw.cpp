@@ -13,6 +13,7 @@
 #include "frame_ab.h"
 #include "gpu_device_features.h"
 #include "guest_texture_hash.h"
+#include "native_pass.h"
 #include "gpu_shared_device.h"
 #include "gpu_queue_family.h"
 
@@ -5081,6 +5082,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // with its denominator, because "0 evicted" only means something next to
         // the number of textures that were actually checked -- a zero denominator
         // would mean the check never ran, which is a different statement.
+        gears::native::ReportRoster();
         lucent::info("draw", "descriptor sets: {} draws reused an earlier draw's"
             " texture sets, {} built new ones, {} distinct sets in the frame."
             " The key is the shader pair plus the fetch constants behind every"
