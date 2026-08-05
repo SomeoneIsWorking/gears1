@@ -29,7 +29,18 @@
 namespace gears::draw
 {
 
-// Inserts a clamp of every fragment colour output to [0,1], in place.
+// WHICH COMPONENTS the target clamps. A fixed-point format clamps all four. The
+// 7e3 formats are the awkward case the hardware actually implements: RGB is a
+// float running to 32, but ALPHA is a 2-bit UNORM, so the console clamps alpha to
+// [0,1] and leaves colour alone. Clamping all four there would flatten exactly the
+// HDR range the widened host format exists to carry.
+enum class ClampMode
+{
+    kRgba,       // fixed-point target: all four components clamp to [0,1]
+    kAlphaOnly,  // 7e3 target: float RGB, UNORM alpha
+};
+
+// Inserts a clamp of the fragment colour output to [0,1], in place.
 //
 // Returns false and leaves `spirv` untouched when the module cannot be handled --
 // a malformed header, no fragment outputs, or no float4 output type. A caller that
@@ -37,6 +48,7 @@ namespace gears::draw
 //
 // Idempotent in effect but not in form: calling it twice inserts two clamps, which
 // is harmless but wasteful, so callers cache per (shader, clamped) instead.
-bool ClampFragmentOutputs(std::vector<uint32_t>& spirv);
+bool ClampFragmentOutputs(std::vector<uint32_t>& spirv,
+                          ClampMode mode = ClampMode::kRgba);
 
 } // namespace gears::draw

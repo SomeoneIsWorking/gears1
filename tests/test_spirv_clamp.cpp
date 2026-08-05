@@ -144,11 +144,49 @@ void TestSecondApplicationStaysValid()
     Check(CountNClamps(m) == 2, "with the clamp applied twice, which is harmless");
 }
 
+// The 7e3 case: RGB must be left alone (it is the HDR range the widened host
+// format exists to carry) and only alpha clamped. Structurally that is a different
+// instruction sequence, so it gets its own check rather than riding on the other.
+void TestAlphaOnlyModeTouchesOnlyAlpha()
+{
+    std::vector<uint32_t> m = gears::native::MovieYuvSpirv();
+    const size_t storesBefore = CountStores(m);
+    Check(gears::draw::ClampFragmentOutputs(m, gears::draw::ClampMode::kAlphaOnly),
+        "alpha-only mode handles a real fragment module");
+    Check(WellFormed(m), "and the rebuilt module is well-formed");
+    Check(CountNClamps(m) == 1, "one clamp, on the alpha component");
+    Check(CountStores(m) == storesBefore, "no store added or lost");
+
+    // The distinguishing structural fact: alpha-only extracts and re-inserts a
+    // component, the RGBA mode does not touch composites at all.
+    auto countOp = [](const std::vector<uint32_t>& mod, uint16_t want) {
+        size_t n = 0;
+        for (size_t i = 5; i < mod.size();)
+        {
+            const uint16_t len = Len(mod[i]);
+            if (len == 0 || i + len > mod.size()) break;
+            if (Opcode(mod[i]) == want) ++n;
+            i += len;
+        }
+        return n;
+    };
+    const size_t inserts = countOp(m, 82 /*OpCompositeInsert*/);
+    Check(inserts >= 1, "alpha-only re-inserts the clamped component");
+
+    std::vector<uint32_t> rgba = gears::native::MovieYuvSpirv();
+    const size_t insertsBefore = countOp(rgba, 82);
+    Check(gears::draw::ClampFragmentOutputs(rgba, gears::draw::ClampMode::kRgba),
+        "rgba mode still handled");
+    Check(countOp(rgba, 82) == insertsBefore,
+        "and rgba mode adds no composite insert -- the two modes really differ");
+}
+
 } // namespace
 
 int main()
 {
     TestClampsARealModule();
+    TestAlphaOnlyModeTouchesOnlyAlpha();
     TestRefusesWhatItCannotHandle();
     TestSecondApplicationStaysValid();
     if (g_failures != 0)
