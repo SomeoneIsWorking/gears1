@@ -3893,6 +3893,32 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             dl.add(" vsconst {}/{} nz, psconst {}/{} nz, ps c255.x={} ({:#x})",
                    nonZero(fVsBuf), vsX->floatCount, nonZero(fPsBuf), psX->floatCount,
                    psC255, c255bits);
+            // GEARS_DRAW_PS_CONSTS=<hash> prints the pixel float constants a named
+            // shader actually received, as the numbers the shader will multiply by.
+            // "psconst 9/3 nz" says three of nine are non-zero and cannot say WHICH,
+            // and for a pass that ends in a scale the difference between "the scale
+            // is 0.9" and "the scale is 0" is the difference between a frame and a
+            // black screen.
+            if (const std::string& want = lucent::config::text("DRAW_PS_CONSTS");
+                !want.empty() && psX != nullptr)
+            {
+                const uint64_t wantHash = std::strtoull(want.c_str(), nullptr, 16);
+                if (wantHash == d.psHash)
+                {
+                    lucent::Line cl;
+                    cl.add("draw {} ps {:#x} float constants ({} vec4s, in the"
+                           " shader's own packed order):", issued, d.psHash,
+                           psX->floatCount);
+                    for (uint32_t i = 0; i < psX->floatCount &&
+                                         (i + 1) * 16 <= fPsBuf.size(); ++i)
+                    {
+                        float v[4];
+                        std::memcpy(v, fPsBuf.data() + size_t(i) * 16, 16);
+                        cl.add(" c[{}]=({}, {}, {}, {})", i, v[0], v[1], v[2], v[3]);
+                    }
+                    cl.flush(lucent::Level::Info, "draw");
+                }
+            }
             dl.flush(lucent::Level::Info, "draw");
         }
         prepared.push_back(pd);
