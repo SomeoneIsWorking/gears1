@@ -172,7 +172,7 @@ endif()
 # replay possible. tools/frame_replay links this and renders a captured frame in
 # about a second, with no guest, no menu walk and no 200-second boot; see
 # frame_capture.h. gears1 links it exactly as before.
-add_library(gears_draw STATIC gpu_draw.cpp frame_capture.cpp
+add_library(gears_draw STATIC gpu_draw.cpp frame_capture.cpp spirv_clamp.cpp
                               gpu_queue_family.cpp gpu_instance.cpp
                               gpu_shared_device.cpp
                               gpu_device_features.cpp

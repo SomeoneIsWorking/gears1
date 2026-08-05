@@ -324,3 +324,15 @@ add_executable(test_frame_ab
     ../runtime/frame_ab.cpp)
 target_include_directories(test_frame_ab PRIVATE ../runtime)
 add_test(NAME frame_ab COMMAND test_frame_ab)
+
+# The fragment-output clamp. A fixed-point render target clamps a shader's colour
+# output to [0,1] before blending and a floating-point one does not -- and this
+# renderer gives a reinterpreted surface ONE float host image, so every draw into
+# it behaves as if its target were HDR. The visible cost is a translucent highlight
+# blending as a flat saturated slab (`catalog.py show 68`). Pure SPIR-V surgery, so
+# the test needs no Vulkan device: it checks that a clamp is inserted before each
+# colour store, that the module stays well-formed, and above all that a module the
+# transform cannot handle is REFUSED rather than left half-rewritten.
+add_executable(test_spirv_clamp test_spirv_clamp.cpp ../runtime/spirv_clamp.cpp)
+target_include_directories(test_spirv_clamp PRIVATE ../runtime)
+add_test(NAME spirv_clamp COMMAND test_spirv_clamp)
