@@ -5065,6 +5065,60 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         checkpointMem.push_back(m);
     };
 
+    // GEARS_DRAW_PIXEL_TRACE=<x>,<y>: WHICH DRAW PAINTED THIS PIXEL.
+    //
+    // Attributing a visible defect to a draw is the question this renderer asks
+    // most, and until now the only answer was GEARS_DRAW_FRAME_STEP -- whole
+    // images, capped at 48, and read back through an 8-bit blit that clamps. On a
+    // base pass whose HDR target is mostly above 1.0 that blit reports 255 for
+    // every pixel of interest, so the instrument cannot separate two draws at all.
+    // This copies ONE texel after every draw, uncapped, in the surface's own
+    // format, and prints the draws where it CHANGED -- with the denominator, so a
+    // trace that never changes is distinguishable from a trace that never ran.
+    struct PixelSample { uint32_t draws; uint32_t surface; VkFormat format; };
+    std::vector<PixelSample> pixelSamples;
+    VkBuffer pixelBuf = VK_NULL_HANDLE;
+    VkDeviceMemory pixelMem = VK_NULL_HANDLE;
+    int32_t traceX = -1, traceY = -1;
+    if (const std::string& spec = lucent::config::text("DRAW_PIXEL_TRACE"); !spec.empty())
+    {
+        const size_t comma = spec.find(',');
+        if (comma == std::string::npos)
+            lucent::warn("draw", "GEARS_DRAW_PIXEL_TRACE: cannot parse '{}',"
+                " expected <x>,<y>; NOT tracing", spec);
+        else
+        {
+            traceX = std::atoi(spec.c_str());
+            traceY = std::atoi(spec.c_str() + comma + 1);
+            if (traceX < 0 || traceY < 0 || uint32_t(traceX) >= W || uint32_t(traceY) >= H)
+            {
+                lucent::warn("draw", "GEARS_DRAW_PIXEL_TRACE: ({},{}) is outside the"
+                    " {}x{} surface; NOT tracing", traceX, traceY, W, H);
+                traceX = traceY = -1;
+            }
+            // 16 bytes per sample covers the widest surface format here.
+            else if (!MakeBuffer(16ull * (prepared.size() + 2),
+                                 VK_BUFFER_USAGE_TRANSFER_DST_BIT, pixelBuf, pixelMem, true))
+            {
+                lucent::warn("draw", "GEARS_DRAW_PIXEL_TRACE: no readback buffer;"
+                    " NOT tracing");
+                traceX = traceY = -1;
+            }
+        }
+    }
+    auto tracePixel = [&](uint32_t drawsSoFar, const SurfaceTarget* t, uint32_t surfaceBase) {
+        if (traceX < 0 || !t || !t->begunThisFrame)
+            return;
+        VkBufferImageCopy rg{};
+        rg.bufferOffset = VkDeviceSize(pixelSamples.size()) * 16;
+        rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        rg.imageOffset = {traceX, traceY, 0};
+        rg.imageExtent = {1, 1, 1};
+        vkCmdCopyImageToBuffer(cmd, t->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            pixelBuf, 1, &rg);
+        pixelSamples.push_back(PixelSample{drawsSoFar, surfaceBase, t->hostFormat});
+    };
+
     // Per-draw pipeline statistics: how far each draw actually got through the
     // pipeline. Four counters per draw, in this order:
     //   0 input-assembly vertices, 1 input-assembly primitives,
@@ -5268,6 +5322,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             const uint32_t checkpointBase = openTarget ? openSurface : lastSurface;
             endPass();
             checkpointHere(drawn, checkpointTarget, checkpointBase);
+        }
+        // One texel, every draw. Same pass-boundary requirement as a checkpoint:
+        // the copy cannot happen inside a render pass.
+        if (traceX >= 0)
+        {
+            SurfaceTarget* const t = openTarget ? openTarget : lastTarget;
+            const uint32_t base = openTarget ? openSurface : lastSurface;
+            endPass();
+            tracePixel(drawn, t, base);
         }
         // Open a pass if there is none, or re-open on a different surface.
         if (!inPass || openSurface != pd.surfaceBase)
@@ -6278,6 +6341,65 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         lucent::info("draw", "  checkpoint after {} draws on surface {:#x}:"
             " {} px != clear, {} px non-black -> {}", checkpoints[i].draws,
             checkpoints[i].surface, cpLit, cpNonBlack, name);
+    }
+    // The pixel trace. Printed as CHANGES, because 650 identical rows hide the
+    // handful that matter -- but with the denominator and the final value, so
+    // "nothing changed it" cannot be confused with "nothing was traced".
+    if (traceX >= 0)
+    {
+        std::vector<uint8_t> raw(16ull * (pixelSamples.size() + 1), 0);
+        void* p = nullptr;
+        if (!pixelSamples.empty() &&
+            vkMapMemory(device, pixelMem, 0, raw.size(), 0, &p) == VK_SUCCESS)
+        {
+            std::memcpy(raw.data(), p, raw.size());
+            vkUnmapMemory(device, pixelMem);
+        }
+        auto decode = [&](size_t i) {
+            std::array<float, 4> v{0, 0, 0, 0};
+            const uint8_t* b = raw.data() + i * 16;
+            if (pixelSamples[i].format == VK_FORMAT_R8G8B8A8_UNORM)
+                for (int k = 0; k < 4; ++k) v[k] = float(b[k]) / 255.0f;
+            else  // R16G16B16A16_SFLOAT, this title's every surface
+                for (int k = 0; k < 4; ++k)
+                {
+                    uint16_t h; std::memcpy(&h, b + k * 2, 2);
+                    v[k] = HalfToFloat(h);
+                }
+            return v;
+        };
+        lucent::Line tl;
+        tl.add("pixel trace ({},{}): {} sample(s), one after every draw. Rows are"
+               " the draws that CHANGED it:", traceX, traceY, pixelSamples.size());
+        uint32_t changes = 0;
+        std::array<float, 4> prev{-1, -1, -1, -1};
+        for (size_t i = 0; i < pixelSamples.size(); ++i)
+        {
+            const std::array<float, 4> v = decode(i);
+            if (i != 0 && v == prev)
+                continue;
+            prev = v;
+            ++changes;
+            const uint32_t n = pixelSamples[i].draws;
+            // The draw that produced this value is the one issued just before the
+            // sample, i.e. prepared[n-1]; naming prepared[n] would blame the next.
+            const PreparedDraw* by = (n >= 1 && n <= prepared.size())
+                                   ? &prepared[n - 1] : nullptr;
+            tl.add("\n  after {} draws (surface {:#x}) = ({}, {}, {}, {}){}",
+                   n, pixelSamples[i].surface, v[0], v[1], v[2], v[3],
+                   by ? std::format(" <- draw {} ps {:#x}", by->diagIndex, by->psHash)
+                      : std::string(" <- (before any draw)"));
+        }
+        if (changes <= 1)
+            tl.add("\n  NOTHING after the first sample changed it. That is a real"
+                   " negative only if the trace ran: {} samples were taken.",
+                   pixelSamples.size());
+        tl.flush(lucent::Level::Info, "draw");
+    }
+    if (pixelBuf != VK_NULL_HANDLE)
+    {
+        vkDestroyBuffer(device, pixelBuf, nullptr);
+        vkFreeMemory(device, pixelMem, nullptr);
     }
     // NO SILENT TRUNCATION. A capped census that does not say it was capped reads
     // as full coverage of the frame.
