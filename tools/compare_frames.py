@@ -15,10 +15,17 @@ accident, so this tool refuses to say it cheaply:
   - a match prints the pixel count it is over and the frame's own mean, so
     "identical" can never be confused with "empty".
 
-Usage: tools/compare_frames.py A.ppm B.ppm [--max-mean-diff N]
+Either side may be a PNG, because the Xenia oracle
+(`xenia-gpu-vulkan-trace-dump`, see tools/gfr_to_xtr.py) writes one. Comparing
+our .ppm against its .png is the oracle comparison; what that can and cannot
+settle is documented in gfr_to_xtr.py and applies in full here.
+
+Usage: tools/compare_frames.py A.ppm|png B.ppm|png [--max-mean-diff N]
 Exit 0 only when the difference is within tolerance AND the frames carry content.
 """
+import struct
 import sys
+import zlib
 
 
 def read_ppm(path):
@@ -47,6 +54,70 @@ def read_ppm(path):
     return w, h, data[i + 1:i + 1 + w * h * 3]
 
 
+def read_png(path):
+    """Enough of PNG to read what the oracle writes: 8-bit RGB or RGBA.
+
+    Anything else RAISES rather than being coerced. A comparison tool that
+    quietly mis-decodes one side would report a difference that is its own.
+    """
+    with open(path, 'rb') as f:
+        data = f.read()
+    if not data.startswith(b'\x89PNG\r\n\x1a\n'):
+        raise SystemExit(f"{path}: not a PNG")
+    pos, idat, w, h, bitdepth, colour = 8, b'', None, None, None, None
+    while pos + 8 <= len(data):
+        (length,) = struct.unpack('>I', data[pos:pos + 4])
+        kind = data[pos + 4:pos + 8]
+        if kind == b'IHDR':
+            w, h, bitdepth, colour = struct.unpack('>IIBB', data[pos + 8:pos + 18])
+        elif kind == b'IDAT':
+            idat += data[pos + 8:pos + 8 + length]
+        pos += 12 + length
+    if bitdepth != 8 or colour not in (2, 6):
+        raise SystemExit(f"{path}: this reader handles 8-bit RGB/RGBA only, got "
+                         f"bit depth {bitdepth}, colour type {colour}")
+    channels = 3 if colour == 2 else 4
+    raw = zlib.decompress(idat)
+    stride = w * channels
+    if len(raw) != (stride + 1) * h:
+        raise SystemExit(f"{path}: {len(raw)} bytes of image data, expected "
+                         f"{(stride + 1) * h} -- truncated or interlaced")
+    out = bytearray(w * h * 3)
+    prev = bytearray(stride)
+    i = 0
+    for y in range(h):
+        filt = raw[i]; i += 1
+        line = bytearray(raw[i:i + stride]); i += stride
+        if filt:
+            for x in range(stride):
+                a = line[x - channels] if x >= channels else 0
+                b = prev[x]
+                c = prev[x - channels] if x >= channels else 0
+                if filt == 1:
+                    line[x] = (line[x] + a) & 255
+                elif filt == 2:
+                    line[x] = (line[x] + b) & 255
+                elif filt == 3:
+                    line[x] = (line[x] + (a + b) // 2) & 255
+                elif filt == 4:
+                    p = a + b - c
+                    pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                    pred = a if (pa <= pb and pa <= pc) else (b if pb <= pc else c)
+                    line[x] = (line[x] + pred) & 255
+                else:
+                    raise SystemExit(f"{path}: unknown row filter {filt}")
+        for x in range(w):
+            out[(y * w + x) * 3:(y * w + x) * 3 + 3] = line[x * channels:x * channels + 3]
+        prev = line
+    return w, h, bytes(out)
+
+
+def read_image(path):
+    if path.lower().endswith('.png'):
+        return read_png(path)
+    return read_ppm(path)
+
+
 def main(argv):
     if len(argv) < 3:
         raise SystemExit(__doc__)
@@ -54,8 +125,8 @@ def main(argv):
     if '--max-mean-diff' in argv:
         tol = float(argv[argv.index('--max-mean-diff') + 1])
     a_path, b_path = argv[1], argv[2]
-    wa, ha, a = read_ppm(a_path)
-    wb, hb, b = read_ppm(b_path)
+    wa, ha, a = read_image(a_path)
+    wb, hb, b = read_image(b_path)
     if (wa, ha) != (wb, hb):
         raise SystemExit(f"REFUSING to compare: {wa}x{ha} vs {wb}x{hb}. Different "
                          f"sizes are a capture mismatch, not a shading difference.")
