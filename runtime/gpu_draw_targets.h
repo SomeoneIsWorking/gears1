@@ -102,6 +102,22 @@ struct RenderTargetCache
     // and not a vkCmdBlitImage because it applies the guest's copy_dest_exp_bias
     // and copy_dest_swap, which a blit cannot do (catalog #33).
     void BuildResolvePipeline();
+
+    // The two resolves themselves, in gpu_draw_resolve.cpp. Both are recorded
+    // into an open command buffer with no render pass active, and both leave
+    // the destination in SHADER_READ_ONLY_OPTIMAL so a later draw can sample it.
+
+    // Reads the host depth image through a sampled view and writes the depth the
+    // guest's k_24_8_FLOAT fetch would produce.
+    void ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
+                        const VkRect2D& srcRect, int32_t dstX, int32_t dstY);
+
+    // Colour. `scale` is the guest's copy_dest_exp_bias applied as a multiplier
+    // and `swapRB` its copy_dest_swap -- neither of which the blit control arm
+    // (GEARS_DRAW_RESOLVE_BLIT=1) can do.
+    void ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarget& srcTarget,
+                          ResolveTarget& dst, const VkRect2D& srcRect,
+                          int32_t dstX, int32_t dstY, float scale, bool swapRB);
 };
 
 } // namespace gears::draw
