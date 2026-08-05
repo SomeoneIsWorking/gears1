@@ -13,6 +13,7 @@
 // to report.
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include <vulkan/vulkan.h>
@@ -86,6 +87,52 @@ private:
     VkBuffer pixelBuf = VK_NULL_HANDLE;
     VkDeviceMemory pixelMem = VK_NULL_HANDLE;
     int32_t traceX = -1, traceY = -1;
+};
+
+// Per-draw pipeline statistics, and the diagnostic table built on them.
+//
+// Four counters per draw: input-assembly vertices, input-assembly primitives,
+// clipping primitives (what survived clip+cull) and fragment invocations. A
+// draw that adds no pixels is one of three very different things, and only
+// these numbers separate them: 0 primitives out of clipping (degenerate or
+// culled geometry), 0 fragment invocations (rasterised nothing), or many
+// fragment invocations (it ran and shaded/blended to nothing).
+struct DrawStats
+{
+    DrawStats(Renderer& r) : R(r) {}
+
+    Renderer& R;
+
+    // Reads the knobs and creates the query pool. `nDraws` bounds it.
+    // GEARS_DRAW_DIAG=<path.tsv> writes the table, which is only useful joined
+    // with the statistics -- so it turns them on rather than making the user
+    // remember two knobs. Not combinable with DRAW_ONLY: unwritten queries
+    // would never resolve.
+    void Build(VkCommandBuffer cmd, size_t nDraws);
+    bool Enabled() const { return pool != VK_NULL_HANDLE; }
+
+    void Begin(VkCommandBuffer cmd, uint32_t drawIndex);
+    void End(VkCommandBuffer cmd, uint32_t drawIndex);
+
+    // Reads the results back, prints the frame summary and writes the table.
+    // `drawn` is how many queries were actually recorded. Destroys the pool.
+    void Report(uint32_t drawn, const std::vector<PreparedDraw>& prepared);
+
+private:
+    // One row per issued draw, joining what the draw WAS (surface, EDRAM mode,
+    // primitive, shaders) with what it DID (pipeline statistics) and with every
+    // piece of state that can silently zero it. This table replaces guessing:
+    // "surface 0x400 renders nothing" is not actionable, "all 348 of surface
+    // 0x400's colour draws report primitives in and zero primitives after
+    // clip+cull, and every one has depth func GEQUAL against a cleared 1.0
+    // depth buffer" names the defect. Grouping and filtering belong to whatever
+    // reads the TSV, so the renderer stays out of the analysis business.
+    void WriteTable(uint32_t drawn, const std::vector<PreparedDraw>& prepared,
+                    const std::vector<uint64_t>& st);
+
+    static constexpr uint32_t kCounters = 4;
+    VkQueryPool pool = VK_NULL_HANDLE;
+    std::string diagPath;
 };
 
 } // namespace gears::draw
