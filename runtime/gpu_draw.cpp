@@ -4896,7 +4896,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // R16G16B16A16_SFLOAT -> 8-bit, clamped. An HDR target holds values
             // well above 1, so the clamp is honest saturation, not a tonemap.
             std::vector<uint8_t> rgba(size_t(rd.w) * rd.h * 4);
-            double maxSeen = 0.0;
+            // A MAX ALONE CANNOT SAY "EMPTY", and reporting it as if it could is
+            // how this dump lied. Not every resolve target is a colour image: the
+            // motion-blur pass reads a two-channel SIGNED velocity buffer, whose
+            // values are fractions of a pixel and frequently negative. Clamping
+            // that to 8-bit writes a pure black PPM, and a max seeded at 0.0 that
+            // only ever grows reports 0.000 -- so a working velocity buffer is
+            // indistinguishable from one the renderer never wrote. Track the true
+            // range, and count what is actually non-zero.
+            double maxSeen = -std::numeric_limits<double>::infinity();
+            double minSeen = std::numeric_limits<double>::infinity();
+            uint64_t nonZero = 0, samples = 0;
             if (rd.isDepth)
             {
                 // R32_SFLOAT depth, written as greyscale. Reverse-Z puts the
@@ -4907,6 +4917,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 {
                     const float v = src[i];
                     maxSeen = std::max(maxSeen, double(v));
+                    minSeen = std::min(minSeen, double(v));
+                    ++samples;
+                    if (v != 0.0f) ++nonZero;
                     const uint8_t g = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
                     rgba[i * 4 + 0] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = g;
                     rgba[i * 4 + 3] = 255;
@@ -4919,7 +4932,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     for (int c = 0; c < 4; ++c)
                     {
                         const float v = HalfToFloat(src[i * 4 + c]);
-                        if (c < 3) maxSeen = std::max(maxSeen, double(v));
+                        if (c < 3)
+                        {
+                            maxSeen = std::max(maxSeen, double(v));
+                            minSeen = std::min(minSeen, double(v));
+                            ++samples;
+                            if (v != 0.0f) ++nonZero;
+                        }
                         rgba[i * 4 + c] = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
                     }
             }
@@ -4930,9 +4949,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                      : std::filesystem::path("scratch/screenshots")) /
                 std::format("resolve_{:08x}.ppm", rd.base);
             if (WritePpm(out, rgba.data(), rd.w, rd.h))
+            {
+                const double lo = samples ? minSeen : 0.0;
+                const double hi = samples ? maxSeen : 0.0;
                 lucent::info("draw", "resolve target {:#x} ({}x{}) dumped to {}"
-                    " (max colour component {:.3f})", rd.base, rd.w, rd.h,
-                    out.string(), maxSeen);
+                    " (range {:.6f} .. {:.6f}, {} of {} components non-zero"
+                    " [{:.1f}%]){}", rd.base, rd.w, rd.h, out.string(), lo, hi,
+                    nonZero, samples,
+                    samples ? 100.0 * double(nonZero) / double(samples) : 0.0,
+                    nonZero != 0 && hi <= 1.0 / 255.0 && lo >= -1.0 / 255.0
+                        ? " -- NOT EMPTY: every value is below one 8-bit step, so"
+                          " the PPM is black and tells you nothing. This is what a"
+                          " velocity or similar sub-unit buffer looks like"
+                        : "");
+            }
             vkUnmapMemory(device, rd.mem);
         }
         vkDestroyBuffer(device, rd.buf, nullptr);
