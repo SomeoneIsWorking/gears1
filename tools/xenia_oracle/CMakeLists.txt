@@ -42,6 +42,7 @@ add_subdirectory("${XENIA_ROOT}" xenia)
 
 add_executable(xenia_oracle
     "${CMAKE_CURRENT_SOURCE_DIR}/main.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/scripted_input.cc"
     # The console entry point, the same one Xenia's own console tools use. It
     # is what initialises logging on POSIX -- without it the first log call
     # blocks forever (catalog #7).
@@ -55,9 +56,10 @@ target_include_directories(xenia_oracle PRIVATE
 
 # The same link set as xenia-gpu-vulkan-trace-dump, which is the closest thing
 # in the tree to what this is: a console app that drives the emulator core.
-# -nop drivers for audio and input, because a headless run has neither device.
+# A REAL audio backend (sdl): the nop one lets the title crash inside its own
+# render-driver callback. See main.cpp for the measurements.
 target_link_libraries(xenia_oracle PRIVATE
-    xenia-apu xenia-apu-nop xenia-base xenia-core xenia-cpu
+    xenia-apu xenia-apu-nop xenia-apu-sdl xenia-base xenia-core xenia-cpu
     xenia-gpu xenia-gpu-vulkan xenia-hid xenia-hid-nop
     xenia-kernel xenia-patcher xenia-ui xenia-ui-vulkan xenia-vfs
     aes_128 capstone fmt glslang-spirv imgui libavcodec libavutil mspack
