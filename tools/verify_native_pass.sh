@@ -17,8 +17,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-capture=${1:-scratch/frames/boot150.gfr}
-control=${2:-scratch/frames/act1.gfr}
+# The v2 captures, which carry the front-buffer address. A v1 capture still gives
+# a valid A/B -- both arms replay identical input -- but it cannot answer anything
+# about the presented buffer, so it is not the default any more.
+capture=${1:-scratch/frames/act1_v2.gfr}
+control=${2:-scratch/frames/play_v2.gfr}
 replay=scratch/build/runtime/frame_replay
 out=scratch/ab
 shots=scratch/screenshots
