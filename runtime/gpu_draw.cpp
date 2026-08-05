@@ -477,6 +477,32 @@ VkCompareOp CompareOpOf(uint32_t f)
     }
 }
 
+// What the console's render target clamps in a shader's colour output before
+// blending -- the property a widened host format loses (catalog #68).
+//
+// The 7e3 formats are the case worth spelling out: RGB is a float running to 32,
+// but ALPHA is a 2-bit UNORM, so the hardware clamps alpha and leaves colour alone.
+// The 16-bit fixed formats are excluded entirely: their range is -32..32, not
+// [0,1], so clamping them would be a new defect rather than a fix.
+enum class GuestClamp { kNone, kRgba, kAlphaOnly };
+
+GuestClamp GuestColorFormatClamp(uint32_t colorFormat)
+{
+    switch (colorFormat)
+    {
+    case 0:  // k_8_8_8_8
+    case 1:  // k_8_8_8_8_GAMMA
+    case 2:  // k_2_10_10_10
+    case 10: // k_2_10_10_10_AS_10_10_10_10
+        return GuestClamp::kRgba;
+    case 3:  // k_2_10_10_10_FLOAT          (7e3 RGB, 2-bit UNORM alpha)
+    case 12: // k_2_10_10_10_FLOAT_AS_16_16_16_16
+        return GuestClamp::kAlphaOnly;
+    default:
+        return GuestClamp::kNone;
+    }
+}
+
 // RB_COLOR_INFO.color_format (a xenos::ColorRenderTargetFormat) -> the host
 // format the surface is rendered in. Ported from Xenia's
 // VulkanRenderTargetCache::GetColorOwnDrawVulkanFormat.
@@ -485,25 +511,6 @@ VkCompareOp CompareOpOf(uint32_t f)
 // k_2_10_10_10_FLOAT (7e3) HDR surface whose values run to 32.0; rendering that
 // into an 8888 UNORM host target clamps every highlight to 1.0 before the
 // tonemap pass ever sees it, so the tonemap reads a flat white/black image.
-// Whether a guest colour format is FIXED-POINT, i.e. whether the console's render
-// target clamps a shader's colour output to its range before blending. This is the
-// property the widened host format loses; see runtime/spirv_clamp.h.
-bool GuestColorFormatIsFixedPoint(uint32_t colorFormat)
-{
-    switch (colorFormat)
-    {
-    case 0:  // k_8_8_8_8
-    case 1:  // k_8_8_8_8_GAMMA
-    case 2:  // k_2_10_10_10
-    case 10: // k_2_10_10_10_AS_10_10_10_10
-        return true;
-    default:
-        // The 7e3 float formats, the 16-bit fixed formats (which are -32..32, so a
-        // [0,1] clamp would be wrong) and the float ones: no [0,1] clamp.
-        return false;
-    }
-}
-
 VkFormat HostColorFormat(uint32_t colorFormat)
 {
     switch (colorFormat)
@@ -751,8 +758,8 @@ struct RendererPersistent
     // (microcode hash, modification, output clamped) -> translation and module.
     // The clamp belongs in the key because a widened host surface makes it a
     // property of the DRAW's guest colour format, not of the microcode.
-    std::map<std::tuple<uint64_t, uint64_t, bool>, draw::ShaderXlate> xlate;
-    std::map<std::tuple<uint64_t, uint64_t, bool>, VkShaderModule> modules;
+    std::map<std::tuple<uint64_t, uint64_t, int>, draw::ShaderXlate> xlate;
+    std::map<std::tuple<uint64_t, uint64_t, int>, VkShaderModule> modules;
     std::map<draw::RectangleGeometryShaderKey, VkShaderModule> geomShaders;
 
     std::map<std::string, VkDescriptorSetLayout> texLayouts;
@@ -1152,13 +1159,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // property of the draw: two draws can share a microcode and a modification and
     // still need different modules, because they target the same widened host
     // surface through different guest colour formats.
-    using ShaderKey = std::tuple<uint64_t, uint64_t, bool>;
+    using ShaderKey = std::tuple<uint64_t, uint64_t, int>;
     std::map<ShaderKey, draw::ShaderXlate>& xlate = P.xlate;
     std::map<ShaderKey, VkShaderModule>& modules = P.modules;
     auto getShader = [&](bool isVertex, const uint8_t* uc, size_t sz, uint64_t hash,
                          uint64_t modification, bool clampOutput,
+                         draw::ClampMode clampMode,
                          draw::ShaderXlate*& outX, VkShaderModule& outM) -> bool {
-        const ShaderKey key{hash, modification, clampOutput};
+        const ShaderKey key{hash, modification,
+                            clampOutput ? (clampMode == draw::ClampMode::kRgba ? 1 : 2) : 0};
         auto xit = xlate.find(key);
         if (xit == xlate.end())
         {
@@ -1203,7 +1212,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 clampedCode.assign(static_cast<const uint32_t*>(mi.pCode),
                                    static_cast<const uint32_t*>(mi.pCode) +
                                        mi.codeSize / sizeof(uint32_t));
-                if (draw::ClampFragmentOutputs(clampedCode))
+                if (draw::ClampFragmentOutputs(clampedCode, clampMode))
                 {
                     mi.codeSize = clampedCode.size() * sizeof(uint32_t);
                     mi.pCode = clampedCode.data();
@@ -3342,17 +3351,27 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // Does this draw need the clamp its render target used to do for it?
             // Only when the guest's format is fixed-point AND the host image was
             // widened to a float container to hold a reinterpreted surface.
+            draw::ClampMode clampMode = draw::ClampMode::kRgba;
             bool clampPs = false;
-            if (GuestColorFormatIsFixedPoint((R[0x2001] >> 16) & 0xF))
             {
+                const GuestClamp want = GuestColorFormatClamp((R[0x2001] >> 16) & 0xF);
                 auto sit = P.surfaceTargets.find(R[0x2001] & 0xFFF);
-                if (sit != P.surfaceTargets.end())
-                    clampPs = sit->second.hostFormat == VK_FORMAT_R16G16B16A16_SFLOAT ||
-                              sit->second.hostFormat == VK_FORMAT_R32G32_SFLOAT ||
-                              sit->second.hostFormat == VK_FORMAT_R16G16_SFLOAT;
+                const bool hostIsFloat =
+                    sit != P.surfaceTargets.end() &&
+                    (sit->second.hostFormat == VK_FORMAT_R16G16B16A16_SFLOAT ||
+                     sit->second.hostFormat == VK_FORMAT_R32G32_SFLOAT ||
+                     sit->second.hostFormat == VK_FORMAT_R16G16_SFLOAT);
+                if (hostIsFloat && want != GuestClamp::kNone)
+                {
+                    clampPs = true;
+                    clampMode = want == GuestClamp::kRgba ? draw::ClampMode::kRgba
+                                                          : draw::ClampMode::kAlphaOnly;
+                }
             }
-            if (!getShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification, false, vsX, vsMod) ||
-                !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification, clampPs, psX, psMod))
+            if (!getShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification, false,
+                           draw::ClampMode::kRgba, vsX, vsMod) ||
+                !getShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification, clampPs,
+                           clampMode, psX, psMod))
             { ++skipped; ++skipReasons[2]; continue; }
             if (!getPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
             { ++skipped; ++skipReasons[3]; continue; }

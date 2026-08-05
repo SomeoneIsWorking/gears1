@@ -74,3 +74,25 @@ where the console would have clamped it.
 Both native passes remain bit-exact through the gate, and 24 tests pass including a
 new one for the transform, whose most important case is that a module it cannot
 handle is REFUSED rather than left half-rewritten.
+
+
+## Companion case: 7e3 alpha (added after the fix above)
+
+`k_2_10_10_10_FLOAT` and `k_2_10_10_10_FLOAT_AS_16_16_16_16` are the awkward
+formats: RGB is a 7e3 float running to 32, but **alpha is a 2-bit UNORM**, so the
+console clamps alpha to [0,1] and leaves colour alone. The widened host format
+loses that too, so the transform gained an alpha-only mode and those draws now use
+it. Clamping all four components there would flatten exactly the HDR range the
+widening exists to carry, which is why it is a separate mode rather than the same
+one.
+
+**Measured honestly: it changed no pixel** on any of the three captures
+(act1_v2, act1, boot150 all identical to two decimal places). It costs one extra
+shader variant and zero extra pipelines on an Act 1 frame. It is kept because it is
+the same root cause and the same documented hardware behaviour as the fix above,
+not because it was observed to matter — if it is ever seen to matter, it will be a
+draw writing alpha outside [0,1] into a 7e3 target.
+
+The 16-bit fixed formats (`k_16_16`, `k_16_16_16_16`) are deliberately excluded
+from both modes: their fixed-point range is -32..32, so a [0,1] clamp would be a
+new defect rather than a fix.
