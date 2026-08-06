@@ -29,7 +29,9 @@
 #include <string>
 
 #include "frame_capture.h"
+#include "frame_content.h"
 #include "gpu_draw.h"
+#include "gpu_draw_xlate.h"
 #include "render_ab.h"
 
 int main(int argc, char** argv)
@@ -114,6 +116,54 @@ int main(int argc, char** argv)
             }
         }
         lucent::info("replay", "dumped {} distinct shader blobs to {}", n, dumpDir);
+    }
+
+    // GEARS_SKINNED_CHECK=1 answers ONE question about a capture and renders
+    // nothing: does this frame contain a skinned character? That is the question
+    // that decided whether three separate four-minute capture attempts had
+    // produced anything usable (catalog #77), and it was answered by hand each
+    // time. Exit 0 when the frame contains one, 3 when it does not, so a shell
+    // loop can select captures without a person reading the log.
+    //
+    // The same scan is what the runtime's GEARS_DRAW_FRAME_DUMP_SKINNED gate
+    // uses, deliberately: this mode is how that gate is validated against
+    // captures whose answer is already known, rather than trusted because it
+    // looks reasonable.
+    if (lucent::config::flag("SKINNED_CHECK"))
+    {
+        const long minIdx = lucent::config::number("SKINNED_MIN_INDICES",
+                                                   gears::kDefaultSkinnedMinIndices);
+        const gears::SkinnedFrameCensus c =
+            gears::ScanForSkinnedCharacter(cap.inputs, uint32_t(minIdx));
+        gears::ReportSkinnedFrameCensus(c);
+        if (lucent::config::flag("SKINNED_CHECK_LIST"))
+        {
+            // Every skinned draw, whatever its size. This is what the threshold
+            // is CHOSEN from -- a threshold picked without looking at both
+            // classes' distributions is a guess with a number in it.
+            uint32_t shown = 0;
+            for (uint32_t i = 0; i < cap.inputs.draws.size(); ++i)
+            {
+                const gears::FrameDrawItem& d = cap.inputs.draws[i];
+                if (!d.vsUcode || !d.vsUcodeSize)
+                    continue;
+                const gears::draw::VertexShaderShape s =
+                    gears::draw::AnalyzeVertexShaderShape(d.vsUcode, d.vsUcodeSize,
+                                                          d.vsHash);
+                if (!s.ok || !s.floatDynamicAddressing)
+                    continue;
+                ++shown;
+                lucent::info("replay", "  skinned draw {}: {} indices, prim {},"
+                    " vs {:#018x}, {} float constants", i, d.indexCount,
+                    d.primType, d.vsHash, s.floatCount);
+            }
+            if (shown == 0)
+                lucent::info("replay", "  (no skinned draw at ANY size in this"
+                    " frame's {} draws)", cap.inputs.draws.size());
+        }
+        if (!c.available)
+            return 2;
+        return c.Passed() ? 0 : 3;
     }
 
     // ---- the interleaved render comparer --------------------------------
