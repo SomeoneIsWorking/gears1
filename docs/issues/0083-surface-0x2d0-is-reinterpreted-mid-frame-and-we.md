@@ -105,3 +105,60 @@ upstream of this, and the R/G 0.769 -> 0.999 result says #62's frame-wide red
 deficit is at least partly a symptom of the missing reinterpretation rather than
 an independent fault. The pass should be re-measured after the post chain is
 right, not turned on to fix the post chain.
+
+### Note (2026-08-06)
+## FALSIFIED: the R/G evidence for this pass was the SWIZZLE BUG, not the reinterpretation (2026-08-06)
+
+This entry, and commit c344b48 with it, recorded that turning the pass on moves
+catalog #62's frame-wide colour balance onto the diagonal:
+
+    OFF  R/G 0.7687        ON  R/G 0.9990
+
+and concluded "#62's frame-wide red deficit is at least partly a symptom of the
+missing reinterpretation rather than an independent fault".
+
+That is wrong, and the cause is now fixed elsewhere. #62's red deficit was
+resolve-target bindings ignoring the guest's fetch swizzle. With that fixed and
+this pass still OFF, on the same capture:
+
+    walk_gameplay, REINTERP OFF   R/G 0.9937  B/G 0.7687   mean 0.076
+    walk_gameplay, REINTERP ON    R/G 0.9928  B/G 0.9990   mean 0.384
+    ORACLE, Act 1                 R/G 0.9882  B/G 0.7237   mean 0.095
+
+The diagonal was already there without the pass. Worse for the old reading:
+turning the pass ON now makes B/G 0.999 where the oracle says 0.724, so it
+DESTROYS a ratio that is otherwise correct, and lifts the mean 5x above the
+reference. The pass was being credited for fixing a fault it had nothing to do
+with, and its damage was hidden behind that credit.
+
+Nothing else in this entry is retracted: the surface really is declared under
+four bit layouts in one frame, draw 649 really is a fixed-point target, the
+self-test still passes 5 of 5, and the oracle really does render this scene dark
+through a faithful ownership transfer.
+
+## What the pass IS still the candidate for, now measured precisely
+
+The ceiling, and only the ceiling. Pixel trace of the frame's brightest scene
+pixel (368,247), pinned per surface:
+
+    surface 0x400   draw 347  (37.09, 30.98, 15.91)      the base pass, real HDR
+    surface 0x2d0   draw 615  (37.09, 30.98, 15.91)      carried across intact
+    surface 0x2d0   draw 649  (1, 1, 1)                  CLAMPED, and faithfully
+    surface 0x2d0   draw 716  (0.297, 0.297, 0.269)      what we present
+
+Draw 649's target is fixed-point, so the hardware clamps there too -- that step
+is correct. The console's next draws then read those same EDRAM bits under a
+FLOAT layout and see 31.875 where we see 1.0, which is this entry's whole thesis
+and is exactly the missing top of #62's range.
+
+So the mechanism is right and the implementation overshoots. The shape of the
+overshoot is the clue and it is the one this entry already named as un-ruled-out:
+the pass converts the WHOLE surface at a format change, where the hardware
+reinterprets only on a READ. The numbers now say so quantitatively -- the oracle
+holds mean 0.095 with p99 0.808, i.e. the same mean as ours-with-the-pass-off but
+a far wider top end. Converting every pixel raises the mean 5x; reinterpreting
+only what is actually read back as float would raise the top and leave the mean
+alone. That is the difference between the two arms, and it is measurable.
+
+NEXT: establish which draws actually READ 0x2d0 after each format change and
+over what region, rather than converting the surface wholesale.
