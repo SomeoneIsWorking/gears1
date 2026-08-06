@@ -46,6 +46,27 @@ struct FrameProbe
     mutable uint32_t highestDrawn = 0;
     bool Tracing() const { return traceX >= 0; }
 
+    // ---- the render comparer -------------------------------------------
+    //
+    // GEARS_DRAW_TRACE_ALL=<path.tsv>: a THUMBNAIL of the surface after EVERY
+    // draw, reduced to a hash and per-channel statistics, one row per draw.
+    //
+    // This exists because chasing a defect one hypothesis at a time does not
+    // converge. The question that keeps coming up is "which draw is the FIRST to
+    // differ between these two runs", and every previous answer to it was
+    // assembled by hand from single-pixel traces, which cost an iteration each
+    // and twice attributed a change to the wrong draw. Two runs under different
+    // knobs produce two of these files, and tools/render_diff.py names the first
+    // divergent draw directly.
+    //
+    // A thumbnail rather than one texel, because a single pixel cannot see a
+    // change that happens somewhere else, and rather than the whole surface,
+    // because 800 full-surface readbacks a frame is not a tool anyone runs.
+    bool Comparing() const { return !tracePath.empty(); }
+    void TraceAll(VkCommandBuffer cmd, uint32_t drawsSoFar,
+                  const SurfaceTarget* t, uint32_t surfaceBase);
+    static constexpr uint32_t kThumbW = 32, kThumbH = 18;
+
     // GEARS_DRAW_SURFACE=<hex>: restrict BOTH probes to one EDRAM surface.
     //
     // Without it each probe samples whatever target is bound at that moment, and
@@ -58,6 +79,13 @@ struct FrameProbe
     // being reused as a depth encode.
     //
     // -1 means every surface, which is the old behaviour and still the default.
+    std::string tracePath;
+    VkImage thumbImage = VK_NULL_HANDLE;
+    VkDeviceMemory thumbMem = VK_NULL_HANDLE;
+    VkBuffer thumbBuf = VK_NULL_HANDLE;
+    VkDeviceMemory thumbBufMem = VK_NULL_HANDLE;
+    struct ThumbSample { uint32_t draws; uint32_t surface; };
+    std::vector<ThumbSample> thumbs;
     int64_t onlySurface = -1;
     // The surface a caller must sample when a filter is set, or -1 for "whatever
     // is bound". A filtered trace that only samples when its surface happens to

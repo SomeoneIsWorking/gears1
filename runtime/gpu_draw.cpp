@@ -1731,6 +1731,22 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             endPass();
             PB.TracePixel(cmd, drawn, t, base);
         }
+        // The render comparer: a thumbnail of the surface after every draw.
+        // Same pass-boundary requirement as the other two probes.
+        if (PB.Comparing())
+        {
+            SurfaceTarget* t = openTarget ? openTarget : lastTarget;
+            uint32_t base = openTarget ? openSurface : lastSurface;
+            if (PB.PinnedSurface() >= 0)
+            {
+                SurfaceTarget* pinned = nullptr;
+                const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
+                if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
+                { t = pinned; base = pinnedBase; }
+            }
+            endPass();
+            PB.TraceAll(cmd, drawn, t, base);
+        }
         // Open a pass if there is none, or re-open on a different surface.
         if (!inPass || openSurface != pd.surfaceBase)
         {
