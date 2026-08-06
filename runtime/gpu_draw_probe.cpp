@@ -243,7 +243,8 @@ void FrameProbe::Checkpoint(VkCommandBuffer cmd, uint32_t drawsSoFar,
 }
 
 void FrameProbe::TracePixel(VkCommandBuffer cmd, uint32_t drawsSoFar,
-                            const SurfaceTarget* t, uint32_t surfaceBase)
+                            uint32_t prepIndex, const SurfaceTarget* t,
+                            uint32_t surfaceBase)
 {
     if (traceX < 0 || !t || !t->begunThisFrame)
         return;
@@ -256,12 +257,13 @@ void FrameProbe::TracePixel(VkCommandBuffer cmd, uint32_t drawsSoFar,
     rg.imageExtent = {1, 1, 1};
     vkCmdCopyImageToBuffer(cmd, t->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         pixelBuf, 1, &rg);
-    pixelSamples.push_back(PixelSample{drawsSoFar, surfaceBase, t->hostFormat});
+    pixelSamples.push_back(PixelSample{drawsSoFar, prepIndex, surfaceBase, t->hostFormat});
 }
 
 // One thumbnail of the surface, blitted down and copied out, per draw.
 void FrameProbe::TraceAll(VkCommandBuffer cmd, uint32_t drawsSoFar,
-                          const SurfaceTarget* t, uint32_t surfaceBase)
+                          uint32_t prepIndex, const SurfaceTarget* t,
+                          uint32_t surfaceBase)
 {
     if (tracePath.empty() || !t || !t->begunThisFrame)
         return;
@@ -300,7 +302,7 @@ void FrameProbe::TraceAll(VkCommandBuffer cmd, uint32_t drawsSoFar,
     rg.imageExtent = {kThumbW, kThumbH, 1};
     vkCmdCopyImageToBuffer(cmd, thumbImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
         thumbBuf, 1, &rg);
-    thumbs.push_back(ThumbSample{drawsSoFar, surfaceBase});
+    thumbs.push_back(ThumbSample{drawsSoFar, prepIndex, surfaceBase});
 }
 
 void FrameProbe::Report(const std::vector<PreparedDraw>& prepared)
@@ -372,10 +374,14 @@ void FrameProbe::Report(const std::vector<PreparedDraw>& prepared)
             prev = v;
             ++changes;
             const uint32_t n = pixelSamples[i].draws;
-            // The draw that produced this value is the one issued just before the
-            // sample, i.e. prepared[n-1]; naming prepared[n] would blame the next.
-            const PreparedDraw* by = (n >= 1 && n <= prepared.size())
-                                   ? &prepared[n - 1] : nullptr;
+            // The PREPARED INDEX of the draw just issued, recorded at sample
+            // time. Deriving it from the draw count instead -- prepared[n-1] --
+            // is wrong wherever a resolve has gone past, because `drawn` counts
+            // draws and `prepared` also holds resolves; that named a draw three
+            // rows early and sent catalog #62 after a colour-masked draw that
+            // was never the writer.
+            const uint32_t pi = pixelSamples[i].prepIndex;
+            const PreparedDraw* by = pi < prepared.size() ? &prepared[pi] : nullptr;
             tl.add("\n  after {} draws (surface {:#x}) = ({}, {}, {}, {}){}",
                    n, pixelSamples[i].surface, v[0], v[1], v[2], v[3],
                    by ? std::format(" <- draw {} ps {:#x}", by->diagIndex, by->psHash)
@@ -415,8 +421,8 @@ void FrameProbe::Report(const std::vector<PreparedDraw>& prepared)
             for (size_t i = 0; i < thumbs.size(); ++i)
             {
                 const uint32_t n = thumbs[i].draws;
-                const PreparedDraw* by = (n >= 1 && n <= prepared.size())
-                                       ? &prepared[n - 1] : nullptr;
+                const uint32_t pi = thumbs[i].prepIndex;
+                const PreparedDraw* by = pi < prepared.size() ? &prepared[pi] : nullptr;
                 double mx[3] = {-1e30, -1e30, -1e30}, sum[3] = {0, 0, 0};
                 uint64_t hash = 1469598103934665603ull;   // FNV-1a
                 for (size_t k = 0; k < size_t(kThumbW) * kThumbH; ++k)

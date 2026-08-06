@@ -1571,6 +1571,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // The surface a render pass is currently open on, if any.
     bool inPass = false;
     const bool passLog = lucent::config::flag("DRAW_PASS_LOG");
+    // The prepared index of the last draw actually ISSUED. The probes sample at
+    // the top of the next iteration, so this -- not the current entry, and not
+    // the draw COUNT -- is the draw whose output they are looking at. The draw
+    // count indexes the wrong thing because `prepared` also holds resolves.
+    uint32_t lastIssuedPrep = UINT32_MAX;
     uint32_t openSurface = 0;
     SurfaceTarget* openTarget = nullptr;
     // The last surface a pass was opened on, which -- unlike openTarget -- SURVIVES
@@ -1744,7 +1749,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 { t = pinned; base = pinnedBase; }
             }
             endPass();
-            PB.TracePixel(cmd, drawn, t, base);
+            PB.TracePixel(cmd, drawn, lastIssuedPrep, t, base);
         }
         // The render comparer: a thumbnail of the surface after every draw.
         // Same pass-boundary requirement as the other two probes.
@@ -1760,7 +1765,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 { t = pinned; base = pinnedBase; }
             }
             endPass();
-            PB.TraceAll(cmd, drawn, t, base);
+            PB.TraceAll(cmd, drawn, lastIssuedPrep, t, base);
         }
         // Open a pass if there is none, or re-open on a different surface.
         if (!inPass || openSurface != pd.surfaceBase)
@@ -1788,6 +1793,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         DS.End(cmd, drawn);
         if (openTarget)
             ++openTarget->drawsThisFrame;
+        lastIssuedPrep = uint32_t(&pd - prepared.data());
         ++drawn;
     }
     endPass();

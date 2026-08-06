@@ -1024,3 +1024,62 @@ from underneath it.
 Checked rather than assumed, since the pinned trace calls `GetSurfaceTarget` and
 that CREATES surfaces: the presented frame is byte-identical with and without it
 (sha1 `b12c0b413284dce4` both ways, max R68 G84 B76).
+
+### Note (2026-08-06)
+## RETRACTION: every "draw 612 / draw 643" note above named the WRONG DRAWS
+
+The pixel trace labelled its rows with `prepared[draws - 1]`, where `draws`
+counts DRAWS and `prepared` also contains RESOLVES. The two are different units,
+so the label slipped earlier by the number of resolves that had gone past. Every
+note in this entry that named guest draw 612 or 643 named a draw that was not
+the writer.
+
+I checked that labelling once and passed it: the code carries a comment
+explaining why it uses `n - 1` rather than `n`, which addresses an off-by-ONE.
+Reading it, I confirmed the off-by-one reasoning and never asked whether `n` and
+the prepared index were the same THING. Third units trap of this session, after
+`_FRAME_STEP_FROM` and `DRAW_ONLY`.
+
+Fixed by recording the prepared index of the last ISSUED draw at sample time
+rather than deriving it from a count.
+
+## The corrected trace, and there is no mystery in it
+
+    after 437 draws  (37.09375, 30.984375, 15.90625, 0.125)  <- draw 615 ps 501ac5d8692bf7b6
+    after 468 draws  (1, 1, 1, 0.125)                        <- draw 649 ps c199b399ca818b55
+    after 527 draws  (0.29711914, 0.29711914, 0.2685547, 0)  <- draw 716
+    after 528 draws  (0.2685547, 0.29711914, 0.29711914, 0)  <- draw 718
+
+    guest 615  surf 0x2d0  fmt 3  mask 15  921600 frags  shaded  ps 501ac5d8692b
+    guest 649  surf 0x2d0  fmt 2  mask 15  921600 frags  shaded  ps c199b399ca81
+
+Both are ordinary full-screen draws with a full colour mask. **There was never a
+colour-masked draw writing colour.** That whole line of investigation -- six
+iterations, a render-pass log, a sentinel hunt, a pipeline-cache-key audit -- was
+chasing my own mislabelling. The eliminations it produced are still true; the
+thing they were eliminating never existed.
+
+## What the corrected attribution shows, which is a real lead
+
+Draw 649 turns (37.09, 30.98, 15.91) into exactly (1, 1, 1), and its
+`color_fmt` is **2 = k_2_10_10_10** -- a FIXED-POINT format. Our
+`GuestColorFormatClamp(2)` returns `kRgba`, so the pixel shader's output is
+clamped to [0,1] before it is written, which is what the hardware's own
+fixed-point target does.
+
+So the clamp itself is faithful. What is NOT faithful is what the surface holds
+afterwards. On the console this write stores 10-bit UNORM BITS into EDRAM at
+base 0x2d0, and a later draw declaring `k_2_10_10_10_FLOAT` on the same base
+REINTERPRETS those bits as 7e3 floats -- a completely different value, not a
+clamped one. We keep one widened float16 image per base, so we store the clamped
+float 1.0 and any later reinterpretation reads 1.0.
+
+That is exactly the candidate the RE frontier has listed and never tested
+(`draw-backend-rt`, gap 1: "all resolve destinations conflated onto ONE host
+colour target... needs a per-surface model"), and this frame catches it on a
+named draw with a measured before-and-after.
+
+NOT YET ESTABLISHED: that this frame's later draws actually reinterpret base
+0x2d0 as a float format after draw 649. The surface's format list for the frame
+includes k_2_10_10_10_FLOAT and k_2_10_10_10_FLOAT_AS_16_16_16_16, so the
+ingredients are there, but the ORDER has not been checked.

@@ -63,7 +63,7 @@ struct FrameProbe
     // change that happens somewhere else, and rather than the whole surface,
     // because 800 full-surface readbacks a frame is not a tool anyone runs.
     bool Comparing() const { return !tracePath.empty(); }
-    void TraceAll(VkCommandBuffer cmd, uint32_t drawsSoFar,
+    void TraceAll(VkCommandBuffer cmd, uint32_t drawsSoFar, uint32_t prepIndex,
                   const SurfaceTarget* t, uint32_t surfaceBase);
     static constexpr uint32_t kThumbW = 32, kThumbH = 18;
 
@@ -84,7 +84,12 @@ struct FrameProbe
     VkDeviceMemory thumbMem = VK_NULL_HANDLE;
     VkBuffer thumbBuf = VK_NULL_HANDLE;
     VkDeviceMemory thumbBufMem = VK_NULL_HANDLE;
-    struct ThumbSample { uint32_t draws; uint32_t surface; };
+    // prepIndex, not the draw count: `drawn` counts DRAWS while the prepared
+    // list also contains RESOLVES, so prepared[draws-1] names an entry several
+    // rows early wherever a resolve has gone past. That mislabelled the central
+    // row of catalog #62 for six iterations -- it named a colour-masked draw as
+    // the writer when the writer was an ordinary composite three rows later.
+    struct ThumbSample { uint32_t draws; uint32_t prepIndex; uint32_t surface; };
     std::vector<ThumbSample> thumbs;
     int64_t onlySurface = -1;
     // The surface a caller must sample when a filter is set, or -1 for "whatever
@@ -105,7 +110,8 @@ struct FrameProbe
     // since ending it nulls the caller's openTarget.
     void Checkpoint(VkCommandBuffer cmd, uint32_t drawsSoFar, const SurfaceTarget* t,
                     uint32_t surfaceBase);
-    void TracePixel(VkCommandBuffer cmd, uint32_t drawsSoFar, const SurfaceTarget* t,
+    void TracePixel(VkCommandBuffer cmd, uint32_t drawsSoFar, uint32_t prepIndex,
+                    const SurfaceTarget* t,
                     uint32_t surfaceBase);
 
     // Writes the checkpoint images and prints the trace. Call after the frame's
@@ -127,7 +133,7 @@ private:
     // frame" when it is only the render target changing to a small bloom buffer
     // -- which is exactly how it was misread once.
     struct Checkpt { uint32_t draws; VkBuffer buffer; uint32_t surface; };
-    struct PixelSample { uint32_t draws; uint32_t surface; VkFormat format; };
+    struct PixelSample { uint32_t draws; uint32_t prepIndex; uint32_t surface; VkFormat format; };
 
     long stepEvery = 0, stepFrom = 0;
     VkDeviceSize rbBytes = 0;
