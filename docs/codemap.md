@@ -17,6 +17,7 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 
 | Path | What it is |
 |---|---|
+| `.env` (gitignored) + `tools/env.sh` | **Machine-local paths, written down ONCE.** `.env` holds `GEARS_ISO` (and optionally `GEARS_GAME_DIR`, `GEARS_BUILD_DIR`, `GEARS_UE3_SRC`); `tools/env.sh` loads it for any tool that needs them — `. "$(dirname "$0")/env.sh"`, or `. tools/env.sh` from the repo root. An already-set variable wins, so a one-off override still works, and a path that is set but missing warns immediately rather than failing obscurely three steps later. **The disc image path must never enter a tracked file**: it is machine-specific and a pointer to copyrighted content. This exists because that path was re-discovered by hand in five separate sessions. `.env` is gitignored, so on a fresh clone it must be recreated — every tool that needs it says so by name |
 | `config/gears.toml` | XenonRecomp configuration: XEX path, save/restore helper addresses, switch-table file |
 | `tools/gdf_extract.py` | GDF/XDVDFS disc reader. `--list`, `--extract`, `--extract-all` (resumable) |
 | `tools/xex_probe/` | XEX decrypt/decompress, section + import dump, save/restore helper byte-scan |
