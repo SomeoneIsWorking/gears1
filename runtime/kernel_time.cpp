@@ -3,6 +3,8 @@
 
 #include "kernel_time.h"
 
+#include "guest_clock.h"
+
 #include <chrono>
 #include <thread>
 
@@ -15,21 +17,26 @@ namespace
 // reporting the real console figure matters even though the host clock differs.
 constexpr uint64_t kTimebaseFrequency = 50000000;
 
-uint64_t HostNanoseconds()
-{
-    return uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-}
 
 // 100 ns units since 1601-01-01, shared by KeQuerySystemTime and the
 // timestamp bundle so the two clocks cannot disagree.
+//
+// THE WALL-CLOCK PART IS FROZEN AT THE START OF THE RUN and the guest clock is
+// added to it. Reading system_clock live would put a different absolute date in
+// every run, which is a per-run input to anything the title seeds or timestamps
+// -- and under a fixed-step clock it would be the one remaining source of
+// irreproducibility. The date is still plausible; it just does not vary within
+// a comparison.
 uint64_t FileTimeNow()
 {
-    const auto now = std::chrono::system_clock::now().time_since_epoch();
-    const uint64_t unix100ns =
-        uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()) / 100;
-    constexpr uint64_t kUnixEpochIn100ns = 116444736000000000ull;
-    return unix100ns + kUnixEpochIn100ns;
+    static const uint64_t base = [] {
+        const auto now = std::chrono::system_clock::now().time_since_epoch();
+        const uint64_t unix100ns =
+            uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()) / 100;
+        constexpr uint64_t kUnixEpochIn100ns = 116444736000000000ull;
+        return unix100ns + kUnixEpochIn100ns;
+    }();
+    return base + gears::GuestClockNanoseconds() / 100;
 }
 } // namespace
 
@@ -39,16 +46,13 @@ namespace gears
 void StartKeTimeStampBundle(GuestMemory& memory, uint32_t guestAddress)
 {
     std::thread([&memory, guestAddress] {
-        const auto start = std::chrono::steady_clock::now();
         auto* interruptTime = memory.Translate<uint64_t>(guestAddress + 0x00);
         auto* systemTime = memory.Translate<uint64_t>(guestAddress + 0x08);
         auto* tickCount = memory.Translate<uint32_t>(guestAddress + 0x10);
 
         for (;;)
         {
-            const auto elapsed = std::chrono::steady_clock::now() - start;
-            const uint64_t elapsed100ns = uint64_t(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()) / 100;
+            const uint64_t elapsed100ns = GuestClockNanoseconds() / 100;
 
             *interruptTime = ByteSwap(elapsed100ns);
             *systemTime = ByteSwap(FileTimeNow());

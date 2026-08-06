@@ -26,6 +26,7 @@
 // image at 0x82221424). The device window is committed memory, so the store
 // lands there and the command processor thread polls it.
 #include "import_stub.h"
+#include "guest_clock.h"
 
 #include <algorithm>
 #include <array>
@@ -2471,6 +2472,12 @@ void VblankThread()
     {
         std::this_thread::sleep_for(std::chrono::microseconds(16667));
 
+        // Control arm only -- see runtime/guest_clock.h. Vblank fires whether
+        // or not the guest presents, so stepping the clock here cannot
+        // deadlock, at the cost of being host-paced and irreproducible.
+        if (gears::GuestClockOnVblank())
+            gears::AdvanceGuestClockFrame();
+
         // Sampled from here rather than from VdSwap: the title submits one
         // frame and then waits, so by the time it is stuck there are no more
         // swaps to hang a trace off, and the ring only has contents to read
@@ -2517,6 +2524,10 @@ void __imp__VdSetGraphicsInterruptCallback(PPCContext& __restrict ctx, uint8_t*)
 void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
 {
     const uint64_t frame = g_frameCount.fetch_add(1) + 1;
+    // The guest's clock advances HERE and, under a fixed step, nowhere else --
+    // so the simulation's delta time is a function of the input schedule rather
+    // than of how fast this machine runs. See runtime/guest_clock.h.
+    gears::AdvanceGuestClockFrame();
     gears::HleDumpCensus("swap");
     gears::HleWorkerCensus();
     gears::HleShaderCaptureFrame(frame);

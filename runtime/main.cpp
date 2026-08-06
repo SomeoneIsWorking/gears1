@@ -8,6 +8,7 @@
 #include <lucent/log.h>
 
 #include "fault_report.h"
+#include "guest_clock.h"
 #include "guest_memory.h"
 #include "guest_heap.h"
 #include "guest_filesystem.h"
@@ -92,6 +93,11 @@ int main(int argc, char* argv[])
     // judged against a log that merely stopped. The reporter chains to the
     // previous disposition, so the core and the exit status are unchanged.
     gears::InstallFaultReporter();
+
+    // Before the guest runs, because the first mftb may be in static init of
+    // the title's own runtime and a clock that changes mode mid-run would go
+    // backwards. Reports which mode it chose either way.
+    gears::InitGuestClock();
 
     if (argc < 2)
     {
