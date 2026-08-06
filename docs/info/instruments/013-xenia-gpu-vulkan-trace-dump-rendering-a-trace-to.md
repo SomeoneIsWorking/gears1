@@ -3,7 +3,7 @@ id: I013
 kind: instrument
 status: DISTRUSTED
 created: 2026-08-05
-distrusted_on: 2026-08-05
+distrusted_on: 2026-08-06
 ---
 
 ## Instrument
@@ -57,3 +57,9 @@ Still DISTRUSTED, and now for a stated reason rather than an unexplained one:
 **colour never reaches the shared-memory buffer during trace playback.** Any
 comparison built on this tool would be comparing our renderer against a black
 image. `tools/xenia_oracle` (claim C013) remains the oracle that works.
+
+## DISTRUSTED 2026-08-06
+
+Superseded note 2026-08-06: the LIVE oracle (tools/xenia_oracle, I014/C013) is confirmed working today -- a fresh 240 s run produced 8 gameplay frames, means 17.7-22.0 with 14k-34k distinct colours, one of them a clean shot of Marcus lit behind cover. Use it. SEPARATE TRAP FOUND: scratch/oracle/frames_long/ holds 11 PNGs from an older run and ALL ELEVEN ARE 100% BLACK (max 0). They are still on disk and are the obvious thing to reach for; comparing against them compares against nothing. Regenerate or delete before use.
+
+> Every result this instrument produced is suspect until it is re-validated.
