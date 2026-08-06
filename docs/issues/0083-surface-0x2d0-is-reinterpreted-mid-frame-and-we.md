@@ -162,3 +162,59 @@ alone. That is the difference between the two arms, and it is measurable.
 
 NEXT: establish which draws actually READ 0x2d0 after each format change and
 over what region, rather than converting the surface wholesale.
+
+### Note (2026-08-06)
+## MEASURED: the float-format draws cover 29% of the screen; we convert 100% of it
+
+This entry has said since it opened that the un-ruled-out risk is "the pass being
+applied where the console would not apply it -- it converts the whole surface at
+the format change, where the hardware only reinterprets on a READ". That is no
+longer a suspicion. From `GEARS_DRAW_DIAG` on `walk_gameplay.gfr`:
+
+    draw  color_fmt  prim            frag_invocations  blend_on
+    649   2          triangle_strip  921600            0      <- full screen, FIXED point
+    650   12         triangle_list     79253           1
+    651   12         triangle_list     42564           1
+    655   12         triangle_list    148267           1
+    664   12         quad_list         55949           1
+
+The draws that declare the FLOAT layout are scattered geometry with blending and
+touch 270,084 fragments between them -- 29% of the screen. Only draw 649, the
+fixed-point write, is full-screen. Our pass converts all 921,600 pixels at the
+format change, so the other 71% are lifted into the 7e3 interpretation by a read
+that never happens.
+
+## The quantiles say the same thing, and bracket the reference
+
+Green channel, `walk_gameplay.gfr` against the oracle's Act 1:
+
+                        median   p90     p99     p99.9   max
+    ours REINTERP OFF   0.051    0.188   0.294   0.298   0.329
+    ours REINTERP ON    0.141    1.000   1.000   1.000   1.000
+    ORACLE              0.063    0.176   0.784   1.000   1.000
+
+**OFF is already correct up to p90** -- median 0.051 against 0.063, p90 0.188
+against 0.176 -- and then flatlines where the reference keeps going. ON is
+correct only at the very top and saturates everything from p90 upward, doubling
+the median.
+
+So the bottom 90% of the frame needs NO reinterpretation and currently gets one;
+the top 10% needs it and currently cannot have it, because turning it on ruins
+the rest. The reference sits between the two arms, which is what a
+whole-surface conversion of a partial-coverage effect looks like.
+
+## What this does NOT yet establish
+
+WHY converting a pixel that is never read under the float layout changes the
+final image at all. The conversion is bit-exact and its round-trip self-test
+passes, so a pixel converted to float and back should return to its own value --
+and the trace of the saturated pixel (368,247) does round-trip: draw 649 (1,1,1),
+650 31.875, 658 (1,1,1), 662 31.875. The frame ends with the surface left in the
+float interpretation, and the final composite at draw 716 reads it there.
+
+That is the thread to pull next, and it is a different question from the one
+this note answers: not "is the coverage wrong" (measured: yes) but "what does the
+surface's interpretation need to BE at draw 716". #83's format list has draw 716
+at fmt 0, i.e. back to k_8_8_8_8 -- so if our tracking leaves it float at that
+point, the final pass reads through the wrong layout and that alone would produce
+this. CHECK THAT FIRST; it is cheaper than reworking the coverage.
