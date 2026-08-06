@@ -2875,3 +2875,43 @@ frame twice with the debug shader -- once as-is, once with that draw suppressed
 -- and take the pixels that changed. Those are exactly the draw's fragments, and
 nothing else contributes to them. Every reading in the two notes above should be
 retaken that way before any of it is believed.
+
+### Note (2026-08-06)
+## The difference method is ALSO invalid, and it proves itself so. The screenshot is post-processed.
+
+The retraction above prescribes isolating the draw's fragments by DIFFERENCE --
+render twice with the debug shader, take the pixels that changed. I ran it: 132,464
+pixels differ, against the draw's 144,191 fragment invocations, which looks right.
+
+It is not right, and the output contains its own disproof:
+
+    gate = saturate(0.3 - nz)     median 0.545
+    normalize(o2).z               median +0.467
+
+With nz = +0.467 the gate must be saturate(-0.167) = 0. A median gate of 0.545
+alongside it is impossible. The two channels come from the same fragment of the
+same shader, so if the numbers disagree, what I am reading is not that shader's
+output.
+
+**Why.** The screenshot is the PRESENTED frame -- after the resolves, the post
+chain and the tonemap. The debug shader's raw output is not what lands there; it
+is filtered through everything downstream. And the A/B difference mask is
+contaminated for the same reason: changing one draw's output changes the post
+chain's input, so pixels far from the character also differ.
+
+So this reading joins the two above as invalid. Three attempts, three distinct
+methodological faults: a rectangle that included other draws; DRAW_ONLY, which
+does not rasterise this draw at all; and now a post-processed readback.
+
+### What a valid version needs
+
+Read the SURFACE THE DRAW WROTE, immediately after the draw -- not the presented
+frame. The project already has the instruments for it and I did not use them:
+`GEARS_DRAW_FRAME_STEP`/`_FROM` dumps a checkpoint image of the bound surface
+after a chosen draw, and `GEARS_DRAW_PIXEL_TRACE=x,y` samples one texel of a
+pinned surface after every draw in the surface's own HDR format. Either reads
+draw 460's output on surface 0x400 before anything downstream touches it.
+
+**The gate's value on the character remains UNMEASURED**, as does o2's sign.
+Nothing in the last three notes should be carried forward except this method
+note.
