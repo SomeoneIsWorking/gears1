@@ -16,6 +16,7 @@
 #include <lucent/log.h>
 
 #include "native_pass.h"
+#include "debug_interp_spv.h"
 
 namespace gears::draw
 {
@@ -95,8 +96,33 @@ bool ShaderCache::GetShader(bool isVertex, const uint8_t* uc, size_t sz, uint64_
         // every other property of the draw the guest's.
         const gears::native::Pass* nat =
             isVertex ? nullptr : gears::native::Find(hash);
+        // GEARS_DRAW_DEBUG_INTERP=<ps hash>: substitute the diagnostic module
+        // that writes interpolator r2 out as colour, for that pixel shader only.
+        // DELIBERATELY NOT IN THE NATIVE-PASS ROSTER: the roster is the list of
+        // UE3 passes we implement and `verify_native_pass.sh` renders all of it,
+        // so a diagnostic living there would corrupt that gate. This is its own
+        // path, off unless the knob names a shader, and it says so when it
+        // fires -- a substituted frame that looked like a render would be the
+        // worst possible diagnostic.
+        static const std::string debugInterp =
+            lucent::config::text("DRAW_DEBUG_INTERP");
+        const bool debugThis =
+            !isVertex && !debugInterp.empty() &&
+            hash == std::strtoull(debugInterp.c_str(), nullptr, 16);
         VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        if (nat != nullptr)
+        if (debugThis)
+        {
+            const std::vector<uint32_t>& dbg = gears::native::DebugInterpolatorSpirv();
+            mi.codeSize = dbg.size() * sizeof(uint32_t);
+            mi.pCode = dbg.data();
+            lucent::warn("draw", "DIAGNOSTIC SUBSTITUTION: pixel shader {:#018x}"
+                " is rendering the interpolator debug module, NOT the title's"
+                " shader. This frame is an instrument reading, not a render:"
+                " R = saturate(1 - normalize(r2).z) (the term that gates catalog"
+                " #77's black character), G = normalize(r2).z remapped so 0.5 is"
+                " zero, B = length(r2)/4", hash);
+        }
+        else if (nat != nullptr)
         {
             mi.codeSize = nat->spirv.size() * sizeof(uint32_t);
             mi.pCode = nat->spirv.data();

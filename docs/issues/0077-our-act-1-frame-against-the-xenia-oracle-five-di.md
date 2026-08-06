@@ -531,3 +531,56 @@ plus a roster entry, with no new mechanism. Substituted for
 `0xf662d670789bfac0` on `bright.gfr` it answers directly whether o2 is degenerate
 and, if so, in which component -- which is the question every eliminated cause
 above was a guess at.
+
+### Note (2026-08-06)
+## The gate is NOT the cause -- read directly, and it is open
+
+The previous three notes converged on `saturate(1 - normalize(r2).z)` as the term
+zeroing the character, having eliminated seven other causes. It is wrong, and now
+it is measured rather than reasoned about.
+
+`GEARS_DRAW_DEBUG_INTERP=f662d670789bfac0` (new, `docs/knobs.md`) substitutes a
+diagnostic module for that pixel shader which writes the interpolator out as
+colour. On `bright.gfr`, pinned to surface 0x400, at two character pixels:
+
+    (200,120)   R 0.317   G 0.841   B 1.000
+    (300,500)   R 0.421   G 0.789   B 1.000
+
+  * **R is the gate, and it is 0.32-0.42 -- OPEN.** Not zero, not close to zero.
+    Whatever blackens the character, it is not this.
+  * G says `normalize(r2).z` = +0.68 and +0.58, consistent with R to three
+    decimals (1 - 0.68 = 0.32), so the instrument agrees with itself.
+  * **B is saturated at 1.0, so `length(r2) >= 4`.** The interpolator is live and
+    large -- not a dead or zeroed vector, which was the other half of the fear.
+
+That is an EIGHTH eliminated cause, and the one every previous note was building
+towards.
+
+## What is left in the shader, and it is one multiply
+
+The output chain is `oC0 = ((r5 * gate) * r4.w) * 8`. The gate is open and c254.w
+is 8, so blackness has to come from `r5` or `r4.w`:
+
+    18   tfetch2D r5.xyz_, r4.zy, tf1        <- a LOOKUP, sampled at computed coords
+    23   mul r5.xyz_, r0.zxyy, r5.zyxx       <- albedo x that lookup
+    24   mul r5.xyz_, r5.xyzz, c254.zzyy
+
+`tf1` is base `0x32eb000`, a **256x256 single-channel k_8** texture, and it is
+50.8% ZERO and 30.8% at 255 -- a hard-edged ramp, not a smooth one. Its sample
+coordinate is `r4.zy`, computed at instructions 14-17 from c3/c4/c5 and c254.
+**If the character samples the zero half of that ramp, the material outputs
+exactly zero**, which is what every silhouette pixel shows.
+
+That is the next measurement, and the mechanism for it now exists: extend
+`runtime/shaders/debug_interpolator.frag` to write the tf1 COORDINATE and its
+sampled value instead of r2 (it needs the tf1 binding declared -- see
+`uber_post_blend.frag` for the descriptor set/binding convention). A coordinate
+outside [0,1], or one landing in the ramp's zero half, names the fault; a
+coordinate that looks right moves the search to `r4.w` and the normal map's blue
+channel.
+
+NOTE the instrument's own limit: it reports what the SHADER receives, so it
+cannot distinguish "the guest asked for this" from "we computed the wrong
+interpolator". Both remain possible for r2's length of 4+, which is not what a
+normalised tangent-space vector would be -- worth returning to if the tf1 lead
+dies.
