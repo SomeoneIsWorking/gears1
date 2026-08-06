@@ -54,6 +54,14 @@ struct PreparedDraw
     float depthClearValue = 0.0f;
     bool copyIsServed = true;   // false: this entry only clears
     bool resolveIsDepth = false; // a depth resolve, not a colour copy
+    // The ColorRenderTargetFormat the copy READS the source EDRAM under, from
+    // RB_COLOR_INFO[RB_COPY_CONTROL.copy_src_select] -- NOT RB_COLOR_INFO0.
+    // `colorFormat` below is always RT0's, which for a resolve is whatever was
+    // last bound and is usually not the surface being copied: every resolve in
+    // walk_gameplay.gfr reported format 0 that way, including the bloom copy
+    // whose own draws are k_16_16_16_16_FLOAT. Xenia indexes the same four
+    // registers (draw_util.cc GetResolveInfo).
+    uint32_t resolveSrcFormat = 0;
     // --- mostly diagnostic (GEARS_DRAW_DIAG) ------------------------------
     // EXCEPTION: `blend0` and `colorFormat` ARE read by the renderer. The EDRAM
     // reinterpretation in gpu_draw.cpp uses BlendIsIdentity(blend0) to decide

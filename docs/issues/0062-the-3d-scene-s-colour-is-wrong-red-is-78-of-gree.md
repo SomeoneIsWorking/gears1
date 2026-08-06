@@ -1496,3 +1496,32 @@ a fresh capture for that reason rather than because of this work.
 
 Recorded rather than quietly deleted: the wrong version was pushed in 9d79db0,
 and a reader of that commit needs to find this.
+
+### Note (2026-08-06)
+## The ceiling is largely gone: #83 is resolved and the pass is on by default (2026-08-06)
+
+The ceiling half of this entry moves a long way. #83's root cause was a resolve
+reading its source format from `RB_COLOR_INFO0` instead of
+`RB_COLOR_INFO[copy_src_select]`. Fixed, and the reinterpretation now runs by
+default.
+
+    green channel, walk_gameplay.gfr
+                        median   p90     p99     p99.9   max
+    before              0.051    0.188   0.294   0.298   0.329
+    after               0.051    0.192   0.549   0.859   1.000
+    ORACLE              0.063    0.176   0.784   1.000   1.000
+
+"Lit surfaces flatten at 0.30" no longer holds: the frame reaches 1.0 and its
+p99.9 is 0.859. The median does not move and p90 lands on the oracle's, so this
+added the top of the range without lifting the rest -- which is what every
+earlier attempt failed to do.
+
+Both halves of this entry's title are now addressed: the red deficit was the
+fetch swizzle on resolve-target bindings, the ceiling was the resolve's source
+format. Neither was a tonemap, an exponent bias or a 7e3 packing -- the three
+suspects this entry opened with.
+
+STILL OPEN, and why this entry is not resolved: we reach p99 0.549 where the
+oracle reaches 0.784. The distribution has the right shape and the right mid-
+tones but still under-reaches at the top. That is a smaller, sharper question
+than the one this entry started with, and it is the one left.
