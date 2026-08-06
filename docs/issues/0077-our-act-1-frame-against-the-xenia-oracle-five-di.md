@@ -2596,3 +2596,47 @@ and the split narrows to three:
 
 Branch (2) required no oracle run and no matched moment, which is why it closed
 cleanly. The remaining three all do.
+
+### Note (2026-08-06)
+## Branch (1) CLOSED for the character draws -- but we do not normalise the colour mask at all
+
+Branch (1) of the split was 'our colour-mask or blend decode differs from the
+console on 655/752'. Checked offline against Xenia's own code, and for these
+draws it does not.
+
+Xenia computes an EFFECTIVE mask in `draw_util::GetNormalizedColorMask`: zero
+unless `RB_MODECONTROL.edram_mode == kColorDepth`; render targets the pixel
+shader does not statically write are excluded; the mask is ANDed with the
+format's component count; and non-existent components are then forced to 1. We
+take the RAW register (`gpu_draw.cpp:1152`, `om.colorMask = R[0x2104]` -- the
+same register index Xenia uses, 0x2104).
+
+For the character's draws the two agree exactly:
+
+    draw  surface  color_fmt  edram_mode  raw mask
+    460   0x400    3          4 (kColorDepth)  15
+    655   0x2d0    12         4                15
+    752   0x2d0    12         4                15
+    690   0x2d0    0          4                0
+
+Format 3 is k_2_10_10_10_FLOAT and format 12 k_2_10_10_10_FLOAT_AS_16_16_16_16,
+both FOUR-component, so the component AND is 0b1111 and leaves 15 unchanged;
+both shaders write oC0, so the render target is not excluded; edram_mode is
+kColorDepth so the early zero does not apply; and a raw 0 normalises to 0.
+
+**So this is not the character's cause.**
+
+### A latent divergence worth its own entry
+
+We nonetheless do NOT implement that normalisation. Two cases where it would
+diverge and no one has looked:
+
+  * a pixel shader that does not write a bound render target -- Xenia excludes
+    it, we would let the raw mask through. Xenia's comment cites two titles
+    where this destroys a render target;
+  * a format with fewer than four components (k_16_16, k_32_FLOAT) -- Xenia
+    forces the non-existent components to 1, we leave them 0, which can push a
+    host driver onto a read-merge slow path or change what a blend reads.
+
+Neither affects the character, which is why this is recorded rather than
+chased here.
