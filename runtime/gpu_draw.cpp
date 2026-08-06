@@ -1878,6 +1878,77 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     uint32_t presentBase = 0;
     bool havePresent = false;
 
+    // WHAT THE GUEST SAID ABOUT SCANOUT, DECODED. VdSwap posts the front
+    // buffer's six-dword texture fetch constant (vd_null_gpu.cpp) and the
+    // capture carries it, but nothing has ever read it: the rule below chooses
+    // between the resolve SOURCE and its DESTINATION from a comment settled
+    // against the boot movie, while this constant is the hardware's own
+    // statement of how the front buffer is read back -- including the SWIZZLE,
+    // which is exactly the red/blue question catalog #62 keeps returning to.
+    //
+    // A frame with no constant must say so rather than print a decode of zeros:
+    // "swizzle XYZW" and "we never recorded a constant" would otherwise read
+    // identically, and only one of them is evidence.
+    {
+        const uint32_t* fb = in.frontBufferFetch;
+        const bool haveFetch = (fb[0] | fb[1] | fb[2] | fb[3] | fb[4] | fb[5]) != 0;
+        // First frame, and every CHANGE after it. A per-frame line would bury a
+        // change in six thousand identical ones, and a first-frame-only line
+        // would report the boot movie's constant and never mention that
+        // gameplay uses a different one -- which is the whole question here.
+        static uint32_t reportedKey = 0;
+        static bool reportedOnce = false;
+        const uint32_t key = fb[0] ^ fb[1] ^ fb[2] ^ fb[3] ^ fb[4] ^ fb[5]
+            ^ in.frontBufferAddress;
+        const bool report = !reportedOnce || key != reportedKey;
+        reportedOnce = true;
+        reportedKey = key;
+        if (!report)
+        {
+            // say nothing
+        }
+        else if (!haveFetch)
+        {
+            lucent::info("draw", "front-buffer fetch constant: NONE -- all six"
+                " dwords are zero. This frame says NOTHING about the scanout"
+                " format or swizzle; it does not say the swizzle is identity."
+                " (A capture older than frame_capture version 3, or a swap"
+                " packet written before VdSwap carried the constant.)");
+        }
+        else
+        {
+            static const char* kSwz[8] = {"X", "Y", "Z", "W", "0", "1", "?6", "?7"};
+            const uint32_t swizzle = (fb[3] >> 1) & 0xFFFu;
+            char swz[5] = {0};
+            for (int i = 0; i < 4; ++i)
+                swz[i] = kSwz[(swizzle >> (i * 3)) & 7][0];
+            const uint32_t base = (fb[1] >> 12) << 12;
+            const uint32_t fmt = fb[1] & 0x3Fu;
+            const uint32_t endian = (fb[1] >> 6) & 3u;
+            const uint32_t tiled = (fb[0] >> 31) & 1u;
+            const uint32_t pitch = ((fb[0] >> 22) & 0x1FFu) * 32u;
+            const uint32_t w = (fb[2] & 0x1FFFu) + 1u;
+            const uint32_t h = ((fb[2] >> 13) & 0x1FFFu) + 1u;
+            lucent::info("draw", "front-buffer fetch constant: base {:#x} {}x{}"
+                " fmt {} endian {} tiled {} pitch {} SWIZZLE {} ({:#05x});"
+                " the guest's address for this frame is {:#x}",
+                base, w, h, fmt, endian, tiled, pitch, swz, swizzle,
+                in.frontBufferAddress);
+            // The one line that matters for catalog #62. Say both readings out
+            // loud, because "ZYXW" is only meaningful next to what it implies.
+            if (swz[0] == 'Z' && swz[1] == 'Y' && swz[2] == 'X')
+                lucent::info("draw", "  -> scanout reads the front buffer with"
+                    " RED AND BLUE EXCHANGED. A resolve that also swaps cancels"
+                    " against this, and the image a person sees is the resolve"
+                    " SOURCE, not the destination.");
+            else if (swz[0] == 'X' && swz[1] == 'Y' && swz[2] == 'Z')
+                lucent::info("draw", "  -> scanout reads the front buffer"
+                    " STRAIGHT. Nothing cancels a resolve swap, so the image a"
+                    " person sees is the resolve DESTINATION -- the front"
+                    " buffer's own bytes.");
+        }
+    }
+
     // FIRST, WHAT THE GUEST SAID. VdSwap carries the front buffer's address, and a
     // surface's resolve destination is where its pixels land in guest memory, so the
     // surface whose destination IS the front buffer is the one being shown. That is
