@@ -1248,3 +1248,62 @@ VdSwap totals: 4380, 1800 (the crash), 4380, 3060, 3000, 3060. Zero KeBugCheck l
 
 ### Note (2026-08-05)
 One clean 480 s headless run (--menu-walk) on today's build reached 13,860 frames at a sustained ~29.3 fps with no stall. One sample, recorded so it can be pooled with others -- it is not a rate and does not move the estimate on its own.
+
+### Note (2026-08-06)
+## The repro this entry rests on was walking into a MENU, and the race detector reads zero overlaps
+
+Two observations from a 260 s headless run, neither of them a fix, both of them
+things this entry should not carry forward unexamined.
+
+### 1. `run.sh --menu-walk` had stopped reaching Act 1
+
+The walk was duplicated in `run.sh` and `tools/capture_gameplay_frame.sh` and
+drifted: run.sh's copy stopped pressing at 60 s where the capture script keeps
+going to 120 s. Measured under the stale copy, a 200 s headless run sat on a
+menu for all **5,481 frames and never exceeded 194 draws** (Act 1 is 620-1839),
+with no crash, no stall, frames advancing and all twelve pad steps delivered.
+
+Fixed (`tools/menu_walk.sh`, one definition sourced by both). The same command
+now reaches `sp_prison_p` and a 1839-draw frame.
+
+**This entry's headline numbers should be re-established.** "The guest stops
+progressing about 70 s in, on roughly two runs out of three" was measured with
+whatever walk those sessions used; a run that never leaves the menu is not the
+same workload as one that loads a level, and the stall was always timed near a
+menu transition.
+
+### 2. The ring race detector fires, and reports NO overlap
+
+Over the 260 s run that DID reach gameplay:
+
+    193x  the render-ring allocator entered by a SECOND guest thread:
+          'host' after 'guest-7'
+    193x  ... 'guest-7' after 'host'
+          producer entries so far: 278,006
+          overlaps caught by the wait: 0
+
+So two producers do enter the allocator, alternating -- but the detector's own
+overlap counter is **zero across 278,006 entries**. In this run the two never
+overlapped in time, and the run did not stall: it reached gameplay and ran to
+its timeout.
+
+That does not refute the lost-update reading, because this was one run and the
+failure is intermittent. It does mean the entry currently has "two producers
+exist" measured and "they overlap" NOT measured, and those are different
+claims. The detector is already counting the second one; it needs a run where
+the stall actually happens.
+
+### 3. The second producer is called 'host'
+
+`'host'` is not a guest thread name. Something on our side is entering the
+guest's render-ring producer, and the entry's own analysis says the producer is
+entered by the game thread and by exactly one render-thread site
+(`0x82327d4c`, a `FlushCommand`). The measured route confirms that site:
+
+    0x82327d4c <- 0x82327b78 <- 0x8221d8f8 <- 0x8221b960 <- 0x8221b560
+      <- 0x82444ea8 <- 0x82445004 <- 0x82445038 <- 0x8243ae00 <- 0x827a94ac
+
+but it is attributed to `'guest-7'`, and the OTHER entrant is `'host'`. Which
+host thread that is, and whether it is a guest callback running on one of ours,
+is unestablished and is the cheapest next question this entry has -- it decides
+whether the second producer is the title's or ours.
