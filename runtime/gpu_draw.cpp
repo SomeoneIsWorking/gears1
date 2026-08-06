@@ -1704,8 +1704,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // the copy cannot happen inside a render pass.
         if (PB.Tracing())
         {
-            SurfaceTarget* const t = openTarget ? openTarget : lastTarget;
-            const uint32_t base = openTarget ? openSurface : lastSurface;
+            SurfaceTarget* t = openTarget ? openTarget : lastTarget;
+            uint32_t base = openTarget ? openSurface : lastSurface;
+            // With GEARS_DRAW_SURFACE set, sample THAT surface after every draw
+            // rather than only when it is the bound one -- see PinnedSurface().
+            if (PB.PinnedSurface() >= 0)
+            {
+                SurfaceTarget* pinned = nullptr;
+                const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
+                if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
+                { t = pinned; base = pinnedBase; }
+            }
             endPass();
             PB.TracePixel(cmd, drawn, t, base);
         }
