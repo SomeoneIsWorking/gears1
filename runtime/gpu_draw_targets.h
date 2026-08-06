@@ -64,8 +64,14 @@ struct RenderTargetCache
     uint32_t reinterpretsDone = 0;
     uint32_t reinterpretsRefused = 0;
     uint32_t reinterpretsOutOfSets = 0;
+    // Format changes met by a draw that does NOT read the destination, and so
+    // deliberately not converted. Counted and reported: "we converted 3" and
+    // "we converted 3 and declined 5" describe very different frames, and the
+    // second is the one this pass now produces.
+    uint32_t reinterpretsNotRead = 0;
     std::set<uint64_t> reinterpretPairs;        // (from << 32) | to
     std::set<uint64_t> reinterpretRefusedPairs;
+    std::set<uint64_t> reinterpretNotReadPairs;
 
     uint32_t resolvesUnstorable = 0;
     uint32_t resolvesOutOfSets = 0;

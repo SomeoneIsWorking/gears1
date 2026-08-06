@@ -570,6 +570,20 @@ void RenderTargetCache::ReportReinterpretation(bool enabled) const
     if (reinterpretsOutOfSets != 0)
         line.add(", {} skipped for want of a descriptor set or a pipeline",
                  reinterpretsOutOfSets);
+    // The deliberate non-conversions. Reported with their pairs because this is
+    // the pass's main behaviour now, not an exception: a reader who sees only
+    // "3 converted" cannot tell a frame with three format changes from one with
+    // eight where five were correctly declined.
+    if (reinterpretsNotRead != 0)
+    {
+        line.add(", {} NOT converted because the draw meeting the format change"
+                 " does not read the destination (no blending, so it never sees"
+                 " the old bits -- converting would rewrite pixels it does not"
+                 " cover)", reinterpretsNotRead);
+        for (uint64_t p : reinterpretNotReadPairs)
+            line.add(" {}->{}", ColorFormatName(uint32_t(p >> 32)),
+                     ColorFormatName(uint32_t(p)));
+    }
     if (reinterpretsDone == 0 && reinterpretsRefused == 0 &&
         reinterpretsOutOfSets == 0)
         line.add(" -- no surface changed storage format this frame, so this"

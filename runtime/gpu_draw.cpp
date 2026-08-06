@@ -1825,6 +1825,31 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // that format rather than the console's bits. Convert before the draw
         // that reads them back -- with no pass open, which is why this sits
         // above the pass management below rather than inside beginPassOn().
+        //
+        // ONLY BEFORE A DRAW THAT ACTUALLY READS. The hardware does not convert
+        // anything at a format change: the bits sit in EDRAM and whoever reads
+        // them next interprets them under its own format. A draw that does not
+        // read the destination -- no blending, so its own output simply
+        // replaces what is there -- never observes the old bits, and converting
+        // the surface for it rewrites every pixel it does not cover.
+        //
+        // That was measured, not reasoned: this condition used to fire on every
+        // format change, and on walk_gameplay.gfr the draws that declare the
+        // FLOAT layout cover 270,084 of 921,600 fragments while draw 649, which
+        // declares the FIXED one, covers the screen and blends nothing. So 71%
+        // of the frame was being lifted into an interpretation nothing ever
+        // read it through, which is catalog #83's over-brightening (median
+        // 0.141 against the oracle's 0.063) and why the pass had to ship off.
+        //
+        // APPROXIMATION, stated because it is one: `storageFormat` is per
+        // SURFACE, so a PARTIAL non-blending write leaves the pixels it missed
+        // labelled with its format. Exactness needs per-pixel provenance -- i.e.
+        // holding EDRAM as bits, Xenia's FSI path -- which is a much larger
+        // change. This frame's non-blending writes into 0x2d0 are full-screen
+        // (649, 660, 716 at 921,600 fragments each), so each re-establishes a
+        // uniform format and the approximation does not bite here. A frame
+        // where it does will show up as a partial-coverage row in the count
+        // below rather than silently.
         if (reinterpretEnabled)
         {
             SurfaceTarget* t = nullptr;
@@ -1832,11 +1857,28 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (RT.GetSurfaceTarget(pd.surfaceBase, t) && t && t->begunThisFrame &&
                 t->storageFormat != UINT32_MAX && t->storageFormat != want)
             {
-                endPass();
-                RT.ReinterpretSurface(cmd, *t, t->storageFormat, want);
-                // Whether the conversion ran or was refused, the contents are
-                // now read as `want` by every draw after this one; a refusal is
-                // counted and reported, not repeated once per draw.
+                // A resolve reads the surface by definition. A geometry draw
+                // reads it only when the blend equation is not the identity
+                // (src ONE, dst ZERO) -- the same predicate the pipeline uses
+                // to decide whether to enable blending at all.
+                const bool readsDestination =
+                    pd.isResolve || !draw::BlendIsIdentity(pd.blend0);
+                if (readsDestination)
+                {
+                    endPass();
+                    RT.ReinterpretSurface(cmd, *t, t->storageFormat, want);
+                }
+                else
+                {
+                    ++RT.reinterpretsNotRead;
+                    RT.reinterpretNotReadPairs.insert(
+                        (uint64_t(t->storageFormat) << 32) | want);
+                }
+                // Either way the contents are read as `want` from here on: a
+                // converted surface holds the new interpretation, and an
+                // unconverted one is about to be overwritten by a draw that
+                // writes in `want`. A refusal is counted and reported, not
+                // repeated once per draw.
                 t->storageFormat = want;
             }
         }
