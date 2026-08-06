@@ -1701,3 +1701,26 @@ shader a constant/interpolator the console would not have. Both remain open:
 The second is the more economical explanation because it accounts for both
 zeros at once. Either way the search is now one fetch and one interpolator wide,
 not "the character is black".
+
+### Note (2026-08-06)
+## Measured: the texture sign/gamma path moves the character 2.4x, but does not fix it
+
+Following the localisation above, the obvious suspect for a corrupted channel
+feeding the env-ramp lookup was the sRGB/gamma decode -- gamma-decoding a NORMAL
+MAP is a classic way to wreck exactly the channel this shader remaps
+(`r4.w = blue*2 - 1`), and this frame reports 556 of its bindings as kGamma.
+
+Measured on the character region (x 60-240, y 250-520) of bright.gfr:
+
+    default                      max 17   mean 1.81   non-black 46.1%
+    GEARS_DRAW_NO_TEX_SIGNS=1    max 29   mean 4.30   non-black 46.5%
+
+So the sign path IS reaching these textures and roughly halves their
+contribution -- a real effect, worth knowing. **It is not the cause.** max 29 of
+255 is still a black character, and the non-black FRACTION barely moves, which
+is what a scale change looks like rather than a restored term.
+
+Recorded so the next session does not spend the hour on it. The localisation
+above stands unchanged: the env ramp lookup returns an exact zero because u
+lands in the ramp's black two thirds, and the open question is still whether u
+is wrong on our side or the interpolator feeding it is.
