@@ -5,7 +5,7 @@ status: open
 symptom: our own renderer, same input script indexed by guest frame, two runs: 98.9% identical pixels at frame 300, 25.9% at 600, 17.7% at 1200
 tags: harness,oracle,determinism,lockstep,method
 created: 2026-08-06
-updated: 2026-08-06
+updated: 2026-08-07
 ---
 
 ## Why this was measured
@@ -201,3 +201,73 @@ The risk to watch is that "as fast as the guest consumes them" changes the
 relative rate of the vblank ISR against the title's other threads, so the
 determinism control (ours vs ours2 at frames 300/600/900/1200) is the gate, not
 a boot that merely looks normal.
+
+### Note (2026-08-07)
+### Note (2026-08-07) -- the free-running vblank was built, and it FREEZES THE PICTURE
+
+The note above proposed the concrete next step: "deliver vblank when the guest
+has consumed the previous one rather than on a 16.667 ms host sleep, and step the
+clock per vblank. Then guest time is a function of the guest's own execution."
+That is now built (`GEARS_GUEST_CLOCK_TRIGGER=vblank-freerun`) and it does not
+work. Recording it in full because it very nearly passed its own gate.
+
+### It boots, and it looks reproducible
+
+    frame 300, five independent runs        BIT-IDENTICAL, mean 160.8
+    frame 3,300, two independent runs       bit-identical
+    frame 7,800, two independent runs       BIT-IDENTICAL
+
+against the real clock's 98.96% at 300, 25.90% at 600, 23.91% at 900, 17.65% at
+1,200. On those numbers the mode is a total success.
+
+### And the numbers are a match on a STILL IMAGE
+
+The frames that reproduce perfectly are frozen. Within a single run:
+
+    frame  300   0% identical to the run's last frame   mean 160.8
+    frame 1200   0.6%                                   mean  20.4
+    frame 1500   0.6%                                   mean  24.5
+    frame 2700  99.91%                                  mean   9.7
+    frame 3300 .. 10800   100.00% every one             mean   9.7
+
+From about frame 2,700 the title presents the SAME IMAGE forever. The counter
+keeps advancing to 10,800 -- it is presenting, so nothing looks stuck -- but
+nothing moves.
+
+**The control that catches it is the real clock**, and it is the only thing that
+does. Consecutive frames of the real-clock arm on the identical walk are 21%,
+22%, 34%, 27%, 27%, 32%, 28% identical to the run's last frame: a picture that
+is alive. Every free-running arm sits at 100%.
+
+So: a frozen picture is trivially reproducible, and the determinism control this
+mode exists to pass is PASSED PERFECTLY BY A STILL IMAGE. Any determinism number
+must be read together with "does the picture change at all". The mode now says
+this in its own startup warning and in its header.
+
+The likely mechanism, NOT confirmed: free-running vblanks arrive far faster than
+60 Hz, so guest time advances at hundreds of times real rate and the title's
+per-frame delta becomes absurd. A `std::this_thread::yield()` between vblanks
+was tried first (the free-run loop re-takes g_interruptMutex with no gap and
+starves everything else); it changed throughput and did not unfreeze anything.
+
+### What is now known, and it pins the design problem exactly
+
+  * The boot spin waits on TIME, not on vblank. Proved: the present-triggered arm
+    had host-paced vblanks arriving at 60 Hz throughout and still deadlocked at
+    0 frames. So vblanks alone do not release it.
+  * The guest is happy on a synthetic clock -- the host-paced vblank-triggered
+    arm boots and stays ALIVE (9 frames, same as the control). It is only
+    unusable because a host sleep paces it.
+  * Free-running the vblank makes guest time race, and the picture stops.
+
+So guest time must advance BEFORE the first present (or boot deadlocks) and at a
+fixed rate PER PRESENT afterwards (or the picture freezes). Those two conflict
+only during boot, and that is the whole remaining problem. A rate-limited vblank
+-- free-running until the first present, then pinned to a fixed vblank:present
+ratio -- satisfies both, but its boot phase is host-paced and therefore seeds the
+run nondeterministically, which may or may not matter and has not been measured.
+
+### Also measured, and it is not new
+
+Roughly two runs in five stall early (max guest frame 300) under every mode
+tried. That is catalog #44, not this work.

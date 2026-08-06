@@ -2470,13 +2470,33 @@ void VblankThread()
     uint32_t tick = 0;
     while (true)
     {
-        std::this_thread::sleep_for(std::chrono::microseconds(16667));
+        // FREE-RUNNING VBLANK: no host sleep at all. `state.Dispatch` below runs
+        // the title's ISR synchronously on this thread, so when it returns the
+        // guest HAS consumed this vblank -- looping straight back is exactly
+        // "deliver the next one as soon as the guest is ready for it", with no
+        // host clock anywhere in the loop. That is what takes real time out of
+        // the guest's notion of time; see runtime/guest_clock.h.
+        const gears::ClockTrigger trigger = gears::GuestClockTrigger();
+        if (trigger != gears::ClockTrigger::kVblankFreeRun)
+            std::this_thread::sleep_for(std::chrono::microseconds(16667));
 
-        // Control arm only -- see runtime/guest_clock.h. Vblank fires whether
-        // or not the guest presents, so stepping the clock here cannot
-        // deadlock, at the cost of being host-paced and irreproducible.
-        if (gears::GuestClockOnVblank())
+        if (trigger == gears::ClockTrigger::kVblank ||
+            trigger == gears::ClockTrigger::kVblankFreeRun)
             gears::AdvanceGuestClockFrame();
+
+        // YIELD, BUT DO NOT SLEEP. Dispatch below holds g_interruptMutex for the
+        // whole of the title's ISR, and looping straight back re-takes it with
+        // no gap at all -- which starves every other path that needs it. Left
+        // unyielded this mode presented 19, 3 and 0 frames on three identical
+        // runs; the real clock presents 9 every time.
+        //
+        // A yield is host SCHEDULING, not host TIME: it changes which thread
+        // runs next, exactly as the OS already does for every other guest
+        // thread, and it puts nothing into the clock the guest reads. That is
+        // the line this mode has to hold -- no host duration may enter guest
+        // time -- and a yield does not cross it.
+        if (trigger == gears::ClockTrigger::kVblankFreeRun)
+            std::this_thread::yield();
 
         // Sampled from here rather than from VdSwap: the title submits one
         // frame and then waits, so by the time it is stuck there are no more
@@ -2524,10 +2544,12 @@ void __imp__VdSetGraphicsInterruptCallback(PPCContext& __restrict ctx, uint8_t*)
 void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
 {
     const uint64_t frame = g_frameCount.fetch_add(1) + 1;
-    // The guest's clock advances HERE and, under a fixed step, nowhere else --
-    // so the simulation's delta time is a function of the input schedule rather
-    // than of how fast this machine runs. See runtime/guest_clock.h.
-    gears::AdvanceGuestClockFrame();
+    // The guest's clock advances HERE only when the trigger is `present`.
+    // EXACTLY ONE trigger drives it -- two would double the step and make the
+    // guest's second read of the same frame's time disagree with its first.
+    // See runtime/guest_clock.h for why `present` deadlocks this title.
+    if (gears::GuestClockTrigger() == gears::ClockTrigger::kPresent)
+        gears::AdvanceGuestClockFrame();
     gears::HleDumpCensus("swap");
     gears::HleWorkerCensus();
     gears::HleShaderCaptureFrame(frame);
