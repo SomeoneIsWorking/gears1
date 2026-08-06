@@ -281,3 +281,48 @@ Also confirmed by eye against `scratch/oq/theirs_play.png` and `ours_play.png`
 (downscaled side by side): differences 1, 2, 3 and 4 all reproduce exactly as
 described, on the current build, from the same two frames. Nothing here has
 gone stale.
+
+### Note (2026-08-06)
+## The missing character is NOT a clipping fault -- measured, not assumed (2026-08-06)
+
+Difference 1 (no character) and 2 (no HUD) are still open, but the biggest-
+looking lead is now closed off, which matters because it would have absorbed a
+session.
+
+`walk_gameplay.gfr` kills **276 of its draws at clip or cull** -- and crossing
+the per-draw verdict with `tools/pass_structure.py`'s attribution, that is
+**120 of 174 BASEPASS draws (69%)** and 115 of 167 PREPASS draws (the same 69%,
+as expected since they draw the same objects). A renderer losing 69% of its
+world geometry is exactly what a missing character looks like.
+
+It is legitimate. `tools/clip_check.py` (new, the general form of
+`clip_volume_check.py`) pushes each draw's dumped vertices through its own world
+matrix and view-projection, on this capture:
+
+    draw 292  shaded                  4 of 4 vertices INSIDE   ndc x +0.96..+1.00
+    draw 293  killed_by_clip_or_cull  0 of 4 -- w = -499 .. -241,  BEHIND CAMERA
+    draw 294  killed_by_clip_or_cull  0 of 4 -- w = -3108 .. -2619, BEHIND CAMERA
+
+293 and 294 are two instances of one mesh (shared vertex buffer 0xe840000, world
+translations (2066,-536,2491) and (-930,-3019,2223)) and the guest itself places
+both behind the camera. The run is CALIBRATED: draw 292 is one the GPU
+rasterised, and the same arithmetic puts it inside, so the layout is checked
+against a case whose answer is known rather than only against the ones it
+expects to reject.
+
+That is the same shape as catalog #74's windows, where the clip was also
+exonerated. Two independent cases now say our clip agrees with the guest.
+
+## So what IS left for differences 1 and 2
+
+Not the clip, and not culling (#74 already ruled that out with
+`GEARS_DRAW_NOCULL=1`). What has NOT been established is whether this capture
+contains the character's draws at all. The 69% kill rate is consistent with a
+big level where UE3's per-object bounds culling is conservative, and it does not
+by itself say a specific object is missing.
+
+The cheap next step is to stop reasoning from aggregates: find the draws whose
+world transform is NEAR THE CAMERA (a third-person character is a few hundred
+units away, not 15,000) and see whether any exists in the frame. `clip_check.py`
+already prints the world position of every draw it is given, so this is one run
+over the base pass rather than a new instrument.
