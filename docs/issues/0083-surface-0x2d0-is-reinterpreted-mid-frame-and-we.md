@@ -277,3 +277,85 @@ p90 and has no highlights and no bloom; ON has highlights and bloom and is 2.2x
 too bright at the median. The reference lies between them, and no global scale
 moves one arm onto it -- which is why this is a coverage question, not a
 tuning one.
+
+### Note (2026-08-06)
+## BUILT: the pass no longer converts for draws that do not read -- and it did NOT fix the brightness
+
+### What was built
+
+`gpu_draw.cpp`'s reinterpretation trigger fired on EVERY format change. Its own
+comment said "convert before the draw that reads them back", but the condition
+never tested whether the draw reads. It now does: a resolve reads by definition,
+and a geometry draw reads only when its blend is not the identity -- the same
+`BlendIsIdentity(blend0)` predicate the pipeline uses to enable blending. The
+declined conversions are counted and printed with their format pairs, so a
+reader can tell a frame with three changes from one with eight where five were
+correctly declined.
+
+On `walk_gameplay.gfr` that is 2 conversions where there were 10:
+
+    2 converted k_2_10_10_10->k_2_10_10_10_FLOAT,
+    8 NOT converted because the draw meeting the format change does not read
+      the destination
+
+This is the faithful model -- the hardware converts nothing at a format change;
+the bits sit in EDRAM and whoever reads them next interprets them -- and it
+removes eight full-surface compute dispatches per frame.
+
+### AND IT CHANGED NOTHING. My hypothesis was wrong.
+
+The presented frame is BYTE-IDENTICAL to the convert-everything arm, and the
+quantiles are unmoved:
+
+    ON, convert-everything      median 0.141  p90 1.000  p99 1.000
+    ON, convert-on-read (new)   median 0.141  p90 1.000  p99 1.000
+    ORACLE                      median 0.063  p90 0.176  p99 0.784
+
+So the over-brightening does NOT come from converting at draws that never read.
+It comes entirely from the two conversions that remain -- which are legitimate
+reads under any model. The previous note's framing ("29% declares the float
+layout, we convert 100% of it") was right about the coverage and wrong about
+which conversions cause the damage.
+
+### The sharpest evidence yet: a mid-tone pixel that no reading draw covers
+
+`GEARS_DRAW_PIXEL_TRACE=640,350` (bare wall), pinned to 0x2d0:
+
+    OFF   draw 615  (0.535, 0.627, 0.799)  ->  draw 716  (0.205, 0.218, 0.208)
+    ON    draw 615  (0.535, 0.627, 0.799)
+          draw 650  (2.547, 4.031, 11.125)     <- lifted ~14x
+          draw 660  (1, 1, 1)
+          draw 716  (1, 1, 1)
+
+Draw 650 covers 79,253 fragments -- 8.6% of the screen -- and this wall pixel is
+not among them. The whole-surface conversion lifted it anyway, and the resolves
+at draws 657 and 659 read the lifted surface before anything restores it. That
+is the entire defect, in one pixel.
+
+### So what is actually needed, and why it is not a small change
+
+The conversion must not touch pixels the reading draw does not cover. The
+reading draws are scattered geometry, not rectangles, so their coverage is
+per-fragment -- which means the reinterpretation has to happen INSIDE the
+reading draw's blend, not as a surface-wide pre-pass. That is what fragment
+shader interlock exists for and is why Xenia has an FSI path at all; our
+renderer models the host-render-target path, where this cannot be expressed
+exactly.
+
+A bracket (convert in before the reading run, convert back after it) looked like
+the cheap answer and is NOT one: the resolves at 657/659 sit inside the run and
+read the lifted surface, so a restore afterwards is already too late.
+
+DO NOT try a third variation of surface-wide conversion. Two have now been
+measured and both fail for the same reason. The next real step is either
+per-fragment reinterpretation at read time, or establishing from the guest's
+register stream that the resolves at 657/659 read under a format that makes the
+lift correct -- in which case the fault is downstream of here and this pass is
+innocent.
+
+### Status
+
+The pass stays OFF by default; the REINTERP-OFF arm is byte-identical to before
+this change, and validate_all and verify_native_pass both pass. The change is
+kept because it is the more faithful model, is fully reported, and removes work
+-- not because it fixed anything. It did not.

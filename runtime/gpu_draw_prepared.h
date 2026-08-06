@@ -54,7 +54,11 @@ struct PreparedDraw
     float depthClearValue = 0.0f;
     bool copyIsServed = true;   // false: this entry only clears
     bool resolveIsDepth = false; // a depth resolve, not a colour copy
-    // --- diagnostic only (GEARS_DRAW_DIAG), never read by the renderer ---
+    // --- mostly diagnostic (GEARS_DRAW_DIAG) ------------------------------
+    // EXCEPTION: `blend0` and `colorFormat` ARE read by the renderer. The EDRAM
+    // reinterpretation in gpu_draw.cpp uses BlendIsIdentity(blend0) to decide
+    // whether a draw reads its destination, and so whether a format change
+    // needs converting at all. Do not drop them from a diagnostic-only build.
     // Everything that can make a draw contribute nothing, recorded next to
     // the draw that did nothing. A summary cannot answer "which stage did
     // this surface's draws die at" -- only the join of per-draw state with
