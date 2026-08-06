@@ -2915,3 +2915,62 @@ draw 460's output on surface 0x400 before anything downstream touches it.
 **The gate's value on the character remains UNMEASURED**, as does o2's sign.
 Nothing in the last three notes should be carried forward except this method
 note.
+
+### Note (2026-08-06)
+## INSTRUMENT DEFECT FOUND AND FIXED: the debug shader's source edits were being ignored
+
+Three of my measurements this session were retracted for three different
+reasons. All three share a fourth, larger cause that I only found by running a
+self-test: **`GEARS_DRAW_DEBUG_INTERP` does not use
+`runtime/shaders/debug_interpolator.frag`.** It uses
+`runtime/debug_interp_spv.h`, a GENERATED SPIR-V blob that must be regenerated
+by hand with `tools/gen_native_spv.sh`.
+
+So every edit I made to the .frag -- and the file's own header invites editing,
+"edit the body to emit whatever the current question needs" -- changed nothing.
+Every reading came from whatever the blob was last built from.
+
+**The self-test that caught it**: make the shader emit the constant
+(0.25, 0.5, 0.75) and trace the surface. It read (-18.9375, 4.8789, 6.4844),
+unchanged from the previous run. Identical output across a changed shader is
+proof the change is not running. That check costs one build and I should have
+run it before the first measurement, not the fourth.
+
+Decoding the stale blob confirms it: it emitted o2 RAW as `v*0.5+0.5`, so
+(-18.94, 4.88, 6.48) means o2 = (-38.9, 8.8, 12.0) with |o2| ~ 41.6 -- exactly
+the "34..65" its own header documents. The instrument was working; I was reading
+it against a source it was not running.
+
+**Worse, I committed the inconsistency**: the .frag in the tree emitted
+gate/nz/ramp while the .h emitted o2 raw, so a reader would have believed the
+source.
+
+### Fixed, and the first valid reading through this instrument
+
+`tools/gen_native_spv.sh runtime/shaders/debug_interpolator.frag
+runtime/debug_interp_spv.h DebugInterpolatorSpirv` regenerates it (860 SPIR-V
+words). Source and blob now agree. Re-measured with
+`GEARS_DRAW_PIXEL_TRACE`, which samples the pinned surface in its own HDR format
+after every draw -- so this is pre-resolve, pre-post, unlike the screenshot
+averages that produced the retracted numbers:
+
+    pixel (150,300), surface 0x400, after draw 460:  (0.0124, 0.6436, 0, 1)
+
+    R = gate            = 0.0124    <- essentially CLOSED
+    G = nz remapped     -> normalize(o2).z = +0.287   <- POSITIVE
+    B = ramp            = 0         <- but downstream of a closed gate
+
+All three in [0,1], as the shader can actually produce.
+
+### What this settles
+
+**The header's position is correct and mine was wrong.** normalize(o2).z is
+POSITIVE here, as UE3's TangentCameraVector requires -- there is no sign error,
+which confirms the retraction. And the gate is 0.0124, i.e. shut, on a
+camera-facing pixel -- which is what a rim term is MEANT to do. Draw 460
+producing ~nothing there is correct behaviour, not a defect.
+
+Caveat kept explicit: this is ONE pixel. The honest generalisation needs the
+same trace at several points across the mesh, including near the silhouette
+where the gate should OPEN. That is now cheap and, for the first time this
+session, would be valid.
