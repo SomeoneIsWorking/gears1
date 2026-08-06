@@ -250,3 +250,34 @@ pointing AT it: the guest writes HDR through one interpretation and reads it
 through another, and our single widened float target does not reproduce the bit
 reinterpretation. Next session should start there, with the R/B swap between
 draws 702 and 703 as a second clue that a format's channel order is in play.
+
+### Note (2026-08-06)
+## A sixth difference, and this one is measured: the COLOUR CAST (2026-08-06)
+
+The five differences here are the eye's; the entry says a pixel metric between
+the two sides is meaningless. That is true of a PIXEL metric. It is not true of
+a CHROMATICITY DISTRIBUTION, which is exposure-invariant and moves slowly as a
+camera walks one environment -- and `tools/chroma_compare.py` (new) measures the
+null band for it, so the claim is calibrated rather than asserted.
+
+    5 of our gameplay frames x 4 of theirs, same oracle_compare.sh run
+    same-renderer null band                 up to 0.0138
+    cross-side under an R/B exchange        0.008 .. 0.018   (20 of 20 pairs)
+    cross-side as we present it             0.064 .. 0.086
+
+Add to the list, as #6: OUR FRAME IS COOL WHERE THEIRS IS NEUTRAL-WARM, by
+almost exactly an R/B exchange. It is not visible next to differences 1-5 by eye
+because the frame is desaturated, which is why it went unlisted for a day.
+
+Difference 5 (lifted blacks / low contrast) and this one are independent: the
+measurement is invariant to exposure by construction, and its selftest proves it
+(a 0.30x copy must still report identity).
+
+The mechanism, and the contradiction it runs into, are on catalog #62 -- the
+guest's own scanout swizzle says our present path is RIGHT, so this is not the
+front-buffer-vs-source choice. Do not chase it here.
+
+Also confirmed by eye against `scratch/oq/theirs_play.png` and `ours_play.png`
+(downscaled side by side): differences 1, 2, 3 and 4 all reproduce exactly as
+described, on the current build, from the same two frames. Nothing here has
+gone stale.

@@ -1103,3 +1103,89 @@ under a fixed-point format and this frame's post chain is already too bright
 (#77: ours mean 30.3 against the oracle's 22.1). So the red deficit has at least
 two contributions and this is one of them. Re-measure R/G here after the post
 chain is right.
+
+### Note (2026-08-06)
+## A SIXTH difference, measured against the oracle: the whole-frame COLOUR CAST is an R/B exchange -- and the guest's own scanout constant says it should not be
+
+New instrument: `tools/chroma_compare.py`. It splits every pixel into brightness
+and chromaticity (r,g,b as fractions of R+G+B) and compares the DISTRIBUTIONS.
+Chromaticity is exposure-invariant, so it is immune to this entry's other half
+(our gameplay frames top out at 76/255) -- and it says NOTHING about that; do not
+quote it on exposure. Crucially it also measures a NULL BAND: how far apart two
+frames of the SAME renderer at different moments land. Without that number,
+"ours matches theirs under a swap" is not a claim, and this is why the
+"a pixel metric between them is meaningless" caveat has left the colour question
+unanswerable until now. `--selftest` passes 7 cases including the load-bearing
+one: a 0.30x-exposure copy must STILL report identity.
+
+Gameplay frames only (menus and loading screens filtered out, and the tool names
+what it dropped), 5 of ours x 4 of theirs from the same `oracle_compare.sh` run:
+
+    null band, theirs vs theirs (6 pairs)   0.0026 .. 0.0138
+    null band, ours   vs ours   (10 pairs)  0.0002 .. 0.0095
+    cross-side under R<->B                  0.008  .. 0.018      <- inside the band
+    cross-side as we present it (identity)  0.064  .. 0.086      <- 5x outside it
+
+R<->B wins 20 of 20 cross pairs. The tool's own verdict is "SUGGESTIVE, NOT
+SETTLED" because the worst R<->B pair (0.0184) just exceeds the band (0.0138),
+and that is the honest reading -- but identity is nowhere near it.
+
+## And our own front buffer already carries the oracle's palette
+
+Same comparison run against two of our own resolve targets from
+`walk_gameplay.gfr` instead of our presented frame:
+
+    resolve 0x311000  (the guest's FRONT BUFFER)   -> identity wins, d 0.010..0.017
+    resolve 0xc7f9000 (what we actually present)   -> R<->B  wins, d 0.010..0.017
+
+and those two are the same image: presented vs 0x311000 is 100.00% identical
+after an R/B swap, per pixel, on one capture (`frame_stats.py --diff`), 3.20%
+identical without one.
+
+So the oracle's palette is not something we fail to produce. We produce it, in
+the buffer the guest names, and present the other one.
+
+## What the guest says, decoded for the first time
+
+VdSwap posts the front buffer's six-dword texture fetch constant and
+`frame_capture` has been storing it as `frontBufferFetch` -- but NOTHING HAS
+EVER READ IT. The present path chose between the resolve source and its
+destination from a comment settled against the boot movie. `gpu_draw.cpp` now
+decodes it (once, and on every change; a frame that carries no constant says so
+rather than printing a decode of zeros):
+
+    front-buffer fetch constant: base 0xa0311000 1280x720 fmt 6 endian 0
+    tiled 1 pitch 1280 SWIZZLE ZYX1 (0xa0a)
+
+ZYX1 = scanout reads the front buffer with RED AND BLUE EXCHANGED. That AGREES
+with the present path: the resolve to 0x311000 sets copy_dest_swap, scanout
+undoes it, and the image is the resolve SOURCE. Checked across a whole live
+headless run, boot movie through gameplay: ONE line, so the swizzle never
+changes and "the boot movie and gameplay need different rules" is refuted.
+
+## The contradiction, stated sharply, because it is the next piece of work
+
+  * The guest's constant says our present path is right.
+  * The oracle displays the palette of the buffer we do NOT present.
+  * And Xenia should cancel it exactly as we do: for k_8_8_8_8 its host format
+    swizzle is RGBA (identity), so `GuestToHostSwizzle(ZYX1, RGBA)` = ZYX1 is
+    applied at scanout (`vulkan_texture_cache.cc:940`), and it honours
+    copy_dest_swap on colour resolves (`draw_util.cc:1323` forces it false only
+    for depth).
+
+Both sides claim to cancel the same swap, and their outputs differ by exactly
+one. So this is NOT the source-vs-destination choice, and re-litigating that
+choice is the dead end to avoid -- the retracted note further up this entry
+already did it once. Exactly one R/B exchange is applied somewhere on one side
+and not the other, in the resolve or the scanout.
+
+WHAT SETTLES IT, and nothing offline will: the bytes each emulator writes to
+0x311000 for the same frame. Ours are dumpable today (GEARS_DRAW_RESOLVE_DUMP);
+the oracle needs a guest-memory dump at swap. Until then this is a measured
+divergence with a named next measurement, not a diagnosis.
+
+CAVEAT ON THE DUMP, recorded so it is not forgotten: resolve_*.ppm is written by
+our own decoder, and 0x311000 is the frame's only endian-0 destination (every
+other is endian 2). A decode fault there would move the dump WITHOUT moving the
+presented image. It cannot affect the primary result -- presented-vs-oracle uses
+no dump -- but it does affect the "our front buffer matches at identity" arm.
