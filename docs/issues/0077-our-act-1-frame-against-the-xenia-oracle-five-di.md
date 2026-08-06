@@ -3202,3 +3202,74 @@ are narrower than before:
 
 The vertex shader's interpolator output is the next thing, and it is the first
 time this entry has pointed at something that has never been looked at.
+
+### Note (2026-08-06)
+## The camera basis behind the ramp lookup is CORRECT, proved against the vertex shader's own view-projection
+
+The previous note left two candidates for the ramp coordinate being wrong: the
+pixel shader's c3/c4/c5 (the camera basis, and the three constants the entry
+records as DIFFERING from Xenia's), and the interpolator o4. The first is now
+eliminated without an oracle, by internal consistency.
+
+`GEARS_DRAW_VS_CONSTS=460` gives the vertex shader's own constants for the same
+draw. Its c[233..235] and the pixel shader's c[3..5] are the SAME three rows,
+related by an exact and uniform ratio:
+
+    component ratio  VS c[233+k] / PS c[3+k],  for k = 0, 1, 2
+        k=0:  +1.00000  +1.77778  +0.99900
+        k=1:  +1.00000  +1.77778  +0.99900
+        k=2:  +1.00000  +1.77778  +0.99900
+
+**1.77778 is 16/9**, the frame's aspect ratio (1280/720), and it is identical
+across all three rows. The VS constants also carry a fourth component that the
+PS ones do not:
+
+    VS c[233] = (-0.991312, -0.165625, 0.092758, 0.092851)
+    PS c[3]   = (-0.991312, -0.093164, 0.092851)
+
+VS `.w` = 0.092851 is exactly PS `.z`. So the vertex shader holds the
+view-PROJECTION rows -- x, y scaled by the aspect, z scaled by the depth range,
+and w carrying the raw z for the perspective divide -- and the pixel shader
+holds the plain VIEW basis. Two different matrices, correctly related.
+
+And the pixel shader's is exactly orthonormal:
+
+    M @ M.T = [[1, 0, -0], [0, 1, -0], [-0, -0, 1]]   to six decimals
+
+**So c3/c4/c5 are a valid camera basis, consistent with the vertex shader's own
+view-projection for the same draw.** The entry's long-standing note that these
+three differ from Xenia's is a MOMENT difference, not a defect, and this closes
+it as a candidate.
+
+### What that leaves, and it is now a single named quantity
+
+The ramp coordinate reduces to `u = 1 + (M^T r5).x` with r5 built from
+interpolator o4 and the normal-map term. The constants are right, the basis is
+right, the texture decodes to a real dithered ramp, the clamp mode is what the
+guest asked for, and the arithmetic is verified against the real shader. The
+ONLY remaining free input is **o4 itself**.
+
+Measured on our side: o4 is inside [0,1] on 100% of fragments with
+|o4*2-1| median 0.978 -- a correctly packed unit vector, so it is not garbage
+and not mis-unpacked. What is unknown is its ORIENTATION: `u` needs to be below
+about 0.95 for the ramp to carry anything, and ours has median 1.675 with only
+~5% of fragments below 0.945.
+
+### And the reading that the character is "supposed to be dark" is DEAD
+
+I briefly took the position that draw 460 is a narrow highlight and the
+console's Marcus is also mostly black. **That is wrong and it is worth saying
+plainly, because the numbers alone support it and the picture does not.**
+The oracle's character crop measures median 0.047 with only 2.4% above 0.30,
+which reads as "mostly dark" -- but viewed at 4x exposure
+(`scratch/oracle/probe/frame_0120s.png`, x 340..620, y 380..720) it is a fully
+shaded character: armour plates with continuous gradients, the COG logo, skin
+on the neck, the weapon. The low median is background and shadow inside the
+crop, not the character being unlit.
+
+Ours writes non-zero on **309 of 126,983 fragments (0.24%)**. The console's is
+broadly lit. So the ramp must be open across most of the mesh on hardware, our
+`u` puts it past the ramp's end, and the difference is real.
+
+**Do not re-derive "the character is meant to be dark" from a percentile.**
+Look at the boosted crop.
