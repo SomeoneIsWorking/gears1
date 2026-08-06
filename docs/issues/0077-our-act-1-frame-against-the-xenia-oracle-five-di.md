@@ -2166,3 +2166,59 @@ It is not present. `runtime/gpu_draw_xlate.cpp:1351` maps `k_DXT1` to
 Red is red and blue is blue. Consistent with the decoded blob, which
 `tools/decode_bc.py` renders as a correct tangent-space normal map (neutral
 purple-blue, not the orange cast a swap would give).
+
+### Note (2026-08-06)
+## MEASURED, and it corrects an earlier claim: the rim term is NOT zero. The env ramp is the only zero.
+
+Earlier notes on this entry say the base pass "genuinely is a rim term" that
+evaluates to ~0. That was inferred from the arithmetic, never measured, and the
+measurement says otherwise.
+
+`GEARS_DRAW_DEBUG_INTERP=f662d670789bfac0` renders the interpolator directly;
+averaged over the character region (48,442 lit pixels of bright.gfr):
+
+    G channel (z remapped linearly)   ->  normalize(o2).z ~ -0.237
+    B channel (length/4)              ->  length(o2)      ~  2.056
+
+Use the LINEAR channel, not R: R is `saturate(1 - z)` and saturates, so a mean
+of R over a region is not `1 - mean(z)`. With z ~ -0.237 the shader's gate is
+
+    saturate(0.3 - z) = saturate(0.537) = 0.537
+
+**Not zero. About half.** Which is consistent with the control arm that forcing
+the rim high (`c254.x = -5`) left the character black -- at the time I read that
+as "the rim is not the only zero", and it is better read as "the rim was never
+the zero".
+
+The other multiplier is equally healthy. The character's normal map, decoded:
+
+    mean channels  R 0.490  G 0.499  B 0.952
+    blue p10 0.902, p50 0.965, p90 1.000
+    so r4.w = blue*2 - 1 = +0.904
+
+which is the scale on the entire environment chain, and it is ~0.9, not ~0.
+
+### So the zero is the env-ramp fetch, alone, and now quantified
+
+    rim term          0.537   healthy
+    r4.w              0.904   healthy
+    diffuse texture   97.8% non-zero
+    env ramp          ~0      <- the only zero
+
+`r2` going into the lookup is `normalize(o4) * r4.w`, so its length is ~0.9 and
+`r4.z` therefore lies in about [-0.9, +0.9]; `u = r4.z + 1` lands in [0.1, 1.9],
+and the ramp is white only below u ~ 0.3. On average u ~ 1, in the black
+two-thirds. That is the whole of the blackness, in one fetch.
+
+### The question this leaves is sharper than before
+
+It is no longer "why is the character black" but "**why does u land above 0.3
+for us**", and the inputs to u are now individually measured and healthy. What
+has NOT been measured is the interpolator `o4` -- the env chain's direction --
+as distinct from `o2`, which is the rim's. Both come out of the same
+440-instruction vertex shader; only `o2` has ever been looked at, because
+`GEARS_DRAW_DEBUG_INTERP` reads `r2`.
+
+The cheapest next step is therefore smaller than the same-moment comparison:
+point the debug module at `o4` instead of `o2` and read its direction the same
+way. If `o4` is wrong the whole entry closes on it.
