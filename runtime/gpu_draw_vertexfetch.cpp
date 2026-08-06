@@ -211,9 +211,17 @@ void DumpVsConstants(const ShaderXlate& vsX, const UniformCache& uc,
     if (!sel.Active() || !sel.Offer(diagIndex))
         return;
     lucent::Line cl;
+    // The constant-addressing mode is in the HEADER, not a footnote, because it
+    // decides whether a fixed layout may be assumed of everything after it. A
+    // shader that indexes its constants through a0 is doing a bone-palette
+    // lookup, and its c0..c3 are bone rows, not a world matrix -- reading them
+    // as one produces per-vertex verdicts that look exactly like real ones
+    // (tools/clip_check.py did precisely that for a draw the GPU had
+    // rasterised, and called every vertex of it BEHIND THE CAMERA).
     cl.add("draw {} (diag {}) vs {:#x} float constants ({} vec4s, in the"
-           " shader's own packed order):", issued, diagIndex, vsHash,
-           vsX.floatCount);
+           " shader's own packed order, addressing={}):", issued, diagIndex,
+           vsHash, vsX.floatCount,
+           vsX.floatDynamicAddressing ? "dynamic-skinned" : "static");
     // FLUSHED IN CHUNKS. A vertex shader can declare 256 float constants -- a
     // skinned mesh's bone palette is most of them -- and one Line of that is
     // ~22 KB, which the sink truncates. A truncated dump reads EXACTLY like a

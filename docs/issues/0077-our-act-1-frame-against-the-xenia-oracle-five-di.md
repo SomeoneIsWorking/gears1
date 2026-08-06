@@ -1266,3 +1266,58 @@ and the second one now has a stage attached to it: clip, not shading.
 Next: root-cause the clip kill on character_auto draw 492 (10292 prims in, 0
 out) against draw 520, which survives with the same pose. The two shaders'
 position transforms are the thing that differs.
+
+### Note (2026-08-06)
+## WITHDRAWN, same day: "the colour-writing character draws die at clip while the same actor survives elsewhere"
+
+The note above ends with a lead, and the load-bearing half of it is wrong. I am
+recording it rather than quietly editing, because the shape of the mistake is
+the one this entry has now made twice.
+
+**The surviving draws are SHADOW MAPS.** `tools/pass_structure.py` on all four
+character-bearing captures puts every colour-masked skinned draw that survives
+clipping -- character_auto 520/538-543, prison_turn 519-523, play_v2 641-643,
+bright 690/693-695 -- inside the depth-only block that feeds a
+`depth 0x0 -> 0xc520000` resolve (448x448, 864x864, 864x672 ...). Those are
+renders from the LIGHT's point of view, not the camera's.
+
+So "the geometry is on screen for the pass that does not write colour" is false.
+A mesh inside the light frustum says nothing whatever about the camera frustum,
+and "the player is off screen" remains a perfectly good explanation of the
+colour-pass kill. Claim C015 is falsified; its surviving half (4 of 15 captures
+submit a character) is re-recorded as C016.
+
+**This is catalog #74's mistake again.** There the same shape -- "instances of
+one mesh, some of them wrongly clipped" -- was retracted after the vertices were
+actually pushed through the transform and found to be genuinely outside the
+frustum. The clip verdict alone never distinguishes "our clip is broken" from
+"UE3 submitted geometry that is off camera"; only transforming the vertices
+does.
+
+### What would actually settle it, and why it is not a five-minute check
+
+`tools/clip_check.py` does exactly this for RIGID geometry: it takes
+`GEARS_DRAW_VDUMP` + `GEARS_DRAW_VS_CONSTS`, treats c0..c3 as the world matrix
+and c7..c10 as the view-projection, and calibrates itself on a draw the GPU
+demonstrably rasterised. That layout does not hold for a SKINNED draw: on
+character_auto draw 492 the bone rows start at c0, and on draw 520 they start at
+c5 behind a 4x3 matrix and a c4=(4,4,4,4). Pointing the existing tool at a
+skinned draw would read bone rows as a view-projection and produce confident
+nonsense -- though its calibration arm should refuse first, which is worth
+verifying before anyone tries.
+
+The honest next step is therefore RE, not a diag join: find, in the skinned
+vertex shader's microcode, which constants carry the view-projection and how the
+bone palette is indexed, then transform the dumped vertices through the skinning
+the shader actually performs. Until that is done, this entry has NO evidence
+that any character draw is wrongly clipped.
+
+### What is left standing from the note above
+
+  * 4 of 15 captures submit a skinned character (C016), and prison_turn --
+    rejected by hand last session as containing none -- has 17 skinned draws.
+  * The detector, its self-test and the self-selecting capture gate.
+  * bright.gfr remains the one capture where a colour-writing character draw
+    survives clipping (draw 460, 1431 of 6592 primitives, 144191 fragments),
+    and it is the one that renders black. That, not the clip counts, is still
+    the frame to work.

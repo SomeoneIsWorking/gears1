@@ -5,7 +5,7 @@ status: open
 symptom: a captured gameplay frame renders completely black (0 of 921600 px non-black) although every draw issues and the scene colour target is full of content; other captures of the same scene render fine
 tags: gpu,draw,post,black,frame,constants,guest,native-renderer
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 ---
 
 ## Symptom
@@ -156,3 +156,47 @@ moment this address is touched, with the caller". Two cautions: the addresses
 come from one capture and a fresh run may place the buffer elsewhere, so
 re-derive them from that run's own capture rather than trusting these; and
 #44 means roughly one live run in three does not reach gameplay.
+
+### Note (2026-08-06)
+## A second repro, and one killed hypothesis (2026-08-06)
+
+`scratch/frames/character_auto.gfr` -- the capture the new self-selecting gate
+produced (see catalog #77) -- reproduces this **identically**, which doubles the
+evidence and gives the entry a repro that contains a character.
+
+    draw 721 (issued 704), ps 0x9610bf8038af9aaf, 921600 fragments
+    c7 = (0, 0, 0, 0.5)
+    c8 = (-nan, -nan, -nan, 0)   bits ffc00000
+
+`tools/frame_hashes.sh` now tags an all-black render explicitly, and reports
+**2 of 16 captures completely black: play_v2.gfr and character_auto.gfr**. They
+share a hash (847b7f79e03d5c66) because that is the hash of 921600 black pixels;
+the script used to report that as an ordinary match between two captures.
+
+Localisation is unchanged and re-confirmed from the surface trace:
+`GEARS_DRAW_TRACE_ALL` on character_auto shows surface 0x2d0 carrying a picture
+through issued draw 536 (diag 712, means R 0.070 G 0.073 B 0.085) and reading
+zero from the fullscreen draw 721 onward.
+
+### KILLED: "the +inf in c1.y is what produces the NaN in c8"
+
+The same constant block carries `c1 = (1200, inf, 4, 0)`, bits `7f800000`, and
+an infinity two constants away from a NaN is an obvious suspect -- inf-inf and
+0*inf both produce exactly the `ffc00000` quiet NaN seen in c8.
+
+**It is not the cause.** Run against both classes, the infinity is present in
+the captures that render CORRECTLY:
+
+    courtyard        c1=(1200, inf, 4, 0)   c7=(1,1,1,0.5)  c8=(0,0,0,0)   renders
+    bright           c1=(1200, inf, 4, 0)   c7=(1,1,1,0.5)  c8=(0,0,0,0)   renders
+    black            c1=(1200, inf, 4, 0)   c7=(1,1,1,0.5)  c8=(0,0,0,0)   renders
+    act1_v2          c1=(0, 5e-04, 0.6, 0)  c7=(1,1,1,0.5)  c8=(0,0,0,0)   renders
+    play_v2          c1=(1200, inf, 4, 0)   c7=(0,0,0,0.5)  c8=(-nan,...)  BLACK
+    character_auto   c1=(1200, inf, 4, 0)   c7=(0,0,0,0.5)  c8=(-nan,...)  BLACK
+
+Three of the four working captures carry the same infinity, so it is a normal
+value of this constant block and not a signal. Recorded so the next session does
+not spend the hour I nearly did chasing it.
+
+The entry's conclusion stands unchanged: c7/c8 are written by the GUEST, and the
+cause is on the CPU side.

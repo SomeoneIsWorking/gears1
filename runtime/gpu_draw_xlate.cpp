@@ -101,6 +101,7 @@ bool TranslateOne(SpirvShaderTranslator& translator, xenos::ShaderType type,
     for (int i = 0; i < 4; ++i)
         out.floatBitmap[i] = map.float_bitmap[i];
     out.floatCount = map.float_count;
+    out.floatDynamicAddressing = map.float_dynamic_addressing;
     // The stage's texture descriptor set layout is decided by the shader, not
     // by us: binding i is texture_bindings_[i] (with its own image dimension),
     // and sampler j lands at binding texture_count + j. Carry that out so the

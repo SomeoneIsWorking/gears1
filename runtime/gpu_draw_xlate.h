@@ -74,6 +74,15 @@ struct ShaderXlate
     std::vector<uint8_t> spirv;      // translated SPIR-V module
     uint64_t floatBitmap[4] = {0, 0, 0, 0}; // ConstantRegisterMap::float_bitmap
     uint32_t floatCount = 0;         // number of float4 constants the UBO holds
+    // Whether the stage reads its float constants through the address register
+    // rather than at fixed indices -- a bone-palette lookup, i.e. GPU skinning.
+    // Carried here as well as in VertexShaderShape because it decides whether a
+    // FIXED CONSTANT LAYOUT can be assumed of a dump: tools/clip_check.py reads
+    // c0..c3 as a world matrix and c7..c10 as a view-projection, and on a
+    // skinned shader those slots hold bone rows, so the same arithmetic
+    // produces confident nonsense. The dump states it so the consumer does not
+    // have to guess.
+    bool floatDynamicAddressing = false;
     std::vector<ShaderTextureBinding> textures; // binding index == vector index
     std::vector<ShaderSamplerBinding> samplers; // binding textures.size() + index
     std::vector<ShaderVertexBinding> vertexBindings; // vertex stage only
