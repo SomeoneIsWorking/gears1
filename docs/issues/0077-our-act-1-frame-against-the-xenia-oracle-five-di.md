@@ -2375,3 +2375,53 @@ walked runtime against a title screen. Fixed, verified both ways; the codemap's
 alignment figures for it are withdrawn. The oracle also gained stick input, a
 shader-hash census, pixel and vertex constant dumps keyed on OUR hash function,
 and a frame gate that records the frame it fired at.
+
+### Note (2026-08-06)
+## MEASURED: the oracle binds the character's vertex shader the SAME number of times we do
+
+The START HERE block above names this as the one measurement that would settle
+the direction. It has now run, in wall-clock mode (the configuration already
+proven to reach Marcus), with the per-frame bind counter in the fork.
+
+    ORACLE, 879 frames with the shader bound:
+        849 frames -> bound by 2 draws
+         30 frames -> bound by 4 draws   (two characters on screen)
+
+    OURS:
+        bright.gfr, black.gfr, character_auto.gfr -> 2 draws each
+        play_v2.gfr -> 0 (its character uses different skinned shaders)
+
+**The modal count is 2 on both sides, and every one of our character captures
+shows exactly 2.** We are not missing draws for this shader.
+
+### What that removes
+
+The reading this entry has carried -- "the character has no lit diffuse pass in
+our frame, therefore the guest is not submitting it, therefore CPU-side (#58)"
+-- does not survive as stated for this shader. The reference submits the same
+two draws we do. There is no missing submission here to find on the CPU side.
+
+### What it does NOT establish, and this matters
+
+It does not locate the defect. Two readings remain open and this measurement
+cannot separate them:
+
+  * the oracle lights Marcus through these SAME two draws, at a view where the
+    rim gate `saturate(0.3 - normalize(o2).z)` is open -- which is legitimate,
+    since that gate is view-dependent by design and the oracle frame shows him
+    from BEHIND at an angle while ours faces him more directly; or
+  * the oracle lights him through one of the OTHER skinned shaders in the frame
+    (bright.gfr has four distinct ones), whose bind counts have not been
+    measured on either side.
+
+The 30 frames at 4 binds are the reminder that this count tracks how many
+characters are on screen, so a rigorous version still wants the same moment.
+
+### The next measurement, which is now much better posed
+
+Count binds for the OTHER skinned vertex shaders on both sides -- the counter
+takes any hash, so it is the same command with a different value. If those also
+match, then the two sides submit identical character geometry and the difference
+is purely in what the shading produces, which puts it back inside the renderer
+and makes the view-angle reading the leading one. If they do NOT match, the
+missing draws are found.
