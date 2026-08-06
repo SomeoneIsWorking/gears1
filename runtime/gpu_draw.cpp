@@ -2615,6 +2615,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             UC.lookups, UC.hits,
             UC.lookups ? 100.0 * double(UC.hits) / double(UC.lookups) : 0.0,
             UC.missSnapshot, UC.missShaders);
+        // WHAT IS IN the blocks, not just how often they were rebuilt. A NaN
+        // here takes a whole frame to black and no draw-level probe can see it.
+        UC.ReportConstantCensus();
         if (UC.recomputes != 0)
             lucent::info("draw", "uniform headroom: of {} recompute(s) measured,"
                 " {} produced BYTE-IDENTICAL blocks ({:.1f}%) -- that is the work a"
