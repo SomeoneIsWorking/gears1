@@ -78,3 +78,126 @@ The frame-indexed machinery stays. It is strictly better than wall-clock
 indexing, it is what made this measurable at all, and it is a prerequisite for
 the deterministic-clock work. The determinism control stays IN the harness so no
 future run can quote a cross-side pixel number without seeing it first.
+
+### Note (2026-08-06)
+### Note (2026-08-06)
+## "Drive the guest's clock" is necessary but NOT sufficient: a frame-stepped clock DEADLOCKS the title
+
+This entry ends by naming the fix: "If the time the guest reads advances by a
+fixed step per presented frame, the simulation becomes a function of the input
+schedule alone and both emulators reproduce." That has now been BUILT on our
+side and MEASURED, and the conclusion is that it does not work as stated. The
+next session should not implement it again.
+
+### What was built
+
+`runtime/guest_clock.{h,cpp}`: one virtual clock, `GEARS_GUEST_CLOCK_STEP_NS=<n>`
+(unset = real time, which is the default and is unchanged). Every clock the
+guest can read is routed through it:
+
+  * **mftb**, via a new `__ppc_set_time_base_source` hook in XenonRecomp's
+    `ppc_context.h` -- generated code calls `__ppc_time_base()` at every mftb, so
+    there is no other choke point;
+  * **KeTimeStampBundle** (interrupt time, system time, tick count);
+  * **KeQuerySystemTime**, whose wall-clock base is now frozen at process start
+    so the absolute date does not vary within a comparison.
+
+`AdvanceGuestClockFrame()` is called from `__imp__VdSwap`. The mode is reported
+in both states -- a run that silently used the real clock and one that used a
+fixed step must not be told apart by guesswork.
+
+### And it deadlocks the title, measured
+
+    real clock (control)            9 frames written in 100 s
+    GEARS_GUEST_CLOCK_STEP_NS=16666667   0 frames written in 100 s
+
+Not a slowdown: **zero presented frames, ever.** The guest is alive throughout --
+17,000 audio frames submitted, 7.8 million kernel calls per second -- so this is
+a spin, not a hang. The stall reporter names it:
+
+    draw has made no progress for 8 s. The guest made 7807162 kernel calls in
+    the last second (so something is running, just not this)
+      guest-7 is running guest code, not in any kernel call
+      gpu-isr is running guest code, not in any kernel call
+      guest-1/2/5/6 have been in NtWait for ~7.7 s
+    7 thread(s) blocked, 3 running guest code. A thread running while nothing
+    progresses is a spin -- it is waiting on something it polls, not on us.
+
+### The mechanism, and why it is a bootstrap problem rather than a bug
+
+The clock advances only at VdSwap. Before the FIRST VdSwap the title is waiting
+for time to pass -- in GUEST CODE, not in a kernel call, so it is an mftb spin
+and not a timed wait anything could intercept. Time cannot advance until a frame
+is presented; a frame cannot be presented until time advances. The first frame
+is the deadlock.
+
+That is not fixable by choosing a different step, and it is not specific to this
+title's frame loop: any "advance only on event X" clock deadlocks on a spin that
+must complete before X.
+
+### What would actually work, and it is bigger than this entry says
+
+A virtual-time scheduler: the clock advances when NO guest thread can make
+progress without it. That needs the runtime to know every thread's blocked state
+and every deadline, and -- because the blocker here is a guest-code spin rather
+than a kernel wait -- it needs a deterministic notion of "this thread is
+spinning" that does not depend on host timing. Detecting that cheaply is the
+open problem, and it is emulator-scheduler work on BOTH sides, not a knob.
+
+### What is kept
+
+The plumbing, because it is correct and the default path is unchanged (31/31
+tests pass; the control run writes the same 9 frames as before). The knob stays
+off by default and says so. Also kept: a CMake drift guard, because
+`ppc_context.h` is COPIED into the generated directory and the copy is what the
+guest compiles against -- editing the submodule header alone does nothing, and
+the symptom is a compile error in the runtime about a symbol that is plainly
+present in the file you just edited. The guard fails the configure with the
+refresh command; proved to fire on a deliberately stale copy and to pass on a
+fresh one.
+
+### Note (2026-08-06)
+### Note (2026-08-06, same session) -- the discriminator, and it narrows the problem sharply
+
+The note above concluded "a frame-stepped clock deadlocks" and left the real fix
+as vague scheduler work. A control arm now separates the two halves of that, and
+the answer is much better than the note implies.
+
+`GEARS_GUEST_CLOCK_ON_VBLANK=1` steps the same virtual clock from the 60 Hz
+VBLANK thread instead of from VdSwap. Vblank is paced by a host sleep and fires
+whether or not the guest presents, so it cannot deadlock -- it is host-paced and
+therefore NOT reproducible, and is a diagnostic only.
+
+    real clock (control)                 9 frames in 100 s
+    fixed step, advanced at VdSwap       0 frames  <- deadlock
+    fixed step, advanced at VBLANK       9 frames  <- identical to the control
+
+**So the guest is entirely happy running on a synthetic clock.** Every reader is
+routed through it -- mftb, the KeTimeStampBundle, KeQuerySystemTime -- and the
+title boots, loads, and presents exactly as it does on the real clock. Nothing
+about virtualising the clock is the problem.
+
+The problem is only the TRIGGER. Gating the clock on presents is circular: the
+title spins in guest code waiting for time before its first present, so time
+cannot advance until a frame is presented and a frame cannot be presented until
+time advances.
+
+### Which makes the next step concrete rather than open-ended
+
+The trigger has to fire independently of presents, and deterministically. VBLANK
+is the right event -- it is what the title waits on -- and the only reason the
+control arm is not already the answer is that its vblanks are paced by a HOST
+SLEEP.
+
+Deliver vblank when the guest has finished consuming the previous one (fire the
+next ISR once the previous returns) rather than on a 16.667 ms host sleep, and
+step the clock per vblank. Then guest time is a function of the guest's own
+execution and of the input schedule, with no host timing in it, and the run goes
+as fast as the machine allows instead of at 60 Hz. That is the standard
+free-running deterministic design and it is a bounded change to
+`VblankThread` -- not the general scheduler work this entry previously implied.
+
+The risk to watch is that "as fast as the guest consumes them" changes the
+relative rate of the vblank ISR against the title's other threads, so the
+determinism control (ours vs ours2 at frames 300/600/900/1200) is the gate, not
+a boot that merely looks normal.
