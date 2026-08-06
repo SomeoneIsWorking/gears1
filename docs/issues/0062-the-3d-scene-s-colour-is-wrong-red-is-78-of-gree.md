@@ -816,3 +816,51 @@ one. Real shaded draws, ascending values, alpha 1. That is what made the
 0x2d0 alpha of 0.125 stand out instead of being read past -- and it is the check
 that keeps "the value changed at a colour-masked draw" from being read as an
 instrument fault, which is what I suspected before running it.
+
+### Note (2026-08-06)
+## Four mechanisms eliminated, and the trace now attributes exactly
+
+The finding to explain: with the pixel trace pinned to surface 0x2d0, the value
+changes at draws 612 and 643, and BOTH have RB_COLOR_MASK = 0.
+
+### 1. The trace was mis-attributing -- FIXED, and the answer did not move
+
+`GEARS_DRAW_SURFACE` dropped every sample taken while another surface was bound,
+so a change happening across a switch landed on the next sampled draw. Draw 611
+targets surface 0x0, so 612 was the first sample after it -- exactly the shape of
+a mis-attribution.
+
+Fixed: with a filter set, the trace now samples that surface after EVERY draw,
+whatever is bound. Samples went from 364 to 550 and **the rows are unchanged** --
+still 612 and 643. So the attribution is exact and the escape hatch is gone.
+
+### 2. R[0x2104] really is RB_COLOR_MASK
+
+Checked against Xenia's own register table
+(`register_table.inc:1265: XE_GPU_REGISTER(0x2104, kDword, RB_COLOR_MASK)`), so
+mask 0 on those draws is not a wrong-register artifact.
+
+### 3. The `openSurface = 0` sentinel does NOT collide with base 0x0
+
+Surface base 0x0 is a real surface in this frame AND 0 is the initial value of
+the "no pass open" tracking, which looked like a classic sentinel bug. It is
+guarded: the switch test is `!inPass || openSurface != pd.surfaceBase`, so with
+no pass open a pass is opened regardless of base.
+
+### 4. The pipeline cache key includes the colour mask
+
+A masked draw reusing an unmasked pipeline would explain everything. It cannot
+happen: the key is `(vsMod, psMod, gsMod, primType, om, renderPass)` and
+`OutputMergerState::operator<` compares `colorMask` first
+(`gpu_draw_formats.h:103`).
+
+### What is left
+
+The only event still bound to exactly those draws is the RENDER PASS BEGIN. Both
+612 and 643 are the first draw on 0x2d0 after a draw on another surface, so each
+one ends a pass and begins a new one on 0x2d0. `beginPassOn` chooses between a
+CLEAR pass and a LOAD pass on `t->begunThisFrame`, and picks the framebuffer and
+the format-keyed render pass. That is the next thing to instrument: log the
+chosen pass, its load op, the framebuffer and the attachment format at every
+begin, and compare the two boundaries against a boundary where the value
+survives.

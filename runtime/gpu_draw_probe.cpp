@@ -33,9 +33,11 @@ void FrameProbe::Build(size_t nDraws, VkDeviceSize readbackBytes)
         if (!t.empty())
         {
             onlySurface = int64_t(std::strtoul(t.c_str(), nullptr, 16));
-            lucent::info("draw", "probes restricted to EDRAM surface {:#x}:"
-                " samples on any other surface are DROPPED, so a row here means"
-                " that draw changed the pixel on THIS surface", onlySurface);
+            lucent::info("draw", "probes PINNED to EDRAM surface {:#x}: the"
+                " pixel trace samples that surface after EVERY draw, whatever is"
+                " bound, so a row names the draw the change actually happened at."
+                " Checkpoints still only dump when it is the bound surface",
+                onlySurface);
         }
     }
     stepEvery = lucent::config::number("DRAW_FRAME_STEP", 0);
