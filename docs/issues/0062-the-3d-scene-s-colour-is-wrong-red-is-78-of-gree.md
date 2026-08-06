@@ -1470,3 +1470,29 @@ be re-measured; it may have been a symptom of the same binding fault.
 The ceiling is NOT a scale error. Ours mean 0.076 / p99 0.298 against the oracle
 mean 0.095 / p99 0.808: the means nearly agree and only the top end is missing,
 which no global multiplier produces.
+
+### Note (2026-08-06)
+### CORRECTION, same day: the bloom remark in the note above is WRONG
+
+The note above says surface 0x5a0 "is no longer identically zero (0..0.05 after
+the swizzle fix, where catalog #81 recorded 0 non-black pixels)" and invites
+re-measuring #81 as a possible symptom of the same binding fault. I checked the
+attribution instead of leaving it, and it does not hold.
+
+The bloom resolve destination on `walk_gameplay.gfr`, dumped with the SAME
+command before and after the swizzle fix:
+
+    PRE-FIX   0x6e4000 (352x182) range 0.000000 .. 0.049988, 3000 of 192192 [1.6%]
+    POST-FIX  0x6e4000 (352x182) range 0.000000 .. 0.049988, 3000 of 192192 [1.6%]
+
+Byte-identical. The swizzle fix changed bloom by nothing at all, and this
+capture's bloom was already non-zero before it.
+
+#81's zero comes from a DIFFERENT capture, and #66 already recorded why:
+`act1.gfr` is a v1 capture that "reports its bloom target as exactly zero where
+fresher captures of comparable scenes report 75.9% non-zero". So there was never
+anything here for today's fix to have changed, and #81 should be re-read against
+a fresh capture for that reason rather than because of this work.
+
+Recorded rather than quietly deleted: the wrong version was pushed in 9d79db0,
+and a reader of that commit needs to find this.
