@@ -1145,3 +1145,47 @@ deterministic rather than lucky:
 
 `bright.gfr` remains the only capture in the tree containing a skinned character
 draw, and it is the one where that draw renders black.
+
+### Note (2026-08-06)
+## Three capture attempts, no character frame. The walk cannot frame the player.
+
+Following the plan above -- get a working character render to A/B against -- I
+made three attempts. None produced a frame containing a skinned character, and
+the reason is now clear enough to stop trying this way.
+
+  1. stick-forward walk, dumped at guest frame 5400 -> a WALL CORNER. 350 draws,
+     largest mesh 2302 primitives with 16 vertex constants and no bone rows.
+     Saved as `scratch/frames/wallcorner.gfr`.
+  2. camera-turn walk, dumped at guest frame 5200 -> the run hit catalog #44's
+     nondeterministic crash before the dump. No file.
+  3. same walk, retried -> SUCCEEDED as a capture and is a much richer gameplay
+     frame (477 draws, a prison interior with pillars and blood decals, and
+     visible MOTION BLUR, so that pass is working). Saved as
+     `scratch/frames/prison_turn.gfr`. But its four meshes above 3000 primitives
+     are all killed by clip or colour-masked, and no character is on screen.
+
+WHY THIS KEEPS FAILING, and it is not bad luck: Gears' third-person camera sits
+BEHIND the player, so during a forward walk or a camera turn the player is
+frequently out of frame or hard against a wall. A capture that frames the
+character needs the player STOPPED and the camera swung to bring them into view,
+or a scripted moment that does it (a cover-take, a roadie-run stop).
+
+`bright.gfr` is still the only capture in the tree with a skinned character draw.
+It was captured before this session and I do not know what walk produced it.
+
+## What this costs, and the cheaper alternative
+
+Each attempt is about four minutes and one in three ends in #44's crash, so
+this is an expensive coin flip. Two better routes:
+
+  * make the capture SELF-SELECTING -- have `capture_gameplay_frame.sh` keep
+     dumping until the frame it dumps contains a mesh with bone-matrix vertex
+     constants, and stop then. The test is the three-line check this entry
+     already used to reject attempt 1, and it turns a coin flip into a loop.
+  * or work `bright.gfr` from the CPU side instead: find what emits its draw 460
+     and why no lit diffuse pass accompanies it. CodeRed-Generator (see
+     docs/native-renderer.md) recovers UE3 class layouts and is the standard
+     route to that, and it is also what catalog #58 has been stuck on.
+
+`prison_turn.gfr` is worth keeping regardless: it is the richest gameplay frame
+in the tree and the first that visibly exercises motion blur.
