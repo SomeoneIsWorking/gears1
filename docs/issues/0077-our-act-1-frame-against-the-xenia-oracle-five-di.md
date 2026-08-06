@@ -2640,3 +2640,58 @@ diverge and no one has looked:
 
 Neither affects the character, which is why this is recorded rather than
 chased here.
+
+### Note (2026-08-06)
+## Branch (4) CLOSED, and with three of four gone the evidence points at branch (3)
+
+The third skinned shader is now measured on both sides.
+
+    vs 0xf3e9368c1bb68ecc, oracle, 2841 frames:
+       1 draw  662 frames     6 draws 450     9 draws 238
+       2 draws 419            5 draws 391    10 draws 230
+       4 draws 216            3 draws  78     7 draws  91
+       8 draws  60           11-13     6
+    OURS: 2 in bright, black and character_auto
+
+**Our 2 is the oracle's SECOND most common value** (419 of 2841 frames; 1 is
+first at 662). The 1..13 spread says this shader serves many skinned objects, so
+the count tracks scene content and our 2 is unremarkable rather than deficient.
+
+The fourth shader, 0x57997d3a9dbfd37e, needs no measurement: it drives only
+draws 655 and 752, whose pixel shader is provably zero for every pixel and which
+blend ONE+ONE, so their count cannot affect the picture whatever it is.
+
+### Where the four-way split now stands
+
+    (1) colour mask / blend decode   CLOSED -- ours equals Xenia's normalised
+                                     mask on every character draw
+    (2) rim reading incomplete       CLOSED -- ucode_reduce end to end shows
+                                     every colour term is gated and the one
+                                     ungated term, c6.xyz, is (0,0,0)
+    (4) unmeasured skinned shaders   CLOSED -- third shader matches, fourth is
+                                     provably irrelevant
+    (3) the oracle image is a
+        DIFFERENT MOMENT and its
+        lit back is grazing-angle
+        rim                          OPEN, and now the only survivor
+
+### What that combination implies, stated as inference not fact
+
+Draw 460 cannot light a camera-facing surface on any correct implementation --
+that is arithmetic, not a measurement of our renderer. Both sides submit the
+same character draws. No other character draw in the frame can write colour. If
+all of that holds, then **a character seen head-on is SUPPOSED to be dark in
+this pass**, and bright.gfr's black Marcus may be substantially correct for its
+camera angle -- with the oracle's lit Marcus explained by his being seen at a
+grazing angle where the rim opens.
+
+That would mean this entry's difference 1 has been partly a mismatched-moment
+comparison from the beginning: our head-on capture against the oracle's angled
+one.
+
+**It is NOT established.** The measurement that settles it is a capture of OUR
+renderer at a grazing angle -- if Marcus's silhouette edges light up there, the
+pass works and the comparison was the fault; if they stay black, the defect is
+real and now very tightly bounded. That needs no oracle at all, only a capture
+where the camera is off-axis to the character, which
+`GEARS_DRAW_FRAME_DUMP_SKINNED=1` can select.
