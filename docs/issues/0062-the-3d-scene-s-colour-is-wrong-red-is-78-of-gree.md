@@ -1083,3 +1083,23 @@ NOT YET ESTABLISHED: that this frame's later draws actually reinterpret base
 0x2d0 as a float format after draw 649. The surface's format list for the frame
 includes k_2_10_10_10_FLOAT and k_2_10_10_10_FLOAT_AS_16_16_16_16, so the
 ingredients are there, but the ORDER has not been checked.
+
+### Note (2026-08-06)
+## The frame-wide red deficit is partly the missing EDRAM reinterpretation (2026-08-06)
+
+Turning on the new reinterpretation pass (`GEARS_DRAW_REINTERP=1`, catalog #83)
+moves this issue's headline number:
+
+    R/G   0.7687 (off)  ->  0.9990 (on)      B/G 0.9937 -> 0.9928
+
+measured with `tools/frame_stats.py --diff` on `walk_gameplay.gfr`. Surface
+0x2d0 is declared under four distinct EDRAM bit layouts in one frame; reading
+one format's bits under another's field boundaries moves R's high bits into G's
+low bits, which is a systematic per-channel bias and not a tonemap constant.
+
+This does NOT resolve #62: with the pass on the frame blows out (p99 0.267 ->
+1.000), because the pass is also a 31.875x multiplier on anything written as 1.0
+under a fixed-point format and this frame's post chain is already too bright
+(#77: ours mean 30.3 against the oracle's 22.1). So the red deficit has at least
+two contributions and this is one of them. Re-measure R/G here after the post
+chain is right.
