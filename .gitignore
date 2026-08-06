@@ -10,3 +10,12 @@ __pycache__/
 
 # Xenia writes this beside its working directory when run from the repo root
 xconfig.settings
+
+# Xenia's per-title caches, written beside its working directory when it is run
+# from the repo root (tools/xenia_oracle, xenia-gpu-vulkan-trace-dump). Same
+# class as xconfig.settings above: 8.5 MB of binary that EVERY oracle run
+# rewrites, so leaving it tracked put a 10 MB blob in the staged set of every
+# commit that happened to follow a run.
+modules/
+shaders/local/
+shaders/shareable/
