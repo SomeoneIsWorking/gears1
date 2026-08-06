@@ -1968,3 +1968,50 @@ term) would follow from.
 
 That is now a single, well-posed question with the tooling in place to ask it:
 dump the VERTEX shader's constants and o2 the same way, from both sides.
+
+### Note (2026-08-06)
+## The VERTEX constants agree too, on everything that is comparable across moments
+
+The pixel-side comparison above eliminated the CPU side for the character's
+pixel shader. The same dump now exists for the VERTEX constant buffer
+(`GEARS_ORACLE_VS_CONSTS=<hex>` -> `scratch/oracle/vs_consts.txt`), and the
+skinned character's vertex shader `15cbc482459fe5b7` reports **256 vec4s on both
+sides**.
+
+The constants that are neither pose- nor view-dependent -- the ones that decode
+the packed tangent frame, and therefore the ones that decide the normal every
+later step depends on -- are identical:
+
+    c[253]   ours (0, 0, 0, 0)                    theirs (0, 0, 0, 0)
+    c[254]   ours (0.5, 0.007843138, 2, 0)        theirs (0.5, 0.00784314, 2, 0)
+    c[255]   ours (0, 1, -1, 3)                   theirs (0, 1, -1, 3)
+
+(The c254.y difference is print precision on 2/255, not a value difference.)
+So `r9 * c254.y + c255.z` -- the `raw*(2/255) - 1` decode -- is fed the same
+numbers on both sides.
+
+120 of 256 match exactly. **The other 136 cannot be compared across different
+moments and it would be wrong to read anything into them**: c8..c253 is the
+bone palette, which is the character's POSE, and c0..c3 / c233..c236 are the
+world and view-projection matrices, which are the CAMERA. The two runs are at
+different moments, so those differing is expected. The 120 that match are the
+decode constants plus the unused all-zero palette slots.
+
+### Where this leaves catalog #77's difference 1
+
+Every input that CAN be compared without a same-moment run has now been compared
+against Xenia and agrees: pixel constants (7/10 identical, 3 camera-dependent
+and both orthonormal), vertex decode constants (identical), vertex fetch format
+and normalisation, interpolator mask, param_gen, clamp modes, textures, the
+translator itself, and the draw stream.
+
+What remains is genuinely blocked on a SAME-MOMENT comparison, because the two
+quantities that could still differ -- the bone palette and the camera matrices --
+are exactly the two that legitimately differ between moments. Our own
+measurements say our world/view-projection are right (the skeleton projection in
+claim C017 agrees with the hardware's own clip verdict on three draws), which
+leaves the pose, and the interpolator computed from it.
+
+The stick support added earlier makes both sides runnable on one walk; the
+remaining piece is stepping them by GUEST FRAME so the pose matches, which
+`tools/oracle_lockstep.sh` already has the machinery for.
