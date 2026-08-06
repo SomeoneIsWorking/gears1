@@ -592,3 +592,23 @@ That looks like a lead and is NOT one: courtyard's equivalent target
 (0xcb91000) is equally all-zero, and courtyard presents a FULL 255 range. A
 black fc2 is therefore common to both classes and cannot be what separates them.
 Recorded so the next session does not spend an hour on it.
+
+### Note (2026-08-06)
+## Checked: the narrow frames really are GAMEPLAY (2026-08-06)
+
+The whole-walk comparison above rests on the capped frames being gameplay rather
+than loading screens, and that was assumed rather than checked. From the same
+run's log, draws issued per reported frame, in order:
+
+    frame_00900   162 of 177 draws     max 255    <- menu
+    frame_01800   639 of 849 draws     max  76    <- gameplay
+    frame_02700   365 of 451 draws     max 197    <- transition
+    frame_03600   497 of 677 draws     max  76    <- gameplay
+    frame_04500   502 of 684 draws     max  76    <- gameplay
+    frame_05400   537 of 723 draws     max  76    <- gameplay
+    frame_06300   514 of 694 draws     max  76    <- gameplay
+
+677-849 guest draws is the deferred UE3 pipeline; 177 is the title screen. So
+the frames that cap at 76 are the gameplay ones and the frame that reaches 255
+is the menu, which is what this entry has claimed since it was opened -- now
+with the draw counts behind it rather than an inference from brightness.
