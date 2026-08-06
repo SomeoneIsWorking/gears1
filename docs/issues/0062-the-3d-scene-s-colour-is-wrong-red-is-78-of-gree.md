@@ -451,3 +451,6 @@ value. Not a candidate.
 
 ### Note (2026-08-06)
 Bloom is a concrete candidate for the missing top of the range: the whole bloom chain renders black (catalog #81) -- surface 0x5a0 has 0 non-black pixels after all five of its draws and its resolve target is 0 of 192192 components non-zero, while the draws themselves shade 57600 fragments each with verdict 'shaded'. The final tonemap therefore composites with no bloom term at all. Not yet established that fixing it fixes this entry.
+
+### Note (2026-08-06)
+The bloom path is now explained and is a SYMPTOM of this entry, not a separate defect (catalog #81): the bright pass thresholds every sample with sgt against c255.x = 1.0, and its input resolve target tops out at 0.125, so it writes zero everywhere. That gives this entry a quantitative target for the first time -- for bloom to do anything, surface 0x2d0 must exceed 8.0, because the resolve feeding the bright pass applies copy_dest_exp_bias -3. Ours maxes at exactly 1.0.
