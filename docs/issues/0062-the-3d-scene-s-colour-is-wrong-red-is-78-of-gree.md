@@ -448,3 +448,6 @@ that samples a biased resolve 8x too dark. Xenia's translator reads it from the
 fetch-constant uniform block at runtime, and `gpu_draw_uniforms.cpp` uploads all
 6 dwords x 32 slots verbatim from register 0x4800, so the shader has the real
 value. Not a candidate.
+
+### Note (2026-08-06)
+Bloom is a concrete candidate for the missing top of the range: the whole bloom chain renders black (catalog #81) -- surface 0x5a0 has 0 non-black pixels after all five of its draws and its resolve target is 0 of 192192 components non-zero, while the draws themselves shade 57600 fragments each with verdict 'shaded'. The final tonemap therefore composites with no bloom term at all. Not yet established that fixing it fixes this entry.

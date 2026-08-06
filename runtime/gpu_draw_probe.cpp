@@ -112,6 +112,10 @@ void FrameProbe::Build(size_t nDraws, VkDeviceSize readbackBytes)
 
 bool FrameProbe::CheckpointDue(uint32_t drawn) const
 {
+    // Highest issued-draw index this frame reached, so Report can explain a
+    // window that the frame never got to.
+    if (drawn > highestDrawn)
+        highestDrawn = drawn;
     // GEARS_DRAW_FRAME_STEP_FROM=N aims the (capped) window of checkpoints at
     // the draws that matter. Without it the cap always lands on the FIRST 48
     // steps, so a defect introduced late in a frame -- the UI, the post chain --
@@ -301,6 +305,23 @@ void FrameProbe::Report(const std::vector<PreparedDraw>& prepared)
             " DROPPED at the {}-checkpoint cap -- the images above stop partway"
             " through the frame, they do not cover it", checkpointsSkipped,
             kMaxCheckpoints);
+    // A WINDOW THE FRAME NEVER REACHED PRODUCED ABSOLUTE SILENCE, and silence
+    // here reads as "the checkpoints found nothing interesting" rather than
+    // "no checkpoint was ever taken".
+    //
+    // The trap is a units mismatch, and it is easy to walk into: _FROM counts
+    // the draws this renderer ISSUED, while the number you naturally reach for
+    // is the `draw` column of the diag table or a pass_structure listing, which
+    // are GUEST draw indices. They differ by every draw the frame drops -- with
+    // the tiling collapse on, act1 issues 527 of 737, so every guest index above
+    // 527 names a checkpoint that can never fire.
+    if (stepEvery > 0 && checkpoints.empty())
+        lucent::warn("draw", "GEARS_DRAW_FRAME_STEP: NO checkpoint was taken."
+            " _FROM={} but this frame only issued {} draws, and _FROM counts"
+            " ISSUED draws -- not the `draw` column of the diag table, which is"
+            " the guest's index and is larger whenever draws are dropped or"
+            " collapsed. Nothing below describes the frame", stepFrom,
+            highestDrawn);
 }
 
 void FrameProbe::Release()
