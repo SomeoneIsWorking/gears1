@@ -200,3 +200,175 @@ not spend the hour I nearly did chasing it.
 
 The entry's conclusion stands unchanged: c7/c8 are written by the GUEST, and the
 cause is on the CPU side.
+
+### Note (2026-08-06)
+## c7 and c8 NAMED against our own verified reimplementation, and the NaN carries x86's SIGN
+
+Two things this entry had as guesses are now read off code rather than inferred,
+and one new discriminator was run against both classes.
+
+### What c7 and c8 ARE
+
+The entry guessed "c7 looks like `GammaColorScaleAndInverse` ... and c8 an
+additive colour term". Half right, and the other half matters.
+`runtime/shaders/uber_post_blend.frag` is this pass reimplemented and verified
+bit-exact against the translated shader (`verify_native_pass.sh`, mean
+|difference| 0.0000 over 2,764,800 samples), so it is authority on the mapping:
+
+    c7.xyz = kOutputScale    the FINAL output colour scale
+    c7.w   = kOutputGamma    the output gamma exponent
+    c8.xyz = kOffset         an offset INSIDE the colour transform
+
+and the tail is
+
+    weighted    = graded * c3.w + kOffset          <- c8 enters HERE
+    desaturated = weighted + lum
+    scaled      = clamp(desaturated * kOutputScale, 0, 1)   <- c7 multiplies AFTER
+    rgb         = PowSat(scaled, kOutputGamma)
+
+**c8 is added BEFORE c7 multiplies.** So "c8 is an overlay colour" is wrong for
+this shader, and the entry should not be read that way.
+
+Proved rather than argued, with `GEARS_DRAW_PS_CONST_SET` on play_v2:
+
+    as captured                          0/921600 non-black
+    c8 := (0,0,0,0)   neutral offset     0/921600
+    c8 := (0.5,0,0,0) a RED overlay      0/921600      <- an overlay would show
+    c8 := (0,0.5,0,0) a GREEN overlay    0/921600      <- so would this
+    c7 := (1,1,1,0.5) and c8 := 0    911386/921600 (98.9%)
+
+A red or green c8 changes nothing because c7 = 0 multiplies it away. c7.xyz is
+the load-bearing constant and nothing downstream can rescue it.
+
+`c7.w = 0.5` is 1/gamma with gamma = 2.0, which is exactly what
+`VdGetCurrentDisplayGamma` reports. That is a consistency check on the mapping,
+not a coincidence.
+
+### c7 is BINARY across the whole capture set
+
+    (1, 1, 1, 0.5)   act1 act1_now act1_v2 black bright courtyard ingame_v3
+                     menu prison_turn swap_v3 walk_gameplay walk_v3 wallcorner
+    (0, 0, 0, 0.5)   play_v2   character_auto
+    (no such draw)   boot150
+
+Thirteen captures at exactly 1, two at exactly 0, never an intermediate value.
+This is `GammaColorScale` -- UE3's `View.ColorScale`, the camera FADE -- either
+fully off or fully on, not a fade caught midway.
+
+**That is worth stating plainly and it is NOT yet settled: if these two captures
+are of a completed fade, a black frame is CORRECT and they are unusable
+captures rather than a rendering defect.** What keeps this entry open is the
+NaN, which is a defect on any reading.
+
+### NEW: the fatal NaN has x86's sign, and it exists ONLY in the broken frames
+
+PowerPC's default QNaN for an invalid operation is `7fc00000`; x86 SSE's "real
+indefinite" is `ffc00000`. The fatal constant is `ffc00000`. Scanning each
+capture's guest memory for aligned dwords of both, which is the discriminator
+run against BOTH classes:
+
+    capture          ffc00000 (x86)   7fc00000 (PowerPC)
+    play_v2                23                 2          BLACK
+    character_auto          8                 2          BLACK
+    courtyard               2                 2          renders
+    walk_gameplay           2                 2          renders
+    bright                  2                 2          renders
+
+Every capture carries a baseline of 2 of each. The broken ones carry 21 and 6
+EXTRA x86-signed NaNs and no extra PowerPC-signed ones at all.
+
+And the extra ones are not scattered. Grouped into consecutive runs, play_v2's
+23 are:
+
+    7 runs of exactly 3 consecutive dwords   <- seven copies of one all-NaN xyz
+    2 isolated dwords                        <- the baseline every capture has
+
+So **21 of the 23 are seven copies of a single all-NaN three-component vector**,
+matching the seven copies of the constant block this entry already located at a
+regular ~0x71e00 stride. One guest computation produces an entire NaN colour
+vector, and it is then copied round-robin.
+
+### What that narrows the hunt to
+
+  * ONE computation, producing all three channels NaN together -- not three
+    independent scalar faults, so a single bad scalar or vector operand;
+  * it went through HOST floating point (the x86 sign), so it is arithmetic our
+    recompiled code executed, not a constant the title stores. That is
+    consistent with, and sharper than, this entry's existing finding that the
+    bytes were already in guest memory -- they were, and now we know they were
+    PUT there by host arithmetic rather than loaded from the title's data;
+  * CAUTION, stated because the sign is seductive: an invalid operation gives a
+    NaN on BOTH architectures, so the sign proves where this NaN was made, NOT
+    that the console avoids one. It does not on its own establish that the
+    console renders this moment non-black.
+
+The next step is unchanged in shape but much better aimed: find the single
+computation that writes an all-NaN vec3 into that round-robin buffer. It is one
+site, not a class of them.
+
+### Note (2026-08-06)
+## The renderer now SAYS this, unprompted -- a NaN constant is a perfect predictor of a black frame
+
+This entry cost two sessions largely because nothing in the renderer ever looked
+at the VALUES it packs into a constant buffer. The frame reported "0 px
+non-black", every draw-level probe reported healthy draws, and the one number
+that mattered was only visible to someone who had already guessed the shader
+hash and set `GEARS_DRAW_PS_CONSTS` to it.
+
+`UniformCache::CensusConstants` now scans every packed float block on the way
+past -- pixel and vertex, on cache rebuilds only, so it is cheap enough to be
+unconditional -- and the frame report WARNS when one holds a NaN, naming the
+shader, the constant index and the raw bits.
+
+On play_v2, with nothing specified:
+
+    [draw:warn] CONSTANT CENSUS: 4 packed constant vec4(s) contain a NaN, over
+      849 repacked block set(s). ...
+      vertex shader 0x8354e5cc00c0a98c  c[71]  = [be1aadb6 bc000108 41b67a23 7f8021c6]
+      vertex shader 0x8354e5cc00c0a98c  c[161] = [ffff39a6 2904ffa8 fffd41a7 18e35e00]
+      vertex shader 0x8354e5cc00c0a98c  c[214] = [2925f8ec 7ffe209f fe0739a6 0c6901ff]
+      pixel  shader 0x9610bf8038af9aaf  c[8]   = [ffc00000 ffc00000 ffc00000 00000000]
+      Raw bits matter: ffc00000 is x86's default QNaN (host arithmetic made it),
+      7fc00000 is PowerPC's, ffffffff is uninitialised memory.
+
+It finds this entry's constant with no prior knowledge of it.
+
+### Run against BOTH classes, over the whole capture set
+
+    capture          NaN vec4s   frame
+    act1                 0       91.5% non-black
+    act1_now             0       97.8%
+    act1_v2              0       97.8%
+    black                0       80.6%
+    boot150              0       99.6%
+    bright               0       83.9%
+    character_auto       1        0.0%   <- BLACK
+    courtyard            0       99.3%
+    ingame_v3            0       97.7%
+    menu                 0       99.0%
+    play_v2              4        0.0%   <- BLACK
+    prison_turn          0       99.9%
+    swap_v3              0       96.2%
+    walk_gameplay        0       98.8%
+    walk_v3              0       99.7%
+    wallcorner           0      100.0%
+
+**A NaN constant is present in exactly the two captures that render black and
+in none of the fourteen that render.** That is the discriminator this entry
+never had, and it is now free on every run.
+
+The negative is designed too: a frame with no NaN says so on the `draw` debug
+channel WITH ITS DENOMINATOR -- "no NaN in any float constant, over 726
+repacked block set(s) (2 carried an Inf, which is a normal value of this
+title's c1)" -- so "clean" cannot be confused with "never scanned".
+
+### A NEW observation, recorded but NOT interpreted
+
+play_v2 also carries three NaN VERTEX constants, all in the skinned character's
+`vs 0x8354e5cc00c0a98c` (c[71], c[161], c[214]). They do not have the tidy
+`ffc00000` shape -- `ffff39a6`, `7ffe209f`, `7f8021c6` -- which is what packed
+non-float data or uninitialised memory read as float looks like, not the result
+of one invalid operation. They may be a bone-palette region the shader never
+indexes, in which case they are harmless and normal. **This is an observation,
+not a finding**: no capture that renders was checked for the same pattern in a
+region its shaders do not read, so nothing here says these are abnormal.

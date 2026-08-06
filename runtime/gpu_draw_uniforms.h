@@ -59,6 +59,36 @@ struct UniformCache
     // anything. It costs an extra copy and compare per miss, so it is gated.
     uint64_t recomputes = 0, recomputesIdentical = 0;
 
+    // ---- the NaN/Inf census over the constants a shader actually receives ----
+    //
+    // A NaN in one pixel constant took a whole gameplay frame to 0 of 921,600
+    // non-black pixels, and it took two sessions to find because nothing in the
+    // renderer looks at the VALUES it packs -- the frame reported "0 px
+    // non-black" and every instrument pointed at the draws, which were all
+    // fine (`catalog.py show 73`). A frame that is black because it was handed
+    // a NaN must SAY so, in a normal run, without anyone having guessed the
+    // shader hash first.
+    //
+    // Cheap enough to leave always on: it scans only on a cache REBUILD, and
+    // only the packed float block, which is 10-16 vec4s.
+    struct BadConst
+    {
+        uint64_t psHash;
+        uint32_t index;      // vec4 index in the shader's own packed order
+        uint32_t bits[4];
+        bool isPixel;
+    };
+    uint64_t nanBlocks = 0, infBlocks = 0;
+    std::vector<BadConst> badConsts;     // capped; nanBlocks is the denominator
+    static constexpr size_t kMaxBadConsts = 8;
+    // Scans one packed block and records what it finds. `isPixel` only labels
+    // the report.
+    void CensusConstants(const std::vector<uint8_t>& block, uint64_t psHash,
+                         bool isPixel);
+    // One line per frame, or SILENCE ONLY when a scan actually ran and found
+    // nothing -- which it says, with its denominator.
+    void ReportConstantCensus() const;
+
 private:
     bool valid = false;
     const void* keySnapshot = nullptr;

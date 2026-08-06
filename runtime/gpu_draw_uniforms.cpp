@@ -59,6 +59,9 @@ UniformCache::Result UniformCache::Update(const uint32_t* regs, const FrameDrawI
     sysc = DeriveSystemConstants(regs);
     fVs = PackFloatConstants(regs, vsX.floatBitmap, vsX.floatCount, 0x4000);
     fPs = PackFloatConstants(regs, psX.floatBitmap, psX.floatCount, 0x4400);
+    // Look at the VALUES, not just pack them. See gpu_draw_uniforms.h.
+    CensusConstants(fPs, d.psHash, true);
+    CensusConstants(fVs, d.vsHash, false);
     // CONTROL ARM. GEARS_DRAW_PS_CONST_SET=<pshash>:<i>=<x>,<y>,<z>,<w>
     // (';'-separated for several) replaces one packed float constant of one
     // pixel shader. It answers exactly one question -- "is the picture wrong
@@ -127,6 +130,73 @@ UniformCache::Result UniformCache::Update(const uint32_t* regs, const FrameDrawI
     keyPs = d.psHash;
     ++rebuilds;
     return Result::kRebuilt;
+}
+
+
+// A NaN or an Inf in a constant a shader will multiply by. See the header for
+// why this is not gated behind a knob.
+void UniformCache::CensusConstants(const std::vector<uint8_t>& block,
+                                   uint64_t hash, bool isPixel)
+{
+    for (size_t i = 0; i + 16 <= block.size(); i += 16)
+    {
+        uint32_t b[4];
+        std::memcpy(b, block.data() + i, 16);
+        bool nan = false, inf = false;
+        for (int k = 0; k < 4; ++k)
+        {
+            const uint32_t exponent = (b[k] >> 23) & 0xFFu;
+            const uint32_t mantissa = b[k] & 0x7FFFFFu;
+            if (exponent != 0xFFu)
+                continue;
+            if (mantissa) nan = true; else inf = true;
+        }
+        if (!nan && !inf)
+            continue;
+        if (nan) ++nanBlocks; else ++infBlocks;
+        // NaN is the one that kills a frame outright, so it wins the capped
+        // slots: an Inf is a normal value of at least one of this title's
+        // constant blocks (catalog #73 killed that hypothesis by running it
+        // against both classes) and must not crowd out a real finding.
+        if (nan && badConsts.size() < kMaxBadConsts)
+            badConsts.push_back(BadConst{hash, uint32_t(i / 16),
+                                         {b[0], b[1], b[2], b[3]}, isPixel});
+    }
+}
+
+void UniformCache::ReportConstantCensus() const
+{
+    if (nanBlocks == 0)
+    {
+        // THE NEGATIVE, with its denominator. "No NaN constants" and "nothing
+        // scanned" must not look the same, and this scan runs only on a cache
+        // REBUILD -- so the denominator is rebuilds, not draws.
+        if (rebuilds != 0)
+            lucent::debug("draw", "constant census: no NaN in any float"
+                " constant, over {} repacked block set(s) ({} carried an Inf,"
+                " which is a normal value of this title's c1)",
+                rebuilds, infBlocks);
+        return;
+    }
+    lucent::Line l;
+    l.add("CONSTANT CENSUS: {} packed constant vec4(s) contain a NaN, over {}"
+          " repacked block set(s). A shader multiplying by one of these writes"
+          " NaN, and a NaN written to a colour target reads back as BLACK --"
+          " so a frame that renders black for this reason is NOT a renderer"
+          " defect and no draw-level probe will show it (catalog #73).",
+          nanBlocks, rebuilds);
+    for (const BadConst& c : badConsts)
+        l.add("\n  {} shader {:#x}  c[{}] = [{:08x} {:08x} {:08x} {:08x}]",
+              c.isPixel ? "pixel " : "vertex", c.psHash, c.index,
+              c.bits[0], c.bits[1], c.bits[2], c.bits[3]);
+    if (nanBlocks > badConsts.size())
+        l.add("\n  ... and {} further NaN vec4(s) not listed (cap {}); the"
+              " count above is the whole frame, the list is not",
+              nanBlocks - badConsts.size(), kMaxBadConsts);
+    l.add("\n  Raw bits matter: ffc00000 is x86's default QNaN (host"
+          " arithmetic made it), 7fc00000 is PowerPC's, ffffffff is"
+          " uninitialised memory. They point at different bugs.");
+    l.flush(lucent::Level::Warn, "draw");
 }
 
 } // namespace gears::draw
