@@ -485,3 +485,49 @@ are the work), or read o4 out of the running shader by substituting a native pas
 that writes an interpolator as colour -- `runtime/native_pass.{h,cpp}` already
 substitutes on a pixel shader hash, so visualising r4 is a small shader and no
 new mechanism.
+
+### Note (2026-08-06)
+## A third cause killed: the interpolator wiring is correct
+
+`GEARS_DRAW_SPV_DUMP` names each module by its translator MODIFICATION KEY, which
+encodes the interpolator mask, so this needed no new code:
+
+    character  vs_15cbc482459fe5b7_mod000000000000003f
+               ps_f662d670789bfac0_mod004240000030003f     mask 0x3f  (o0..o5)
+    world      vs_cb3cec323318973e_mod000000000000001f
+               ps_1f1a3f779667a02a_mod004240000000001f     mask 0x1f  (o0..o4)
+
+0x3f is exactly the six interpolators the character's vertex shader exports, and
+it covers r1, r2 and r4 -- the three the pixel shader reads. The mask is
+`vs->writes_interpolators() & ps->GetInterpolatorInputMask(...)`, Xenia's
+IssueDraw computation verbatim, and it comes out right for this pair. So the
+pixel shader is wired to receive what the vertex shader sends.
+
+## Where this leaves the black character
+
+SEVEN candidate causes are now eliminated, each by measurement, and each is
+written down above so none is re-run:
+
+  1. missing geometry / clipping -- 1431 prims survive, 144,191 fragments shade
+  2. missing interpolator EXPORTS -- o1 and o4 are full-register writes
+  3. black or stubbed textures -- all three decode to character art
+  4. shader constants -- c254.w = 8, a bright multiplier
+  5. tangent-frame byte order -- unpacks to unit vectors, |v| = 1.00
+  6. the bone-index interpolator chain -- r2 is rewritten 9x before o4
+  7. interpolator mask / modification key -- 0x3f, correct
+
+What remains is the VALUE of interpolator o2 at the pixel, which gates the whole
+material through `saturate(1 - normalize(o2).z)`. Nothing measured so far can see
+it: it is computed by 440 vertex-shader instructions with control flow and an
+address-register bone-palette lookup, which is beyond what `ucode_reduce.py`
+models (it now refuses vertex shaders by name rather than crashing).
+
+THE NEXT STEP, scoped: a debug substitution that writes an interpolator out as
+colour. `runtime/native_pass.{h,cpp}` already substitutes our own SPIR-V for a
+title pixel shader keyed on its hash, and `tools/gen_native_spv.sh` compiles a
+`.frag` into the checked-in header -- so this is one small shader
+(`oC0 = normalize(r2) * 0.5 + 0.5`, and a second for `saturate(1-normalize(r2).z)`)
+plus a roster entry, with no new mechanism. Substituted for
+`0xf662d670789bfac0` on `bright.gfr` it answers directly whether o2 is degenerate
+and, if so, in which component -- which is the question every eliminated cause
+above was a guess at.
