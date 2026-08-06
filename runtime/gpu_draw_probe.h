@@ -59,6 +59,14 @@ struct FrameProbe
     //
     // -1 means every surface, which is the old behaviour and still the default.
     int64_t onlySurface = -1;
+    // The surface a caller must sample when a filter is set, or -1 for "whatever
+    // is bound". A filtered trace that only samples when its surface happens to
+    // be BOUND cannot attribute a change to a draw: the samples either side of a
+    // switch to another surface are separated by every draw on that other
+    // surface, so anything that happens in between lands on the next sampled
+    // draw. That mis-attributed the two most important rows of this
+    // investigation before it was fixed.
+    int64_t PinnedSurface() const { return onlySurface; }
     bool SurfaceWanted(uint32_t base) const
     {
         return onlySurface < 0 || uint32_t(onlySurface) == base;
