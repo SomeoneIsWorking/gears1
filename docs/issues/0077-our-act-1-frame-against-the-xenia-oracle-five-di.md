@@ -1321,3 +1321,80 @@ that any character draw is wrongly clipped.
     survives clipping (draw 460, 1431 of 6592 primitives, 144191 fragments),
     and it is the one that renders black. That, not the clip counts, is still
     the frame to work.
+
+### Note (2026-08-06)
+## ANSWERED: the character in character_auto.gfr is BEHIND THE CAMERA. The clip is correct.
+
+The withdrawal above left the question open -- "this entry has NO evidence that
+any character draw is wrongly clipped" -- and named the RE needed to settle it.
+That RE is done, and the answer is measured in both directions.
+
+### The skinned vertex shader's transform chain, read out of its microcode
+
+`xenos_translate --raw` on vs `0x15cbc482459fe5b7` (bright.gfr's character draw
+460, and character_auto's draw 319 -- the same shader):
+
+    instr 60,196   the fetched position is rebuilt as r10 = (pz, px, py, 1)
+    instr 197-200  skinning: dp4 against c[8+a0], c[9+a0], c[10+a0] -- a bone
+                   palette of three rows per bone from c8, so 82 slots in the
+                   256-constant block; a character uses about 45 and the rest
+                   are left ALL-ZERO
+    instr 202-205  world:  r11 = x*c0 + y*c2 + z*c1 + c3
+    instr 207-210  clip:   oPos = x*c233 + y*c234 + z*c235 + w*c236
+    instr 435      oPos exported from r12
+
+**The view-projection is at c233..c236**, not the c7..c10 that rigid draws use.
+That alone is why `clip_check.py` could never have answered this.
+
+**Every swizzle in the chain cancels, and that is not a coincidence.** The
+accumulator is rotated by `.wyxz` at each step; call that permutation
+P = (3,1,0,2). It fixes one component and 3-cycles the other three, so P applied
+three times is the IDENTITY -- and each constant's own swizzle is exactly the
+inverse of the rotation its term receives before landing. Implementing the
+rotations literally transposes both matrices into nonsense. This is the trap the
+`ue3-native-pass` skill warns about, met head on.
+
+### The measurement, with a control arm in both directions
+
+`tools/skeleton_where.py` (new) transforms each bone's ORIGIN through world and
+view-projection and reports where the joints land. It refuses any shader whose
+layout has not been read out of its microcode, and it refuses to report anything
+at all unless a calibration draw -- one the renderer says it SHADED -- comes back
+with a majority of its skeleton on screen.
+
+    bright.gfr draw 460      RASTERISED 1431 of 6592 prims, 144191 fragments
+      44 of 45 joints ON SCREEN, 0 behind
+      ndc.x -1.16 .. +0.11   ndc.y -0.68 .. +0.98      <- a character in frame
+
+    character_auto.gfr draw 319   killed_by_clip_or_cull, 0 of 6592 prims
+      43 of 44 joints BEHIND THE CAMERA, 0 on screen
+      the one remaining joint at ndc.x +3.86             <- four screens right
+
+**The clipping is correct.** The player is behind the camera in that frame, and
+"the player is off screen" was the right explanation all along. This is the third
+time on this entry that a clip verdict has looked like a defect and turned out to
+be geometry the guest genuinely put off camera (see #74's retraction); the
+difference is that this time there is a number attached.
+
+### Two traps this measurement had to survive, both recorded in the tool
+
+  * **Unused palette slots are not joints.** 37 of the 82 slots are all-zero; a
+    zero matrix maps the origin to the world translation, a single point that
+    may well be on screen. Counting them put 9 phantom joints on screen for a
+    skeleton that has none there.
+  * **The first calibration gate was too weak.** It asked for "at least one
+    on-screen joint", and a layout that was genuinely wrong passed it with 1 of
+    45 while scattering the rest across 345 screens. It now requires a majority.
+    The wrong layout was caught by that gate, not by inspection.
+
+### What this does NOT settle
+
+Only vs `0x15cbc482459fe5b7` has a known layout. The killed character draws in
+prison_turn and play_v2 use different skinned shaders (0x455aa697b9d60993,
+0xd1f8fda33c3a18cc, 0xbff17775a314aa7a, 0x8354e5cc00c0a98c) and the tool refuses
+them by design. And this measures the SKELETON, not the mesh, so a character
+straddling the frustum edge is not decidable this way -- 43 joints behind the
+camera is.
+
+**bright.gfr draw 460 remains the frame to work**: a character demonstrably in
+frame, rasterising 144191 fragments, rendering black.
