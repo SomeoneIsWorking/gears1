@@ -296,3 +296,51 @@ reports a written length, and a destination that stays empty.
 That is testable without emulator work: emit registers as DELTAS from the
 previous draw rather than a full restore, and see whether the dump gains a
 picture. It is the next thing to try and it is on OUR side of the fence.
+
+### Note (2026-08-06, same session)
+## The register restore was a memcpy, not a write. Fixed -- and it is NOT sufficient.
+
+`gfr_to_xtr` restored each draw's register file with the trace format's
+`execute_callbacks` flag FALSE, which is the field's default and what this
+converter sent for its entire life. In Xenia:
+
+    CommandProcessor::RestoreRegisters(..., bool execute_callbacks) {
+      if (execute_callbacks) { for (...) WriteRegister(first + i, values[i]); }
+      else { std::memcpy(register_file_->values + first, values, ...); }
+    }
+
+So every register arrived by **memcpy**, and `WriteRegister` -- which is what
+drives every register side effect Xenia has -- never ran once in a playback of
+our traces. That is a real fidelity defect in the converter and it is fixed.
+
+**It changes playback materially, proved:** with callbacks on and the whole
+register file restored, the dump goes from 100.0% black to 100.0% WHITE (every
+channel exactly 1.0). The cause is the gamma ramp -- writing `DC_LUT_30_COLOR`
+auto-increments `DC_LUT_RW_INDEX` (catalog #78), so restoring registers
+0x1921..0x1934 once per draw pushes 844 bogus entries into the ramp. Those are
+pure display state that no draw or resolve depends on, so the restore now skips
+that window and the ramp keeps what the capture set (the dump reports "255 of
+256 entries non-zero", a sensible ramp).
+
+### And with both corrections the dump is STILL BLACK
+
+    callbacks off (as shipped for its whole life)   100.0% black
+    callbacks on, whole register file               100.0% WHITE (ramp saturated)
+    callbacks on, DC_LUT window excluded            100.0% black
+
+So the memcpy was a genuine bug and was NOT the cause of the black dump. Both
+corrections are kept because both are more faithful than what they replace and
+the second is required by the first, but neither is the fix, and this entry
+must not be read as though the trace path now works. It does not.
+
+`--selftest` still passes.
+
+### Hypotheses dead after this session
+
+`readback_resolve`; `gfr_to_xtr`'s memory emission; the host-render-target dump
+step (the `fsi` path fails identically); unsubmitted work at probe time; draws
+dropped in playback; and now the register-restore memcpy. What remains
+unexamined is whether a wholesale per-draw register restore -- even with
+callbacks -- can drive Xenia's EDRAM ownership tracking at all, given it was
+designed for an incremental PM4 stream. Emitting only CHANGED registers per
+draw is the next experiment and is still on our side of the fence.
