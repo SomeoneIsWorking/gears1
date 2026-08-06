@@ -68,4 +68,12 @@ void PollHostInput();
 // whichever thread polls; safe to call from either.
 void UpdateScriptedInput();
 
+// Where frame-indexed script steps ("f1500:A") read "now" from. The GPU layer
+// registers VdSwap's counter; input.cpp does not LINK against it, because the
+// kernel-logic tests build input.cpp without the GPU translation unit and a
+// direct call made them fail to link. Unregistered, a frame-indexed step never
+// fires and says so once -- silently treating the counter as 0 would fire every
+// such step immediately, which looks like a script that ran correctly.
+void SetGuestFrameSource(uint64_t (*source)());
+
 } // namespace gears
