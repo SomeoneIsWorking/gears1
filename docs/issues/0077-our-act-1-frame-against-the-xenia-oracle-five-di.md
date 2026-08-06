@@ -326,3 +326,93 @@ world transform is NEAR THE CAMERA (a third-person character is a few hundred
 units away, not 15,000) and see whether any exists in the frame. `clip_check.py`
 already prints the world position of every draw it is given, so this is one run
 over the base pass rather than a new instrument.
+
+### Note (2026-08-06)
+## RETRACTED: "NO CHARACTER". The character IS drawn -- it is SHADED PURE BLACK (2026-08-06)
+
+This entry's difference 1 says "Marcus is absent from our frame". That is wrong,
+and it sent the search after missing geometry for a day. The character is
+present, correctly posed, with the right textures bound, and its base pass
+writes ZERO.
+
+### Seen
+
+`scratch/frames/bright.gfr`, presented frame gamma-boosted (0.42) to see into the
+shadows: a head, shoulder, upper arm and an outstretched hand in perfect
+silhouette on the left of frame, pure black, against a correctly lit corridor.
+The shape is unmistakably a COG soldier. Boosting is what makes it visible --
+at native exposure it reads as darkness, which is how it was recorded as absent.
+
+### It is the character, established three ways
+
+1. **Bone palette.** `GEARS_DRAW_VS_CONSTS=460` returns **256 vec4s**, and from
+   c[8] on they are 3x4 matrices -- rotation rows plus a translation --
+   repeating in threes. A skinned skeletal mesh, not static geometry.
+2. **Its textures are the character's.** `GEARS_DRAW_TEX_DUMP` + `decode_bc.py`
+   on its three bindings: fc0 `0x1e8f000` is a tangent-space NORMAL MAP showing a
+   torso, shoulders and vest straps; fc2 `0x1722000` is the ALBEDO -- a bearded
+   soldier's face, skin, and dark armour. Both decode correctly. No stub, no
+   black texture.
+3. **6592 triangles**, the largest skinned mesh in the frame, appearing in six
+   draws (depth prepass 177, base pass 460, 655 and 752 on 0x2d0, masked 690,
+   738).
+
+### Where it goes black, exactly
+
+`GEARS_DRAW_PIXEL_TRACE` on three separate pixels of the silhouette -- (300,500),
+(200,120), (120,300) -- all say the same thing:
+
+    after 280 draws  (4.47, 4.73, 4.46)   <- the scene behind it, lit
+    ...
+    after 461 draws  (0, 0, 0)            <- draw 460, ps 0xf662d670789bfac0
+
+Draw 460 has `blend_on 0` and `color_mask 15`: it REPLACES, it does not add. So
+this is the character's base pass and its output is zero.
+
+### The term that zeroes it
+
+`xenos_translate --raw` on `scratch/shaders/bound/ps_f662d670789bfac0.ucode`,
+reduced by hand from the listing:
+
+    r4.x = r2.z / |r2.zxy|              (instructions 4,7,8: dp3, rsq, mul)
+    r4.x = saturate(c254.y - r4.x)      (25: subsc_sat, c254.y = 1.0)
+    r4.xyz = r5.yxz * r4.x              (26)
+    r4.xyz = r4.zxy * r4.w              (27, c6 = 0)
+    oC0.xyz = r4.xyz * c254.w           (28, c254.w = 8)
+
+Everything the pass emits is multiplied by `saturate(1 - normalize(r2).z)`. That
+is zero wherever `normalize(r2).z >= 1`, i.e. wherever the interpolated vector r2
+points straight at the viewer. Ours is apparently doing that over the WHOLE mesh.
+
+### Ruled out, each by measurement
+
+  * **Missing geometry / clipping**: 1431 primitives survive clip and it shades
+    144,191 fragments. It rasterises.
+  * **Missing interpolators**: the pixel shader reads r1, r2, r4 before writing
+    them (`ucode_reduce.py`), and the vertex shader exports o0,o1,o2,o3,o4,o5 --
+    `max o1, r12, r12` and `max o4, r2, r2` are full-register writes with no
+    mask, which a grep for `o1.` misses. They ARE supplied. (Recorded because
+    that grep produced a convincing false lead.)
+  * **Missing or black textures**: all three bindings are real guest textures and
+    both colour ones decode to recognisable character art.
+  * **Constants**: c254 = (0.7, 1, 0.8, 8) and c255 = (0.11, 0.3, 0.59, 0.5) --
+    the latter are BT.601 luma weights, so the shader desaturates. c254.w = 8 is
+    a BRIGHT multiplier, not a zero.
+
+### What is NOT established, and the next measurement
+
+WHY `normalize(r2).z` saturates the term to zero. r2 is interpolator o2, written
+by the skinned vertex shader as `max o2.xyz_, r5.xyzz`. The positions skin
+correctly -- the silhouette is a properly posed character -- so the bone matrices
+reach the vertex shader intact; something about the TANGENT-FRAME output does
+not.
+
+The vertex layout is stride 10 dwords: float3 position, then THREE packed dwords
+`[3][4][5]` (0x00a95110, 0x005d09a3, 0x00f36db2 -- note every one has a zero
+LEADING byte), two float UVs, a zero, and 0x000000ff. Those three packed dwords
+are the normal/tangent/binormal. A byte-order or signedness error in unpacking
+them would leave positions perfect and the tangent frame degenerate, which is
+exactly the shape of this defect. That is the thing to measure next -- read the
+vfetch instructions in `vs_15cbc482459fe5b7.ucode.txt` for those three streams
+and check the format and endian we hand the translator against what the guest
+declared.
