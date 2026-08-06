@@ -429,7 +429,7 @@ void DrawStats::WriteTable(uint32_t drawn, const std::vector<PreparedDraw>& prep
     }
     else
     {
-        t << "draw\tsurface\tcolor_fmt\tedram_mode\tprim\tprim_name"
+        t << "draw\tsurface\tcolor_fmt\tcolor_exp_bias\tedram_mode\tprim\tprim_name"
              "\tindexed\tcount\tfrag_stage\tia_verts\tia_prims"
              "\tprims_after_clip\tfrag_invocations\tverdict"
              "\tdepth_test\tdepth_write\tdepth_func\tcolor_mask"
@@ -466,7 +466,8 @@ void DrawStats::WriteTable(uint32_t drawn, const std::vector<PreparedDraw>& prep
             {
                 t << pd.diagIndex << '\t' << std::hex << "0x"
                   << pd.surfaceBase << std::dec
-                  << '\t' << pd.colorFormat << '\t' << pd.edramMode
+                  << '\t' << pd.colorFormat << '\t' << pd.colorExpBias
+                  << '\t' << pd.edramMode
                   << "\t\tresolve\t\t\t\t\t\t\t\tresolve"
                   // depth/colour-mask/blend/viewport columns: a
                   // resolve programs none of them.
@@ -504,7 +505,8 @@ void DrawStats::WriteTable(uint32_t drawn, const std::vector<PreparedDraw>& prep
                 !pd.hasFragmentStage ? "depth_only_no_colour" :
                 pd.colorMask == 0 ? "colour_fully_masked" : "shaded";
             t << pd.diagIndex << '\t' << std::hex << "0x" << pd.surfaceBase
-              << std::dec << '\t' << pd.colorFormat << '\t' << pd.edramMode
+              << std::dec << '\t' << pd.colorFormat
+              << '\t' << pd.colorExpBias << '\t' << pd.edramMode
               << '\t' << pd.primType << '\t' << PrimName(pd.primType)
               << '\t' << (pd.indexed ? 1 : 0) << '\t' << pd.count
               << '\t' << (pd.hasFragmentStage ? 1 : 0)

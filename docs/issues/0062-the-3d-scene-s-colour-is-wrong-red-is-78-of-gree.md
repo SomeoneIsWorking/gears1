@@ -494,3 +494,50 @@ which are now measured and behaving.
 
 NOT established: where the factor is applied or omitted. What is established is
 its size and that it is upstream of everything this entry has ruled out.
+
+### Note (2026-08-06)
+## RETRACTED: "two routes agree the scene is ~3.5x too dim" (2026-08-06)
+
+That note was built entirely on act1, and running the same probe across every
+capture refutes it. The scene surface, per capture:
+
+    capture      surface 0x400 max (R/G/B)        px above 1.0
+    act1         1.95 / 2.19 / 2.10               1715  (0.19%)
+    black        34.16 / 31.78 / 17.19           12135  (1.32%)
+    courtyard    37.09 / 30.98 / 16.34           19161  (2.08%)
+    act1_now     0 / 0 / 0                            0
+    act1_v2      0 / 0 / 0                            0
+
+**Courtyard's scene reaches 37.** That is the full 7e3 range the format carries,
+so the scene pass produces proper HDR and there is no global scale missing.
+act1's 2.19 is act1 being a darker moment, not a defect, and the "~3.7x
+shortfall against bloom's threshold" I derived from it measured the scene rather
+than the renderer.
+
+I should have run the probe against a second capture before writing the
+convergence down. One number from one frame, agreeing with another number from
+the same frame, is not two independent routes.
+
+## What survives, and the sharper question it leaves
+
+Still true and still this entry's core: our presented GAMEPLAY frames top out at
+0.30-0.42 while the oracle reaches 1.0, and five walk frames share the maxima
+68/76/76 exactly.
+
+But it is now clear that this is MOMENT-SPECIFIC rather than global. Presented
+maxima by capture:
+
+    act1        102 / 106 / 106   contiguous   <- narrow, like the walk frames
+    courtyard   255 / 250 / 255   gappy        <- full range
+    act1_v2     255 / 255 / 255   gappy
+    black       196 / 197 / 196   gappy
+
+So the renderer produces a full-range image on some captures and a narrow one on
+others, and courtyard does it with a scene surface reaching 37 while act1 does
+not with one reaching 2.19.
+
+THE QUESTION IS NOW: what distinguishes the frames that present a full range
+from the frames that stop at 0.30-0.42? Both classes are gameplay, both go
+through the same passes. Comparing act1 against courtyard pass by pass is a
+comparison of two captures the frame_replay harness can run back to back, which
+is the cheapest form this investigation has ever had.
