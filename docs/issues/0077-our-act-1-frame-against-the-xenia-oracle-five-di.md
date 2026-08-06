@@ -1114,3 +1114,34 @@ a lit skinned mesh -- would be worth more than any further analysis of draw 460,
 because it turns an open question into a differential one. `tools/oracle_lockstep.sh`
 and `tools/capture_gameplay_frame.sh` both reach gameplay; a capture taken where
 the camera clearly shows the player would do it.
+
+### Note (2026-08-06)
+## Attempt to capture a character frame: the walk does not reliably show one
+
+Acting on the note above -- "there is NO working character render to A/B
+against, getting one is worth more than further analysis" -- I captured a fresh
+gameplay frame with stick input driving the camera
+(`GEARS_INPUT_SCRIPT=...,135000:LY+,160000:RX+,175000:LY+`, dumped at guest
+frame 5400). Saved as `scratch/frames/wallcorner.gfr`.
+
+It does NOT contain a character. 350 draws, and its only meshes above 1000
+primitives are 2302-primitive draws whose vertex shader declares 16 constants
+with no bone-matrix rows -- static geometry. The frame is a wall corner: the
+scripted walk pushed the camera into a wall.
+
+Recorded so the next attempt does not repeat it. The scripted walk reaches
+gameplay reliably but does NOT reliably frame the player, and a capture is only
+useful here if a skinned mesh is actually on screen. Two ways to make that
+deterministic rather than lucky:
+
+  * check the capture before using it -- a frame containing a character has a
+    mesh of several thousand primitives whose VS constants include bone-matrix
+    rows (unit xyz, large w). That check is three lines of the diag table plus
+    `GEARS_DRAW_VS_CONSTS`, and it is what this note used to reject this capture
+    in under a minute;
+  * or drive the camera away from walls: `RX-`/`RX+` swings the view, and a
+    capture taken while the camera is turning is far more likely to frame the
+    player than one taken mid-forward-walk.
+
+`bright.gfr` remains the only capture in the tree containing a skinned character
+draw, and it is the one where that draw renders black.
