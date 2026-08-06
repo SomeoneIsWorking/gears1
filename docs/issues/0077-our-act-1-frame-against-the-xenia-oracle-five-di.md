@@ -789,3 +789,77 @@ places shaded draws inside the frustum and killed ones behind the camera.
 THE INSTRUMENT STAYS: `GEARS_DRAW_DEBUG_INTERP` (docs/knobs.md) now carries a
 faithful replication of this material's coordinate chain and its sign-flipped
 control, so any change to the vertex path can be checked against it in one run.
+
+### Note (2026-08-06)
+## CORRECTION: the gate IS the cause. My debug shader was wrong, and it misled three notes.
+
+### The mistake
+
+The debug module computed the material's gate as `saturate(1 - normalize(o2).z)`,
+read 0.32-0.42 on the character, and I recorded the gate as OPEN. That is wrong.
+`ucode_reduce.py`'s FULL reduction (which I truncated at 60 lines and did not
+read to the end) has:
+
+    t42 = (t11 + c254.x)              t11 = normalize(o2).z, c254.x = 0.7
+    t70 = saturate((c254.y - t42))    c254.y = 1
+
+so the gate is
+
+    saturate(c254.y - c254.x - normalize(o2).z) = saturate(0.3 - normalize(o2).z)
+
+I dropped the `+ 0.7` by reading the disassembly listing instead of the
+reduction -- the exact failure `ucode_reduce.py` exists to prevent, in the exact
+way its docstring warns about.
+
+### Measured with the corrected shader
+
+    pixel        REAL gate   normalize(o2).z   the WRONG gate I reported
+    (200,120)      0.000          0.68              0.317
+    (240,180)      0.000          0.31              0.688
+    (300,500)      0.000          0.58              0.421
+    (100,200)      0.000          0.69              0.308
+
+**The gate is EXACTLY ZERO at every character pixel.** It multiplies the whole
+material output, so this alone produces the black character.
+
+### What this retracts
+
+Three notes above are built on "the gate is open, so look downstream":
+
+  * "Both multipliers healthy, the tf1 binding healthy: it is the COORDINATE" --
+    the tf1 and coordinate measurements in it are RIGHT (the ramp really is a
+    horizontal gradient, the coordinate really does land at 1.8-2.0, the binding
+    really does work), but they are not the cause. With the gate at zero the
+    output is zero whatever the lookup returns.
+  * "MECHANISM PROVEN: interpolator o4 arrives NEGATED" -- WITHDRAWN as a cause.
+    The sign-flip experiment did light the RAMP, but the ramp is downstream of a
+    zero. That is also why the two `GEARS_DRAW_PS_CONST_SET` control arms in this
+    session changed nothing: substituting the identity for c0/c1/c2, and negating
+    c3/c4/c5, both moved the coordinate and neither moved the output, because the
+    gate was zero in both arms. Those null results are CONSISTENT with this and
+    were the first sign the coordinate story was wrong.
+  * "o4 is healthy" stands as a fact about o4 and is now beside the point.
+
+The debug shader now emits BOTH forms -- the real gate in R and the old wrong one
+in B -- so this specific error cannot be made again silently.
+
+### Where it actually stands
+
+The character is black because `saturate(0.3 - normalize(o2).z)` is zero, i.e.
+because `normalize(o2).z` measures 0.31-0.69 where it must be below 0.3.
+
+NOT YET ESTABLISHED, and these want opposite fixes:
+  (a) o2 is wrong -- it is an interpolator whose measured LENGTH is >= 4, which
+      is not what a normalised tangent-space vector looks like, so its direction
+      may be wrong too; or
+  (b) o2 is right and this material is a RIM light that is legitimately near-zero
+      facing the camera -- in which case the character's diffuse must come from
+      elsewhere, and draws 655 and 752 (ps 0xd113bf9d8354, 112,984 and 164,528
+      fragments on surface 0x2d0) are the candidates. They shade large areas and
+      were measured NOT to touch the traced silhouette pixels, which is the thing
+      to explain first under this reading.
+
+(b) is testable immediately and cheaply: point `GEARS_DRAW_DEBUG_INTERP` at
+0xd113bf9d8354 and trace where it writes. If those draws are the character's
+diffuse and land somewhere other than the character, that is the real defect and
+draw 460 was never going to light anything.

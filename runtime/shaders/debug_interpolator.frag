@@ -71,7 +71,16 @@ void main() {
     // blend does with it and reads as an answer. Zero length is a real possible
     // finding, so it gets a defined output instead of being hidden.
     float nz = len > 0.0 ? (r2.z / len) : 0.0;
-    float gate = clamp(1.0 - nz, 0.0, 1.0);
+    // THE REAL GATE. An earlier build of this shader computed
+    // saturate(1 - nz) and measured it "open" at 0.32-0.42 -- WRONG, and it
+    // sent three commits after the coordinate instead. ucode_reduce's full
+    // reduction has t42 = nz + c254.x and t70 = saturate(c254.y - t42), i.e.
+    //     gate = saturate(c254.y - c254.x - nz) = saturate(0.3 - nz)
+    // with c254 = (0.7, 1, 0.8, 8). The +0.7 was dropped by reading the listing
+    // instead of the reduction. Both forms are emitted below so the mistake
+    // cannot be repeated silently.
+    float gateWrong = clamp(1.0 - nz, 0.0, 1.0);
+    float gate      = clamp(0.3 - nz, 0.0, 1.0);
 
     // The layer is 0: the translated shader declares its 2D textures as arrays,
     // so a plain 2D sample here would not match the descriptor and the pipeline
@@ -104,5 +113,9 @@ void main() {
     // G = the ramp with the sign flipped (what it would read if o4.x were negative)
     // B = coordX/2, so the coordinate itself is legible: >0.5 here means >1.0,
     //     i.e. clamped past the end of the ramp.
-    OutColor = vec4(rampAsIs, rampFlipped, coordX * 0.5, 1.0);
+    // R = the REAL gate, saturate(0.3 - normalize(o2).z). Zero here IS the bug.
+    // G = normalize(o2).z remapped (0.5 = zero), the value the gate turns on.
+    // B = the old, wrong gate, kept so a run cannot be confused with the
+    //     earlier builds that measured it.
+    OutColor = vec4(gate, nz * 0.5 + 0.5, gateWrong, 1.0);
 }
