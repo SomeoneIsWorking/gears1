@@ -1439,3 +1439,34 @@ reaches 0.80 with p99.9 at 1.0. That was always the separate observation in this
 entry and it is untouched by this -- an exchange cannot change a percentile.
 This entry stays OPEN on that half. #77's missing character and HUD are also
 untouched.
+
+### Note (2026-08-06)
+## The ceiling is localised to three draws, and it is catalog #83 (2026-08-06)
+
+With the channel fault fixed, the remaining half of this entry is now traced end
+to end. `GEARS_DRAW_PIXEL_TRACE=368,247` (the frame's brightest scene pixel,
+named by `GEARS_DRAW_SURFACE_RANGE`), pinned to each surface in turn on
+`walk_gameplay.gfr`:
+
+    surface 0x400   draw 347  (37.09, 30.98, 15.91)   base pass, real HDR
+    surface 0x2d0   draw 615  (37.09, 30.98, 15.91)   carried across intact
+    surface 0x2d0   draw 649  (1, 1, 1)               clamped
+    surface 0x2d0   draw 716  (0.297, 0.297, 0.269)   what we present
+
+End-of-frame surface ranges agree: 0x400 reaches 37.09 with 2.08% of pixels
+above 1.0; 0x2d0 never exceeds 0.33.
+
+So nothing is lost in the scene pass, nothing is lost carrying it to 0x2d0, and
+the range dies at draw 649 -- whose target is FIXED-POINT, where the hardware
+clamps too. That step is faithful. What is missing is what the console does
+NEXT: read those same EDRAM bits under a float layout, where 1.0's bits are
+31.875. That is catalog #83, and this entry's ceiling is now its symptom rather
+than an independent fault.
+
+Also measured: the bloom surface 0x5a0 is no longer identically zero (0..0.05
+after the swizzle fix, where catalog #81 recorded 0 non-black pixels). #81 should
+be re-measured; it may have been a symptom of the same binding fault.
+
+The ceiling is NOT a scale error. Ours mean 0.076 / p99 0.298 against the oracle
+mean 0.095 / p99 0.808: the means nearly agree and only the top end is missing,
+which no global multiplier produces.
