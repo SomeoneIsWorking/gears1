@@ -895,6 +895,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     TB.rtLinkEnabled = !lucent::config::flag("DRAW_NORT");
     TB.texUploadEnabled = texUploadEnabled;
     const bool listDraws = lucent::config::flag("DRAW_FRAME_LIST");
+    // GEARS_DRAW_PS_CONSTS names a pixel shader whose constants to print, and
+    // the printing lives inside the per-draw listing -- so asking for it ALONE
+    // used to produce nothing at all, with no line saying why. It now pulls the
+    // listing in for the draws it names, and only those, rather than requiring
+    // GEARS_DRAW_FRAME_LIST=1 (which prints a line for every draw in the frame).
+    const std::string& psConstsWant = lucent::config::text("DRAW_PS_CONSTS");
+    const uint64_t psConstsHash =
+        psConstsWant.empty() ? 0 : std::strtoull(psConstsWant.c_str(), nullptr, 16);
+    uint32_t psConstsMatched = 0;
 
     // The guest's resolve rectangle and the kCopy decode are in
     // gpu_draw_resolve_decode.{h,cpp}.
@@ -1246,12 +1255,23 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // What this draw fetches, and whether the mirror covers it, is in
         // gpu_draw_vertexfetch.{h,cpp}.
         draw::CollectFetchRanges(R, in, *vsX, *psX, CN, fetchRanges);
-        if (listDraws)
+        const bool psConstsHit = psConstsHash != 0 && d.psHash == psConstsHash;
+        if (psConstsHit)
+            ++psConstsMatched;
+        if (listDraws || psConstsHit)
             draw::ListDraw(R, d, in, *vsX, *psX, UC, issued);
         prepared.push_back(pd);
         msPrepare += sinceStartMs() - prepareBegin;
         ++issued;
     }
+
+    // A HASH THAT MATCHED NOTHING MUST NOT LOOK LIKE A SHADER WITH NO
+    // CONSTANTS. Both print nothing, and the difference is "you asked about a
+    // shader this frame never ran" versus "the constants are all zero".
+    if (psConstsHash != 0 && psConstsMatched == 0)
+        lucent::warn("draw", "GEARS_DRAW_PS_CONSTS={}: NO draw in this frame"
+            " used that pixel shader, so nothing was printed about it. The"
+            " frame issued {} draws", psConstsWant, issued);
 
     // The EDRAM-tiling collapse lives in gpu_draw_untile.{h,cpp}; the reasoning
     // for it, and for what it refuses to do, is on that header.
