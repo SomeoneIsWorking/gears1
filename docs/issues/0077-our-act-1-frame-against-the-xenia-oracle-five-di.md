@@ -2277,3 +2277,35 @@ the ramp) were mine and all three are withdrawn.
 **Read the shader, not knobs.md's description of it** -- and knobs.md's
 `GEARS_DRAW_DEBUG_INTERP` row should be corrected to say the channels are
 whatever the file currently emits, since it is edited per question by design.
+
+### Note (2026-08-06)
+## Attempted the one test of the standing conclusion, and could not complete it
+
+The standing conclusion -- the character has no lit diffuse pass, so this is
+CPU-side -- has never been checked against the reference. The test is direct: if
+the oracle binds the character's vertex shader MORE times per frame than we do,
+the missing draws ARE the answer and it is not CPU-side at all.
+
+Our side, measured and clean:
+
+    bright.gfr          2 draws bind vs 15cbc482459fe5b7
+    black.gfr           2
+    character_auto.gfr  2
+    play_v2.gfr         0  (its character uses different skinned shaders)
+
+Note this REFINES the "six draws" figure quoted elsewhere on this entry: those
+six are across ALL skinned shaders in the frame. This specific character vertex
+shader is bound exactly TWICE, and of those two only one writes colour.
+
+The oracle side is NOT measured. A per-frame bind counter was added to the fork
+(logged at IssueSwap, one integer compare per draw) and built, but three
+successive frame-driven runs failed to produce a reading: the character's shader
+is bound at different points on different runs of the same frame-indexed walk,
+and the runs increasingly hang in shutdown past their timeout. The counter is
+sound; the harness around it is not reliable enough to get an answer today.
+
+**So the standing conclusion remains UNVERIFIED against the reference.** It is
+an inference from our own frame, not a comparison. Anyone continuing here should
+treat "the character has no lit diffuse pass" as the best available reading and
+NOT as established -- the measurement that would settle it is one reliable
+oracle run away, and the instrument for it is already built and in the fork.
