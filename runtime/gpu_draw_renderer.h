@@ -70,7 +70,17 @@ struct StubTex
 // images that cannot see each other's output, which is the same defect one
 // level down from the one this cache exists to fix. Instead each base gets ONE
 // host image in a format wide enough for every format the frame uses there
-// (HostFormatFor below), so a reinterpretation accumulates the way EDRAM does.
+// (HostFormatFor below).
+//
+// That container holds VALUES, and EDRAM holds BITS -- which agree only while
+// the format does not change. When it does, the stored values must be pushed
+// through the console's packing and read back under the new format, or a draw
+// blends against a number the hardware never held: measured on
+// walk_gameplay.gfr, guest draw 649 stores 1.0 into base 0x2d0 as k_2_10_10_10
+// where the console stores the bits 0x3FF, which guest draw 650 reads back as
+// the 7e3 float 31.875 and blends with. gpu_draw_reinterpret.cpp is that
+// conversion; `storageFormat` below is the format the image's contents are
+// currently in.
 //
 // The console also renders each surface in PREDICATED TILES, re-binding the
 // same base once per tile. Tiles therefore ACCUMULATE into that one target: a
@@ -89,6 +99,11 @@ struct SurfaceTarget
     VkFramebuffer fb = VK_NULL_HANDLE;
     bool begunThisFrame = false;
     uint32_t drawsThisFrame = 0;
+    // The guest colour format (in STORAGE form -- see StorageColorFormat) the
+    // image's contents are currently written in, or UINT32_MAX before the
+    // frame's first draw into it. A draw declaring a different one needs the
+    // contents converted first.
+    uint32_t storageFormat = UINT32_MAX;
 };
 
 // A resolve destination: the main-memory address the guest copies an EDRAM
@@ -189,6 +204,16 @@ struct RendererPersistent
     VkPipeline resolvePipeline = VK_NULL_HANDLE;
     VkDescriptorPool resolveDescPool = VK_NULL_HANDLE;
     uint32_t resolveDescCapacity = 0;
+    // EDRAM format reinterpretation: the pass run when a frame re-declares one
+    // base under a different colour format, converting the stored values
+    // through the bits the console would hold. See gpu_draw_reinterpret.cpp.
+    VkShaderModule reinterpretModule = VK_NULL_HANDLE;
+    VkDescriptorSetLayout reinterpretSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout reinterpretLayout = VK_NULL_HANDLE;
+    VkPipeline reinterpretPipeline = VK_NULL_HANDLE;
+    VkDescriptorPool reinterpretDescPool = VK_NULL_HANDLE;
+    uint32_t reinterpretDescCapacity = 0;
+    bool reinterpretSelfTested = false;
     // The DEPTH resolve: its own pipeline, because its source is a sampled
     // image (a depth image cannot be a storage image) rather than a storage one.
     VkShaderModule resolveDepthModule = VK_NULL_HANDLE;

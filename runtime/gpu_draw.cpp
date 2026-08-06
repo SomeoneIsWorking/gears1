@@ -720,6 +720,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // needs, and the resolve compute pipeline -- is in gpu_draw_targets.{h,cpp}.
     draw::RenderTargetCache RT(*this, P, in, W, H, depthFormat, depthView);
     RT.BuildResolvePipeline();
+    // GEARS_DRAW_REINTERP=1: convert a surface's contents when the frame
+    // re-declares its EDRAM base under a different colour format. Off by
+    // default until it is verified against a frame -- see
+    // gpu_draw_reinterpret.cpp for what it is and what it fixes.
+    const bool reinterpretEnabled = lucent::config::flag("DRAW_REINTERP");
+    if (reinterpretEnabled)
+        RT.BuildReinterpretPipeline();
+    // GEARS_DRAW_REINTERP_SELFTEST=1 proves the conversion on this GPU rather
+    // than on paper, once, before the frame it would otherwise silently alter.
+    if (lucent::config::flag("DRAW_REINTERP_SELFTEST") && !P.reinterpretSelfTested)
+    {
+        P.reinterpretSelfTested = true;
+        RT.ReinterpretSelfTest();
+    }
 
     // Descriptor set layouts, pipeline layouts, rectangle geometry shaders and
     // the graphics pipelines are in gpu_draw_pipelines.{h,cpp}.
@@ -884,6 +898,40 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 if (vkAllocateDescriptorSets(device, &dai, RT.resolveDepthSets.data()) != VK_SUCCESS)
                     RT.resolveDepthSets.clear();
             }
+        }
+    }
+
+    // One descriptor set per format reinterpretation. A frame's format changes
+    // are bounded by its draws, but only a handful ever happen (12 on the Act 1
+    // capture's one mixed surface), so the pool is small and grows only if a
+    // frame needs more than the last one did.
+    if (P.reinterpretPipeline != VK_NULL_HANDLE)
+    {
+        const uint32_t want = std::max<uint32_t>(32, plan.drawCount / 8 + 8);
+        if (P.reinterpretDescPool == VK_NULL_HANDLE || P.reinterpretDescCapacity < want)
+        {
+            vkDestroyDescriptorPool(device, P.reinterpretDescPool, nullptr);
+            P.reinterpretDescPool = VK_NULL_HANDLE;
+            const VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, want};
+            VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            pi.maxSets = want;
+            pi.poolSizeCount = 1;
+            pi.pPoolSizes = &ps;
+            if (vkCreateDescriptorPool(device, &pi, nullptr, &P.reinterpretDescPool) == VK_SUCCESS)
+                P.reinterpretDescCapacity = want;
+        }
+        if (P.reinterpretDescPool != VK_NULL_HANDLE)
+        {
+            vkResetDescriptorPool(device, P.reinterpretDescPool, 0);
+            std::vector<VkDescriptorSetLayout> layouts(P.reinterpretDescCapacity,
+                                                       P.reinterpretSetLayout);
+            RT.reinterpretSets.resize(P.reinterpretDescCapacity);
+            VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            ai.descriptorPool = P.reinterpretDescPool;
+            ai.descriptorSetCount = P.reinterpretDescCapacity;
+            ai.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &ai, RT.reinterpretSets.data()) != VK_SUCCESS)
+                RT.reinterpretSets.clear();
         }
     }
 
@@ -1541,8 +1589,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Every surface starts the frame un-begun, so the first draw into each one
     // CLEARS it and every draw after LOADS -- which is how the console's
     // predicated tiles accumulate into one host image per surface.
+    // storageFormat goes with begunThisFrame: a surface whose first use this
+    // frame CLEARS it holds no format's bits yet, so the first draw's format
+    // defines the contents and needs no conversion.
     for (auto& [k, s] : P.surfaceTargets)
-    { s.begunThisFrame = false; s.drawsThisFrame = 0; }
+    { s.begunThisFrame = false; s.drawsThisFrame = 0; s.storageFormat = UINT32_MAX; }
     for (auto& [k, r] : P.resolveTargets)
         r.copies = 0;
 
@@ -1767,6 +1818,26 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             endPass();
             PB.TraceAll(cmd, drawn, lastIssuedPrep, t, base);
         }
+        // The EDRAM base this draw renders into may have been written under a
+        // different colour format, and what is in the host image is VALUES in
+        // that format rather than the console's bits. Convert before the draw
+        // that reads them back -- with no pass open, which is why this sits
+        // above the pass management below rather than inside beginPassOn().
+        if (reinterpretEnabled)
+        {
+            SurfaceTarget* t = nullptr;
+            const uint32_t want = draw::StorageColorFormat(pd.colorFormat);
+            if (RT.GetSurfaceTarget(pd.surfaceBase, t) && t && t->begunThisFrame &&
+                t->storageFormat != UINT32_MAX && t->storageFormat != want)
+            {
+                endPass();
+                RT.ReinterpretSurface(cmd, *t, t->storageFormat, want);
+                // Whether the conversion ran or was refused, the contents are
+                // now read as `want` by every draw after this one; a refusal is
+                // counted and reported, not repeated once per draw.
+                t->storageFormat = want;
+            }
+        }
         // Open a pass if there is none, or re-open on a different surface.
         if (!inPass || openSurface != pd.surfaceBase)
         {
@@ -1775,6 +1846,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (!beginPassOn(pd.surfaceBase))
                 continue;
         }
+        if (openTarget && openTarget->storageFormat == UINT32_MAX)
+            openTarget->storageFormat = draw::StorageColorFormat(pd.colorFormat);
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pd.pipeline);
         vkCmdSetViewport(cmd, 0, 1, &pd.viewport);
         vkCmdSetScissor(cmd, 0, 1, &pd.scissor);
@@ -2625,6 +2698,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         lucent::info("draw", "frame render pass: {} segments across {} surface"
             " switches, {} resolves executed (RT link {})", segments,
             surfaceSwitches, resolvesDone, TB.rtLinkEnabled ? "on" : "off");
+        RT.ReportReinterpretation(reinterpretEnabled);
 
         lucent::info("draw", "scan-out gamma: {}", in.gammaRamp
             ? "the guest's ramp WAS applied to these host pixels (screenshot,"

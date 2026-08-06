@@ -135,6 +135,22 @@ VkFormat HostColorFormat(uint32_t colorFormat)
     }
 }
 
+// Xenia's xenos::GetStorageColorFormat. The two _AS_ formats differ from their
+// base only in BLENDING PRECISION -- the bits in EDRAM are packed identically --
+// so anything asking "did the bit interpretation change" must compare storage
+// formats, not raw ones. Comparing raw ones makes the frame's routine
+// k_2_10_10_10_FLOAT <-> ..._AS_16_16_16_16 alternation look like 20 format
+// changes a frame that are not changes at all.
+uint32_t StorageColorFormat(uint32_t colorFormat)
+{
+    switch (colorFormat)
+    {
+    case 10: return 2;  // k_2_10_10_10_AS_10_10_10_10   -> k_2_10_10_10
+    case 12: return 3;  // k_2_10_10_10_FLOAT_AS_16_16_16_16 -> k_2_10_10_10_FLOAT
+    default: return colorFormat;
+    }
+}
+
 const char* ColorFormatName(uint32_t f)
 {
     switch (f)
