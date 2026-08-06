@@ -214,6 +214,15 @@ void DumpVsConstants(const ShaderXlate& vsX, const UniformCache& uc,
     cl.add("draw {} (diag {}) vs {:#x} float constants ({} vec4s, in the"
            " shader's own packed order):", issued, diagIndex, vsHash,
            vsX.floatCount);
+    // FLUSHED IN CHUNKS. A vertex shader can declare 256 float constants -- a
+    // skinned mesh's bone palette is most of them -- and one Line of that is
+    // ~22 KB, which the sink truncates. A truncated dump reads EXACTLY like a
+    // complete one: this printed 47 of 256 vec4s for the skinned character in
+    // catalog #77 with no indication, and 47 looks like a plausible constant
+    // count, so it was read as "the shader only uses 47" and cost a detour.
+    // Chunked, every constant is shown and each row says which range it covers.
+    constexpr uint32_t kPerLine = 24;
+    uint32_t shown = 0;
     for (uint32_t i = 0;
          i < vsX.floatCount && (i + 1) * 16 <= uc.fVs.size(); ++i)
     {
@@ -222,7 +231,15 @@ void DumpVsConstants(const ShaderXlate& vsX, const UniformCache& uc,
         std::memcpy(b, uc.fVs.data() + size_t(i) * 16, 16);
         cl.add(" c[{}]=({}, {}, {}, {})[{:08x} {:08x} {:08x} {:08x}]",
                i, v[0], v[1], v[2], v[3], b[0], b[1], b[2], b[3]);
+        ++shown;
+        if (shown % kPerLine == 0)
+        {
+            cl.flush(lucent::Level::Info, "draw");
+            cl.add("draw {} (diag {}) vs {:#x} float constants, continued from"
+                   " c[{}]:", issued, diagIndex, vsHash, shown);
+        }
     }
+    cl.add("; {} of {} vec4s shown", shown, vsX.floatCount);
     // The constants the shader DECLARES versus the bytes actually packed for
     // it. If the block is short, the tail the shader reads is not in this dump
     // and a "the transforms are identical" conclusion drawn from it would be
