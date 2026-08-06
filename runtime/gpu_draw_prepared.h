@@ -66,6 +66,11 @@ struct PreparedDraw
     bool hasFragmentStage = false;
     uint32_t colorMask = 0, depthControl = 0, blend0 = 0;
     uint32_t colorFormat = 0;    // RB_COLOR_INFO color_format
+    // RB_COLOR_INFO color_exp_bias, a SIGNED 6-bit exponent the shader's colour
+    // output is multiplied by (2^bias) on the way into EDRAM. It scales what a
+    // draw writes, so a frame that is uniformly too dim or too bright is a
+    // question about this column before it is a question about lighting.
+    int32_t colorExpBias = 0;
     // The state that decides whether a primitive survives to rasterisation,
     // which is where this frame's world geometry dies. Raw, so the table
     // shows what the guest programmed rather than our interpretation of it.

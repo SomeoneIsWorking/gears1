@@ -1197,6 +1197,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pd.depthControl = om.depthControl;
         pd.blend0 = om.blend0;
         pd.colorFormat = (R[0x2001] >> 16) & 0xF;
+        pd.colorExpBias = int32_t((R[0x2001] >> 20) & 0x3F);
+        if (pd.colorExpBias & 0x20)
+            pd.colorExpBias -= 64;
         pd.clipCntl = R[0x2204];
         pd.suScModeCntl = R[0x2205];
         pd.vteCntl = R[0x2206];

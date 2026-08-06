@@ -191,3 +191,33 @@ pass's inputs from those aggregates.
 
 ### Note (2026-08-06)
 Third instrument agrees the bloom surface is empty: GEARS_DRAW_SURFACE_RANGE reports surface 0x5a0 at 0.0000..0.0000 on every channel. And the upstream question this entry handed over now has a measured answer -- surface 0x400, the HDR scene, peaks at 2.19 with 0.19% of pixels above 1.0, where bloom's threshold implies it must reach 8.0. So the scene is real HDR but about 3.7x too dim, which matches the ~3.4x shortfall #62 measures at the other end of the pipeline.
+
+### Note (2026-08-06)
+## CORRECTION: bloom is NOT universally black -- it is act1 that has none
+
+Ran the surface probe over every capture instead of just the one this entry was
+opened on:
+
+    capture      surface 0x5a0 (bloom) max R/G/B
+    act1         0.0000 / 0.0000 / 0.0000        <- this entry
+    act1_now     2.5488 / 0.6196 / 0.1220
+    act1_v2      1.5840 / 0.4075 / 0.0751
+    black        0.0268 / 0.0275 / 0.0258
+    courtyard    0.0500 / 0.0500 / 0.0500
+
+Bloom produces output in three of five captures, and above 1.0 in two of them.
+So the chain works, and "the bloom chain renders entirely black" is wrong as a
+general claim -- it is true of act1 only.
+
+Everything measured about act1 stands: the bright pass thresholds with
+`sgt <sample>, c255.x` at c255.x = 1.0, its input tops out at 0.125, so it
+writes zero. What changes is the reading: on act1 that is bloom CORRECTLY
+finding nothing above the threshold in a dark moment, not a defect.
+
+This entry was opened on a single capture and generalised from it. The
+discriminator existed the whole time -- run the same probe on a capture that
+should bloom -- and running it is what settles it.
+
+Status: not a defect on the evidence available. Left open only because it is
+unknown whether act1's moment SHOULD have bloom; the oracle could answer that
+and has not been asked.
