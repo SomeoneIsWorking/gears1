@@ -1724,3 +1724,47 @@ Recorded so the next session does not spend the hour on it. The localisation
 above stands unchanged: the env ramp lookup returns an exact zero because u
 lands in the ramp's black two thirds, and the open question is still whether u
 is wrong on our side or the interpolator feeding it is.
+
+### Note (2026-08-06)
+## The oracle can now be driven along OUR walk: stick input added to its scripted pad
+
+Every wrong conclusion on this entry -- and there have been several today --
+traces to the same root: our runtime and the oracle were compared at DIFFERENT
+GAME MOMENTS, and there was no way to fix that, because the oracle's scripted
+input driver understood BUTTONS ONLY while the runtime's menu walk uses stick
+deflections (`GEARS_INPUT_SCRIPT`'s `LY+`, `RX+`). The two sides could not be
+given the same walk even in principle.
+
+`tools/xenia_oracle/scripted_input.{h,cc}` now parses stick tokens in the same
+notation as its buttons:
+
+    LY+@135     full deflection, held from 135 s onward
+    RX-@205     the other direction
+    RX0@190     centre that axis
+
+An axis takes the LAST token at or before now and holds it, which is what the
+runtime's script does, so one walk can be written for both sides. A stick change
+bumps the packet number -- a title that polls a pad whose packet number never
+moves treats it as idle however correct the axis values are.
+
+Verified on a 230 s run against the disc, with the runtime's own Act 1 walk
+transcribed token for token:
+
+    START@25,A@30,B@35,A@42,A@50,A@60,A@75,A@90,A@105,A@120,
+    LY+@135,RX+@160,LY+@175,RX0@190,RX-@205
+
+All four stick events fire at their scripted times (135029, 160023, 190004 and
+205000 ms) and the run reaches gameplay. `scratch/oracle/samewalk/frame_0175s.png`
+is **Marcus seen from behind, clearly lit, armour detailed**, in the prison
+corridor -- the ground truth for difference 1, taken from the same walk our own
+runs use.
+
+### What this does NOT yet give, and it should be said plainly
+
+Same WALK is not yet same MOMENT. The two emulations still advance at different
+rates, so at 175 s the oracle is looking at a corridor while our runtime at a
+comparable frame index is against a different wall. This removes the structural
+blocker -- it is now possible to drive both identically -- but closing the
+remaining drift needs the frame-indexed stepping `tools/oracle_lockstep.sh`
+already has (`f<N>:` on our side, `--oracle_by_frame` on theirs), now that the
+stick tokens exist to be stepped.

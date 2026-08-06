@@ -29,12 +29,29 @@ struct ScriptedPress {
   std::chrono::milliseconds at{0};
   std::chrono::milliseconds hold{120};
   std::chrono::milliseconds repeat{0};
+  // A STICK DEFLECTION, not a button. `axis` is 0 for a button press and
+  // otherwise names one of LX/LY/RX/RY; `value` is the signed 16-bit
+  // deflection. Sticks exist here because the runtime's own menu walk uses
+  // them (GEARS_INPUT_SCRIPT's `LY+`, `RX+`) and this driver could only
+  // express buttons -- which meant the two sides could not be driven along the
+  // SAME walk, and every cross-renderer comparison this project has made was
+  // therefore between different game moments. That mismatch is the direct
+  // cause of several wrong conclusions on catalog #77.
+  char axis = 0;      // 0 = button, else 'x'/'y' on 'L' or 'R' (see kAxis*)
+  bool right = false; // which stick, when axis != 0
+  int16_t value = 0;  // signed deflection, held from `at` onward
 };
 
 // Parses "START@25,A@30+1" -- button at second, optionally repeating every N
 // seconds. Returns false and says which token failed rather than silently
 // dropping it: a schedule that quietly lost its only press produces a run that
 // looks like the game ignored input.
+//
+// STICKS use the same notation with an axis name and a sign: "LY+@135",
+// "RX-@205", and "LY0@190" to centre it. A deflection is HELD from its time
+// onward until another token touches the same axis, which is what the
+// runtime's GEARS_INPUT_SCRIPT does, so the same walk can be written for both
+// sides.
 bool ParseInputScript(const std::string& text, std::vector<ScriptedPress>& out,
                       std::string& error_out);
 
@@ -87,6 +104,10 @@ class ScriptedInputDriver final : public xe::hid::InputDriver {
   uint16_t last_buttons_ = 0;
   uint32_t packet_number_ = 1;
   uint32_t presses_reported_ = 0;
+  // Last reported stick state, so a change bumps the packet number. A title
+  // that polls but never sees the packet number move treats the pad as idle,
+  // which is how a correct button mask can still look like ignored input.
+  int16_t last_lx_ = 0, last_ly_ = 0, last_rx_ = 0, last_ry_ = 0;
 };
 
 }  // namespace gears

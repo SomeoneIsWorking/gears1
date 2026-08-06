@@ -59,9 +59,38 @@ bool ParseInputScript(const std::string& text, std::vector<ScriptedPress>& out,
     }
     std::string name = token.substr(0, at);
     std::transform(name.begin(), name.end(), name.begin(), ::toupper);
+
+    // A STICK token: L/R, then X/Y, then +, - or 0. Parsed before the button
+    // table so that an axis name never falls through to "not a button", which
+    // would refuse a perfectly good schedule.
+    bool is_stick = name.size() == 3 && (name[0] == 'L' || name[0] == 'R') &&
+                    (name[1] == 'X' || name[1] == 'Y') &&
+                    (name[2] == '+' || name[2] == '-' || name[2] == '0');
+    if (is_stick) {
+      std::string timing_s = token.substr(at + 1);
+      size_t plus_s = timing_s.find('+');
+      if (plus_s != std::string::npos) {
+        timing_s = timing_s.substr(0, plus_s);
+      }
+      ScriptedPress stick;
+      stick.axis = name[1] == 'X' ? 'x' : 'y';
+      stick.right = name[0] == 'R';
+      // Full deflection. 32767 rather than a partial value because the walk
+      // this mirrors uses a full push, and a smaller one would move the
+      // player a different distance in the same time -- which is exactly the
+      // divergence this feature exists to remove.
+      stick.value = name[2] == '+' ? int16_t(32767)
+                                   : (name[2] == '-' ? int16_t(-32768) : int16_t(0));
+      stick.at = std::chrono::milliseconds(
+          int64_t(std::atof(timing_s.c_str()) * 1000.0));
+      out.push_back(stick);
+      continue;
+    }
+
     auto it = ButtonNames().find(name);
     if (it == ButtonNames().end()) {
-      error_out = "'" + name + "' is not a button this driver knows";
+      error_out = "'" + name + "' is neither a button nor a stick this driver"
+                  " knows (sticks are LX/LY/RX/RY with +, - or 0)";
       return false;
     }
     std::string timing = token.substr(at + 1);
@@ -100,6 +129,9 @@ uint16_t ScriptedInputDriver::ButtonsAt(
     uint64_t tick) const {
   uint16_t buttons = 0;
   for (const ScriptedPress& press : presses_) {
+    if (press.axis != 0) {
+      continue;  // a stick deflection, handled by SticksAt
+    }
     const uint64_t at = static_cast<uint64_t>(press.at.count());
     const uint64_t hold = static_cast<uint64_t>(press.hold.count());
     const uint64_t repeat = static_cast<uint64_t>(press.repeat.count());
@@ -163,9 +195,41 @@ xe::X_RESULT ScriptedInputDriver::GetState(uint32_t user_index,
     }
     last_buttons_ = buttons;
   }
+  // Each axis takes the LAST token at or before now, so a deflection is held
+  // until something changes it -- the same semantics as the runtime's script.
+  int16_t lx = 0, ly = 0, rx = 0, ry = 0;
+  uint64_t best[4] = {0, 0, 0, 0};
+  bool seen[4] = {false, false, false, false};
+  for (const ScriptedPress& press : presses_) {
+    if (press.axis == 0) {
+      continue;
+    }
+    const uint64_t at = static_cast<uint64_t>(press.at.count());
+    if (tick < at) {
+      continue;
+    }
+    const int idx = (press.right ? 2 : 0) + (press.axis == 'y' ? 1 : 0);
+    if (seen[idx] && at < best[idx]) {
+      continue;
+    }
+    seen[idx] = true;
+    best[idx] = at;
+    (idx == 0 ? lx : idx == 1 ? ly : idx == 2 ? rx : ry) = press.value;
+  }
+  if (lx != last_lx_ || ly != last_ly_ || rx != last_rx_ || ry != last_ry_) {
+    ++packet_number_;
+    XELOGI("oracle input: sticks L({},{}) R({},{}) at {} {}", lx, ly, rx, ry,
+           tick, tick_source_ ? "guest frames" : "ms");
+    last_lx_ = lx; last_ly_ = ly; last_rx_ = rx; last_ry_ = ry;
+  }
+
   std::memset(out_state, 0, sizeof(*out_state));
   out_state->packet_number = packet_number_;
   out_state->gamepad.buttons = buttons;
+  out_state->gamepad.thumb_lx = lx;
+  out_state->gamepad.thumb_ly = ly;
+  out_state->gamepad.thumb_rx = rx;
+  out_state->gamepad.thumb_ry = ry;
   return X_ERROR_SUCCESS;
 }
 
