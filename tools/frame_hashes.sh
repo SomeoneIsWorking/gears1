@@ -29,6 +29,7 @@ out=${1:-}
 [[ -x $replay ]] || { echo "build $replay first (ninja -C scratch/build frame_replay)" >&2; exit 1; }
 
 captures=(scratch/frames/*.gfr)
+allblack=()
 # A GLOB THAT MATCHED NOTHING IS A FAILURE, not an empty report. Without this the
 # script prints a header and exits 0, which reads exactly like "everything is
 # unchanged".
@@ -50,5 +51,42 @@ for c in "${captures[@]}"; do
         echo "$(basename "$c")	NO-SCREENSHOT" | emit
         continue
     fi
-    echo "$(basename "$c")	$(sha256sum "$produced" | cut -c1-16)" | emit
+    # AN ALL-BLACK FRAME IS NOT A HASH, IT IS A FAILED RENDER -- and it hashes
+    # just as cleanly as a picture. Two captures that render nothing produce the
+    # SAME hash and this script reported them as an ordinary match: play_v2.gfr
+    # and character_auto.gfr both hashed 847b7f79e03d5c66, which is the hash of
+    # 921600 black pixels. Uniform output is the classic broken-instrument tell,
+    # so it is called out here rather than left for someone to notice that two
+    # unrelated captures agree.
+    black=$(python3 - "$produced" <<'PY'
+import sys
+d = open(sys.argv[1], 'rb').read()
+# P6 header: magic, dimensions, maxval -- three whitespace-separated fields
+# after "P6", then one byte of whitespace, then the pixels.
+i, fields = 2, 0
+while fields < 3 and i < len(d):
+    while i < len(d) and d[i] in b' \t\r\n': i += 1
+    while i < len(d) and d[i] not in b' \t\r\n': i += 1
+    fields += 1
+i += 1
+print("BLACK" if fields == 3 and not any(d[i:]) else "")
+PY
+)
+    if [[ $black == BLACK ]]; then
+        echo "$(basename "$c")	$(sha256sum "$produced" | cut -c1-16)	ALL-BLACK" | emit
+        allblack+=("$(basename "$c")")
+    else
+        echo "$(basename "$c")	$(sha256sum "$produced" | cut -c1-16)" | emit
+    fi
 done
+
+# Said once at the end as well, because a per-row tag scrolls past in a
+# sixteen-capture run and the count is the thing worth reacting to.
+if (( ${#allblack[@]} )); then
+    echo "# ${#allblack[@]} of ${#captures[@]} captures rendered a COMPLETELY BLACK frame:" \
+         "${allblack[*]}" | emit
+    echo "# Their hashes are stable and comparable, so this script's" \
+         "unchanged/changed answer still holds for them -- but a black frame is" \
+         "a rendering failure, not a picture, and two black captures always" \
+         "match each other." | emit
+fi
