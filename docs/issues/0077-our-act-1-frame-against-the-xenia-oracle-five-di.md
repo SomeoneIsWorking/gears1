@@ -1027,3 +1027,69 @@ tree contains no such change.
     any emulator comparison. Cheapest by far if the source can be obtained.
   * Otherwise catalog #84's deterministic guest clock, which unblocks per-draw
     cross-emulator comparison generally -- not just this question.
+
+### Note (2026-08-06)
+## UE3's SOURCE SAYS OUR o2 IS CORRECT. The "negated basis" hypothesis is dead.
+
+With a UE3 checkout available (`GEARS_UE3_SRC`, see docs/native-renderer.md), the
+question that had no reference now has one, and it goes against the last three
+notes.
+
+`Engine/Shaders/LocalVertexFactory.usf:276` -- and, for this mesh, the SKINNED
+factory at `Engine/Shaders/GpuSkinVertexFactory.usf:244`, identically:
+
+    Result.TangentCameraVector = TransformWorldVectorToTangent(
+        Result.TangentToWorld,
+        CameraPositionDS.xyz - CameraLocalWorldPosition.xyz * CameraPositionDS.w);
+
+So UE3's tangent camera vector is:
+
+  * **(CameraPosition - WorldPosition)** -- pointing FROM the surface TO the
+    camera, so its tangent-space z is POSITIVE on a surface facing the viewer;
+  * **UNNORMALISED** -- a difference of positions, so its magnitude is a
+    distance.
+
+Ours measures (-23.47, +13.96, +25.48) with |o2| = 34-65 and
+normalize(o2).z = +0.31..+0.69. That is exactly the sign and exactly the shape
+UE3 specifies. **o2 is right.**
+
+### Consequences, and they are large
+
+  * "o2 arrives negated" and "one upstream sign closes both terms" are WITHDRAWN.
+    The demonstration image `scratch/h38/character_lit.png` remains a true
+    statement that forcing the terms open renders the mesh, and a false one about
+    the cause.
+  * `saturate(0.3 - normalize(o2).z)` is therefore MEANT to be ~0 on surfaces
+    facing the camera. Draw 460 is a RIM / edge term, and it is CORRECTLY dark
+    over the body. It was never the character's diffuse.
+  * So the character's diffuse contribution is genuinely ABSENT from this frame's
+    textured draws, which is a different defect from the one chased all session:
+    a missing or mis-attributed draw, not a wrong value.
+
+### Also tested and NOT the cause: the EDRAM tiling collapse
+
+The collapse drops real draws -- "1 tile group(s) collapsed, 185 replayed draws
+and 2 resolves dropped", 641 of 844 issued -- so it was a good suspect for a
+missing diffuse pass. `GEARS_DRAW_TILED=1` restores them (826 of 844 issued) and
+adds a write to the character pixel at draw 534, but the presented frame is
+statistically identical (R mean 0.0492, p99 0.408, 16.1% black in both arms) and
+the character is still black. Not the cause.
+
+### Where difference 1 actually stands now
+
+The character mesh (6592 primitives, bone palette, real character textures) is
+drawn six times in this frame, and NONE of those draws is a lit diffuse pass:
+
+    177  depth prepass, 0 fragments
+    460  base pass, 144,191 fragments -- the RIM term, correctly ~0
+    655  0x2d0, 112,984 fragments -- module has 0 textures, 0 samplers
+    690  0x2d0, colour mask 0
+    738  0x2d0, 0 fragments
+    752  0x2d0, 164,528 fragments -- same 0-texture module as 655
+
+Next: find what the guest's diffuse pass for this mesh looks like and whether it
+is in the capture at all. `Engine/Shaders/BasePassPixelShader.usf` and
+`MaterialTemplate.usf` now say what a lit UE3 base pass binds and outputs, which
+is the reference this question lacked. If no such draw exists in the stream, the
+defect is upstream of the renderer entirely -- and that is a CPU-side question,
+not a GPU one.
