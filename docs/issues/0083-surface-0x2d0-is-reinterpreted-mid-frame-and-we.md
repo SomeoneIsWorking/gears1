@@ -76,3 +76,32 @@ the hardware only reinterprets on a READ.
 Next: the Xenia oracle renders this scene with a faithful per-(base, format) RT
 cache. If its frame at the same moment is not blown out, the fault is upstream
 of the reinterpretation, and #62 and #81 are the places to look.
+
+### Note (2026-08-06)
+## The oracle answers the open question: the pass amplifies, it does not invent
+
+`scratch/oracle/compare/theirs/frame_0210s.png` is Xenia at the same Act 1 wall.
+Xenia keys render targets on (base, format) and performs exactly this
+reinterpretation as an ownership transfer -- it is the code this pass is ported
+from -- and its frame is DARK and correctly exposed: mean 22.1, 24,497 distinct
+colours (catalog #77). Nothing saturates except the sky inside the window
+frames.
+
+So a faithful reinterpretation is compatible with a correct picture, and our
+blow-out is not the mechanism being wrong. It is the mechanism multiplying
+something we already get wrong upstream: catalog #77 measures our frame as
+BRIGHTER than the oracle's with a third of the colour variety even with the
+pass OFF (mean 30.3 vs 22.1, 6,711 colours vs 24,497) -- the signature of a
+flattened tonemap. Any pixel that reaches 1.0 under a fixed-point format becomes
+31.875 to the next draw that blends, so a flattened tonemap and this pass
+together produce exactly the white slabs seen.
+
+Caveat on the strength of this: the two frames are different moments (#77 says
+why no pixel metric is quoted between them). "Not blown out" survives that; a
+per-pixel claim would not.
+
+CONSEQUENCE FOR ORDER OF WORK. #62 (colour flatness) and #81 (black bloom) are
+upstream of this, and the R/G 0.769 -> 0.999 result says #62's frame-wide red
+deficit is at least partly a symptom of the missing reinterpretation rather than
+an independent fault. The pass should be re-measured after the post chain is
+right, not turned on to fix the post chain.
