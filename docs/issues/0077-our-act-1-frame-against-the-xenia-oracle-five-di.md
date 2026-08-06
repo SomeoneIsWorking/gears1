@@ -3454,3 +3454,89 @@ comparable today, and both AGREE:
 Making our side dump per-resolve rather than per-target is the bounded piece of
 work that turns every one of this frame's eighteen resolves into a paired
 comparison, and it is on our side of the fence.
+
+### Note (2026-08-06)
+### Note (2026-08-06, same session, continued)
+## All eighteen resolves now pair across both sides. One row is a real lead.
+
+Our renderer dumped resolve destinations per TARGET (last write wins) while the
+oracle probes per RESOLVE, so only two of eighteen were comparable. Both sides
+now snapshot per resolve -- `GEARS_DRAW_RESOLVE_DUMP_EACH=1` on our side -- and
+`tools/resolve_pair.py <capture.gfr> <ours.log> <oracle.log>` pairs them.
+
+**They must be paired by DRAW INDEX, not by position.** Our renderer executes 14
+of this frame's 18 copy draws, so "resolve 3" is a different resolve on each
+side and lining the lists up by position compares unrelated buffers while
+looking authoritative. The tool refuses when the counts disagree.
+
+    orc# draw  dest     kind |  oracle  mean |   ours    max | verdict
+       0  461  0BDF0000 color|   18.4%  13.6 |  86.1%  3.625 | WE HAVE MORE
+       1  462  0BA50000 depth|   74.8% 104.3 |     --        | depth: blind spot
+       2  648  0C2F0000 color|   62.4%  38.5 |     --        | not executed by us
+       3  649  0BCD0000 depth|   69.5%  98.2 |     --        | depth: blind spot
+       4  653  0CB91000 color|    0.0%   0.0 |   0.0%  0.000 | agree
+       5  682  0BDF0000 color|    0.7%   0.5 |  83.9%  0.977 | oracle empty (#79)
+       6  731  0C520000 depth|   58.6% 136.4 |     --        | depth: blind spot
+       7  740  0C7F9000 color|   84.3% 215.1 |  28.9%  0.977 | ORACLE HAS MORE
+       8  754  0BDF0000 color|    1.3%   1.0 |  83.9%  0.977 | oracle empty (#79)
+       9  756  0C7F9000 color|    0.0%   0.0 |  83.9%  0.977 | oracle empty (#79)
+      10  758  0BDF0000 color|    0.4%   0.3 |  83.9%  3.625 | oracle empty (#79)
+      11  779  0BDF0000 color|    0.4%   0.3 |  83.9%  3.625 | oracle empty (#79)
+      12  780  0BDF0000 color|    0.4%   0.3 |  83.9%  3.625 | oracle empty (#79)
+      13  810  006E4000 color|    1.9%   4.3 |   0.8%  0.695 | agree
+      14  812  006E4000 color|    1.9%   4.3 |   0.9%  0.562 | agree
+      15  814  006E4000 color|    1.9%   4.3 |   1.1%  0.457 | agree
+      16  816  0C7F9000 color|    0.0%   0.0 |  83.9%  1.000 | oracle empty (#79)
+      17  843  00311000 color|    0.0%   0.0 |  84.0%  1.000 | oracle empty (#79)
+
+### Reading it honestly, row class by row class
+
+  * **8 rows say nothing about us.** The oracle reads ~0 because #79's playback
+    defect empties its late resolves. Not evidence.
+  * **3 depth rows are a BLIND SPOT, not a gap.** Our renderer reports "frame
+    depth resolves: 0 executed" and still has content at those destinations --
+    the deferred passes sample them as k_24_8_FLOAT through a decode path that
+    never calls `ResolveSurfaceTo`, which is the only place the per-resolve dump
+    hooks. Do not read these as missing resolves.
+  * **Row 2 (draw 648) we genuinely do not execute**, and that is by design: the
+    untile collapse drops tile 2's colour and depth resolves ("2 resolves
+    dropped") because it has already merged both tiles into one host image.
+  * **Row 0 (draw 461) "WE HAVE MORE" is the same tiling difference.** The
+    oracle resolves tile 1 only; we resolve the collapsed whole frame.
+  * **4 rows agree**, including the one both sides render EMPTY (0CB91000).
+
+### The one row that is a real lead: draw 740
+
+Row 7 is the only pairing where both sides executed the resolve, the oracle's
+number is trustworthy (#7 is the LAST resolve that lands before #79's defect
+starts emptying them), and the two disagree grossly:
+
+    oracle  84.3% non-zero, mean 215/255
+    ours    28.9% non-zero, max 0.977, coverage bbox y 0..556, x 306..974
+
+And our own next resolve of the SAME address, sixteen draws later at 756, reads
+83.9% over the full frame. So our content arrives LATE relative to the oracle's:
+at draw 740 the oracle's scene target is already ~84% covered and ours is ~29%,
+and ours only reaches ~84% by draw 756.
+
+`scratch/oracle/deltatest/ours_each/resolve_03_0c7f9000_draw740_x4.png` shows
+what we do have there, and it is reassuring about everything except coverage:
+the SAME brick wall, the same three windows, the same camera and the same
+geometry as the oracle's own render of this capture. Geometry, textures and
+camera agree. What differs is that our background is exactly zero where the
+oracle's is not.
+
+**Caveat before anyone spends a session on it:** the two percentages are
+different metrics (the oracle counts non-zero BYTES over the tiled destination,
+ours non-zero COMPONENTS over the untiled RGB image). A 3x gross difference is
+worth chasing; the exact numbers are not comparable to a point.
+
+### Instrument caveat found on the way
+
+`--present resolve:7` renders UNIFORMLY WHITE (every channel exactly 1.0) even
+though the underlying bytes have mean 215, not 255. `--present resolve:0` from
+the same run renders a real, non-uniform picture. So the fetch descriptor
+`fetch_from_resolve` builds is not right for every destination format -- it
+casts ColorFormat straight onto TextureFormat, which is what Xenia does, but a
+float destination presented that way saturates. **Do not read a uniformly white
+resolve image as content.** Recorded against instrument I023.

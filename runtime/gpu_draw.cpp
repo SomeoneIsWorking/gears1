@@ -1603,6 +1603,74 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     for (auto& [k, r] : P.resolveTargets)
         r.copies = 0;
 
+    // WHERE A RESOLVE'S PIXELS GO, PER RESOLVE RATHER THAN PER DESTINATION.
+    //
+    // GEARS_DRAW_RESOLVE_DUMP writes each destination ONCE, after the frame, so
+    // an address resolved six times is reported only in its LAST state. The
+    // oracle probes per resolve (Xenia fork, GEARS_PROBE_AFTER_RESOLVE), and
+    // catalog #79 measures that a frame's late resolves overwrite what its early
+    // ones wrote -- so per-target against per-resolve compares two different
+    // moments while looking like a like-for-like comparison. Of this frame's
+    // eighteen resolves exactly two were comparable.
+    //
+    // GEARS_DRAW_RESOLVE_DUMP_EACH=1 snapshots the destination immediately after
+    // every resolve executes, numbered in the same order the oracle's IssueCopy
+    // log numbers them, so resolve N pairs with resolve N.
+    struct ResolveDump
+    {
+        uint32_t base, w, h;
+        bool isDepth;
+        VkBuffer buf;
+        VkDeviceMemory mem;
+        uint32_t ordinal;    // UINT32_MAX for the post-frame per-target dump
+        uint32_t drawIndex;
+    };
+    std::vector<ResolveDump> resolveDumps;
+    const bool dumpEachResolve = lucent::config::flag("DRAW_RESOLVE_DUMP_EACH");
+    uint32_t resolveOrdinal = 0;
+    // Records a copy of `r`'s image into a fresh readback buffer. Returns false
+    // when it could not, and the caller COUNTS those -- a resolve missing from
+    // the output and a resolve that wrote nothing must not look the same.
+    uint32_t resolveSnapshotsFailed = 0;
+    auto snapshotResolveTarget = [&](const draw::ResolveTarget& r, uint32_t ordinal,
+                                     uint32_t drawIndex) -> bool
+    {
+        if (r.image == VK_NULL_HANDLE || r.width == 0 || r.imageHeight == 0)
+            return false;
+        const uint32_t bpp = r.isDepth ? 4u : 8u;
+        const VkDeviceSize bytes = VkDeviceSize(r.width) * r.imageHeight * bpp;
+        VkBuffer b = VK_NULL_HANDLE; VkDeviceMemory m = VK_NULL_HANDLE;
+        if (!MakeBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m, true))
+            return false;
+        // The destination image sits in SHADER_READ_ONLY between resolves, which
+        // is the layout the post passes sample it in.
+        VkImageMemoryBarrier tb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        tb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        tb.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        tb.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        tb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        tb.srcQueueFamilyIndex = tb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        tb.image = r.image;
+        tb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &tb);
+        VkBufferImageCopy rg{};
+        rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        rg.imageExtent = {r.width, r.imageHeight, 1};
+        vkCmdCopyImageToBuffer(cmd, r.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            b, 1, &rg);
+        VkImageMemoryBarrier rb2 = tb;
+        rb2.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        rb2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        rb2.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        rb2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb2);
+        resolveDumps.push_back({r.base, r.width, r.imageHeight, r.isDepth, b, m,
+                                ordinal, drawIndex});
+        return true;
+    };
+
     // GEARS_DRAW_ONLY=<index>: emit only that one draw, over the clear colour.
     // A DIAGNOSTIC control arm: it shows what a single draw's shader produces
     // without anything before it having painted the target, which is the only
@@ -1790,6 +1858,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             RT.ResolveSurfaceTo(cmd, src->second, dst->second, pd.resolveSrcRect,
                              pd.resolveDstX, pd.resolveDstY, pd.resolveScale,
                              pd.resolveSwapRB);
+            // Snapshot BEFORE the next resolve can touch this destination. The
+            // ordinal advances whether or not the snapshot succeeds, so the
+            // numbering keeps matching the oracle's even when one copy fails.
+            if (dumpEachResolve &&
+                !snapshotResolveTarget(dst->second, resolveOrdinal, pd.diagIndex))
+                ++resolveSnapshotsFailed;
+            ++resolveOrdinal;
             doDepthClear();
             ++resolvesDone;
             continue;
@@ -2212,8 +2287,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // isDepth decides how the bytes are READ back. Getting this wrong does not
     // fail -- it silently reports 0.000 for every depth target, which is
     // indistinguishable from "the resolve wrote nothing".
-    struct ResolveDump { uint32_t base, w, h; bool isDepth; VkBuffer buf; VkDeviceMemory mem; };
-    std::vector<ResolveDump> resolveDumps;
     if (lucent::config::flag("DRAW_RESOLVE_DUMP"))
     {
         for (auto& [k, r] : P.resolveTargets)
@@ -2247,7 +2320,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             rb2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb2);
-            resolveDumps.push_back({r.base, r.width, r.imageHeight, r.isDepth, b, m});
+            resolveDumps.push_back({r.base, r.width, r.imageHeight, r.isDepth, b, m, UINT32_MAX, 0});
         }
     }
 
@@ -2454,7 +2527,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             const std::filesystem::path out =
                 (dir ? std::filesystem::path(dir)
                      : std::filesystem::path("scratch/screenshots")) /
-                std::format("resolve_{:08x}.ppm", rd.base);
+                // A per-resolve snapshot is named by its ORDINAL FIRST, so the
+                // files sort in the order the oracle's IssueCopy log lists them
+                // and resolve N pairs with resolve N by filename alone.
+                (rd.ordinal == UINT32_MAX
+                     ? std::format("resolve_{:08x}.ppm", rd.base)
+                     : std::format("resolve_{:02}_{:08x}_draw{}.ppm",
+                                   rd.ordinal, rd.base, rd.drawIndex));
             if (WritePpm(out, rgba.data(), rd.w, rd.h))
             {
                 const double lo = samples ? minSeen : 0.0;
@@ -2500,6 +2579,44 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
         vkDestroyBuffer(device, rd.buf, nullptr);
         vkFreeMemory(device, rd.mem, nullptr);
+    }
+    // ALWAYS, when the knob is on, including when nothing was captured. Silence
+    // here would mean "the frame performs no resolves" and "every snapshot
+    // failed" print the same way -- and the second is an instrument failure
+    // being read as a fact about the frame.
+    if (dumpEachResolve)
+    {
+        const size_t taken = std::count_if(resolveDumps.begin(), resolveDumps.end(),
+            [](const ResolveDump& d) { return d.ordinal != UINT32_MAX; });
+        lucent::Line rl;
+        rl.add("per-resolve snapshots: {} captured, of {} resolves this renderer"
+               " EXECUTED and {} copy draws the frame CONTAINS", taken,
+               resolveOrdinal, resolves.size());
+        if (resolveSnapshotsFailed)
+            rl.add("; {} FAILED to allocate a readback buffer and are MISSING"
+                   " from the output -- a gap is that, not a resolve that wrote"
+                   " nothing", resolveSnapshotsFailed);
+        // THE ORDINAL IS OURS, NOT THE ORACLE'S, and saying otherwise would be
+        // worse than saying nothing. This renderer skips copy draws the oracle
+        // performs -- depth resolves go down another path, and the untile
+        // collapse drops a tile's worth -- so on bright.gfr we execute 14 where
+        // Xenia executes 18 and ordinal 3 is a DIFFERENT resolve on each side.
+        // PAIR BY THE DRAW INDEX in the filename: the oracle's Nth IssueCopy is
+        // the Nth copy draw of the capture, which `gfr_to_xtr.py` lists with
+        // its draw index.
+        if (resolves.size() != size_t(resolveOrdinal))
+            rl.add(". These ordinals are THIS RENDERER'S execution order and do"
+                   " NOT match the oracle's, because {} copy draw(s) were not"
+                   " executed here. Pair by the draw index in the filename",
+                   resolves.size() - size_t(resolveOrdinal));
+        else
+            rl.add(". Every copy draw was executed, so these ordinals match the"
+                   " oracle's IssueCopy order; pair by the draw index anyway");
+        rl.flush(lucent::Level::Info, "draw");
+        if (resolveOrdinal == 0)
+            lucent::warn("draw", "GEARS_DRAW_RESOLVE_DUMP_EACH is on but this"
+                " frame executed NO resolves, so nothing was captured and this"
+                " run says nothing about any resolve");
     }
 
     DS.Report(drawn, prepared);

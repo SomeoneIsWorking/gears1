@@ -220,6 +220,15 @@ for resolve, so this is Xenia trace playback and not our converter. Probe it wit
 alone (I014) only samples at the swap and reports a false negative for every
 destination a later resolve has since emptied.
 
+Both sides now snapshot **per resolve**: `GEARS_DRAW_RESOLVE_DUMP_EACH=1` on
+ours, `GEARS_PROBE_AFTER_RESOLVE=1` on the oracle's, and
+`tools/resolve_pair.py <capture.gfr> <ours.log> <oracle.log>` pairs all eighteen
+of `bright.gfr`'s copy draws. **Pair by DRAW INDEX, never by position** — our
+renderer executes 14 of the 18, so position-pairing compares unrelated buffers;
+the tool refuses when the counts disagree. It also labels the classes that say
+nothing (the oracle's own emptied late resolves, and the depth resolves our dump
+structurally cannot see).
+
 `--regs delta` emits only the registers that changed since the previous draw
 (393x fewer writes); more faithful to a real command stream, and measured NOT to
 be the cause of the black composite.
