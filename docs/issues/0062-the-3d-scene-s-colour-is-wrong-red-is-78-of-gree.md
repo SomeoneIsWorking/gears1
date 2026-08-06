@@ -665,3 +665,60 @@ from a summary statistic that could not see what I was asking it. Max cannot
 distinguish "a bright image" from "a dark image with one lamp in it". Every
 brightness claim here should quote a PERCENTILE, and `tools/frame_stats.py`
 already reports p99 and p99.9 -- I stopped using it and went back to max.
+
+### Note (2026-08-06)
+## LOCALISED TO ONE DRAW BOUNDARY: RGB clamped to exactly 1.0, alpha untouched
+
+On `scratch/frames/walk_gameplay.gfr` (defect class, 744 draws), the surface
+probe now reports WHERE its maximum is, so a pixel trace can be aimed instead of
+guessed:
+
+    surface 0x400 brightest pixel is (368,247) at 37.0938
+
+Following that pixel on surface 0x2d0 (`GEARS_DRAW_SURFACE=0x2d0
+GEARS_DRAW_PIXEL_TRACE=368,247`), in the surface's own format:
+
+    after   2 draws  (0, 0, 0, 0)                          <- draw   1
+    after 437 draws  (37.09375, 30.984375, 15.90625, 0.125) <- draw 612
+    after 468 draws  (1, 1, 1, 0.125)                       <- draw 643
+    after 527 draws  (0.29711914, 0.29711914, 0.2685547, 0) <- draw 702
+    after 528 draws  (0.2685547, 0.29711914, 0.29711914, 0) <- draw 703
+
+**The full HDR scene value reaches surface 0x2d0 intact** -- 37.09, the same
+number the scene surface holds. And between the samples either side of draw 643
+it becomes exactly (1, 1, 1) with **alpha preserved at 0.125**.
+
+That signature is the useful part. It is not a shader writing white (alpha would
+change), not a clear (alpha would change), and not a tonemap (it would not land
+on exactly 1.0 in all three channels). It is an RGB-only clamp to [0,1].
+
+## And draw 643 cannot be the one writing it
+
+    draw 643  surface 0x2d0  color_fmt 0  color_mask 0  verdict colour_fully_masked
+              triangle_list, 4248 indices, 2278 fragment invocations, blend off
+              viewport and scissor 422x422
+
+`color_mask 0` means no colour channel is written, and the pipeline HONOURS it
+(`gpu_draw_pipelines.cpp` maps the mask bits to `colorWriteMask`, so zero writes
+nothing). The column is real, not a stuck value: across the frame it is 0 on 314
+draws, 15 on 237 and 7 on one, and exactly three draws are classified
+`colour_fully_masked` -- 612, 643 and 644, which are the three the trace names.
+
+So the clamp is NOT draw 643's colour output. Something at that boundary rewrote
+RGB and left alpha alone.
+
+## What to look at next, in order
+
+  1. The render-pass SPLIT. This renderer ends and resumes the pass around draws
+     that sample the rendered RT, copying colour into a separate image
+     (`copyColorToImage`, `renderPassLoad`). A copy through an 8888 view would
+     clamp RGB and could leave alpha, and the split points are exactly draw
+     boundaries.
+  2. Surface 0x2d0 is the WIDENED one -- five guest formats in one float16 host
+     image -- and draw 643's guest format is k_8_8_8_8 while draw 612's is
+     k_2_10_10_10_FLOAT. A reinterpretation between those two is the frontier's
+     long-listed and never-tested candidate (draw-backend-rt, gap 1).
+  3. Our own per-draw guest clamp (`GuestColorFormatClamp`) produces exactly
+     this shape for a k_8_8_8_8 target on a widened surface -- but it is applied
+     in the pixel shader, and a masked draw's shader output goes nowhere, so it
+     should not be reachable here. Worth confirming rather than assuming.
