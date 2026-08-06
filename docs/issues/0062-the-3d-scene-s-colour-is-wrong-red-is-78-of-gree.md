@@ -1371,3 +1371,71 @@ over a blue background: those glyphs are drawn AFTER this pass (menu.gfr draw 14
 paints over draw 78 in the same pixel trace), so a whole-frame scanout exchange
 would turn the B button blue. It is red. Both cannot be right, so measure the
 microcode rather than choosing.
+
+### Note (2026-08-06)
+## FIXED: resolve-target bindings ignored the guest's fetch SWIZZLE (2026-08-06)
+
+### The root cause, both halves named
+
+A resolve destination is written with `RB_COPY_DEST_INFO.copy_dest_swap`
+applied -- our resolve pass does that, faithfully, and bakes it into the
+destination's host image. On the hardware the consumer's texture fetch constant
+carries the SWIZZLE that reads those bytes back, and the two cancel.
+
+We only ever did the first half. `TextureBinder::SelectView` served every
+resolve-target binding the destination's own `view`, created with no
+`VkComponentMapping` at all (gpu_draw_targets.cpp ~294), while the guest-texture
+path next to it composes the fetch swizzle and puts it on the view
+(gpu_draw_textures.cpp ~263). So the swap went in and never came out.
+
+Measured, on `scratch/frames/menu.gfr`, with the swizzle now printed per binding
+(`GEARS_DRAW_TEX_BINDS`, new column):
+
+    fc0 base 0xc7f9000 swizzle ZYXW (0x60a) -> this frame's RESOLVE TARGET
+    fc1 base 0xba50000 swizzle XYZW (0x688) -> this frame's RESOLVE TARGET
+    fc2 base 0xcb91000 swizzle XY11 (0xb48) -> this frame's RESOLVE TARGET
+
+The guest asks for ZYXW on the scene colour and XYZW on depth IN THE SAME DRAW.
+That is what makes this a real fix rather than the NOSWAP knob: the swizzle is
+per BINDING, so switching the resolve swap off globally would happen to correct
+this draw and corrupt any binding whose swizzle is not the cancelling one.
+
+### The fix
+
+`TextureUploader::ResolveTargetView(rt, guestSwizzle)` -- one cached sampled
+view per distinct swizzle on the target, component mapping straight from the
+guest swizzle (a resolve target's host image is canonical RGBA, so unlike a
+guest texture there is no host-format order to compose with). Identity goes
+through the SAME path rather than short-circuiting on a separate one. A depth
+destination (R32, one component) refuses and WARNS instead of silently serving
+the unmapped view, and a view that fails to create warns rather than falling
+back to the defect.
+
+### Result
+
+    menu.gfr        R/G 0.755 B/G 2.675  ->  R/G 2.675 B/G 0.755
+    walk_gameplay   R/G 0.771 B/G 0.962  ->  R/G 0.9937 B/G 0.7687
+    oracle, Act 1                            R/G 0.9882 B/G 0.7237
+
+**This entry's headline -- "red is 78% of green frame-wide" -- is gone.** The
+title screen renders in Gears red (`scratch/oq14/fixed_menu.png`).
+`chroma_compare` now puts our gameplay frame against the oracle at IDENTITY,
+0.010-0.017, inside the same-renderer null band; before the fix identity was
+0.064-0.086 and only an R/B exchange fitted.
+
+### Gates
+
+  * `tools/validate_all.sh`: PASS, all 7 captures, only the known point-list VUID.
+  * `tools/verify_native_pass.sh`: PASS -- 3 native substitutions bit-exact
+    (mean |difference| 0.0000 over 2,764,800 samples), interface arm clean, and
+    the negative control still reports a difference.
+  * `tools/frame_hashes.sh`: every hash changed, which is the intended effect;
+    new baseline recorded in this commit.
+
+### WHAT IS NOT FIXED
+
+The CEILING. `walk_gameplay` still tops out at p99 0.298 where the oracle
+reaches 0.80 with p99.9 at 1.0. That was always the separate observation in this
+entry and it is untouched by this -- an exchange cannot change a percentile.
+This entry stays OPEN on that half. #77's missing character and HUD are also
+untouched.
