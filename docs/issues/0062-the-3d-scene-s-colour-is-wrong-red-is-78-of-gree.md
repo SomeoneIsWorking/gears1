@@ -541,3 +541,54 @@ from the frames that stop at 0.30-0.42? Both classes are gameplay, both go
 through the same passes. Comparing act1 against courtyard pass by pass is a
 comparison of two captures the frame_replay harness can run back to back, which
 is the cheapest form this investigation has ever had.
+
+### Note (2026-08-06)
+## THE WALK, BOTH SIDES, EVERY FRAME -- this is real and it is consistent (2026-08-06)
+
+The previous notes compared one frame against one frame, which is why the
+"3.5x" reading did not survive. Comparing every frame of the same scripted walk,
+green channel, from `scratch/oracle/compare`:
+
+    OURS                                        ORACLE
+    frame_00900  max 255  p99 121  p99.9 196    0030s  max 255  p99  48  p99.9 189
+    frame_01800  max  76  p99  67  p99.9  75    0060s  max 254  p99  23  p99.9  75
+    frame_02700  max 197  p99  16  p99.9 189    0090s  max 146  p99   9  p99.9  37
+    frame_03600  max  76  p99  75  p99.9  75    0120s  max 255  p99 137  p99.9 197
+    frame_04500  max  76  p99  75  p99.9  75    0150s  max 255  p99 198  p99.9 254
+    frame_05400  max  76  p99  75  p99.9  75    0180s  max 255  p99 185  p99.9 254
+    frame_06300  max  76  p99  75  p99.9  75    0210s  max 255  p99 199  p99.9 254
+                                                0240s  max 255  p99 178  p99.9 254
+
+FIVE CONSECUTIVE GAMEPLAY FRAMES OF OURS TOP OUT AT 76, with p99.9 at 75 -- so
+essentially every pixel is below 76 and there is nothing in the top 70% of the
+byte. Every gameplay frame on the oracle's side reaches 255 with p99 between 137
+and 199.
+
+This is not moment-specific and it is not one unlucky pair. It is every
+gameplay frame on one side against every gameplay frame on the other, from the
+same scripted walk.
+
+And it agrees with this entry's founding observation rather than contradicting
+it: our EARLY frames (00900 at max 255, 02700 at 197) are the menu and the
+loading screens, and they behave like the oracle's early frames. The defect is
+specific to the deferred gameplay path.
+
+So the retraction above stands (there is no global 3.5x scale, and act1's dark
+scene was not evidence of one), and the entry's core is now on much stronger
+footing than it has ever been: a whole-walk comparison against a trusted oracle
+rather than a single frame pair.
+
+## The final tonemap's inputs, and one thing NOT to chase
+
+`GEARS_DRAW_TEX_BINDS=629226076307234e` -- the last full-screen pass before the
+front-buffer resolve, and the same shader in both captures:
+
+    fc0 -> 0xc7e9000  (the composite)   exp_adjust +0
+    fc1 -> 0xba40000  (depth)           exp_adjust +0
+    fc2 -> 0xcb81000  ALL ZERO          exp_adjust +0
+
+fc2 is entirely black -- it resolves surface 0x2d0 immediately after a clear.
+That looks like a lead and is NOT one: courtyard's equivalent target
+(0xcb91000) is equally all-zero, and courtyard presents a FULL 255 range. A
+black fc2 is therefore common to both classes and cannot be what separates them.
+Recorded so the next session does not spend an hour on it.
