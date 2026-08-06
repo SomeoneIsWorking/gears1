@@ -1768,3 +1768,70 @@ blocker -- it is now possible to drive both identically -- but closing the
 remaining drift needs the frame-indexed stepping `tools/oracle_lockstep.sh`
 already has (`f<N>:` on our side, `--oracle_by_frame` on theirs), now that the
 stick tokens exist to be stepped.
+
+### Note (2026-08-06)
+## Every link in the character's shading chain verified against Xenia -- and it is still black
+
+The localisation above pointed at either our computation of the env-ramp u or
+the interpolator feeding it. I have now checked every link between the vertex
+buffer and that fetch. All of them match Xenia. Recorded in full so the next
+session starts past them rather than through them.
+
+    vertex fetch normalisation   The tangent frame is fetched as FMT_8_8_8_8
+                                 NumFormat=INTEGER, and the VS decodes it with
+                                 c254.y = 0.007843138 = 2/255 and c255.z = -1,
+                                 i.e. raw*(2/255)-1. That only lands in [-1,1]
+                                 if the fetch delivers 0..255 rather than
+                                 0..1 -- and Xenia's translator skips
+                                 normalisation exactly when is_integer is set
+                                 (spirv_shader_translator_fetch.cc:297,408).
+                                 Measured: 0x00a95110 -> (16,81,169) -> a unit
+                                 vector, length 1.0016.
+    VS decode constants          c254 = (0.5, 2/255, 2, 0), c255 = (0, 1, -1, 3).
+                                 Read out, not assumed.
+    interpolator mask            GEARS_DRAW_SPV_DUMP names each module by its
+                                 modification: vs ...003f and ps ...0030003f.
+                                 Mask 0x3f = all six interpolators exchanged,
+                                 so o2 IS passed.
+    param_gen                    Our derivation is a verbatim port of Xenia's
+                                 IssueDraw, including param_gen_pos, which is
+                                 what would shift every interpolator by one if
+                                 it were wrong.
+    PS constants                 All ten identified and sane: c253 = (2,-1,0,0)
+                                 is the normal-map decode, c255.xyz =
+                                 (0.11, 0.3, 0.59) are luminance weights,
+                                 c3/c4/c5 an orthonormal basis.
+    textures                     Normal map decodes to a correct tangent-space
+                                 map, diffuse 97.8% non-zero, env ramp real.
+    texture signs / gamma        Measured: 2.4x on the character, not the cause.
+    clamp mode                   From Xenia's own GetClampModesForDimension.
+    draws dropped                Zero, on all four paths, counted.
+
+### The gap, now measured at the SAME WALK
+
+With stick input added to the oracle (see the note above), both sides can run
+the runtime's own Act 1 walk. At 175 s the oracle shows Marcus from behind:
+
+    ORACLE character region   max 254   mean 17.5   non-black 100.0%
+    OURS                      max  17   mean  1.81  non-black  46.1%
+
+Roughly a factor of ten, and ours is not merely dim -- over half its pixels are
+exactly zero. This is not a tonemap difference.
+
+### What is left
+
+Only the vertex shader's own 440-instruction body, i.e. whether our translated
+VS computes the same o2 as the console given inputs now shown to be identical.
+It is translated by Xenia's own translator, which is why every plumbing check
+above passes; so the remaining candidates are narrow and specific:
+
+  * the bone-palette dynamic-addressing path in the SPIR-V backend, which is
+    the one construct this shader uses that ordinary geometry does not (it is
+    also what `float_dynamic_addressing`, added today for the skinned-frame
+    detector, detects);
+  * or a guest-side constant outside the palette that this chain reads.
+
+The cheapest next measurement is no longer analytical: with the same walk now
+possible on both sides, step them by GUEST FRAME (`oracle_lockstep.sh` has the
+machinery, and the stick tokens it lacked now exist) and compare the character
+draw's inputs directly rather than reasoning about them.
