@@ -47,7 +47,12 @@ present_dump=""
 # and it only advances when the guest polls the pad, so it does not drift with
 # machine speed. START, A (storage dialog), B (profile prompt), A/A/A (campaign,
 # chapter, difficulty).
-menu_walk='25000:START,25300:,30000:A,30300:,35000:B,35300:,42000:A,42300:,50000:A,50300:,60000:A,60300:'
+# THE WALK IS NOT DEFINED HERE. It lives in tools/menu_walk.sh because it was
+# also copied into tools/capture_gameplay_frame.sh and the two drifted -- this
+# copy stopped pressing at 60 s and no longer reached Act 1 at all, while still
+# being described as the walk into Act 1. See that file.
+. "$self/tools/menu_walk.sh"
+menu_walk=$GEARS_MENU_WALK
 
 usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; }
 

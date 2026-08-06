@@ -38,7 +38,10 @@ SECONDS_TO_RUN="${1:-180}"
 : "${GEARS_DRAW_FRAME_COUNT:=0}"
 : "${GEARS_DRAW_FRAME_REPORT_EVERY:=60}"
 : "${GEARS_NO_WINDOW:=1}"
-: "${GEARS_INPUT_SCRIPT:=25000:START,25300:,30000:A,30300:,35000:B,35300:,42000:A,42300:,50000:A,50300:,60000:A,60300:,75000:A,75300:,90000:A,90300:,105000:A,105300:,120000:A,120300:}"
+# The walk is shared with run.sh --menu-walk; keeping a second copy here is
+# what let the two drift apart. See tools/menu_walk.sh.
+. "$(dirname "$0")/menu_walk.sh"
+: "${GEARS_INPUT_SCRIPT:=$GEARS_MENU_WALK}"
 : "${GEARS_BUILD_DIR:=scratch/build}"
 # The game's own files, extracted from the user's disc image (see README).
 : "${GEARS_GAME_DIR:=scratch/game}"
