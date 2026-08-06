@@ -1835,3 +1835,39 @@ The cheapest next measurement is no longer analytical: with the same walk now
 possible on both sides, step them by GUEST FRAME (`oracle_lockstep.sh` has the
 machinery, and the stick tokens it lacked now exist) and compare the character
 draw's inputs directly rather than reasoning about them.
+
+### Note (2026-08-06)
+## DEAD END: dumping Xenia's own float constants breaks the oracle. Reverted.
+
+The elimination table above leaves one class of input unverified: the CONSTANTS.
+Every other input was checked for internal consistency on our side, but never
+against Xenia's actual values -- and since the constants come from each side's
+own CPU emulation, they are the one input that can differ while every plumbing
+check passes.
+
+The obvious move is to make the oracle print them. I added a dump to
+`extern/xenia/.../vulkan_command_processor.cc`, in the block that packs the
+pixel float constants for `UpdateBindings`, keyed on the pixel shader's ucode
+hash and guarded by a `std::set` so each shader logs once per run. It compiles
+and it is wrong to leave in.
+
+**It stops the title presenting at all.** Before the patch the oracle captured a
+frame at 30 s; with it, two separate runs reported "the title has not presented
+a frame yet" at 60 s and at 180 s, and captured 0 of 2 and 0 of 3 attempts.
+`UpdateBindings` is on the hot draw path and a shader with 256 constants formats
+a ~15 KB log line there; whatever the precise mechanism, the instrument that was
+working is not working with it in.
+
+**Reverted, and the revert is verified rather than assumed**: after
+`git checkout` of that file and a rebuild, a 70 s run captures both its frames,
+mean 19.0 and 17.9 with 43,834 and 48,769 distinct colours. The oracle is back
+to the state the earlier notes measured it in.
+
+If someone wants this comparison -- and it IS the right next measurement -- do
+it OFF the draw path: snapshot the register file at the swap, or write the
+constants to a file from a place that runs once a frame, not once per draw.
+
+WORTH KNOWING SEPARATELY: killing that run left an ORPHAN emulator holding the
+GPU (the `timeout` wrapper and the shell died, the binary did not), and the next
+run then failed for an unrelated-looking reason. Kill by the binary's own PID,
+not the wrapper's.
