@@ -2554,3 +2554,45 @@ Recorded so the next attempt does not repeat the same shortcut. Doing this
 properly needs the character actually segmented -- a depth or stencil readback
 from the oracle, or a frame where he is against a dark background -- not a
 brightness threshold over a box.
+
+### Note (2026-08-06)
+## Branch (2) of the split is CLOSED: the rim gate is provably the only path to colour
+
+The four-way split names as one branch 'the rim reading of ps f662d670789bfac0
+is incomplete -- ucode_reduce reduces pixel shaders, but *nothing else can
+produce colour* was never reduced end to end'. It has now been run end to end,
+and the reading is complete.
+
+`tools/ucode_reduce.py` on the full shader gives, at the outputs:
+
+    t70 = saturate(c254.y - t42)          <- the gate
+    t73 = t68 * t70 ; t71 = t67 * t70 ; t72 = t66 * t70
+    t75 = t73 * t7 + c6.x                 <- the ONLY additive term
+    t79 = t75 * c254.w
+    oC0.x = t79   (and .y/.z the same shape)
+
+So `oC0.xyz = (colour * gate * t7 + c6.xyz) * c254.w`. Every colour term is
+multiplied by the gate, and the one term that is NOT -- c6.xyz -- is
+**(0, 0, 0)** on this draw, measured with GEARS_DRAW_PS_CONSTS. There is no
+unaccounted path to colour in this shader.
+
+### What that forces
+
+Draw 460 cannot light a camera-facing surface on ANY correct implementation,
+including the console, because the gate is 0 there and everything is gated. It
+is not that OUR draw 460 is broken -- the draw is incapable of it by
+construction.
+
+So the oracle's lit Marcus does NOT come from draw 460's camera-facing pixels,
+and the split narrows to three:
+
+  * **our colour-mask or blend decode differs** on draws 655/752, or on one of
+    the mask-0 draws, so a pass that contributes on hardware is a no-op for us;
+  * **the oracle image is a different moment** and what reads as lit
+    back-facing armour is grazing-angle rim -- still the first thing to rule
+    out, and the attempt at it above was contaminated;
+  * **the two unmeasured skinned shaders** (0xf3e9368c1bb68ecc,
+    0x57997d3a9dbfd37e) differ in bind count on the oracle side.
+
+Branch (2) required no oracle run and no matched moment, which is why it closed
+cleanly. The remaining three all do.
