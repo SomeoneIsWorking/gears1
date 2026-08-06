@@ -2534,3 +2534,23 @@ That is a well-posed four-way split with a named cheapest test for each, which
 is where this entry now stands. It is a much smaller question than the one the
 session opened with, and none of the four requires the CPU-side work this entry
 previously pointed at.
+
+### Note (2026-08-06)
+## Attempted and INCONCLUSIVE: is the oracle's lit character rim or diffuse?
+
+The four-way split above names ruling out reading (4) -- that the oracle's
+apparently-lit back is grazing-angle rim light rather than diffuse -- as the
+FIRST thing to do, because it is the mismatched-moment trap that has cost this
+entry several retractions.
+
+I attempted it by comparing mean luminance in an interior core against an edge
+band of the character's bounding box in `scratch/oracle/samewalk/frame_0175s.png`
+(interior 20.4, edge 31.1). **Do not use those numbers.** The bounding box
+contains the lit brick wall behind Marcus, and the wall is BRIGHTER than he is,
+so the edge band is mostly wall and the ratio measures segmentation, not
+lighting.
+
+Recorded so the next attempt does not repeat the same shortcut. Doing this
+properly needs the character actually segmented -- a depth or stencil readback
+from the oracle, or a frame where he is against a dark background -- not a
+brightness threshold over a box.
