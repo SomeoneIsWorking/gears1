@@ -979,3 +979,51 @@ is readable rather than guessable.
 EVIDENCE THAT SURVIVES ALL OF THIS, for whoever picks it up: the character is
 drawn, correctly posed, correctly skinned, correctly textured, and one sign away
 from being lit. Everything else on this entry's difference 1 is closed.
+
+### Note (2026-08-06)
+## The blocker is a REFERENCE VALUE, and neither source of one is available here
+
+Stating this plainly, because the investigation is otherwise complete and the
+next session should spend its first ten minutes getting a reference rather than
+re-deriving what is already measured.
+
+Everything about the character is now established EXCEPT one number. It is drawn,
+posed, skinned, textured and one sign from lit; the gate and the ramp lookup are
+both closed and one negated tangent basis accounts for both; and forcing them
+open renders the character. What is NOT known is what `o2` SHOULD be. Ours is
+(-23.47, +13.96, +25.48) at one pixel, with normalize(o2).z = +0.68 where the
+material needs < +0.3.
+
+Three ways to learn the right value, and none is available on this machine today:
+
+1. **The same-frame oracle** -- Xenia's o2 for this draw. Blocked twice over:
+   trace playback renders colour black (catalog #79) and neither wall clock nor
+   guest frame count aligns two live runs (catalog #84, which needs a
+   deterministic guest clock).
+2. **UE3's own sources** -- `GEARS_UE3_SRC`, which `docs/native-renderer.md`
+   uses to write native passes from the engine rather than from our reading of
+   microcode. UNSET, and no checkout exists on this machine (searched).
+3. **Reducing the vertex shader symbolically** -- ruled out, not merely
+   unavailable: this shader has predication and jumps (instructions 315-328 are
+   inside `(p0)` blocks with `jmp L83` / `jmp L114`), and `ucode_reduce.py`
+   REFUSES predication and control flow by design. Extending it to vertex
+   shaders would not help; the refusal is about the control flow, not the stage.
+
+## What must NOT be done
+
+Patching the guest's constants to open the gate. That is what
+`GEARS_DRAW_PS_CONST_SET` did to produce `scratch/h38/character_lit.png`, and
+that knob's own documentation says it: "It is never a fix: the number comes from
+the guest, and a wrong one is a bug on the CPU side, not here." Shipping it would
+hardcode a value to make one frame look right and would be exactly the class of
+change this project's rules forbid. The image is evidence, not a patch, and the
+tree contains no such change.
+
+## The cheapest route to unblocking, in order
+
+  * A UE3 checkout at `GEARS_UE3_SRC`. This material is a skinned base pass with
+    a `saturate(0.3 - N.V)`-shaped term and a 1D ramp lookup; the engine source
+    says what vector feeds it and in which space, which settles the sign without
+    any emulator comparison. Cheapest by far if the source can be obtained.
+  * Otherwise catalog #84's deterministic guest clock, which unblocks per-draw
+    cross-emulator comparison generally -- not just this question.
