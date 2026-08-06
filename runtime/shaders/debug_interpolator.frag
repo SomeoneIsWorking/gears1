@@ -27,32 +27,32 @@
 // runtime/shaders/uber_post_blend.frag documents. This shader's issue order is
 // tf0 (instruction 3), tf1 (18), tf2 (19), so tf0 is binding 0 / sampler 6.
 //
-// WHAT EACH CHANNEL SHOWS:
-// BOTH multipliers have now been read and both are healthy -- r4.w is 0.92-1.0
-// and the gate is 0.32-0.42, so gate*r4.w*c254.w is about 2.6, a BRIGHT
-// multiplier. Since the material's output is exactly zero, arithmetic forces
-// r5 = albedo * tf1 to be zero, and the albedo decodes to real character art.
-// So tf1's sample must be zero, and this build asks the next question: is that
-// the BINDING or the COORDINATE?
+// WHAT EACH CHANNEL SHOWS (this build): o2 RAW, remapped so 0.5 is zero and
+// 1.0 is +1 -- R = o2.x, G = o2.y, B = o2.z. The render target is float, so
+// values outside [0,1] are NOT clipped and read back as-is; un-remap with
+// (v - 0.5) * 2. Measured on the character: (-23.47, +13.96, +25.48), |o2| in
+// 34..65.
 //
-//   (THIS BUILD) R = o4.x raw, G = o4.y raw, B = length(o4*2-1)/4. o4 is the
-//   interpolator the tf1 COORDINATE is built from -- unpacked by c253 = (2,-1)
-//   then normalised, so |o4*2-1| should be about 1. A raw o4 of 0.5 means the
-//   unpack yields zero; a length far from 1 means the vector is not what the
-//   normalise expects.
+// UE3 settles what o2 SHOULD be, and it matches: GpuSkinVertexFactory.usf:244
+// (the skinned factory this mesh uses) computes TangentCameraVector as
+// tangent-space (CameraPosition - WorldPosition) -- toward the camera, hence
+// positive z facing the viewer, and UNNORMALISED. So o2 is correct and the
+// material's saturate(0.3 - normalize(o2).z) is MEANT to be ~0 facing the
+// camera: draw 460 is a rim term, not the character's diffuse.
 //
-//   (PREVIOUS BUILD, kept for the record)
-//   R = tf1 sampled at a FIXED (0.5, 0.5). This is a BINDING test and owes
-//       nothing to the shader's computed coordinate. tf1 (0x32eb000) is a
-//       256x256 k_8 ramp measured 50.8% zero, 30.8% at 255, mean 99.5/255 =
-//       0.39 -- so a healthy binding reads SOMETHING here on most of the mesh,
-//       and a flat 0 means the fetch itself is broken (format, swizzle XXX1 on
-//       a single-channel texture, or the descriptor).
-//   G = tf1 sampled at the material coordinate r0.xy. NOT the shader's real
-//       coordinate (that is twelve instructions of c0..c5 this refuses to
-//       replicate) -- it is a second, independent probe of the same binding.
-//   B = the gate, kept so one image still carries a known-good reference and a
-//       run cannot be confused with the previous build's output.
+// Earlier builds of this shader emitted other things; two are worth keeping in
+// mind because each cost several notes on catalog #77:
+//   * it once computed the gate as saturate(1 - normalize(o2).z), DROPPING the
+//     + c254.x that ucode_reduce's full reduction shows (t42 = t11 + c254.x).
+//     That read 0.32-0.42 -- "open" -- when the real gate is exactly 0. Read the
+//     REDUCTION to its end, never the listing.
+//   * it once replicated the tf1 coordinate chain to test a sign flip. That
+//     experiment was sound and its conclusion was not: the ramp is downstream of
+//     the gate, so lighting it proves nothing about the cause.
+//
+// Edit the body to emit whatever the current question needs, and edit THIS
+// BLOCK in the same change -- a diagnostic whose comment describes different
+// channels than it writes is the worst instrument in the tree.
 
 layout(set = 3, binding = 0) uniform texture2DArray Tf0Tex;   // the normal map
 layout(set = 3, binding = 2) uniform texture2DArray Tf1Tex;   // the k_8 ramp
