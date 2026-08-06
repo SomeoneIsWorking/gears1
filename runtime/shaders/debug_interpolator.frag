@@ -82,8 +82,27 @@ void main() {
     // `mad r5.xyz, r4.xyzz, c253.xxxx, c253.yyyy` with c253 = (2, -1), i.e. the
     // usual [0,1] -> [-1,1] unpack, then a normalise. So o4 is the input the
     // failing lookup actually depends on, and o2's length says nothing about it.
-    vec3 o4unpacked = InR4.xyz * 2.0 - 1.0;
-    float o4len = length(o4unpacked);
+    // THE COORDINATE, replicated EXACTLY from tools/ucode_reduce.py's straight-
+    // line reduction of this shader (t13..t40), not from reading the listing:
+    //   n   = normalize(o4*2-1), permuted   t13=n.z t14=n.x t15=n.y
+    //   t7  = tf0.z*2-1
+    //   t40 = t18*c5.x - t19*c3.x - t17*c4.x   with c0,c1,c2 collapsed
+    //   coord.x = t40 + c254.y      (c254.y = 1)
+    // Constants from GEARS_DRAW_PS_CONSTS on this draw.
+    float tf0z = texture(sampler2DArray(Tf0Tex, Tf0Samp), vec3(InR0.xy, 0.0)).z;
+    vec3 n = normalize(InR4.xyz * 2.0 - 1.0);
+    float t7 = tf0z * 2.0 - 1.0;
+    float t17 = n.y * t7, t18 = n.z * t7, t19 = n.x * t7;
+    float t40 = t18 * (-0.0826) + t19 * 0.9913 - t17 * 0.1024;
+    float coordX      = t40 + 1.0;
+    float coordFlipped = -t40 + 1.0;   // the same chain with n.x's sign flipped
 
-    OutColor = vec4(InR4.x, InR4.y, o4len * 0.25, 1.0);
+    float rampAsIs    = texture(sampler2DArray(Tf1Tex, Tf1Samp), vec3(coordX, 0.5, 0.0)).x;
+    float rampFlipped = texture(sampler2DArray(Tf1Tex, Tf1Samp), vec3(coordFlipped, 0.5, 0.0)).x;
+
+    // R = the ramp AS WE COMPUTE IT (the material's actual lookup)
+    // G = the ramp with the sign flipped (what it would read if o4.x were negative)
+    // B = coordX/2, so the coordinate itself is legible: >0.5 here means >1.0,
+    //     i.e. clamped past the end of the ramp.
+    OutColor = vec4(rampAsIs, rampFlipped, coordX * 0.5, 1.0);
 }

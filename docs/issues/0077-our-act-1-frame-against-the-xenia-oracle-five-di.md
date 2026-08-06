@@ -728,3 +728,64 @@ runs, and the fix there is a deterministic guest clock.
 ELEVEN causes are now eliminated by measurement, all recorded above. The
 instrument built for it (`GEARS_DRAW_DEBUG_INTERP`, docs/knobs.md) reads any
 interpolator or texture binding of any pixel shader as colour, and stays.
+
+### Note (2026-08-06)
+## MECHANISM PROVEN: interpolator o4 arrives NEGATED, and flipping it lights the character
+
+The debug module now replicates the tf1 coordinate EXACTLY -- not from reading
+the listing, but from `tools/ucode_reduce.py`'s straight-line reduction of
+ps 0xf662d670789bfac0 (t13..t40), with the constants from
+`GEARS_DRAW_PS_CONSTS` on that draw:
+
+    n    = normalize(o4*2-1)          (permuted: t13=n.z, t14=n.x, t15=n.y)
+    t7   = tf0.z*2-1                  (the normal map, measured 0.92..1.00)
+    t40  = -0.0826*n.z*t7 + 0.9913*n.x*t7 - 0.1024*n.y*t7
+    coord.x = t40 + c254.y            (c254.y = 1)
+
+and samples tf1 both as computed and with n.x's sign flipped:
+
+    pixel        ramp as computed   ramp sign-flipped   coord.x
+    (200,120)         0.000              1.000           1.972
+    (240,180)         0.000              1.000           1.894
+    (100,200)         0.000              1.000           1.814
+    (300,500)         0.000              0.000           1.330
+
+tf1 (0x32eb000) is a pure HORIZONTAL RAMP -- every row identical, 255 up to
+x = 0.31, falling to 0 by x = 0.5, zero after (measured: row means all 99, column
+means 255,255,255,255,255,242,142,52,0,0,...). So a coordinate of 1.81-1.97
+clamps past the end of the ramp and reads **exactly zero**, and that zero
+multiplies the material's entire output. That is the black character, end to end.
+
+**Flipping the sign reads FULL BRIGHT.** The correct coordinate is about 0.1,
+the lit end of the ramp; ours is about 1.9. The magnitude is right and the sign
+is wrong -- o4 arrives NEGATED relative to what this material expects.
+
+## What this closes and what it leaves
+
+CLOSED: why the character is black. It is not geometry, not textures, not
+constants, not the binding, not clipping, not the interpolator mask, not the
+gate, not the normal map -- all eleven eliminated causes stand, and this is the
+twelfth possibility, confirmed rather than eliminated.
+
+OPEN: which input to the skinned vertex shader is negated. o4 is exported by
+`max o4, r2, r2` at VS instruction 440, and r2 there is a computed tangent-space
+vector (it is NOT the bone-index fetch from instruction 64 -- r2 is rewritten
+nine times in between, recorded above). Candidates, in the order worth testing:
+
+  1. a vertex CONSTANT carrying the eye or light position, negated or in the
+     wrong space -- an eye vector computed as (eye - pos) where the guest means
+     (pos - eye) flips exactly this way, and costs one sign;
+  2. the tangent basis' HANDEDNESS -- the three packed streams at offsets 3,4,5
+     unpack to unit vectors (measured) but which is normal/tangent/binormal, and
+     the sign of the binormal, is a convention we may have backwards;
+  3. our vertex constant upload for this draw more broadly.
+
+(1) is testable without changing the renderer: dump the VS constants for draw 460
+-- 256 vec4s, already available through `GEARS_DRAW_VS_CONSTS=460` -- and compare
+the camera-related vec4s against the view-projection the frame's other draws use,
+which `tools/clip_check.py` already extracts and which is known good because it
+places shaded draws inside the frustum and killed ones behind the camera.
+
+THE INSTRUMENT STAYS: `GEARS_DRAW_DEBUG_INTERP` (docs/knobs.md) now carries a
+faithful replication of this material's coordinate chain and its sign-flipped
+control, so any change to the vertex path can be checked against it in one run.
