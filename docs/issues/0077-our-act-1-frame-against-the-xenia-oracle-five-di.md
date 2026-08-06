@@ -1093,3 +1093,24 @@ is in the capture at all. `Engine/Shaders/BasePassPixelShader.usf` and
 is the reference this question lacked. If no such draw exists in the stream, the
 defect is upstream of the renderer entirely -- and that is a CPU-side question,
 not a GPU one.
+
+### Note (2026-08-06)
+## WITHDRAWN: "characters CAN render correctly" (2026-08-06)
+
+A note added to catalog #85 earlier today claimed the difficulty-select preview
+proved characters render correctly somewhere, and used that to constrain this
+entry. It does not. `ingame_v3.gfr` is a MENU frame -- 159 draws, largest mesh 92
+primitives, no bone palette anywhere -- so its soldiers are a texture, not
+rendered geometry.
+
+This entry is exactly where it was: the only skinned character draw measured in
+any capture is bright.gfr's draw 460, and it is black. Nothing has been shown
+about whether the renderer can light a character, because no other capture
+contains one to try.
+
+That is worth stating plainly for the next session: **there is no working
+character render to A/B against.** Getting one -- a capture whose frame contains
+a lit skinned mesh -- would be worth more than any further analysis of draw 460,
+because it turns an open question into a differential one. `tools/oracle_lockstep.sh`
+and `tools/capture_gameplay_frame.sh` both reach gameplay; a capture taken where
+the camera clearly shows the player would do it.
