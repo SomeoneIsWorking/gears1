@@ -2477,3 +2477,60 @@ legitimately closed at ours (in which case Marcus's visible lighting comes from
 elsewhere in the frame and the black base pass is a red herring), or whether our
 o2 differs. A matched-moment capture answers it, and every piece of tooling for
 one now exists.
+
+### Note (2026-08-06)
+## The sharp question this session ends on, stated as a trichotomy
+
+With both sides shown to submit the same character geometry, the whole of the
+black character now reduces to what THREE draws produce. Every character draw in
+bright.gfr, and whether it can put colour on screen:
+
+    draw 177  vs f3e9368c...  mask 0   0 frags        depth prepass
+    draw 460  vs 15cbc482...  mask 15  144,191 frags  the RIM material
+    draw 655  vs 57997d3a...  mask 15  112,984 frags  constant-black shader
+    draw 690  vs 8354e5cc...  mask 0   22,793 frags   shadow map
+    draw 693  vs 8354e5cc...  mask 0   29,898 frags   shadow map
+    draw 694  vs 8354e5cc...  mask 0   3,493 frags    shadow map
+    draw 695  vs 8354e5cc...  mask 0   2,174 frags    shadow map
+    draw 738  vs f3e9368c...  mask 0   0 frags        nothing rasterised
+    draw 752  vs 57997d3a...  mask 15  164,528 frags  constant-black shader
+
+Three write colour. Two of the three (655, 752) run a THREE-INSTRUCTION shader
+whose output is provably zero for every pixel (`sgt oC0.xyz0, -|r5.x|, c255.x`
+with c255 = 0), and they blend ONE+ONE, so they are exact no-ops. That leaves
+draw 460 as the only draw in the frame that can light the character.
+
+### The contradiction
+
+  1. Both sides submit the same character draws (claim C019, two shaders
+     compared, bind counts on the reference's modal values).
+  2. Of those, only draw 460 can write a non-zero colour.
+  3. Draw 460's gate is `saturate(0.3 - normalize(o2).z)`, which is 0 on any
+     surface FACING the camera -- and o2 is confirmed correct against UE3's
+     `GpuSkinVertexFactory.usf:244`.
+  4. The oracle nonetheless renders Marcus's back -- surfaces facing the camera
+     -- clearly lit (max 254, mean 17.5, 100% non-black over his region).
+
+(1)-(3) say the console should paint those surfaces black too. (4) says it does
+not. One of the four is wrong, and each is a different bug:
+
+  * **(2) is wrong** -- our colour MASK or blend decode differs from the console
+    on 655/752, or on one of the masked draws, so a pass that contributes on
+    hardware is a no-op for us. Cheapest to test: compare RB_COLOR_MASK and
+    RB_BLENDCONTROL for those draws against the oracle's, which the fork can now
+    dump the same way it dumps constants.
+  * **(3) is wrong** -- the rim reading of ps f662d670789bfac0 is incomplete.
+    Note `ucode_reduce` reduces PIXEL shaders only; the reduction behind the
+    gate is trustworthy, but the claim that nothing else in the shader can
+    produce colour has never been reduced end to end.
+  * **(4) is not comparable** -- the oracle frame is a different moment, and
+    what looks like lit back-facing armour is edge-lit at a grazing angle. This
+    is the mismatched-moment trap that has cost this entry several retractions,
+    and it is the FIRST thing to rule out.
+  * **(1) is wrong** -- two of the frame's four skinned shaders are still
+    unmeasured on the oracle side (0xf3e9368c1bb68ecc, 0x57997d3a9dbfd37e).
+
+That is a well-posed four-way split with a named cheapest test for each, which
+is where this entry now stands. It is a much smaller question than the one the
+session opened with, and none of the four requires the CPU-side work this entry
+previously pointed at.
