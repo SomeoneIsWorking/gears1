@@ -360,6 +360,66 @@ VkSampler TextureUploader::GetSampler(const GuestSamplerState& gs)
 }
 
 
+VkImageView TextureUploader::ResolveTargetView(ResolveTarget& rt,
+                                               uint32_t guestSwizzle)
+{
+    // XYZW is what an unmapped view already is, so it costs nothing and, more
+    // usefully, keeps the identity case on the SAME code path as the swizzled
+    // one -- a bug that only appears once a mapping is applied would otherwise
+    // hide behind the common case.
+    static constexpr uint32_t kIdentity = 0x688u;  // X,Y,Z,W at 3 bits each
+    if (guestSwizzle == kIdentity)
+        return rt.view;
+
+    // A DEPTH destination's host image is R32_SFLOAT: it has no G/B/A to route,
+    // and mapping one in would sample a component that does not exist. The
+    // guest asks XYZW for these in every frame measured, so this is a guard
+    // rather than a known case -- and it SAYS SO instead of silently serving
+    // the unmapped view, because a depth pass reading the wrong channel is
+    // exactly the kind of fault that presents as plausible geometry.
+    if (rt.isDepth)
+    {
+        static std::set<uint32_t> reported;
+        if (reported.insert(guestSwizzle).second)
+            lucent::warn("draw", "resolve destination {:#x} is DEPTH (R32) and a"
+                " binding asks for swizzle {:#05x}, which is not XYZW. Serving"
+                " the unmapped view: a single-component image has nothing to"
+                " route. If a depth pass reads the wrong channel, this is why",
+                rt.base, guestSwizzle);
+        return rt.view;
+    }
+
+    auto it = rt.swizzleViews.find(guestSwizzle);
+    if (it != rt.swizzleViews.end())
+        return it->second;
+
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = rt.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;  // as the unmapped view is
+    vi.format = rt.hostFormat;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    // The host image is canonical RGBA (R16G16B16A16_SFLOAT), so unlike a guest
+    // texture there is no host-format order to compose with: the guest swizzle
+    // maps straight onto components.
+    vi.components.r = compSwizzle(uint8_t((guestSwizzle >> 0) & 7));
+    vi.components.g = compSwizzle(uint8_t((guestSwizzle >> 3) & 7));
+    vi.components.b = compSwizzle(uint8_t((guestSwizzle >> 6) & 7));
+    vi.components.a = compSwizzle(uint8_t((guestSwizzle >> 9) & 7));
+    VkImageView v = VK_NULL_HANDLE;
+    if (vkCreateImageView(R.device, &vi, nullptr, &v) != VK_SUCCESS)
+    {
+        // Falling back to the unmapped view would reintroduce the exact defect
+        // this function exists to fix, and silently. Say which target.
+        lucent::warn("draw", "could not create a swizzled view of resolve"
+            " destination {:#x} for swizzle {:#05x}; serving the UNMAPPED view,"
+            " so this binding reads the channels as stored", rt.base, guestSwizzle);
+        return rt.view;
+    }
+    rt.swizzleViews[guestSwizzle] = v;
+    return v;
+}
+
+
 VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureBinding& tb)
 {
     const uint32_t fc = tb.fetchConstant & 31;
@@ -393,9 +453,23 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
             int32_t expAdjust = int32_t((w3 >> 13) & 0x3F);
             if (expAdjust & 0x20)
                 expAdjust -= 64;
+            // The SWIZZLE the guest asks this binding to be read with. It is
+            // here because a resolve-target binding is served by the target's
+            // own host view, which carries NO component mapping -- so for those
+            // this line is the only place the guest's request is visible at
+            // all, and a mismatch between it and what the resolve baked into
+            // the image is exactly catalog #62's channel exchange. Printed for
+            // every binding, not only the ones that differ: "the swizzle is
+            // identity" and "nobody looked at the swizzle" must not read alike.
+            static const char kSwz[8] = {'X', 'Y', 'Z', 'W', '0', '1', '?', '?'};
+            const uint32_t swizzle = (w3 >> 1) & 0xFFFu;
+            const char swz[5] = {kSwz[swizzle & 7], kSwz[(swizzle >> 3) & 7],
+                                 kSwz[(swizzle >> 6) & 7],
+                                 kSwz[(swizzle >> 9) & 7], '\0'};
             lucent::info("draw", "  tex bind ps {:#x}: fc{} base {:#x} dim {}"
-                " exp_adjust {:+d} (x{}) -> {}", currentPsHash, fc, base,
-                tb.dimension, expAdjust, std::ldexp(1.0, expAdjust), how);
+                " exp_adjust {:+d} (x{}) swizzle {} ({:#05x}) -> {}",
+                currentPsHash, fc, base, tb.dimension, expAdjust,
+                std::ldexp(1.0, expAdjust), swz, swizzle, how);
         }
         return v;
     };
@@ -437,7 +511,9 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
         if (rt != P.resolveTargets.end())
         {
             ++bindsRt;
-            return say("this frame's RESOLVE TARGET", rt->second.view);
+            return say("this frame's RESOLVE TARGET",
+                       TX.ResolveTargetView(rt->second,
+                                            (regs[0x4800 + fc * 6 + 3] >> 1) & 0xFFFu));
         }
     }
     // The guest's own texture, decoded from this fetch constant. The stub

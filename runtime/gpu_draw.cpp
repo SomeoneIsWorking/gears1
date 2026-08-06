@@ -390,6 +390,8 @@ void Renderer::ReleasePersistent()
     for (auto& [k, r] : P.resolveTargets)
     {
         vkDestroyImageView(device, r.view, nullptr);
+        for (auto& [swz, v] : r.swizzleViews)
+            vkDestroyImageView(device, v, nullptr);
         vkDestroyImageView(device, r.storageView, nullptr);
         vkDestroyImage(device, r.image, nullptr);
         vkFreeMemory(device, r.mem, nullptr);

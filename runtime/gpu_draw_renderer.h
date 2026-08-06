@@ -119,6 +119,17 @@ struct ResolveTarget
     VkDeviceMemory mem = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
     VkImageView storageView = VK_NULL_HANDLE; // 2D, for the resolve dispatch
+    // SAMPLED VIEWS BY THE GUEST'S FETCH SWIZZLE, keyed on the raw 12-bit
+    // field. A resolve destination is written with RB_COPY_DEST_INFO's
+    // copy_dest_swap applied, and the consumer's fetch constant carries the
+    // swizzle that reads it back -- on the hardware the two cancel. Serving
+    // every binding the same unmapped `view` skipped that second half, so a
+    // pass sampling a swapped target saw red and blue exchanged and wrote them
+    // out that way (catalog #62: the whole frame from the motion-blur pass
+    // onward). One view per distinct swizzle, because the swizzle is per
+    // BINDING, not per target: the motion-blur pass asks for ZYXW on the scene
+    // colour and XYZW on depth in the same draw.
+    std::map<uint32_t, VkImageView> swizzleViews;
     uint32_t sourceBase = 0; // the EDRAM base it is a copy of
     uint32_t copies = 0;     // resolves into it this frame
     // A resolve destination is a REGION OF A TEXTURE, not a texture. This one

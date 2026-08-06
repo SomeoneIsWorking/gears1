@@ -42,6 +42,13 @@ struct TextureUploader
     RendererPersistent& P;
     const FrameDrawInputs& in;
 
+    // A sampled view of a resolve destination carrying the guest's fetch
+    // SWIZZLE. The destination was written with copy_dest_swap applied, and on
+    // the hardware the consumer's swizzle reads it back -- the two cancel.
+    // Binding one unmapped view for every consumer performed only the first
+    // half. Views are cached per swizzle on the target and live as long as it.
+    VkImageView ResolveTargetView(ResolveTarget& rt, uint32_t guestSwizzle);
+
     // Every texture the frame samples is described by its own texture fetch
     // constant. gpu_draw_xlate decodes one (Xenia's texture_util /
     // texture_address / FormatInfo do the layout, detiling and format
