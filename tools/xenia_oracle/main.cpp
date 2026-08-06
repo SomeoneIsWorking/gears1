@@ -223,11 +223,11 @@ int oracle_main(const std::vector<std::string>& args) {
     if (cvars::oracle_trace_at > 0 && !trace_requested &&
         elapsed >= cvars::oracle_trace_at) {
       trace_requested = true;
-      // NOT YET WORKING, and said so here rather than in a commit message
-      // nobody reads: the request is issued and no .xtr appears, with no
-      // message from the trace writer either. RequestFrameTrace queues work for
-      // the command processor, so the next thing to check is what that queue
-      // does with it when tracing was never begun -- not to request it harder.
+      // The request is served on the GPU worker thread, and only at a SWAP: the
+      // trace opens at one swap and closes at the next. So it does nothing
+      // until the title presents, and a request made while the title is
+      // loading (2 draws a frame) produces no file at all. The wait after the
+      // loop is what makes that visible instead of silent.
       XELOGI("oracle: requesting a Xenia frame trace at {}s", elapsed);
       emulator->graphics_system()->RequestFrameTrace();
     }
@@ -245,6 +245,40 @@ int oracle_main(const std::vector<std::string>& args) {
 
   XELOGI("oracle: captured {} of {} attempts over {}s into {}", captured,
          attempted, seconds, xe::path_to_utf8(out_dir));
+
+  // WAIT FOR THE FRAME TRACE BEFORE TEARING ANYTHING DOWN.
+  //
+  // A requested trace is written from the GPU worker thread between one swap
+  // and the next. Destroying the emulator inside that window closes the trace
+  // writer's FILE* under a thread that is inside fwrite: glibc aborts with
+  // "free(): invalid pointer" and the .xtr on disk is TRUNCATED -- 4.4 MB of a
+  // 42 MB trace, which loads, plays back a fraction of a frame and looks like a
+  // trace of a frame that did almost nothing.
+  //
+  // Bounded, and it says which way it ended. A trace that never completes is a
+  // real outcome here (the request lands only at a swap, so a title that is
+  // loading never serves it), and it must not be reported as success.
+  if (trace_requested) {
+    constexpr int kTraceWaitSeconds = 60;
+    int waited = 0;
+    while (emulator->graphics_system()->IsFrameTracePending() &&
+           waited < kTraceWaitSeconds) {
+      std::this_thread::sleep_for(std::chrono::seconds(1));
+      ++waited;
+    }
+    if (emulator->graphics_system()->IsFrameTracePending()) {
+      XELOGE(
+          "oracle: the frame trace was still being written after {}s, so the "
+          "run is shutting down ON TOP of it -- the .xtr under "
+          "--trace_gpu_prefix is TRUNCATED and must not be used. The request "
+          "is served at a SWAP, so a title "
+          "that is not presenting never serves it",
+          kTraceWaitSeconds);
+    } else {
+      XELOGI("oracle: the frame trace finished writing after {}s", waited);
+    }
+  }
+
   emulator.reset();
   // A run that captured nothing is a FAILED run, not an empty one: exiting 0
   // would let a harness above this treat "no frames" as success.
