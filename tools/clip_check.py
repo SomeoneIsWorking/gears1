@@ -27,14 +27,23 @@ the count is printed for that reason. And it says nothing about why a draw with
 primitives left after clipping still shows nothing.
 """
 import argparse
+import io
 import re
 import sys
+from contextlib import redirect_stdout
 from pathlib import Path
 
 VERT_RE = re.compile(
     r"draw (\d+) vertex (\d+) @ 0x([0-9a-f]+) \(stride (\d+) dwords\): (.*)")
 VAL_RE = re.compile(r"\[(\d+)\]0x[0-9a-f]+=(-?[0-9.eE+-]+)")
 CONST_RE = re.compile(r"draw (\d+) \(diag \d+\) vs 0x[0-9a-f]+ float constants")
+# The runtime states the shader's constant-addressing mode in that same header.
+# A shader that indexes its constants dynamically is doing a bone-palette lookup,
+# so c0..c3 are bone rows rather than a world matrix and this tool's whole layout
+# is inapplicable -- see refuse_skinned() for why that is a REFUSAL and not a
+# caveat. A log written before the runtime printed it carries no mode at all, and
+# that is treated as unknown rather than as static.
+SKIN_RE = re.compile(r"addressing=(dynamic-skinned|static)")
 VEC_RE = re.compile(r"c\[(\d+)\]=\(([^)]*)\)")
 
 
@@ -65,6 +74,9 @@ def parse(log_text):
         if m:
             d = int(m.group(1))
             e = draws.setdefault(d, {"verts": [], "c": {}})
+            sm = SKIN_RE.search(line)
+            if sm:
+                e["skinned"] = sm.group(1) == "dynamic-skinned"
             for idx, body in VEC_RE.findall(line):
                 parts = [p.strip() for p in body.split(",")]
                 if len(parts) == 4:
@@ -90,6 +102,25 @@ def inside(cl):
 
 
 def report(d, e, verdicts):
+    # SKINNED DRAWS ARE REFUSED, not approximated. The layout below is a rigid
+    # one: c0..c3 the world matrix, c7..c10 the view-projection. A skinned
+    # vertex shader keeps a bone palette in those slots and computes its
+    # position from bones selected per vertex by blend indices this tool never
+    # reads. Running the arithmetic anyway does not produce a rough answer, it
+    # produces a confident wrong one: on character_auto.gfr draw 520 -- which
+    # the GPU rasterised into 4306 primitives -- it reported every dumped
+    # vertex BEHIND THE CAMERA. Answering "I cannot see this draw" is the only
+    # honest output until the skinning path is implemented.
+    if e.get("skinned"):
+        print(f"draw {d}: REFUSED -- this shader indexes its float constants "
+              f"dynamically (a bone palette), so c0..c3 are bone rows and not a "
+              f"world matrix. This tool models RIGID geometry only; it cannot "
+              f"see where a skinned mesh lands. Nothing computed.")
+        return None
+    if "skinned" not in e:
+        print(f"draw {d}: NOTE -- this log predates the constant-addressing "
+              f"field, so whether the shader is skinned is UNKNOWN. If it is, "
+              f"every number below is meaningless. Re-run to get the field.")
     need = (0, 1, 2, 3, 7, 8, 9, 10)
     if not all(k in e["c"] for k in need):
         print(f"draw {d}: NO CONSTANTS in this log (need c0..c3, c7..c10) -- "
@@ -156,29 +187,49 @@ def main(argv):
     if missing:
         print(f"NOT IN THE LOG: {missing} -- they were not dumped, which is not "
               f"the same as being on-screen.")
-    results = {d: report(d, draws[d], verdicts) for d in want if d in draws}
+    # THE CALIBRATION VERDICT IS PRINTED BEFORE THE PER-DRAW NUMBERS, not after.
+    # It used to trail them, so a run that could not check its own layout still
+    # opened with pages of "OUTSIDE ... BEHIND THE CAMERA" and only admitted at
+    # the bottom that none of it had been checked. Whatever a reader sees first
+    # is what they quote.
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        results = {d: report(d, draws[d], verdicts) for d in want if d in draws}
+    body = buf.getvalue()
 
-    # CALIBRATION. The layout is a hypothesis; a run that cannot check it against
-    # a draw the GPU kept must not read as a settled answer.
-    print("\n-- calibration --")
-    kept = [d for d in results
-            if verdicts.get(d, "").startswith("shaded") and results[d] is not None]
-    if not kept:
+    computed = [d for d in results if results[d] is not None]
+    refused = [d for d in results if draws[d].get("skinned")]
+    kept = [d for d in computed if verdicts.get(d, "").startswith("shaded")]
+
+    print("-- calibration --")
+    status = 0
+    if not computed:
+        print("   NOTHING WAS COMPUTED. Every draw asked for was refused or")
+        print("   lacked constants/vertices; see below. This is not a frame")
+        print("   whose draws are all on-screen.")
+        status = 2
+    elif not kept:
         print("   UNCALIBRATED: this run contains no draw the renderer says it")
         print("   SHADED, so the transform layout was not checked against a")
-        print("   known-visible case. Dump one alongside and re-run before")
-        print("   quoting any verdict above.")
-        return 2
-    bad = [d for d in kept if results[d] == 0]
-    if bad:
-        print(f"   FAILED: draw(s) {bad} rasterised on the GPU but this layout")
-        print("   places every dumped vertex outside. The layout is wrong and")
-        print("   every verdict above is unusable.")
-        return 1
-    print(f"   OK: draw(s) {kept} rasterised on the GPU and this layout places")
-    print("   them inside, so the arithmetic agrees with the hardware on a case")
-    print("   whose answer is known.")
-    return 0
+        print("   known-visible case. WHAT FOLLOWS ARE NOT VERDICTS. Dump a")
+        print("   rasterised draw alongside and re-run before quoting any of it.")
+        status = 2
+    else:
+        bad = [d for d in kept if results[d] == 0]
+        if bad:
+            print(f"   FAILED: draw(s) {bad} rasterised on the GPU but this layout")
+            print("   places every dumped vertex outside. The layout is wrong and")
+            print("   every verdict below is unusable.")
+            status = 1
+        else:
+            print(f"   OK: draw(s) {kept} rasterised on the GPU and this layout")
+            print("   places them inside, so the arithmetic agrees with the")
+            print("   hardware on a case whose answer is known.")
+    if refused:
+        print(f"   REFUSED as SKINNED (not modelled, not counted): {refused}")
+    print()
+    print(body, end="")
+    return status
 
 
 def selftest():
@@ -232,6 +283,34 @@ def selftest():
           f"{n_inside(cases[288], wrong)}/4 inside")
     # NEGATIVE: an empty log must refuse rather than report no draws clipped.
     check("an empty log parses to nothing", parse("no vertices here") == {})
+
+    # NEGATIVE: A SKINNED DRAW MUST BE REFUSED, NOT COMPUTED. This is the case
+    # that motivated the field: pointed at character_auto.gfr draw 520 -- which
+    # the GPU rasterised into 4306 primitives -- the rigid layout reported every
+    # dumped vertex BEHIND THE CAMERA, because it read bone rows as a
+    # view-projection. Both halves are checked: the skinned header must be
+    # parsed as skinned AND the static one must still compute.
+    skinned_log = (
+        "[draw] draw 514 (diag 520) vs 0x8354e5cc00c0a98c float constants"
+        " (256 vec4s, in the shader's own packed order, addressing="
+        "dynamic-skinned): c[0]=(-0.0, 1.0, 0.0, 0.0)\n"
+        "[draw] draw 514 vertex 0 @ 0x1000 (stride 11 dwords):"
+        " [0]0x0=310.6 [1]0x0=578.2 [2]0x0=555.3\n")
+    sk = parse(skinned_log)
+    check("a skinned draw's header parses as skinned",
+          sk.get(514, {}).get("skinned") is True, f"parsed {sk.get(514, {}).get('skinned')!r}")
+    check("a skinned draw is REFUSED rather than computed",
+          report(514, sk[514], {}) is None)
+    static_log = skinned_log.replace("dynamic-skinned", "static")
+    check("a static draw is still parsed as not skinned",
+          parse(static_log).get(514, {}).get("skinned") is False)
+    # NEGATIVE: a log with NO addressing field at all must be UNKNOWN, never
+    # silently taken as static -- every capture logged before the field existed
+    # is that case.
+    old_log = skinned_log.replace(
+        ", addressing=dynamic-skinned", "")
+    check("a pre-field log leaves skinnedness unknown, not false",
+          "skinned" not in parse(old_log).get(514, {}))
 
     print("SELFTEST", "PASSED" if ok else "FAILED")
     return 0 if ok else 1
