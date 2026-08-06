@@ -1456,3 +1456,83 @@ rasterises nothing, and the last is a rim term. There is no draw here that could
 put a lit character on screen, so nothing the RENDERER does to these draws will
 produce one. The defect is upstream, on the CPU side, exactly as this entry
 suspected -- and that makes it the same class of problem as catalog #73 and #58.
+
+### Note (2026-08-06)
+## Ground truth restored, four renderer causes eliminated, and one number that may explain all five differences
+
+Working the goal "fix the game", I went at the black character directly. I did
+not fix it. What follows is what was measured, because four of these are
+eliminations and the last is a lead worth more than the four.
+
+### The oracle works, and the oracle frames IN THE TREE are a trap
+
+`scratch/oracle/frames_long/` holds 11 PNGs from a previous run. **All eleven
+are 100% black, max value 0.** Anyone comparing against them would be comparing
+against nothing. They should be deleted or regenerated.
+
+A fresh run works fine: `xenia_oracle --target=$GEARS_ISO --oracle_seconds=240
+--oracle_interval=30 --oracle_input="START@25+8,A@30+2"` produced 8 frames,
+means 17.7-22.0 with 14k-34k distinct colours -- matching the numbers this entry
+opened with. `scratch/oracle/probe/frame_0120s.png` is a proper gameplay frame:
+Marcus crouched behind cover, armour lit and detailed, three windows with BARS
+and light shafts through them, fine wall texture.
+
+**So difference 1 is confirmed real**: the character is meant to be clearly lit
+and visible. Ours is a black silhouette (`bright.gfr` and `black.gfr` both).
+
+### Four renderer-side causes for the black character, eliminated by measurement
+
+  1. **The interpolator is healthy.** `GEARS_DRAW_DEBUG_INTERP=f662d670789bfac0`
+     renders o2 directly: a smooth, geometrically coherent field over Marcus's
+     head, shoulder and arm. It is not zero and not garbage.
+  2. **The vertex fetch is correct.** `GEARS_DRAW_VDUMP=460` gives the packed
+     8-8-8-8 tangent frame at dwords 3-5; `0x00a95110` decodes to (16, 81, 169),
+     and v*2-1 gives (-0.874, -0.364, 0.325) with length **1.0016**. A unit
+     vector. Vertex 1 gives 1.004. The normals are being fetched and decoded
+     right.
+  3. **Shader binding is clean.** The shader-load report is `lucent::debug` and
+     so silent by default; with `GEARS_LUCENT_DEBUG=gpu` a 90 s run reports
+     **346,324 IM_LOAD + 61,142 IM_LOAD_IMMEDIATE, 0 rejected, 0 truncated**. No
+     load is being dropped, so no draw is inheriting a stale shader.
+  4. **The base pass really is a rim term.** Its constants are now read rather
+     than inferred: c254 = (0.7, 1, 0.8, 8), so instruction 25's
+     `subsc_sat r4.x, c254.y, r4.x` after instruction 17's `+c254.x` is
+     `saturate(0.3 - N.V)` exactly. And c254.w = 8 is the final multiplier --
+     NOT a zero scale, so this is not catalog #73's failure mode.
+
+Together with the earlier elimination of draws 655 and 752 (constant-black by
+construction, and the guest itself loaded that 3-instruction shader), there is
+no renderer-side candidate left in this frame.
+
+### THE LEAD: our guest issues about a THIRD of the draws the oracle's does
+
+The oracle logs `gears_draws_recorded_` per frame -- incremented once per draw
+actually recorded into the command buffer, `vulkan_command_processor.cc:3159`,
+with dropped draws counted separately. At gameplay it reports:
+
+    oracle, gameplay frames:   2295, 2296, 2297, 2359, 2362, 2363, 2364, 2365
+
+Our own gameplay captures, counting the DRAW_INDX packets the guest issued
+(before any collapse of ours):
+
+    act1 737   bright 844   black 828   courtyard 744
+    play_v2 868  walk_gameplay 744  prison_turn 622  character_auto 750
+
+**Two tight clusters that do not come close to overlapping: 622-868 against
+2295-2365, a factor of ~2.8.** Both sides include the console's per-tile command
+buffer replays, so that is not the difference.
+
+If our recompiled guest is submitting a third of the scene, it would explain
+difference 1, difference 2 and difference 3 with ONE cause rather than three:
+the character's lighting passes, the window bar geometry and the HUD would all
+simply never be submitted. That reframes this entry from five renderer faults to
+one CPU-side deficit.
+
+WHAT WOULD FALSIFY IT, and it must be checked before anyone acts on it: the two
+sides are at DIFFERENT MOMENTS, and although the within-side spread is small
+(±15% on both), no one has yet put our runtime and the oracle at the same moment
+and counted. The way to do that is a scripted walk both sides reach gameplay on
+-- note that the oracle's `START@25+8,A@30+2` spam does NOT get our runtime into
+gameplay (measured: 4831 frames, never above 188 draws, i.e. still in menus),
+so `tools/capture_gameplay_frame.sh`'s walk is the one to port to the oracle
+rather than the reverse.
