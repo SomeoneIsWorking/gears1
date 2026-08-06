@@ -2014,6 +2014,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             float hi[4] = {-1e30f, -1e30f, -1e30f, -1e30f};
             double sum[4] = {0, 0, 0, 0};
             uint64_t above1 = 0;
+            // WHERE the brightest pixel is, not just how bright. A range is
+            // something to look at next, and looking means aiming
+            // GEARS_DRAW_PIXEL_TRACE at a coordinate -- which was being found by
+            // guesswork before this.
+            size_t brightest = 0;
+            float brightestVal = -1e30f;
             const size_t px = size_t(W) * H;
             for (size_t i = 0; i < px; ++i)
             {
@@ -2038,6 +2044,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     if (c < 3 && v[c] > 1.0f) over = true;
                 }
                 if (over) ++above1;
+                const float lum = std::max(std::max(v[0], v[1]), v[2]);
+                if (lum > brightestVal) { brightestVal = lum; brightest = i; }
             }
             vkUnmapMemory(device, sd.mem);
             lucent::info("draw", "surface {:#x} range: R {:.4f}..{:.4f} G"
@@ -2046,6 +2054,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 sd.base, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2],
                 sum[0] / double(px), sum[1] / double(px), sum[2] / double(px),
                 above1, px, 100.0 * double(above1) / double(px));
+            lucent::info("draw", "  surface {:#x} brightest pixel is ({},{}) at"
+                " {:.4f} -- GEARS_DRAW_PIXEL_TRACE={},{} follows it",
+                sd.base, uint32_t(brightest % W), uint32_t(brightest / W),
+                brightestVal, uint32_t(brightest % W), uint32_t(brightest / W));
         }
         vkDestroyBuffer(device, sd.buf, nullptr);
         vkFreeMemory(device, sd.mem, nullptr);
