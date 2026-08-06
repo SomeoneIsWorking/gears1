@@ -64,7 +64,22 @@ does that pass do".
 
 Not vendored, and never to be committed: UE3 source is licensed and this repository
 stays clean (see the rule in CLAUDE.md about copyrighted material). Point
-`GEARS_UE3_SRC` at a checkout. The subset that matters here, verified present:
+`GEARS_UE3_SRC` at a checkout, and record it in the gitignored `.env` so no
+session has to go looking for it (`tools/env.sh` loads it).
+
+A checkout that has the layout below: **https://github.com/CodeRedModding/UnrealEngine3**
+— "Full source from Unreal Engine 3 2013 (Build 10897)". Caveat worth carrying:
+that is a 2013 build and this title shipped on a 2006 UE3, so the pass structure
+and engine sources line up while individual shader files may not — check a
+`.usf` against the microcode before trusting it, which is what
+`tools/ucode_reduce.py` is for.
+
+The same organisation also publishes **CodeRed-Generator**, a C++20 internal SDK
+generator that recovers `UObject`/`UClass` layouts and property offsets for UE3
+titles. Not needed for a native pass, but it is the standard route to the
+question catalog #58 is stuck on — which guest function emits the draws.
+
+The subset that matters here, verified present:
 
 | Path under `$GEARS_UE3_SRC` | What it settles |
 |---|---|
