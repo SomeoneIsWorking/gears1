@@ -70,3 +70,58 @@ exactly this.
 
 `GEARS_DRAW_PS_CONSTS=a146058ecfeb9122` printed nothing on this capture; that
 needs looking at before it can be used to rule the constants in or out.
+
+### Note (2026-08-06)
+## The bright pass's constants, and an infinity that is the GUEST's (2026-08-06)
+
+`GEARS_DRAW_PS_CONSTS=a146058ecfeb9122` on act1, once the knob was made to work
+at all (see below):
+
+    c[0]=(-9990.128, 0.0009999871, 0.1001001, 0.00010009881)
+    c[1]=(1200, inf, 4, 0)          [44960000 7f800000 40800000 00000000]
+    c[2]=(0, 0.4, 0, 0)
+    c[3]=(0.5, 0.5, 0.5, 0.5)
+    c[4]=(1, 0.0625, 0, 0)
+
+**c[1].y is +infinity**, raw bits 7f800000. That is the shape of catalog #73 --
+a post pass handed a value that makes its output degenerate -- so it was chased
+the same way #73 was, and it lands the same way.
+
+### The infinity is in guest memory, so the renderer did not make it
+
+Searching the capture for the exact 16-byte block, big-endian:
+
+    (1200, inf, 4, 0)   30 hits, at real guest addresses --
+                        0x22ed0, 0x482b0, 0x4b0b0, 0x686c0, 0x8ae80,
+                        0x8b9b0, 0xa8e30, 0xcf2a0, +22 more
+    bare +inf dword     673 occurrences
+
+Thirty copies of a well-formed constant block at guest addresses is the title
+storing it deliberately, not a value we manufactured on the way in. Exactly the
+exoneration #73 got, by the same instrument.
+
+### And the arithmetic that would make it bite is already emulated
+
+The Xenos rule that matters here is that a multiply by zero gives zero even when
+the other operand is NaN or infinite, where IEEE and plain SPIR-V give NaN.
+Xenia's SPIR-V translator implements it (`spirv_shader_translator_alu.cc`:
+"Check if the different components in any of the operands are zero, even if the
+other is NaN ... Replace with +0"), and we use that translator, so our shaders
+inherit it.
+
+So "the inf poisons the output through a multiply" is NOT available as an
+explanation. NOT ruled out: that the shader reaches the infinity through some
+other operation, or that it is meant to be consumed by a comparison whose Xenos
+semantics differ. The constants are a lead that has been narrowed, not closed.
+
+## Instrument fixed to get here: GEARS_DRAW_PS_CONSTS printed NOTHING
+
+The printing lives inside the per-draw listing, which only runs under
+`GEARS_DRAW_FRAME_LIST=1`. So asking for PS_CONSTS on its own produced no
+output and no explanation -- the second knob in this session to answer a
+question with silence.
+
+It now pulls the listing in for the draws it names (and only those, rather than
+a line per draw in the frame), and a hash that matched NO draw says so with the
+frame's draw count, because "you asked about a shader this frame never ran" and
+"the constants are all zero" both print nothing otherwise.
