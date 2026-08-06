@@ -722,3 +722,55 @@ RGB and left alpha alone.
      this shape for a k_8_8_8_8 target on a widened surface -- but it is applied
      in the pixel shader, and a masked draw's shader output goes nowhere, so it
      should not be reachable here. Worth confirming rather than assuming.
+
+### Note (2026-08-06)
+## The window narrowed to two draws, and a correction to my own signature reading
+
+### CORRECTION: "alpha preserved, so it is an RGB-only clamp" was wrong
+
+The traced pixel goes (37.09, 30.98, 15.91, 0.125) -> (1, 1, 1, 0.125), and I
+read the unchanged alpha as meaning only RGB was touched. **Alpha 0.125 is
+already inside [0,1]**, so an ordinary four-channel clamp to [0,1] leaves it
+exactly there. The signature is a plain clamp, which WIDENS the candidate list
+rather than narrowing it, and the note above claimed the opposite.
+
+### Where it happens, to two draws
+
+The trace prints only the samples that CHANGED, so the value was still 37.09 at
+the sample after draw 640 and was (1,1,1) at the sample after 643. The frame in
+between:
+
+    640  surf 0x2d0  fmt  0  mask 15  rectangle_list  0 frags   rasterised_no_fragment
+    641  surf 0x0    fmt  0  mask  0  rectangle_list  0 frags   rasterised_no_fragment
+    642  surf 0x0    fmt  0  mask  0  rectangle_list  0 frags   rasterised_no_fragment
+    643  surf 0x2d0  fmt  0  mask  0  triangle_list   2278      colour_fully_masked
+
+Draw 643 writes no colour (mask 0, and `gpu_draw.cpp:1098` and the pipeline both
+read RB_COLOR_MASK from R[0x2104], so the diag and the pipeline agree). Draws
+641 and 642 target a DIFFERENT surface, 0x0, whose host image is
+R8G8B8A8_UNORM -- an 8-bit format that cannot hold 37.09.
+
+So the window contains exactly one interesting event: a switch away from surface
+0x2d0 to an 8-bit surface and back, with the render-pass end/begin that implies.
+
+### Two control arms that CANNOT answer this -- do not retry them
+
+Both were tried and both are too destructive, because they remove the composite's
+input rather than isolating the clamp:
+
+  * `GEARS_DRAW_NORT=1` -- the pixel never leaves (0,0,0,0). The composite reads
+    a resolve target, and without the RT link it reads a stub.
+  * `GEARS_DRAW_ONLY_BASE=0x2d0` -- same, for the same reason: the scene arrives
+    on 0x2d0 THROUGH a resolve of another surface.
+
+A useful arm has to keep the input and change only the suspected mechanism.
+
+### Also checked and NOT the cause
+
+The one draw in the frame with colour mask 7 (RGB, no alpha) is draw 718, the
+final tonemap, 75 draws later. It matched the signature I had misread and is not
+in the window.
+
+The `vkCmdClearColorImage` that fills with (1,1,1,1) is the white STUB texture
+for unbound samplers, not a surface -- and it would set alpha to 1.0, which did
+not happen.
