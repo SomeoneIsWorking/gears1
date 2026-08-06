@@ -726,7 +726,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // re-declares its EDRAM base under a different colour format. Off by
     // default until it is verified against a frame -- see
     // gpu_draw_reinterpret.cpp for what it is and what it fixes.
-    const bool reinterpretEnabled = lucent::config::flag("DRAW_REINTERP");
+    // EDRAM format reinterpretation, ON by default since the resolve read its
+    // source format from the right register (RB_COLOR_INFO[copy_src_select],
+    // not RT0). It shipped off while it blew the picture out; that was this
+    // bug, not the mechanism. GEARS_DRAW_NOREINTERP=1 is the control arm.
+    const bool reinterpretEnabled = !lucent::config::flag("DRAW_NOREINTERP");
     if (reinterpretEnabled)
         RT.BuildReinterpretPipeline();
     // GEARS_DRAW_REINTERP_SELFTEST=1 proves the conversion on this GPU rather
@@ -1760,6 +1764,29 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 !src->second.begunThisFrame)
                 continue; // nothing has been rendered into it yet this frame
             endPass();
+            // A RESOLVE IS A READ, and it reads EDRAM under RB_COLOR_INFO's
+            // format at this point in the stream -- `pd.colorFormat` is that
+            // register for resolve entries exactly as it is for geometry.
+            //
+            // This is where the frame's damage was escaping. The reinterpret
+            // trigger further down never sees a resolve, because the resolve
+            // branch `continue`s above it; the `isResolve` term added there was
+            // dead. So a surface left in a float interpretation by a blending
+            // draw was copied out lifted: catalog #83's wall pixel (640,350)
+            // goes to (2.547, 4.031, 11.125) at draw 650 and the resolves at
+            // 657 and 659 carried that away before anything restored it.
+            if (reinterpretEnabled &&
+                src->second.storageFormat != UINT32_MAX)
+            {
+                const uint32_t want =
+                    draw::StorageColorFormat(pd.resolveSrcFormat);
+                if (src->second.storageFormat != want)
+                {
+                    RT.ReinterpretSurface(cmd, src->second,
+                                          src->second.storageFormat, want);
+                    src->second.storageFormat = want;
+                }
+            }
             RT.ResolveSurfaceTo(cmd, src->second, dst->second, pd.resolveSrcRect,
                              pd.resolveDstX, pd.resolveDstY, pd.resolveScale,
                              pd.resolveSwapRB);
