@@ -612,3 +612,56 @@ run's log, draws issued per reported frame, in order:
 the frames that cap at 76 are the gameplay ones and the frame that reaches 255
 is the menu, which is what this entry has claimed since it was opened -- now
 with the draw counts behind it rather than an inference from brightness.
+
+### Note (2026-08-06)
+## RETRACTED AGAIN: there are not two classes. MAX is a one-pixel statistic.
+
+I split the captures into "narrow" and "full range" by their presented MAXIMUM,
+and used that split to retract the scale hypothesis and to propose comparing
+act1 against courtyard pass by pass. The split does not exist.
+
+Captured a gameplay frame from the walk itself (744 guest draws,
+`scratch/frames/walk_gameplay.gfr`, replays in ~1 s) and compared its
+distribution against courtyard's, green channel:
+
+    walk_gameplay (replayed)   median 12   p99 74   p99.9 75   max  84   px>128: 0
+    courtyard     (replayed)   median 12   p99 74   p99.9 75   max 250   px>128: 26
+
+**Identical to the percentile.** Courtyard is not a full-range frame: it is the
+same narrow image with TWENTY-SIX pixels above 128 out of 921,600 -- 0.003%, a
+specular highlight or a lamp. Reading its max as "full range" was reading one
+pixel.
+
+So every gameplay capture we have is in one class, and the earlier note's
+"the renderer produces a full-range image on some captures and a narrow one on
+others" is withdrawn, along with the act1-versus-courtyard comparison it
+proposed. act1 is simply a darker moment within the same one class.
+
+## What the whole thing actually says now
+
+    ours    (5 gameplay frames)  p99  74-75   p99.9  75     max 76
+    oracle  (5 gameplay frames)  p99 137-199  p99.9 197-254  max 255
+
+and on the SAME defect-class frame, measured directly:
+
+    surface 0x400 (the HDR scene)  max 37.09 / 30.98 / 16.34
+                                   19161 px above 1.0  (2.08%)
+    surface 0x2d0 (the composite)  max  0.27 /  0.33 /  0.30
+                                   0 px above 1.0
+    presented                      max 68 / 84 / 76
+
+The scene surface carries proper HDR -- 37, with 2% of the frame above 1.0 --
+and the composite surface it becomes never exceeds 0.33. **The range is lost
+between the scene surface and the composite**, in a frame that is measured
+rather than inferred, with both ends of the loss on the same run.
+
+That is the narrowest the search has been, and it does not depend on any
+comparison between two different captures.
+
+## The lesson worth keeping
+
+Three retractions in this investigation, and this one and the last both came
+from a summary statistic that could not see what I was asking it. Max cannot
+distinguish "a bright image" from "a dark image with one lamp in it". Every
+brightness claim here should quote a PERCENTILE, and `tools/frame_stats.py`
+already reports p99 and p99.9 -- I stopped using it and went back to max.
