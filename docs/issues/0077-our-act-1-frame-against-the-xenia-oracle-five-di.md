@@ -1871,3 +1871,100 @@ WORTH KNOWING SEPARATELY: killing that run left an ORPHAN emulator holding the
 GPU (the `timeout` wrapper and the shell died, the binary did not), and the next
 run then failed for an unrelated-looking reason. Kill by the binary's own PID,
 not the wrapper's.
+
+### Note (2026-08-06)
+## CORRECTION: the constant dump did not break the oracle by being slow. I dereferenced a null pointer.
+
+The note above blames the logging: "UpdateBindings is on the hot draw path and
+a 256-constant shader formats a ~15 KB line there". That diagnosis is wrong, and
+it was wrong in a way worth recording, because it blamed a plausible cost when
+the actual fault was a straightforward bug of mine.
+
+`VulkanCommandProcessor::UpdateBindings(vertex_shader, pixel_shader)` is called
+with **pixel_shader == nullptr on depth-only draws**, and both of my attempts
+called `pixel_shader->ucode_data_hash()` before testing it. The emulator died on
+the first depth-only draw, before ever presenting -- which surfaced as "the
+title has not presented a frame yet" and read exactly like a slow instrument.
+
+Proved by fixing only that:
+
+    minimal patch, no null check   0 of 2 frames captured
+    + `&& pixel_shader`            2 of 2 frames captured
+
+Same patch, same logging volume, same run length. The dump is off the hot path
+now anyway (one integer compare per draw, one fwrite once per run, to
+`scratch/oracle/ps_consts.txt`, target selected by `GEARS_ORACLE_PS_CONSTS=<hex
+ucode hash>`), but that is not what fixed it.
+
+**What this invalidates:** the advice in the previous note to "do it OFF the
+draw path" was reasoning from a wrong cause. Doing it off the draw path is still
+sensible for cost, but there was never a cost problem -- there was a null
+dereference.
+
+Recorded rather than edited away: anyone reading the previous note would
+otherwise avoid a perfectly workable approach for an invented reason.
+
+### Note (2026-08-06)
+## MEASURED: our guest computes the SAME constants Xenia's does for the character shader
+
+The elimination table left exactly one class of input unchecked -- the constants,
+because they come from each side's own CPU emulation and are the one input that
+can differ while every plumbing check passes. They are now compared directly,
+and they agree.
+
+### How
+
+The oracle writes one named pixel shader's packed float constants to a file,
+once per run, selected by `GEARS_ORACLE_PS_CONSTS=<hex>`. Two things this
+needed, both of which cost a run to find:
+
+  * `pixel_shader` is **null on depth-only draws**; dereferencing it killed the
+    emulator before it presented (see the correction above -- I first blamed
+    logging cost, wrongly).
+  * Xenia's `ucode_data_hash()` and our runtime's hash are **different functions
+    over the same bytes**, so keying on Xenia's hash matched nothing and looked
+    exactly like "the shader is never bound". The patch now reproduces our
+    FNV-1a 64 over the big-endian ucode bytes.
+
+A census mode (`GEARS_ORACLE_PS_CONSTS=ffffffffffffffff`) writes every distinct
+shader hash, which is what proved the identification correct rather than assumed:
+the oracle's own list contains **`f662d670789bfac0`, 90 dwords, 10 consts** --
+byte for byte the shape our runtime reports.
+
+### The comparison
+
+    index   ours                                  theirs (Xenia)
+    c0      (-1, 0, 0, 0)                         (-1, 0, 0, 0)              SAME
+    c1      (0, -1, 0, 0)                         (0, -1, 0, 0)              SAME
+    c2      (0, 0, 1, 0)                          (0, 0, 1, 0)               SAME
+    c3      (-0.99131, -0.09316, 0.09285, 0)      (0.04416, 0.63734, 0.76932, 0)
+    c4      (0.10236, -0.10311, 0.98939, 0)       (0.99786, 0.00904, -0.06476, 0)
+    c5      (-0.08260, 0.99030, 0.11175, 0)       (-0.04823, 0.77053, -0.63558, 0)
+    c6      (0, 0, 0, 1)                          (0, 0, 0, 1)               SAME
+    c7      (2, -1, 0, 0)                         (2, -1, 0, 0)              SAME
+    c8      (0.7, 1, 0.8, 8)                      (0.7, 1, 0.8, 8)           SAME
+    c9      (0.11, 0.3, 0.59, 0.5)                (0.11, 0.3, 0.59, 0.5)     SAME
+
+**Seven of ten are byte-identical.** The three that differ are c3/c4/c5, the
+orthonormal basis instructions 14-16 use to transform the normal into the
+env-ramp lookup -- and BOTH sets are unit length to six decimals, i.e. both are
+valid camera bases. They differ because the two runs are looking in different
+directions, which is expected and is not a defect.
+
+### What this eliminates
+
+The CPU side, for this shader. Our recompiled guest hands the character's pixel
+shader the same numbers Xenia's emulation does, including every view-independent
+one: the normal-map decode (c7 = (2,-1,0,0)), the luminance weights
+(c9.xyz = (0.11, 0.3, 0.59)), and the ramp/output constants (c8 = (0.7,1,0.8,8))
+that gate the whole output.
+
+So with the constants, the textures, the vertex fetch, the interpolator mask,
+param_gen, the clamp modes, the translator and the draw stream all now shown
+equivalent, **the only input left that has never been compared against Xenia is
+the interpolator o2 itself** -- the output of the 440-instruction skinned vertex
+shader, which is also the one thing both measured zeros (this fetch and the rim
+term) would follow from.
+
+That is now a single, well-posed question with the tooling in place to ask it:
+dump the VERTEX shader's constants and o2 the same way, from both sides.
