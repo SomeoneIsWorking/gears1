@@ -2105,3 +2105,49 @@ frame number (`GEARS_ORACLE_DUMP_AT_FRAME=N` on the oracle, the existing `f<N>:`
 machinery on our side), run both at the same N, and diff. That turns the last
 unverified input on this entry -- the interpolator o2 and the pose behind it --
 from an inference into a diff.
+
+### Note (2026-08-06)
+## The frame gate works; the character's frame VARIES run to run, which is the next obstacle
+
+The last missing increment is built: both constant dumps are gated on a guest
+frame (`GEARS_ORACLE_DUMP_AT_FRAME=N`) and each records the frame it actually
+fired at in its header, so a dump can never silently be from a different moment
+than the one asked for.
+
+The gate demonstrably works -- with `=5200` and again with `=3900`, the dump
+correctly stayed silent and the runs completed normally (2 of 2 frames each).
+But the file was empty both times, and an UNGATED run of the same walk had
+produced it earlier. So the skinned character's vertex shader is bound at
+different guest frames on different runs of the SAME frame-indexed walk.
+
+That is the oracle's own nondeterminism, the counterpart of catalog #44 on our
+side, and it is the next obstacle rather than a defect in the gate: a frame
+number chosen from one run is not necessarily a frame where the character is
+drawn in the next.
+
+### What that means for the comparison
+
+Gating on a fixed frame is not sufficient on its own. Two ways forward, both
+cheap now that the plumbing exists:
+
+  * dump on the FIRST bind at or after the gate and TRUST THE RECORDED FRAME
+    rather than the requested one -- then drive our side to the frame the
+    oracle actually reported, instead of agreeing one in advance. The header
+    already carries it;
+  * or gate on a WINDOW and dump every bind in it, so a run that drifts still
+    produces a comparable sample.
+
+The first is a shell change, not a code change: run the oracle ungated, read
+the frame out of the header, then run our side with `GEARS_INPUT_SCRIPT`'s
+`f<N>:` steps and `GEARS_DRAW_FRAME_AT` set to that number.
+
+### Honest status of this whole apparatus
+
+Built and verified this session: stick input for the oracle's scripted pad; the
+frame-driven schedule, which was inert (see above); constant dumps for both the
+pixel and vertex buffers on both sides, keyed on our own hash function and
+proved by a shader census; and a frame gate that records what it actually did.
+
+NOT achieved: a single same-moment constant comparison, because the two sides do
+not reliably reach the same moment even when driven by frame index. That is the
+one thing standing between this entry and a diff of the bone palette.
