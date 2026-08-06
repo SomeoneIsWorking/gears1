@@ -774,3 +774,45 @@ in the window.
 The `vkCmdClearColorImage` that fills with (1,1,1,1) is the white STUB texture
 for unbound samplers, not a surface -- and it would set alpha to 1.0, which did
 not happen.
+
+### Note (2026-08-06)
+## The same pixel on both surfaces: RGB identical, ALPHA divided by exactly 8
+
+Traced (368,247) on the scene surface as well as the composite, same frame, same
+run:
+
+    surface 0x400 (scene)     after draw 347: (37.09375, 30.984375, 15.90625, 1)
+    surface 0x2d0 (composite) after draw 612: (37.09375, 30.984375, 15.90625, 0.125)
+
+**RGB is bit-identical and alpha is exactly one eighth.** 0.125 is 2^-3, and -3
+is precisely the `copy_dest_exp_bias` every colour resolve in this frame carries.
+
+So on the path from the scene surface to the composite surface, an exponent bias
+of 2^-3 was applied to ALPHA and not to RGB. The resolve shader multiplies a
+float4 by the scale (`gpu_draw_xlate.cpp`: `c *= scale`, all four components,
+matching Xenia's `pixel_0 *= exp_bias`), so a result with three components
+unscaled and one scaled is not what that code should produce.
+
+This is the sharpest single anomaly this entry has, and it is one pixel measured
+twice rather than an aggregate.
+
+WHAT IT DOES NOT YET SAY: which stage did it. The composite draw 612 has colour
+mask 0 and cannot write, the resolve runs 200 draws earlier, and the value on
+0x2d0 could have arrived by either. It is also not established that this
+asymmetry causes the clamp at draw 643 -- they may be two faces of the same
+mishandling or unrelated.
+
+## The pixel trace is VALIDATED, not merely used
+
+Both surfaces were traced with the same instrument, and on the scene surface it
+reports a history that makes sense on its own terms:
+
+    after 259 draws  (0, 0, 0, 0)                            <- draw 258
+    after 263 draws  (2.9785156, 3.3339844, 3.3496094, 1)    <- draw 262
+    after 348 draws  (37.09375, 30.984375, 15.90625, 1)      <- draw 347
+
+A cleared pixel, then a base-pass draw putting light into it, then a brighter
+one. Real shaded draws, ascending values, alpha 1. That is what made the
+0x2d0 alpha of 0.125 stand out instead of being read past -- and it is the check
+that keeps "the value changed at a colour-masked draw" from being read as an
+instrument fault, which is what I suspected before running it.
