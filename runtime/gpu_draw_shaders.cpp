@@ -54,7 +54,12 @@ bool ShaderCache::GetShader(bool isVertex, const uint8_t* uc, size_t sz, uint64_
         // reference is the thing being matched, and dumping our own output
         // instead would let a native pass "verify" against itself.
         {
-            static const std::string& spvDir = lucent::config::text("DRAW_SPV_DUMP");
+            // BY VALUE, not by reference. lucent::config::text returns a
+            // reference into its own cache, and that cache can be dropped --
+            // the interleaved comparer drops it deliberately between arms to
+            // make a knob re-read. A `static const std::string&` then dangles
+            // and the next draw crashes inside std::filesystem::path.
+            static const std::string spvDir{lucent::config::text("DRAW_SPV_DUMP")};
             if (!spvDir.empty())
             {
                 std::error_code ec;

@@ -112,7 +112,7 @@ Each isolates one cause by comparison against the default.
 
 | Knob | Isolates |
 |---|---|
-| `GEARS_DRAW_ONLY=N`, `GEARS_DRAW_ONLY_BASE=<hex>` | One draw, or one EDRAM surface |
+| `GEARS_DRAW_ONLY=N`, `GEARS_DRAW_ONLY_BASE=<hex>` | One draw, or one EDRAM surface. **N is the ISSUED index, not the diag table's `draw` column** — the same units trap as `_FRAME_STEP_FROM`; a guest index matches nothing and renders an empty frame, which reads as "that draw contributes nothing". It now reports how many draws it matched. And it renders the draw **over the clear, with nothing before it**, so a draw that samples a resolve target or a rendered texture has no inputs and produces black however correct it is — "renders nothing under DRAW_ONLY" is NOT evidence that a draw writes nothing (`catalog.py show 62`) |
 | `GEARS_DRAW_PS_CONST_SET=<pshash>:<i>=<x>,<y>,<z>,<w>` | One packed pixel float constant, replaced (`;`-separated for several). Answers "is the picture wrong because of THIS number?" by substituting a working capture's value. **Never a fix** — the number comes from the guest, so a wrong one is a defect on the CPU side. It is what proved catalog #73: forcing c7 and c8 took a wholly black frame to 99.4% non-black, and either one alone left it black |
 | `GEARS_DRAW_NOTEX=1` | Texture content (white stubs) |
 | `GEARS_DRAW_NOBLEND=1` | The blend equation |

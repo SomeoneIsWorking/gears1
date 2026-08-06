@@ -156,8 +156,10 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
             // DIAGNOSTIC control arm: at 1.0 the compute resolve must
             // reproduce the old blit exactly, which is how the compute
             // path is separated from the bias value it applies.
-            static const std::string& forced =
-                lucent::config::text("DRAW_RESOLVE_SCALE");
+            // BY VALUE -- see the note in gpu_draw_shaders.cpp: a reference
+            // into lucent's config cache dangles when the cache is dropped.
+            static const std::string forced{
+                lucent::config::text("DRAW_RESOLVE_SCALE")};
             if (!forced.empty())
                 pd.resolveScale = float(std::atof(forced.c_str()));
             pd.resolveSwapRB = ((R[0x231B] >> 24) & 1) != 0;

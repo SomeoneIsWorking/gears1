@@ -961,3 +961,66 @@ Note the thumbnail's own limit, which the tool states: 32x18 NEAREST samples 576
 of 921,600 pixels, so its 2.98 is not the 37.09 the pixel trace reads at
 (368,247) -- it never lands on that texel. The two instruments measure the same
 draw, not the same pixel.
+
+### Note (2026-08-06)
+## THE CONTRADICTION WAS TWO INSTRUMENT MISUSES, NOT A RENDERER MYSTERY
+
+Several iterations rested on "the pixel changes across a draw that writes
+nothing", where the second half came from `GEARS_DRAW_ONLY=612` rendering an
+empty surface. Both halves of that were my error.
+
+**`GEARS_DRAW_ONLY` takes an ISSUED index, not the diag table's guest index.**
+The same units trap as `GEARS_DRAW_FRAME_STEP_FROM`, in a second knob, found the
+same way. It now says so:
+
+    GEARS_DRAW_ONLY=612: matched 0 draw(s) of the 552 this frame ISSUED
+
+Zero draws. The empty surface was a frame with nothing in it, not a draw that
+writes nothing.
+
+**And even with the right index the experiment cannot answer the question.**
+`DRAW_ONLY` renders its draw OVER THE CLEAR, with nothing before it -- so a draw
+that samples a resolve target or a rendered texture has no inputs and produces
+black however correct it is. Guest draw 612 is exactly such a draw. Both facts
+are in the knob's own output now.
+
+## What the sweep says instead
+
+The interleaved comparer (`GEARS_DRAW_AB`, catalog #82) run over eleven knobs on
+`walk_gameplay.gfr`, pinned to surface 0x2d0:
+
+    DRAW_NOTEX            FIRST DIVERGENCE row 435, draw 437 (guest 612)
+    DRAW_NORT             FIRST DIVERGENCE row 435, draw 437 (guest 612)
+    DRAW_NO_TEX_SIGNS     FIRST DIVERGENCE row 435, draw 437 (guest 612)
+    DRAW_FORCE_LDR        FIRST DIVERGENCE row 435, draw 437 (guest 612)
+    DRAW_NOBLEND          no divergence
+    DRAW_NODEPTH          no divergence
+    DRAW_RESOLVE_NOSWAP   no divergence
+    DRAW_RESOLVE_BLIT     no divergence
+    DRAW_DEPTHONLY_PS     no divergence
+    DRAW_NOCULL           no divergence
+    DRAW_FIXEDVP          no divergence
+
+Every knob that changes anything changes it at the SAME draw, and all four are
+knobs about what a draw SAMPLES or how the surface stores what it writes:
+texture content, the resolve-to-texture link, texture sign/gamma decode, and the
+widened host format. The seven that touch raster, depth, blend, culling and the
+resolve's swap change nothing anywhere in the frame.
+
+So guest draw 612 is the first draw in this frame whose output depends on
+textures at all, and the content that appears on surface 0x2d0 at that point is
+that draw's shading -- not something that arrived by another route.
+
+## Still open
+
+Its `RB_COLOR_MASK` is 0 and the pipeline maps that to `colorWriteMask` 0
+(`gpu_draw_pipelines.cpp`, `attachmentCount = 1`, `pAttachments = &cba`). A draw
+that cannot write colour should not be able to put its shading on the surface.
+That is now the whole of the question, with every instrument artifact removed
+from underneath it.
+
+## The probe does not perturb the render
+
+Checked rather than assumed, since the pinned trace calls `GetSurfaceTarget` and
+that CREATES surfaces: the presented frame is byte-identical with and without it
+(sha1 `b12c0b413284dce4` both ways, max R68 G84 B76).
