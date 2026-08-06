@@ -864,3 +864,52 @@ the format-keyed render pass. That is the next thing to instrument: log the
 chosen pass, its load op, the framebuffer and the attachment format at every
 begin, and compare the two boundaries against a boundary where the value
 survives.
+
+### Note (2026-08-06)
+## A CONTRADICTION, stated rather than guessed past (2026-08-06)
+
+Two measurements that cannot both describe a simple colour write:
+
+**A. The trace says guest draw 612 changed the pixel.** Pinned to surface 0x2d0
+so it samples after every draw (550 samples for 552 issued draws), with the
+labelling verified in the code -- `prepared[n-1]`, the draw issued just BEFORE
+the sample, with a comment saying naming `prepared[n]` would blame the next one.
+The value goes 0 -> (37.09375, 30.984375, 15.90625, 0.125) across that draw.
+
+**B. Rendering ONLY guest draw 612 leaves surface 0x2d0 entirely zero.**
+`GEARS_DRAW_ONLY=612` with the surface probe: range 0.0000..0.0000 on every
+channel, brightest pixel 0.0000, 0 of 921600 px non-black. So that draw writes
+no colour, which is what its RB_COLOR_MASK of 0 says it should do.
+
+So the pixel changes across a draw that writes nothing.
+
+## Everything ruled out so far, so the next session does not redo it
+
+  * the trace mis-attributing across surface switches -- FIXED, rows unchanged
+  * the trace's labelling being off by one -- read the code, it is correct
+  * R[0x2104] not being RB_COLOR_MASK -- checked against Xenia's register table
+  * the `openSurface = 0` sentinel colliding with the real surface at base 0x0
+    -- guarded by `!inPass`
+  * the pipeline cache key omitting the colour mask -- `OutputMergerState`
+    compares `colorMask` first
+  * the colour write mask not reaching the pipeline -- `gpu_draw_pipelines.cpp`
+    maps the RT0 nibble to `colorWriteMask`, and B above confirms it works
+  * the render pass begin -- `GEARS_DRAW_PASS_LOG=1` (new) shows no pass begin
+    at that draw at all; the surrounding begins are all LOAD passes on the same
+    framebuffer with the same float16 format
+
+## What that leaves
+
+Something OTHER than the draw's colour output changes the surface between two
+consecutive samples. The candidates that survive:
+
+  1. The tiling collapse. `CollapseEdramTiling` rewrites the prepared draw list,
+     so the Nth issued draw is not the Nth guest draw and a collapsed group may
+     execute work the trace attributes to its representative. `GEARS_DRAW_TILED=1`
+     restores the faithful path and is the A/B: if the change moves to a
+     different draw, the collapse is implicated.
+  2. `GEARS_DRAW_ONLY` may not isolate what it appears to. Its own report still
+     says "552 of 744 draws issued" while rendering almost nothing, so the
+     counter it prints is the PREPARED count, not what was drawn -- B rests on
+     the surface probe rather than on that line, but the knob's scope should be
+     read before leaning on it again.
