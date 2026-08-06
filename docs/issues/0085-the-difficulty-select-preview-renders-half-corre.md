@@ -49,3 +49,36 @@ character) covering the panel's rectangle, or a YUV composite draw
 That one check decides between two very different investigations, and it is
 cheap: `GEARS_DRAW_TEX_BINDS` and `GEARS_DRAW_VS_CONSTS` on the draws covering
 x 400-880, y 120-340.
+
+### Note (2026-08-06)
+## CORRECTION, same day: the soldiers are a TEXTURE, not rendered characters
+
+The entry above says this panel "is the first evidence in this project that
+characters CAN render correctly". That is wrong and I should have run the check
+the entry itself prescribes before writing it.
+
+`ingame_v3.gfr` has **159 draws**, and the largest mesh in the whole frame is
+**92 primitives**:
+
+    draw 31  ia 14   4,200,993 fragments
+    draw 33  ia 92   3,790,870 fragments
+    draw 36  ia 14   3,702,469 fragments
+
+That is a menu: a handful of large quads with enormous fragment counts. There is
+no skinned geometry anywhere in it -- no 6592-primitive mesh, no bone palette,
+nothing resembling catalog #77's character draw. The soldiers in the preview
+panel are pixels in a TEXTURE, drawn on a quad.
+
+So this entry tells us nothing about whether characters render, and the
+constraint it placed on #77 -- "the black character is not a blanket skinned-mesh
+failure" -- is UNSUPPORTED and withdrawn. #77 is exactly where it was.
+
+What survives is the defect itself: a texture that decodes correctly on its right
+and as blue-green noise on its left, boundary measured at x=447. With live
+geometry ruled out, the movie-player reading is now the leading one rather than
+one of two -- the title rewrites Y/U/V planes at fixed addresses every frame
+(catalog #53), and a half-decoded plane looks like this. The next step is
+unchanged but better aimed: identify the texture the panel's quad samples
+(`GEARS_DRAW_TEX_BINDS` on the draw covering x 400-880, y 120-340) and dump it
+with `GEARS_DRAW_TEX_DUMP` to see whether the corruption is already in the
+decoded texture or is introduced by the draw.
