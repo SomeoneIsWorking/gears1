@@ -148,6 +148,17 @@ struct ResolvePushConstants
 };
 bool BuildResolveComputeShader(std::vector<uint32_t>& spirv);
 
+// EDRAM format reinterpretation, laid out to match the push-constant block in
+// runtime/shaders/edram_reinterpret.comp exactly. The formats are the STORAGE
+// forms (10 -> 2, 12 -> 3), because the _AS_ variants pack identically and a
+// change between them is not a change.
+struct ReinterpretPushConstants
+{
+    int32_t extent[2];
+    uint32_t srcFormat;
+    uint32_t dstFormat;
+};
+
 // The DEPTH resolve. The guest resolves depth to a k_8_8_8_8 destination -- the
 // Xenos depth-as-colour resolve -- so this encodes our float32 depth back into
 // the guest's 24-bit format (float24 20e4 for kD24FS8, unorm24 for kD24S8),

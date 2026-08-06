@@ -60,6 +60,12 @@ VkFormat HostColorFormat(uint32_t colorFormat);
 
 const char* ColorFormatName(uint32_t f);
 
+// The format with the same EDRAM PACKING, dropping the blending-precision
+// modifier: the two _AS_ formats store exactly what their base format stores.
+// "Has the bit interpretation of this surface changed" is a question about this
+// value, never about the raw RB_COLOR_INFO field.
+uint32_t StorageColorFormat(uint32_t colorFormat);
+
 // Bytes per pixel of a TEXTURE format (xenos::TextureFormat), not a render
 // target format -- the two enumerations do not agree and mixing them up reads a
 // texture at the wrong stride.
