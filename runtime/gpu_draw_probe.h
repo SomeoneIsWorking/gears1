@@ -41,6 +41,9 @@ struct FrameProbe
     // True when a checkpoint is due after `drawn` draws. Kept here so the knob
     // and the cadence it implies cannot drift apart.
     bool CheckpointDue(uint32_t drawn) const;
+    // Highest issued-draw count seen, so a _FROM the frame never reached can be
+    // reported as that rather than as an empty result.
+    mutable uint32_t highestDrawn = 0;
     bool Tracing() const { return traceX >= 0; }
 
     // GEARS_DRAW_SURFACE=<hex>: restrict BOTH probes to one EDRAM surface.
