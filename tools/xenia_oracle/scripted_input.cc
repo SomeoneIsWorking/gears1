@@ -81,8 +81,9 @@ bool ParseInputScript(const std::string& text, std::vector<ScriptedPress>& out,
       // divergence this feature exists to remove.
       stick.value = name[2] == '+' ? int16_t(32767)
                                    : (name[2] == '-' ? int16_t(-32768) : int16_t(0));
-      stick.at = std::chrono::milliseconds(
-          int64_t(std::atof(timing_s.c_str()) * 1000.0));
+      // Raw units, as for buttons above.
+      stick.at =
+          std::chrono::milliseconds(int64_t(std::atof(timing_s.c_str())));
       out.push_back(stick);
       continue;
     }
@@ -103,8 +104,16 @@ bool ParseInputScript(const std::string& text, std::vector<ScriptedPress>& out,
     double at_seconds = std::atof(timing.c_str());
     ScriptedPress press;
     press.button = it->second;
-    press.at = std::chrono::milliseconds(int64_t(at_seconds * 1000.0));
-    press.repeat = std::chrono::milliseconds(int64_t(repeat_seconds * 1000.0));
+    // RAW UNITS, scaled at use time. The schedule's numbers mean SECONDS on a
+    // wall-clock run and GUEST FRAMES under --oracle_by_frame, and this parser
+    // cannot know which. Baking in a *1000 here made every frame-driven
+    // schedule fire at frame 150000 instead of frame 150 -- i.e. never. That
+    // is not a hypothetical: measured, a 1200-frame run with
+    // "START@150+270,A@300+120" reported ZERO button presses while capturing
+    // all 3 of its frames, so tools/oracle_lockstep.sh has been comparing our
+    // walked runtime against an oracle sitting on the title screen.
+    press.at = std::chrono::milliseconds(int64_t(at_seconds));
+    press.repeat = std::chrono::milliseconds(int64_t(repeat_seconds));
     out.push_back(press);
   }
   if (out.empty()) {
@@ -125,6 +134,15 @@ ScriptedInputDriver::~ScriptedInputDriver() = default;
 
 xe::X_STATUS ScriptedInputDriver::Setup() { return X_STATUS_SUCCESS; }
 
+// One schedule unit expressed in the units NowTick() returns: a guest frame
+// when a frame tick source is installed, otherwise a millisecond.
+uint64_t ScriptedInputDriver::UnitScale() const { return tick_source_ ? 1 : 1000; }
+
+// How long a press is held. 120 ms on a wall clock; under frame indexing that
+// same 120 would be 120 FRAMES (four seconds), so hold a handful of frames
+// instead -- long enough for a title polling once a frame to see it.
+uint64_t ScriptedInputDriver::HoldTicks() const { return tick_source_ ? 8 : 120; }
+
 uint16_t ScriptedInputDriver::ButtonsAt(
     uint64_t tick) const {
   uint16_t buttons = 0;
@@ -132,9 +150,10 @@ uint16_t ScriptedInputDriver::ButtonsAt(
     if (press.axis != 0) {
       continue;  // a stick deflection, handled by SticksAt
     }
-    const uint64_t at = static_cast<uint64_t>(press.at.count());
-    const uint64_t hold = static_cast<uint64_t>(press.hold.count());
-    const uint64_t repeat = static_cast<uint64_t>(press.repeat.count());
+    const uint64_t at = static_cast<uint64_t>(press.at.count()) * UnitScale();
+    const uint64_t hold = HoldTicks();
+    const uint64_t repeat =
+        static_cast<uint64_t>(press.repeat.count()) * UnitScale();
     if (tick < at) {
       continue;
     }
@@ -204,7 +223,7 @@ xe::X_RESULT ScriptedInputDriver::GetState(uint32_t user_index,
     if (press.axis == 0) {
       continue;
     }
-    const uint64_t at = static_cast<uint64_t>(press.at.count());
+    const uint64_t at = static_cast<uint64_t>(press.at.count()) * UnitScale();
     if (tick < at) {
       continue;
     }
