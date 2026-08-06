@@ -30,6 +30,10 @@ set -eu
 SECONDS_TO_RUN="${1:-240}"
 INTERVAL="${2:-30}"
 
+# Machine-local paths (the disc image above all) come from the gitignored
+# .env via one loader, so no session has to go looking for the ISO again.
+. "$(dirname "$0")/env.sh"
+
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 OUT="$REPO/scratch/oracle/compare"
 ISO="${GEARS_ISO:-}"
