@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-05
 tags: oracle,harness
 depends: tools/xenia_oracle/main.cpp, tools/xenia_oracle/scripted_input.cc
+reconfirmed: 2026-08-06
+verified_at: 2026-08-06
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ tools/xenia_oracle + scratch/oracle/run/oracle11.log: 6254 swaps, 0 crashes, 115
 ## What would falsify it
 
 a run of tools/xenia_oracle on this ISO whose captured frames are uniform, or which logs a CRASH DUMP -- and note this says nothing about whether Xenia's pixels are CORRECT, only that they exist
+
+## Re-confirmed 2026-08-06
+
+Re-verified 2026-08-06 after the trace-wait and shm-unlink changes to tools/xenia_oracle/main.cpp. Two headless runs off the disc image with no window and no desktop dependency: scratch/oracle/live (7 frames at 30s intervals) and scratch/oracle/live2 (4 frames at 60s intervals), all 1280x720 PNGs. The gameplay ones are a lit scene, not black -- 120s mean R23.0 G23.5 B17.0 at 100% non-black, 180s mean R25.2 G25.5 B18.6 at 99.8%. The renderer inside it reported 1280-2125 draws recorded per frame with 0 dropped. Still true after the changes, and the changes are the reason it was re-checked.
