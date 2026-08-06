@@ -1536,3 +1536,88 @@ and counted. The way to do that is a scripted walk both sides reach gameplay on
 gameplay (measured: 4831 frames, never above 188 draws, i.e. still in menus),
 so `tools/capture_gameplay_frame.sh`'s walk is the one to port to the oracle
 rather than the reverse.
+
+### Note (2026-08-06)
+## WITHDRAWN: "our guest issues a third of the draws the oracle's does". It issues MORE.
+
+The note above offered a draw-count deficit as the single cause that might
+explain the missing character lighting, window bars and HUD together. It is
+wrong, and it was wrong in the same way as this session's earlier retraction:
+two numbers taken from DIFFERENT GAME MOMENTS and compared as if they were the
+same one.
+
+### Measured, on the runtime, at gameplay
+
+Four paths in `CaptureFrameDraw` discard a draw and NONE of them was counted, so
+"this frame had 800 draws" could not be distinguished from "this frame had 2400
+and we kept 800". They are counted now, and reported per frame with the
+denominator. On a scripted gameplay run:
+
+    frame has 3936 draws of 3936 the guest issued
+      (dropped: 0 no shader pair, 0 zero indices, 0 immediate-index,
+                0 after frame done)
+    frame has 3928 draws of 3928 ... 0 0 0 0
+    frame has 3911 draws of 3911 ... 0 0 0 0
+
+**3936 draws a frame, against the oracle's gameplay median of 2141. We issue
+MORE, and we drop NOTHING.** The 622-868 range quoted above comes from the
+captures in `scratch/frames/`, which are single frames from lighter moments; the
+live peak is four to six times that. There is no draw deficit.
+
+Also eliminated on the way, so nobody repeats them:
+
+  * **Predication is not dropping draws.** Ours is `(binSelect & binMask) != 0`,
+    byte-identical to Xenia's `pm4_command_processor_implement.h:411`, and the
+    per-frame census reports DRAW_INDX skip 0.
+  * **No unhandled draw opcode.** The IB census's `op0x27` and `op0x2b` are
+    IM_LOAD and IM_LOAD_IMMEDIATE, which we do handle -- they simply have no
+    entry in `OpcodeName()` and print as raw numbers.
+  * **Frame pacing is not a confound either way**: the oracle presents 7120
+    frames in 240 s (29.7 fps), ours 4831 in 170 s (28.4 fps).
+  * **Nor is EDRAM tiling**: the oracle resolves a median of 18 times per
+    gameplay frame, ours 16. A side replaying the command buffer over more tiles
+    would resolve proportionally more often.
+
+### What survives
+
+The instrumentation, which is worth keeping on its own: four silent data-loss
+paths in the draw capture now carry counters and print with their denominator,
+so a frame that loses geometry there can never again look like a frame that had
+none to lose.
+
+And the elimination stands: with no draw deficit, no dropped draws, a healthy
+interpolator, a correct vertex fetch, clean shader binding and a base pass whose
+rim gate is genuinely ~0, there is still no renderer-side explanation for the
+black character in `bright.gfr`.
+
+### Note (2026-08-06)
+## Two of the five differences do not reproduce on the LIVE game (2026-08-06)
+
+Everything on this entry has been argued from `.gfr` captures. Driving the real
+runtime through the menu walk with `GEARS_DRAW_FRAME_REPORT_EVERY=250` and
+looking at the frames it actually renders gives a different picture from the one
+this entry has been carrying.
+
+`scratch/live_shots/frame_04750.ppm` (mean 20.1, 5697 distinct colours): a
+prison wall, moss line, motion blur, and a small window at the upper left
+**showing its BARS as a clear cross pattern**. Difference 3 says "windows are
+flat grey blocks"; here the bar geometry renders.
+
+`scratch/live_shots/frame_04500.ppm`: an objective/subtitle panel at the top and
+**a HUD element at the bottom centre**. Difference 2 says "no HUD"; something of
+the HUD is drawing.
+
+Neither observation clears the renderer -- these are different moments from the
+one the original comparison used, which is exactly the trap this entry has now
+fallen into three times. What they do establish is that **differences 2 and 3 are
+not systemic**: the passes that draw window bars and HUD elements do run and do
+produce pixels. Whatever is wrong at the compared moment is narrower than "the
+pass is missing", and re-comparing at a matched moment is now the cheapest way
+to make progress on both.
+
+Peak live draw counts on that run: **4142 kept of 4142 issued**, zero dropped on
+all four paths.
+
+Difference 1 (the black character) is NOT in this category: it reproduces on
+every capture that contains a character, and the oracle frame captured today
+shows Marcus clearly lit. That one is real and still unexplained.

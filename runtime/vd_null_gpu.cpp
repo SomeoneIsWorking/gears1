@@ -692,6 +692,15 @@ struct CommandProcessor
     uint32_t skinnedScans = 0;
     uint32_t skinnedBestIndices = 0;
     uint32_t skinnedBestDraws = 0;
+    // EVERY DRAW THE GUEST ISSUED, AND EVERY REASON WE DROPPED ONE. Four paths
+    // in CaptureFrameDraw discard a draw, and none of them was counted, so
+    // "this frame had 800 draws" could never be distinguished from "this frame
+    // had 2400 and we kept 800". Reported per frame with the denominator.
+    uint32_t drawsOffered = 0;
+    uint32_t drawsNoShaderPair = 0;
+    uint32_t drawsZeroIndices = 0;
+    uint32_t drawsImmediateIndex = 0;
+    uint32_t drawsAfterFrameDone = 0;
     long framesRendered = 0;
     uint64_t lastRenderFrames = 0;
     uint64_t lastDroppedFrames = 0;
@@ -1182,22 +1191,40 @@ struct CommandProcessor
                           uint32_t initiator)
     {
         if (frameRenderDone)
+        {
+            ++drawsAfterFrameDone;
             return;
+        }
         const uint64_t vsHash = g_shaderCapture.activeVertexHash;
         const uint64_t psHash = g_shaderCapture.activePixelHash;
         auto vsIt = g_shaderCapture.shaders.find(vsHash);
         auto psIt = g_shaderCapture.shaders.find(psHash);
+        ++drawsOffered;
         if (vsIt == g_shaderCapture.shaders.end() ||
             psIt == g_shaderCapture.shaders.end() ||
             vsIt->second.type != 0 || psIt->second.type != 1 ||
             vsIt->second.ucode.empty() || psIt->second.ucode.empty())
-            return; // no bound pair yet (e.g. movie-internal draw) -- skip honestly
+        {
+            // "Skip honestly" was the intent, but skipping SILENTLY is not
+            // honest: this and the three returns below discard a draw the guest
+            // issued and, until they were counted, a frame that lost two thirds
+            // of its geometry here looked exactly like a frame that had none to
+            // lose. The oracle records ~2141 draws on a gameplay frame where we
+            // record ~800, at the same guest frame rate and the same resolve
+            // count, and these returns were the first place that gap could be
+            // hiding (catalog #77).
+            ++drawsNoShaderPair;
+            return;
+        }
 
         const uint32_t sourceSelect = (initiator >> 6) & 0x3;
         const uint32_t indexSizeBit = (initiator >> 11) & 0x1; // 0=int16,1=int32
         const uint32_t numIndices = (initiator >> 16) & 0xFFFF;
         if (numIndices == 0)
+        {
+            ++drawsZeroIndices;
             return;
+        }
         const uint32_t indexSizeBytes = indexSizeBit ? 4u : 2u;
 
         bool indexed = false;
@@ -1216,7 +1243,12 @@ struct CommandProcessor
         }
         else
         {
-            return; // kImmediate index source not handled yet
+            // kImmediate: the indices ride in the packet itself. Not decoded
+            // yet -- and counted rather than dropped in silence, because "we
+            // do not implement this" and "the title never uses it" are the same
+            // number of log lines otherwise.
+            ++drawsImmediateIndex;
+            return;
         }
 
         gears::FrameDrawItem item;
@@ -1287,8 +1319,14 @@ struct CommandProcessor
         {
             // Info, not debug: this line IS the draws-per-frame profile used to
             // choose which frame to capture. One line per frame, no other cost.
-            lucent::info("gpu", "guest-draw: frame {} has {} draws (waiting for {})",
-                frameSwaps, frameDraws.size(), target);
+            lucent::info("gpu", "guest-draw: frame {} has {} draws of {} the guest"
+                " issued (dropped: {} no shader pair, {} zero indices, {}"
+                " immediate-index, {} after frame done) (waiting for {})",
+                frameSwaps, frameDraws.size(), drawsOffered, drawsNoShaderPair,
+                drawsZeroIndices, drawsImmediateIndex, drawsAfterFrameDone,
+                target);
+            drawsOffered = drawsNoShaderPair = drawsZeroIndices = 0;
+            drawsImmediateIndex = drawsAfterFrameDone = 0;
             ++frameSwaps;
             frameDraws.clear();
             return;
@@ -1300,6 +1338,17 @@ struct CommandProcessor
         const long frameCount = lucent::config::number("DRAW_FRAME_COUNT", 0);
         if (frameCount > 0 && framesRendered >= frameCount)
             frameRenderDone = true;
+
+        // The same accounting for a frame that IS rendered. A capture whose
+        // draw list is short because we dropped the rest is the difference
+        // between "the guest drew this" and "this is what we kept of it".
+        lucent::info("gpu", "guest-draw: frame {} kept {} of {} draws the guest"
+            " issued (dropped: {} no shader pair, {} zero indices, {}"
+            " immediate-index, {} after frame done)",
+            frameSwaps, frameDraws.size(), drawsOffered, drawsNoShaderPair,
+            drawsZeroIndices, drawsImmediateIndex, drawsAfterFrameDone);
+        drawsOffered = drawsNoShaderPair = drawsZeroIndices = 0;
+        drawsImmediateIndex = drawsAfterFrameDone = 0;
 
         gears::FrameDrawInputs in;
         in.frontBufferAddress = frontBufferAddress;
