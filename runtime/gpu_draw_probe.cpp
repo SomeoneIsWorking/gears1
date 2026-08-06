@@ -40,6 +40,49 @@ void FrameProbe::Build(size_t nDraws, VkDeviceSize readbackBytes)
                 onlySurface);
         }
     }
+    // The render comparer's staging image and buffer. Sized for the whole
+    // frame's draws up front, because growing it mid-frame would reorder the
+    // copies already recorded into the command buffer.
+    if (const std::string& tp = lucent::config::text("DRAW_TRACE_ALL"); !tp.empty())
+    {
+        tracePath = tp;
+        VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        ci.imageType = VK_IMAGE_TYPE_2D;
+        ci.format = VK_FORMAT_R16G16B16A16_SFLOAT;
+        ci.extent = {kThumbW, kThumbH, 1};
+        ci.mipLevels = 1;
+        ci.arrayLayers = 1;
+        ci.samples = VK_SAMPLE_COUNT_1_BIT;
+        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+        ci.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        VkMemoryRequirements req{};
+        uint32_t type = 0;
+        if (vkCreateImage(R.device, &ci, nullptr, &thumbImage) == VK_SUCCESS)
+        {
+            vkGetImageMemoryRequirements(R.device, thumbImage, &req);
+            if (!R.FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
+                R.FindMemory(req.memoryTypeBits, 0, type);
+            VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            ai.allocationSize = req.size;
+            ai.memoryTypeIndex = type;
+            if (vkAllocateMemory(R.device, &ai, nullptr, &thumbMem) != VK_SUCCESS ||
+                vkBindImageMemory(R.device, thumbImage, thumbMem, 0) != VK_SUCCESS)
+            {
+                vkDestroyImage(R.device, thumbImage, nullptr);
+                thumbImage = VK_NULL_HANDLE;
+            }
+        }
+        const VkDeviceSize thumbBytes = VkDeviceSize(kThumbW) * kThumbH * 8;
+        if (thumbImage == VK_NULL_HANDLE ||
+            !R.MakeBuffer(thumbBytes * (nDraws + 2),
+                          VK_BUFFER_USAGE_TRANSFER_DST_BIT, thumbBuf, thumbBufMem, true))
+        {
+            lucent::warn("draw", "GEARS_DRAW_TRACE_ALL: could not create the"
+                " staging image or buffer, so NO comparison file will be"
+                " written and this run says nothing");
+            tracePath.clear();
+        }
+    }
     stepEvery = lucent::config::number("DRAW_FRAME_STEP", 0);
     stepFrom = lucent::config::number("DRAW_FRAME_STEP_FROM", 0);
     if (stepEvery > 0)
@@ -216,6 +259,50 @@ void FrameProbe::TracePixel(VkCommandBuffer cmd, uint32_t drawsSoFar,
     pixelSamples.push_back(PixelSample{drawsSoFar, surfaceBase, t->hostFormat});
 }
 
+// One thumbnail of the surface, blitted down and copied out, per draw.
+void FrameProbe::TraceAll(VkCommandBuffer cmd, uint32_t drawsSoFar,
+                          const SurfaceTarget* t, uint32_t surfaceBase)
+{
+    if (tracePath.empty() || !t || !t->begunThisFrame)
+        return;
+    if (!SurfaceWanted(surfaceBase))
+        return;
+    VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    b.srcAccessMask = 0;
+    b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    b.image = thumbImage;
+    b.subresourceRange = range;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+    // NEAREST, so the values are the surface's own rather than an average of
+    // them: a comparer that filters cannot tell a changed pixel from a moved one.
+    VkImageBlit bl{};
+    bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    bl.srcOffsets[1] = {int32_t(W), int32_t(H), 1};
+    bl.dstOffsets[1] = {int32_t(kThumbW), int32_t(kThumbH), 1};
+    vkCmdBlitImage(cmd, t->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        thumbImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, VK_FILTER_NEAREST);
+    VkImageMemoryBarrier r = b;
+    r.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    r.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    r.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &r);
+    VkBufferImageCopy rg{};
+    rg.bufferOffset = VkDeviceSize(thumbs.size()) * kThumbW * kThumbH * 8;
+    rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    rg.imageExtent = {kThumbW, kThumbH, 1};
+    vkCmdCopyImageToBuffer(cmd, thumbImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        thumbBuf, 1, &rg);
+    thumbs.push_back(ThumbSample{drawsSoFar, surfaceBase});
+}
+
 void FrameProbe::Report(const std::vector<PreparedDraw>& prepared)
 {
     // Checkpoint images, each labelled with how many draws had run.
@@ -300,6 +387,68 @@ void FrameProbe::Report(const std::vector<PreparedDraw>& prepared)
                    pixelSamples.size());
         tl.flush(lucent::Level::Info, "draw");
     }
+    // The render comparer's file. One row per draw: what the draw WAS, and a
+    // hash plus statistics of the surface AFTER it. Two runs give two files and
+    // tools/render_diff.py names the first row that differs.
+    if (!tracePath.empty())
+    {
+        std::ofstream tf(tracePath);
+        if (!tf)
+        {
+            lucent::error("draw", "GEARS_DRAW_TRACE_ALL: cannot write {}."
+                " Nothing was recorded", tracePath);
+        }
+        else
+        {
+            void* p = nullptr;
+            const size_t stride = size_t(kThumbW) * kThumbH * 4;
+            const VkDeviceSize bytes = VkDeviceSize(stride) * 2 * thumbs.size();
+            std::vector<uint16_t> all(stride * thumbs.size());
+            if (!thumbs.empty() &&
+                vkMapMemory(R.device, thumbBufMem, 0, bytes, 0, &p) == VK_SUCCESS)
+            {
+                std::memcpy(all.data(), p, size_t(bytes));
+                vkUnmapMemory(R.device, thumbBufMem);
+            }
+            tf << "draw\tdiag\tsurface\tps_hash\tthumb_hash"
+                  "\tmaxR\tmaxG\tmaxB\tmeanR\tmeanG\tmeanB\n";
+            for (size_t i = 0; i < thumbs.size(); ++i)
+            {
+                const uint32_t n = thumbs[i].draws;
+                const PreparedDraw* by = (n >= 1 && n <= prepared.size())
+                                       ? &prepared[n - 1] : nullptr;
+                double mx[3] = {-1e30, -1e30, -1e30}, sum[3] = {0, 0, 0};
+                uint64_t hash = 1469598103934665603ull;   // FNV-1a
+                for (size_t k = 0; k < size_t(kThumbW) * kThumbH; ++k)
+                {
+                    for (int c = 0; c < 4; ++c)
+                    {
+                        const uint16_t bits = all[i * stride + k * 4 + c];
+                        hash = (hash ^ bits) * 1099511628211ull;
+                        if (c < 3)
+                        {
+                            const float v = HalfToFloat(bits);
+                            if (v > mx[c]) mx[c] = v;
+                            sum[c] += v;
+                        }
+                    }
+                }
+                const double px = double(kThumbW) * kThumbH;
+                tf << n << '\t' << (by ? int64_t(by->diagIndex) : -1)
+                   << '\t' << std::hex << "0x" << thumbs[i].surface << std::dec
+                   << '\t' << std::hex << (by ? by->psHash : 0) << std::dec
+                   << '\t' << std::hex << hash << std::dec
+                   << '\t' << mx[0] << '\t' << mx[1] << '\t' << mx[2]
+                   << '\t' << sum[0] / px << '\t' << sum[1] / px
+                   << '\t' << sum[2] / px << '\n';
+            }
+            lucent::info("draw", "render comparer: {} row(s) written to {}"
+                " ({}x{} thumbnails). Diff two of these with"
+                " tools/render_diff.py", thumbs.size(), tracePath,
+                kThumbW, kThumbH);
+        }
+    }
+
     // NO SILENT TRUNCATION. A capped census that does not say it was capped reads
     // as full coverage of the frame.
     if (checkpointsSkipped != 0)

@@ -913,3 +913,51 @@ consecutive samples. The candidates that survive:
      counter it prints is the PREPARED count, not what was drawn -- B rests on
      the surface probe rather than on that line, but the knob's scope should be
      read before leaning on it again.
+
+### Note (2026-08-06)
+## Built a render comparer instead of continuing one hypothesis per iteration
+
+`GEARS_DRAW_TRACE_ALL=<path.tsv>` writes one row per issued draw -- the draw's
+identity plus a hash and per-channel statistics of a 32x18 thumbnail of the
+surface AFTER it -- and `tools/render_diff.py a.tsv b.tsv` names the first draw
+where two runs diverge. `--selftest` covers both classes plus a shifted stream
+and a missing file.
+
+### It invalidated the A/B I had planned, on its first run
+
+The plan was collapsed-tiling versus `GEARS_DRAW_TILED=1`. The comparer refuses
+to report pixel differences for it:
+
+    THE DRAW STREAMS DIVERGE at row 434: collapsed has guest draw 611,
+    tiled has 435. The two runs are not issuing the same draws, so a
+    per-row comparison after this point compares different draws.
+
+550 rows against 724. The collapse removes draws, so every row after the first
+collapse compares two DIFFERENT draws, and any pixel difference is unattributable.
+That would have produced a confident wrong answer had I run it by hand, which is
+what the previous iterations were doing.
+
+### An aligned comparison, and what it says
+
+Against `GEARS_DRAW_FORCE_LDR=1` (same draw stream, 550 rows both sides):
+
+    FIRST DIVERGENCE at row 435 -- 435 rows matched before it
+    draw 437 (guest 612) surface 0x2d0 ps 272c76c2a6cc
+      normal     max 2.9785  3.2402  3.1836
+      force_ldr  max 1.0000  1.0000  1.0000
+
+So guest draw 612 is where content first appears on surface 0x2d0, the content
+is above 1.0, and it is the first draw at which the widened host format matters
+at all. The three preceding rows are 0.0000 on both arms.
+
+### The contradiction stands, and is now sharper
+
+Guest draw 612 is where the surface first holds HDR content, and
+`GEARS_DRAW_ONLY=612` renders that draw alone to an entirely empty surface. Both
+measurements are now backed by a tool that compares whole surfaces rather than
+one texel, and they still disagree.
+
+Note the thumbnail's own limit, which the tool states: 32x18 NEAREST samples 576
+of 921,600 pixels, so its 2.98 is not the 37.09 the pixel trace reads at
+(368,247) -- it never lands on that texel. The two instruments measure the same
+draw, not the same pixel.
