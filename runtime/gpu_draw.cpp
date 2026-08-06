@@ -1935,6 +1935,53 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
     }
 
+    // GEARS_DRAW_SURFACE_RANGE=1: the RANGE OF A SURFACE, not of a resolve
+    // destination.
+    //
+    // Every range this renderer reports comes from a resolve DESTINATION,
+    // because those are the only images it dumps. That is the wrong side of the
+    // question whenever a pass renders wrong: catalog #81 needed "does surface
+    // 0x2d0 exceed 8.0" and there was no way to ask it, so the range had to be
+    // inferred backwards through a resolve's exponent bias.
+    //
+    // Reports per channel, and counts the pixels ABOVE 1.0 -- an HDR surface
+    // that never exceeds 1.0 is the specific thing worth noticing, and a max
+    // alone can be a single stray pixel.
+    struct SurfDump { uint32_t base; VkFormat fmt; VkBuffer buf; VkDeviceMemory mem; };
+    std::vector<SurfDump> surfDumps;
+    if (lucent::config::flag("DRAW_SURFACE_RANGE"))
+    {
+        for (auto& [base, st] : P.surfaceTargets)
+        {
+            uint32_t bpp = 0;
+            if (st.hostFormat == VK_FORMAT_R8G8B8A8_UNORM) bpp = 4;
+            else if (st.hostFormat == VK_FORMAT_R16G16B16A16_SFLOAT) bpp = 8;
+            if (bpp == 0)
+            {
+                // REFUSED, not guessed. Reading these bytes as a format they are
+                // not is how the resolve dump once reported 0.000 for every
+                // depth target, which looks exactly like "nothing was written".
+                lucent::warn("draw", "GEARS_DRAW_SURFACE_RANGE: surface {:#x} is"
+                    " host format {} which this probe cannot decode, so NO range"
+                    " is reported for it", base, uint32_t(st.hostFormat));
+                continue;
+            }
+            const VkDeviceSize bytes = VkDeviceSize(W) * H * bpp;
+            VkBuffer b = VK_NULL_HANDLE; VkDeviceMemory m = VK_NULL_HANDLE;
+            if (!MakeBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m, true))
+                continue;
+            VkBufferImageCopy rg{};
+            rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            rg.imageExtent = {W, H, 1};
+            vkCmdCopyImageToBuffer(cmd, st.color,
+                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b, 1, &rg);
+            surfDumps.push_back({base, st.hostFormat, b, m});
+        }
+        if (surfDumps.empty())
+            lucent::warn("draw", "GEARS_DRAW_SURFACE_RANGE: no surface could be"
+                " read back, so this run says NOTHING about any surface's range");
+    }
+
     VK_CHECK(vkEndCommandBuffer(cmd));
 
     AR.EndFrame();
@@ -1952,6 +1999,54 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     VK_CHECK(vkQueueSubmit(queue, 1, &submit, fence));
     VK_CHECK(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
     accumulate(msSubmit, tSubmit);
+
+    for (const SurfDump& sd : surfDumps)
+    {
+        const uint32_t bpp = sd.fmt == VK_FORMAT_R8G8B8A8_UNORM ? 4u : 8u;
+        const VkDeviceSize bytes = VkDeviceSize(W) * H * bpp;
+        void* mapped = nullptr;
+        if (vkMapMemory(device, sd.mem, 0, bytes, 0, &mapped) == VK_SUCCESS)
+        {
+            float lo[4] = {1e30f, 1e30f, 1e30f, 1e30f};
+            float hi[4] = {-1e30f, -1e30f, -1e30f, -1e30f};
+            double sum[4] = {0, 0, 0, 0};
+            uint64_t above1 = 0;
+            const size_t px = size_t(W) * H;
+            for (size_t i = 0; i < px; ++i)
+            {
+                float v[4];
+                if (bpp == 4)
+                {
+                    const uint8_t* p8 = static_cast<const uint8_t*>(mapped) + i * 4;
+                    for (int c = 0; c < 4; ++c) v[c] = p8[c] / 255.0f;
+                }
+                else
+                {
+                    const uint16_t* p16 =
+                        static_cast<const uint16_t*>(mapped) + i * 4;
+                    for (int c = 0; c < 4; ++c) v[c] = HalfToFloat(p16[c]);
+                }
+                bool over = false;
+                for (int c = 0; c < 4; ++c)
+                {
+                    if (v[c] < lo[c]) lo[c] = v[c];
+                    if (v[c] > hi[c]) hi[c] = v[c];
+                    sum[c] += v[c];
+                    if (c < 3 && v[c] > 1.0f) over = true;
+                }
+                if (over) ++above1;
+            }
+            vkUnmapMemory(device, sd.mem);
+            lucent::info("draw", "surface {:#x} range: R {:.4f}..{:.4f} G"
+                " {:.4f}..{:.4f} B {:.4f}..{:.4f} | means R {:.4f} G {:.4f} B"
+                " {:.4f} | {} of {} px have a colour channel ABOVE 1.0 ({:.2f}%)",
+                sd.base, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2],
+                sum[0] / double(px), sum[1] / double(px), sum[2] / double(px),
+                above1, px, 100.0 * double(above1) / double(px));
+        }
+        vkDestroyBuffer(device, sd.buf, nullptr);
+        vkFreeMemory(device, sd.mem, nullptr);
+    }
 
     for (const ResolveDump& rd : resolveDumps)
     {

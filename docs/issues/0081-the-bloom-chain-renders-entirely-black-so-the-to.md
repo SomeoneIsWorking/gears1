@@ -188,3 +188,6 @@ and which of the three sources served it -- this frame's resolve target, a guest
 texture, or a stub. The frame report only ever counted bindings by kind across
 the whole frame, and three separate investigations have had to infer a single
 pass's inputs from those aggregates.
+
+### Note (2026-08-06)
+Third instrument agrees the bloom surface is empty: GEARS_DRAW_SURFACE_RANGE reports surface 0x5a0 at 0.0000..0.0000 on every channel. And the upstream question this entry handed over now has a measured answer -- surface 0x400, the HDR scene, peaks at 2.19 with 0.19% of pixels above 1.0, where bloom's threshold implies it must reach 8.0. So the scene is real HDR but about 3.7x too dim, which matches the ~3.4x shortfall #62 measures at the other end of the pipeline.
