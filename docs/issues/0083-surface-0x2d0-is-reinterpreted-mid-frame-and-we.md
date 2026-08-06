@@ -218,3 +218,62 @@ surface's interpretation need to BE at draw 716". #83's format list has draw 716
 at fmt 0, i.e. back to k_8_8_8_8 -- so if our tracking leaves it float at that
 point, the final pass reads through the wrong layout and that alone would produce
 this. CHECK THAT FIRST; it is cheaper than reworking the coverage.
+
+### Note (2026-08-06)
+## The "left in the float interpretation at 716" hypothesis is DEAD, and bloom needs this pass
+
+### Killed, by one column of the diag table
+
+The previous note said to check first whether our format tracking leaves 0x2d0
+in the float interpretation at draw 716, where the guest declares k_8_8_8_8. It
+cannot matter:
+
+    draw  color_fmt  prim_name      frag_invocations  color_mask  blend_on
+    716   0          triangle_list  921600            15          0
+
+**blend_on 0.** Draw 716 is a pure full-screen write that samples textures and
+never reads its own render target, so whatever interpretation 0x2d0 is left in
+immediately before it is discarded. Recorded because it was this entry's stated
+next step and it is an hour nobody else needs to spend.
+
+(Also corrected: draws 708-714, which I read as a k_16_16_16_16_FLOAT phase on
+0x2d0, are on surface 0x5a0 -- the frame report's "8@0x5a0:f7" says so. They are
+the bloom chain, not part of 0x2d0's format sequence.)
+
+### So the ceiling propagates through the RESOLVE TARGETS 716 samples
+
+Resolve destinations at end of frame, both arms, same capture:
+
+                    REINTERP OFF                  REINTERP ON
+    0xbdf0000       0..0.305   99.3% non-zero     0..3.984   99.3%
+    0xc7f9000       0..0.331   99.3%              0..1.000   99.3%
+    0x6e4000        0..0.050    1.6%              0..3.586   32.2%
+    0x311000        0..0.331  100.0%              0..1.000   99.3%
+
+### THE PASS IS NOT OPTIONAL: bloom only exists with it on
+
+0x6e4000 is the bloom resolve destination. With the pass OFF it is 1.6% non-zero
+with a maximum of 0.05 -- which is catalog #81's "the whole bloom chain renders
+black", still true today and NOT caused by anything else. With the pass ON it is
+32.2% non-zero reaching 3.586.
+
+#81 derived a quantitative target for this: the bright pass thresholds with sgt
+against 1.0 and its input carries copy_dest_exp_bias -3, so the source must
+reach 8.0 for bloom to exist at all. OFF we reach 0.305; ON we reach 3.98. Still
+short of 8.0, but thirteen times closer, and the effect goes from nothing to a
+third of the buffer.
+
+So #81 and this entry are the same defect seen from two ends, and the
+reinterpretation is REQUIRED rather than a candidate. That reframes the work:
+the question is not "should this pass exist" but "why does applying it
+over-brighten the mid-tones", with the coverage measurement from the previous
+note (29% of the screen declares the float layout; we convert 100%) as the
+leading answer.
+
+### Honest status
+
+Neither arm is shippable and the entry stays `investigating`. OFF is correct to
+p90 and has no highlights and no bloom; ON has highlights and bloom and is 2.2x
+too bright at the median. The reference lies between them, and no global scale
+moves one arm onto it -- which is why this is a coverage question, not a
+tuning one.
