@@ -130,6 +130,17 @@ struct FrameDrawInputs
 // it could not issue with the reason. Returns true if the frame rendered.
 bool RenderFrame(const FrameDrawInputs& in);
 
+// Drops everything the renderer keeps between frames -- surfaces, pipelines,
+// shader translations, caches -- so the next RenderFrame rebuilds from nothing.
+//
+// The interleaved comparer needs this and nothing else does: the two arms must
+// each be a CLEAN render, and almost every knob worth comparing is consumed
+// while building persistent state. A surface's host format is chosen once, when
+// the surface is created, so arm B silently inherits arm A's surfaces and the
+// knob appears to change nothing -- which reads exactly like "the knob does not
+// matter".
+void ResetRendererForComparison();
+
 // The last frame RenderFrame read back, as tightly-packed R8G8B8A8 rows,
 // 1280x720, or empty if none. The presenter uploads this into the swapchain
 // when it cannot blit the drawn image directly (the two sides ended up on
