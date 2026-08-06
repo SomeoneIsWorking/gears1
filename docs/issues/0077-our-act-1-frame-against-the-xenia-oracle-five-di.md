@@ -3046,3 +3046,52 @@ says draw 460 writes exact zero at that pixel.
 The instruments need validating against each other on a case with a known
 answer before any of them is used again for this question. That is a session's
 work on its own and it is the honest prerequisite for everything above.
+
+### Note (2026-08-06)
+## RESOLVED: the contradictions were an off-by-two draw index. Both anomalies explained.
+
+The four mutually inconsistent readings above have one cause, and it is mine.
+
+`GEARS_DRAW_FRAME_STEP_FROM` and `GEARS_DRAW_ONLY` both index by ISSUED
+draw, and `docs/knobs.md` says so in bold. The character's draw is diag 460,
+and from `GEARS_DRAW_TRACE_ALL`'s own draw/diag columns:
+
+    draw(issued) 460 -> diag 459   ps 63dc93a9c0911b7f
+    draw(issued) 461 -> diag 460   ps f662d670789bfac0   <- the character
+
+**diag 460 is issued 461.** I used 459 for both knobs, which is diag 458 -- a
+different draw entirely. That single error explains both anomalies without
+anything else being wrong:
+
+  * `GEARS_DRAW_ONLY=459` rendered 0 non-black pixels because it rendered
+    diag 458, not the character. My conclusion 'draw 460 alone produces
+    nothing' was about the wrong draw.
+  * the FRAME_STEP checkpoint pair changed 29,017 pixels at x 816..964 -- far
+    from the character at x 60..240 -- because it bracketed diag 458. Readings
+    (3) and (4) are measurements of that draw, correctly reported by the
+    instrument and mislabelled by me.
+
+The instruments were not lying and do not need cross-validating. I misused two
+of them the same way, and the knob documentation warns about exactly this trap
+in two separate places.
+
+### What survives
+
+Reading (1) stands and is now the only one about the character: PIXEL_TRACE
+reports by DIAG index and names the shader hash in its output row --
+`<- draw 460 ps 0xf662d670789bfac0` -- so it was always pointed at the right
+draw. At (150,300) on surface 0x400 it writes **(0, 0, 0, 1)**, exact zero, in
+the surface's own HDR format before any resolve or post.
+
+Reading (2), the debug-shader trace at the same pixel, is likewise correctly
+indexed: gate 0.0124, normalize(o2).z = +0.287, ramp 0. Both are valid and they
+agree with each other -- a nearly-shut gate multiplying to nothing.
+
+### The measurement still wanted
+
+A checkpoint pair bracketing issued 461. The obvious attempt
+(`FRAME_STEP_FROM=461`) yields only `frame_after0461.ppm`: diag 461 and 462
+are RESOLVES, and a checkpoint asked for right after a resolve is the case
+knobs.md records as previously vanishing. So the gate's distribution across the
+whole character remains unmeasured, and the route to it is a checkpoint taken
+BEFORE the resolve boundary rather than after.
