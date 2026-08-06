@@ -54,6 +54,7 @@
 #include "gpu_draw.h"
 #include "render_thread.h"
 #include "frame_capture.h"
+#include "frame_content.h"
 #include "hle_d3d.h"
 #include "guest_thread.h"
 #include "wait_probe.h"
@@ -684,6 +685,13 @@ struct CommandProcessor
     bool frameRenderDone = false;
     // One frame capture per run (GEARS_DRAW_FRAME_DUMP), not one per frame.
     bool frameDumpWritten = false;
+    // GEARS_DRAW_FRAME_DUMP_SKINNED: how many frames the character scan has
+    // rejected, and the best it has seen. A run that scans for ten minutes and
+    // finds nothing must say what it scanned -- silence would be
+    // indistinguishable from a scan that never ran.
+    uint32_t skinnedScans = 0;
+    uint32_t skinnedBestIndices = 0;
+    uint32_t skinnedBestDraws = 0;
     long framesRendered = 0;
     uint64_t lastRenderFrames = 0;
     uint64_t lastDroppedFrames = 0;
@@ -1346,10 +1354,57 @@ struct CommandProcessor
         // in a second, is the only way to compare two renderer arms on identical
         // input. Written for the REPORTED frame only, so a live run leaves one
         // capture rather than one per frame.
+        //
+        // GEARS_DRAW_FRAME_DUMP_SKINNED=1 makes the capture SELF-SELECTING: the
+        // run keeps scanning and dumps the first frame that submits a skinned
+        // character mesh, instead of dumping whichever frame the report cadence
+        // happens to land on. Three attempts to capture a character by timing a
+        // scripted walk produced none, because Gears' camera sits behind the
+        // player and a walk frequently has them out of frame; at four minutes an
+        // attempt with catalog #44's one-in-three crash, choosing by hand is a
+        // coin flip. See frame_content.h -- and note what the gate does NOT
+        // claim: that the character is VISIBLE. It selects frames that SUBMIT a
+        // character, because "does the character survive to the screen" is the
+        // defect under investigation and gating on it would be gating on the
+        // bug's absence.
         const std::string& dumpPath = lucent::config::text("DRAW_FRAME_DUMP");
-        if (!dumpPath.empty())
-            if (in.report && !frameDumpWritten)
+        if (!dumpPath.empty() && !frameDumpWritten)
+        {
+            if (lucent::config::flag("DRAW_FRAME_DUMP_SKINNED"))
+            {
+                const gears::SkinnedFrameCensus c = gears::ScanForSkinnedCharacter(
+                    in, uint32_t(lucent::config::number("SKINNED_MIN_INDICES",
+                                     gears::kDefaultSkinnedMinIndices)));
+                ++skinnedScans;
+                skinnedBestIndices = std::max(skinnedBestIndices,
+                                              c.largestSkinnedIndices);
+                skinnedBestDraws = std::max(skinnedBestDraws, c.skinnedDraws);
+                if (c.Passed())
+                {
+                    lucent::info("gpu", "guest-draw: frame {} is the first to"
+                        " submit a skinned character, after {} frames scanned."
+                        " Capturing it", frameSwaps, skinnedScans);
+                    gears::ReportSkinnedFrameCensus(c);
+                    frameDumpWritten =
+                        gears::WriteFrameCapture(dumpPath.c_str(), in);
+                }
+                else if (skinnedScans == 1 || skinnedScans % 300 == 0)
+                {
+                    // The periodic negative, with what the scan HAS seen. A run
+                    // that never finds a character has to be distinguishable
+                    // from one whose scan is broken.
+                    lucent::info("gpu", "guest-draw: {} frames scanned, none has"
+                        " submitted a skinned character yet (best so far: {}"
+                        " skinned draws in a frame, largest {} indices)",
+                        skinnedScans, skinnedBestDraws, skinnedBestIndices);
+                    gears::ReportSkinnedFrameCensus(c);
+                }
+            }
+            else if (in.report)
+            {
                 frameDumpWritten = gears::WriteFrameCapture(dumpPath.c_str(), in);
+            }
+        }
 
         // A CAPTURE OR MEASUREMENT RUN RENDERS IN LINE, a live run does not.
         // GEARS_DRAW_FRAME_COUNT>0 means "render exactly these N frames and report

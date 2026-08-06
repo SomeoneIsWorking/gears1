@@ -1189,3 +1189,80 @@ this is an expensive coin flip. Two better routes:
 
 `prison_turn.gfr` is worth keeping regardless: it is the richest gameplay frame
 in the tree and the first that visibly exercises motion blur.
+
+### Note (2026-08-06)
+## The tree already had four character captures, not one. And the character's colour-writing draws die at CLIP.
+
+The three failed capture attempts above were followed by the cheaper route
+they recommended: make the capture SELF-SELECTING. That is now built, and
+running it corrected two things this entry believed.
+
+### The detector, and why it is not a heuristic over constant values
+
+A UE3 skinned mesh transforms each vertex by bone matrices fetched from a
+palette of float constants indexed by the vertex's own blend indices, which
+compiles to a float-constant read through the address register (a0). Rigid
+geometry has no reason to index constants dynamically. So "is this a skinned
+mesh" is answered by Xenia's ucode analysis
+(`constant_register_map().float_dynamic_addressing`), not by guessing which
+constant rows look like a matrix -- which is what the by-hand check did.
+
+  * `runtime/frame_content.{h,cpp}` -- the scan and its census
+  * `GEARS_SKINNED_CHECK=1` (frame_replay) -- exit 0 found / 3 none / 2 no
+    translator; `GEARS_SKINNED_CHECK_LIST=1` lists every skinned draw
+  * `tools/skinned_frames.sh` -- the table; `--selftest` runs BOTH classes
+    (bright.gfr must be FOUND, courtyard.gfr must be NONE) and passes
+  * `GEARS_DRAW_FRAME_DUMP_SKINNED=1` -- the runtime gate
+
+### Correction 1: bright.gfr was NOT the only capture with a character
+
+Over all 15 captures in the tree: **4 contain skinned character draws** --
+bright, black, play_v2 and prison_turn -- not one. Eleven do not, including the
+744-draw gameplay frames act1, courtyard, walk_gameplay and walk_v3, so this is
+not "any big frame passes".
+
+prison_turn.gfr in particular was rejected by the note above as containing no
+character. It contains **17 skinned draws across 4 distinct skinned shaders**,
+including three 30720-index meshes. The earlier rejection looked at the largest
+meshes and their clip verdicts, saw them all killed or masked, and concluded
+there was no character on screen. The character is there; its draws die.
+
+### Correction 2: the walk CAN frame a character -- the timing was the problem
+
+One 260-second run with the gate on scanned **2614 frames** and captured the
+first one that submitted a character, at guest frame 2913:
+`scratch/frames/character_auto.gfr` -- 750 draws, 12 skinned draws, 5 distinct
+skinned shaders, meshes up to 36732 indices, two actors. The walk was never the
+obstacle; choosing the frame by wall-clock was.
+
+### What the captures then show, and it is a lead
+
+Joining the skinned draws against the diag table, counting colour-writing
+(color_mask != 0) skinned draws by whether anything survived clip:
+
+    capture          colour-writing: survive / killed at clip   masked, surviving
+    bright                 3 / 0                                       6
+    black                  3 / 0                                       6
+    play_v2                2 / 13                                      9
+    prison_turn            0 / 9                                       5
+    character_auto         0 / 3                                       5
+
+In three of five captures EVERY colour-writing character draw has
+`prims_after_clip = 0`, while the SAME actor's colour-masked draws (the depth
+and velocity passes) rasterise thousands of primitives in the same frame.
+
+That the two are the same actor is measured, not assumed:
+`GEARS_DRAW_VS_CONSTS=492,520` on character_auto shows draws 492 (10292 prims,
+mask 15, 0 after clip) and 520 (10292 prims, mask 0, 4306 after clip) carrying
+**identical bone rows** -- same skeleton, same pose, same frame. They differ in
+vertex shader (0xd1f8fda33c3a18cc vs 0x8354e5cc00c0a98c) and constant layout.
+
+So "the player is off screen" cannot explain the kill: the geometry is on
+screen for the pass that does not write colour. And bright.gfr, the one capture
+where a colour-writing character draw DOES survive clip, is the one where it
+renders black. Between them those are the two shapes this entry has to explain,
+and the second one now has a stage attached to it: clip, not shading.
+
+Next: root-cause the clip kill on character_auto draw 492 (10292 prims in, 0
+out) against draw 520, which survives with the same pose. The two shaders'
+position transforms are the thing that differs.

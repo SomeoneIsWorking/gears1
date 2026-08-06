@@ -306,6 +306,24 @@ bool DeriveShaderModifications(const uint32_t* registerFile,
     return true;
 }
 
+VertexShaderShape AnalyzeVertexShaderShape(const uint8_t* ucode, size_t size,
+                                           uint64_t hash)
+{
+    VertexShaderShape out;
+    xe::gpu::SpirvShader* shader =
+        GetAnalyzedShader(xenos::ShaderType::kVertex, ucode, size, hash);
+    // ok stays false, which the caller must count as "could not see", never as
+    // "not skinned": a shader this cannot read is a BLIND SPOT in the census,
+    // and one reported as a negative would be a lie.
+    if (!shader)
+        return out;
+    const auto& map = shader->constant_register_map();
+    out.ok = true;
+    out.floatDynamicAddressing = map.float_dynamic_addressing;
+    out.floatCount = map.float_count;
+    return out;
+}
+
 bool TranslateHotPair(const uint32_t* registerFile,
                       const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
                       const uint8_t* psUcode, size_t psSize, uint64_t psHash,
