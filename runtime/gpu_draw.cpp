@@ -1551,7 +1551,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // without anything before it having painted the target, which is the only
     // way to tell "this draw contributes nothing" from "something later
     // overwrote it".
+    // The index is the ISSUED one -- how many draws this renderer has emitted
+    // before it -- NOT the `draw` column of the diag table, which is the guest's
+    // index and is larger wherever draws are dropped or collapsed. Passing a
+    // guest index matches nothing and renders an empty frame, which reads as
+    // "that draw contributes nothing" and cost this project several iterations
+    // of a phantom contradiction. It is reported below either way.
+    //
+    // And what it shows is that draw's shader OVER THE CLEAR, with nothing
+    // before it: a draw that samples a resolve target or a rendered texture has
+    // no inputs in this arm and will produce black no matter how correct it is.
+    // "Renders nothing under DRAW_ONLY" is therefore NOT evidence that a draw
+    // writes nothing.
     const long onlyDraw = lucent::config::number("DRAW_ONLY", -1);
+    uint32_t onlyDrawMatched = 0;
     uint32_t drawn = 0, segments = 0, surfaceSwitches = 0, resolvesDone = 0;
     uint32_t depthClearsDone = 0;
     uint32_t depthResolvesDone = 0, depthResolvesSkipped = 0;
@@ -1696,6 +1709,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             ++resolvesDone;
             continue;
         }
+        if (onlyDraw >= 0 && long(drawn) == onlyDraw)
+            ++onlyDrawMatched;
         if (onlyDraw >= 0 && long(drawn) != onlyDraw)
         { ++drawn; continue; }
         if (PB.CheckpointDue(drawn))
@@ -2594,6 +2609,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         lucent::info("draw", "frame mid-stream depth clears: {} executed of {}"
             " carried by the frame's copy draws (the guest clears depth once per"
             " predicated tile)", depthClearsDone, RT.midFrameDepthClears);
+        if (onlyDraw >= 0)
+            lucent::info("draw", "GEARS_DRAW_ONLY={}: matched {} draw(s) of the"
+                " {} this frame ISSUED (the index counts issued draws, not the"
+                " diag table's guest index). It renders that draw over the"
+                " CLEAR, so a draw that samples a resolve target or a rendered"
+                " texture has no inputs here and produces black however correct"
+                " it is", onlyDraw, onlyDrawMatched, drawn);
         lucent::info("draw", "frame render pass: {} segments across {} surface"
             " switches, {} resolves executed (RT link {})", segments,
             surfaceSwitches, resolvesDone, TB.rtLinkEnabled ? "on" : "off");
