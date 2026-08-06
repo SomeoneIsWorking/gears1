@@ -2425,3 +2425,55 @@ match, then the two sides submit identical character geometry and the difference
 is purely in what the shading produces, which puts it back inside the renderer
 and makes the view-angle reading the leading one. If they do NOT match, the
 missing draws are found.
+
+### Note (2026-08-06)
+## CONFIRMED on a second shader: both sides submit the same character geometry
+
+The previous note measured one skinned vertex shader and found the counts equal.
+The follow-up it named has now run on the most-bound one.
+
+    vs 0x8354e5cc00c0a98c
+      ORACLE, 1337 frames with it bound:
+        4 draws  x475     5 draws  x404     3 draws  x220
+        9 draws  x115     6 draws  x102     2 draws  x17    1 draw x4
+      OURS:
+        bright.gfr 4      black.gfr 4       character_auto.gfr 5
+
+Our three values are 4, 4 and 5 -- the oracle's two modal buckets, which
+together account for 879 of its 1337 frames. Combined with the earlier shader
+(2 on both sides, 849 of 879 oracle frames at 2):
+
+    vs 15cbc482459fe5b7   ours 2, 2, 2      oracle modal 2
+    vs 8354e5cc00c0a98c   ours 4, 4, 5      oracle modal 4 and 5
+
+### What this settles
+
+**We are not missing character draws.** Two independent skinned shaders, and in
+both cases our per-frame bind counts land on the reference's modal values. The
+guest submits the character's geometry the way the console does.
+
+That retires this entry's long-standing reading -- "the character has no lit
+diffuse pass, so the guest is not submitting it, so this is CPU-side #58". It is
+not a submission problem. **The same draws exist on both sides, and one side
+lights the character while the other paints it black, so the difference is in
+what those draws PRODUCE.** That is inside the renderer, or in the
+view-dependent inputs it is handed.
+
+### Honest limits of this measurement
+
+Distributions, not a matched moment: the counts vary with how many characters
+are on screen (the oracle's spread from 1 to 9 is exactly that), so equality of
+modes is strong evidence and not proof. Two shaders of the frame's four are
+compared; the remaining two (0xf3e9368c1bb68ecc and 0x57997d3a9dbfd37e, both
+bound twice by us) are unmeasured on the oracle side.
+
+### Where a next session should start
+
+Inside the renderer, on those two draws -- not on #58. The specific question is
+now the one the START HERE block frames: the material's gate is
+`saturate(0.3 - normalize(o2).z)`, view-dependent by design, and the open
+reading is whether it is legitimately open at the oracle's viewing angle and
+legitimately closed at ours (in which case Marcus's visible lighting comes from
+elsewhere in the frame and the black base pass is a red herring), or whether our
+o2 differs. A matched-moment capture answers it, and every piece of tooling for
+one now exists.
