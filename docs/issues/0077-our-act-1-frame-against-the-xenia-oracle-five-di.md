@@ -2695,3 +2695,61 @@ pass works and the comparison was the fault; if they stay black, the defect is
 real and now very tightly bounded. That needs no oracle at all, only a capture
 where the camera is off-axis to the character, which
 `GEARS_DRAW_FRAME_DUMP_SKINNED=1` can select.
+
+### Note (2026-08-06)
+## MEASURED: the gate is OPEN on 70.6% of the character. This contradicts a standing claim.
+
+Branch (3) -- "the oracle image is a different moment and its lit back is
+grazing-angle rim" -- implies our gate should be shut wherever the character
+faces us and open at the silhouette. `runtime/shaders/debug_interpolator.frag`'s
+header goes further and asserts the gate is "exactly 0". Both are now measured
+against, and neither survives.
+
+The shader's body was changed to emit the gate directly (its header invites
+exactly this, and was updated in the same edit). All three channels are in
+[0,1], so unlike the o2-raw build an 8-bit readback is safe -- that was the flaw
+in my earlier attempt at this, retracted above.
+
+Over 48,441 character pixels of bright.gfr:
+
+    R  gate      = saturate(0.3 - nz)   mean 0.347   max 1.000
+    B  gateWrong = saturate(1.0 - nz)   mean 0.514   max 1.000
+    G  normalize(o2).z                  mean -0.237  median -0.514
+
+    fraction of character pixels with nz < 0.3, i.e. GATE OPEN:  70.6%
+
+The two gate forms are emitted together on purpose so a run cannot be confused
+with the historical builds, and they behave as they should: both saturate, so
+they differ by 0.167 on average rather than by the 0.7 the raw expressions would.
+
+### The contradiction, stated plainly
+
+The header says "the real gate is exactly 0"; measured, it is non-zero on
+essentially every character pixel and open (nz < 0.3) on 70.6% of them. One of
+the two is wrong. The header's claim is an assertion following the reduction and
+cites no measurement; this is a direct render with an internal control. That
+does not make it right, but it does make it the thing to check first.
+
+### If the measurement stands, the consequence is large
+
+With gate ~0.35, r4.w ~0.90 (measured from the normal map) and c254.w = 8, the
+shader's output is `colour * 0.35 * 0.90 * 8 ~ colour * 2.5`. The character is
+black, so **`colour` -- albedo x env-ramp -- must be the zero**, which is the
+env-ramp fetch localised several notes above.
+
+That reopens the ramp as the cause. The header dismisses it -- "the ramp is
+downstream of the gate, so lighting it proves nothing about the cause" -- and
+that dismissal is only valid IF the gate is 0. It is measured open, so the ramp
+is not downstream of a zero and the dismissal does not apply.
+
+This also matches the one independent check already on record: `GEARS_DRAW_NOTEX=1`,
+which replaces every texture with a white stub, takes the character region from
+max 0 to max 175. A gate that was shut would have kept it black.
+
+### What to do with this
+
+Resolve the contradiction before building on either side of it. The cheapest
+route is `tools/ucode_reduce.py`'s reduction of this shader, read at t42/t70 --
+it is already in the tree and it is what the header's claim rests on. If the
+reduction and this render disagree, one of them is decodable to a specific
+error; they cannot both describe the same shader.
