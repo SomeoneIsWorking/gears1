@@ -1557,6 +1557,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     uint32_t depthResolvesDone = 0, depthResolvesSkipped = 0;
     // The surface a render pass is currently open on, if any.
     bool inPass = false;
+    const bool passLog = lucent::config::flag("DRAW_PASS_LOG");
     uint32_t openSurface = 0;
     SurfaceTarget* openTarget = nullptr;
     // The last surface a pass was opened on, which -- unlike openTarget -- SURVIVES
@@ -1590,6 +1591,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         bi.renderArea = {{0, 0}, {W, H}};
         bi.clearValueCount = t->begunThisFrame ? 0u : 2u;
         bi.pClearValues = t->begunThisFrame ? nullptr : clears;
+        // GEARS_DRAW_PASS_LOG=1: every pass begin, with what it was begun ON.
+        // Two draws in the defect frame change the colour surface while their
+        // colour mask is zero, and after four other mechanisms were eliminated
+        // the pass begin is the only event still bound to exactly those draws
+        // (catalog #62). "Which pass, which framebuffer, clear or load" is not
+        // derivable from any existing line.
+        if (passLog)
+            lucent::info("draw", "  pass begin at draw {}: surface {:#x} host"
+                " format {} framebuffer {} -- {} pass{}", drawn, base,
+                uint32_t(t->hostFormat), (void*)t->fb,
+                t->begunThisFrame ? "LOAD" : "CLEAR",
+                t->begunThisFrame ? "" : " (first use this frame)");
         vkCmdBeginRenderPass(cmd, &bi, VK_SUBPASS_CONTENTS_INLINE);
         t->begunThisFrame = true;
         inPass = true;
