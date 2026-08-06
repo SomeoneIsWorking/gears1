@@ -117,5 +117,9 @@ void main() {
     // G = normalize(o2).z remapped (0.5 = zero), the value the gate turns on.
     // B = the old, wrong gate, kept so a run cannot be confused with the
     //     earlier builds that measured it.
-    OutColor = vec4(gate, nz * 0.5 + 0.5, gateWrong, 1.0);
+    // o2 RAW, remapped so 0.5 is zero and 1.0 is +1: the gate needs
+    // normalize(o2).z < 0.3 and ours measures 0.31-0.69, so the question is what
+    // o2 actually is. Its LENGTH is also reported because a tangent-space vector
+    // should be about 1 and this one measured >= 4.
+    OutColor = vec4(r2.x * 0.5 + 0.5, r2.y * 0.5 + 0.5, r2.z * 0.5 + 0.5, 1.0);
 }

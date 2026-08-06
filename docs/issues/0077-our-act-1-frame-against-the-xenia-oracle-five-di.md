@@ -863,3 +863,55 @@ NOT YET ESTABLISHED, and these want opposite fixes:
 0xd113bf9d8354 and trace where it writes. If those draws are the character's
 diffuse and land somewhere other than the character, that is the real defect and
 draw 460 was never going to light anything.
+
+### Note (2026-08-06)
+## o2 measured raw: an unnormalised view vector whose Z has the wrong sign
+
+With the gate established as the cause (`saturate(0.3 - normalize(o2).z)`, zero
+everywhere on the character), the debug module now reads o2 itself. Un-remapped:
+
+    pixel        o2                              |o2|    normalize(o2).z   gate
+    (200,120)    (-23.47, +13.96, +25.48)        37.4        +0.68          0
+    (240,180)    (-35.59, +13.69, +12.52)        40.1        +0.31          0
+    (300,500)    (-38.75, -36.22, +37.66)        65.2        +0.58          0
+    (100,200)    (-23.39,  +6.91, +23.38)        33.8        +0.69          0
+
+Two facts:
+
+  * o2 is an UNNORMALISED vector of magnitude 34-65, not a unit tangent-space
+    direction. That is consistent with an eye/view vector in the mesh's own
+    units (the mesh's local coordinates run to ~140, per its vertex dump), and
+    the shader normalises it itself -- so the magnitude is not by itself a fault.
+  * **normalize(o2).z is POSITIVE, +0.31 to +0.69, on every character pixel**,
+    and the gate needs it BELOW +0.3.
+
+Flip that sign and the gate becomes `saturate(0.3 + 0.68) = 0.98` -- fully open,
+and the character lights. The magnitude is plausible and the sign is not: the
+same shape as an eye vector formed as `(eye - pos)` where the material wants
+`(pos - eye)`, or a tangent basis with its third row negated.
+
+## Draw 460 really is the character's only textured pass
+
+Worth stating, because it decides whether the gate matters. The other two large
+draws of the same 6592-primitive mesh, 655 and 752 (ps 0xd113bf9d83540000,
+112,984 and 164,528 fragments, on surface 0x2d0, BLENDED), translate to a module
+with **0 textures and 0 samplers**. They cannot be a diffuse pass -- a diffuse
+pass samples the albedo. So the character's entire textured appearance comes
+through draw 460, and the zero gate blacks all of it.
+
+That closes the alternative reading offered in the correction above ("this is a
+rim light and the diffuse is elsewhere"): there is no elsewhere.
+
+## What is left
+
+o2 is exported by the skinned vertex shader at instruction 440
+(`max o2.xyz_, r5.xyzz`). Its sign is wrong and everything else about it is
+plausible. The remaining question is which vertex-shader INPUT carries that sign
+-- a constant holding the eye position, or the handedness of the tangent basis
+built from the three packed streams at offsets 3/4/5 (which unpack to unit
+vectors, measured, but whose ROLE assignment and binormal sign are a convention).
+
+The instrument reads o2 directly now, so any change to the vertex path is one
+run from being confirmed or refuted -- and the shader emits the real gate
+alongside the wrong one it used to compute, so the error that cost three notes
+cannot recur silently.
