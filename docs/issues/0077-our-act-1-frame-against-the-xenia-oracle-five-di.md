@@ -2974,3 +2974,37 @@ Caveat kept explicit: this is ONE pixel. The honest generalisation needs the
 same trace at several points across the mesh, including near the silhouette
 where the gate should OPEN. That is now cheap and, for the first time this
 session, would be valid.
+
+### Note (2026-08-06)
+## Two valid gate samples, and they confirm the standing position
+
+With the instrument fixed (see above), `GEARS_DRAW_PIXEL_TRACE` on surface
+0x400 after draw 460, reading the surface in its own HDR format before any
+resolve or post:
+
+    pixel (150,300)   gate 0.0124   normalize(o2).z = +0.287   ramp 0
+    pixel (100,200)   gate 0.0       normalize(o2).z = +0.691   ramp 0
+
+Both positive, both with the gate shut. That is exactly what UE3's
+TangentCameraVector implies for camera-facing geometry and exactly what a rim
+term is meant to do there. **Draw 460 contributing nothing on those pixels is
+correct behaviour, not a defect.**
+
+(Two further guesses at silhouette pixels, (210,420) and (235,330), were not
+written by draw 460 at all, so the gate's behaviour AT the silhouette -- where it
+should OPEN -- is still unsampled. Finding one needs the draw's coverage, which
+`GEARS_DRAW_FRAME_STEP` would show.)
+
+### Net effect on this entry
+
+The header's reading is upheld and mine is not: there is no o2 sign error, the
+gate is not wrongly open, and the env ramp reading zero is downstream of a shut
+gate and therefore says nothing. All three of my claims are retracted above.
+
+What remains standing from the whole session on difference 1 is the same
+statement it began with, now much better supported: **draw 460 is a rim term
+behaving correctly, and the character's lit diffuse contribution is not in this
+frame's draws.** The bind-count measurements say the reference submits the same
+draws we do, so the question is what those draws produce on hardware -- and the
+one instrument that could answer it per-pixel now works, for the first time this
+session.
