@@ -385,3 +385,66 @@ SATURATED to pure white. So the scene buffer is too BRIGHT at the top while the
 composite's output is too DARK everywhere. Whatever sits between them compresses
 rather than clips, and that pair -- saturated input, 0.3-maximum output -- is
 the shape of the defect to explain.
+
+### Note (2026-08-06)
+## An OFFLINE repro, and two candidates killed (2026-08-06)
+
+### act1.gfr reproduces it in 550 ms
+
+Replayed every capture and measured the presented maximum per channel:
+
+    act1       max R102 G106 B106   levels 103/107/107   CONTIGUOUS  <-- reproduces
+    act1_now   max R255 G255 B255   levels 243/245/247   gappy
+    act1_v2    max R255 G255 B255   levels 246/242/253   gappy
+    black      max R196 G197 B196   levels 150/157/154   gappy
+    courtyard  max R255 G250 B255   levels 144/142/169   gappy
+
+Only `act1` has the narrow-contiguous signature of the walk frames (68/76/76
+there, 102/106/106 here -- same shape, different scene). So this no longer costs
+a 200 s scripted walk: `frame_replay scratch/frames/act1.gfr`.
+
+Note the channel asymmetry is NOT a fixed constant -- R/G is 0.895 in the walk
+frames and 0.962 here -- so whatever makes red short is scene-dependent and is
+not a single hardcoded scale.
+
+### KILLED: the HDR scene surface being clamped by its host format
+
+Surface 0x400 (k_2_10_10_10_FLOAT, the scene) gets VK_FORMAT_R16G16B16A16_SFLOAT
+and its content exceeds 1.0. The per-draw clamp our shaders apply is
+`kAlphaOnly` for that format, which is correct -- RGB unclamped.
+
+### KILLED, after I nearly reported it as the smoking gun
+
+The scene resolve destination 0xbde0000 ends the frame with a maximum of
+EXACTLY 0.125000 = 2^-3, which reads as "a source clamped at exactly 1.0, times
+the resolve's own exp_bias of -3".
+
+It is not. The resolve LIST says the last write into 0xbde0000 is draw 670 from
+surface **0x2d0**, not from the scene surface 0x400 -- and 0x2d0 is used with
+k_8_8_8_8, whose guest clamp to [0,1] the hardware performs too. So a maximum of
+exactly 1.0 there is FAITHFUL, and 0.125 after the bias is the correct answer.
+The dump reports end-of-frame state; four resolves land in that target with two
+different formats and two different biases, and reading the last one as if it
+came from the scene pass is what made it look like a defect.
+
+### INSTRUMENT CAVEAT: GEARS_DRAW_RESOLVE_SCALE cannot read a source's range
+
+Forcing scale 1.0 to "see the unbiased source" does not work on this frame, and
+the number it gives is not what it looks like. The composite SAMPLES resolve
+targets, so making every resolve 8x brighter changes what the later passes
+compute and therefore changes the surfaces the later resolves read. The two arms
+are not the same frame. It reported the source at 1.504883; that value describes
+a perturbed chain, not this one.
+
+To read a surface's own range, use something that does not alter it --
+GEARS_DRAW_PIXEL_TRACE reads in the surface's native format without changing the
+pass.
+
+### Checked and fine: the texture fetch exponent
+
+`exp_adjust` (fetch constant word 3, bits 13:18) is what would compensate a
+resolve's exp_bias on the sampling side, and its absence would make everything
+that samples a biased resolve 8x too dark. Xenia's translator reads it from the
+fetch-constant uniform block at runtime, and `gpu_draw_uniforms.cpp` uploads all
+6 dwords x 32 slots verbatim from register 0x4800, so the shader has the real
+value. Not a candidate.
