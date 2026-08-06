@@ -3343,3 +3343,61 @@ same captured frame, which is the trace path #79 records as blocked on
 Until that exists, "the character is missing" cannot be separated from "the
 character is in a dark room in a different shot". This entry should not spend
 another session on renderer-side eliminations; there are none left to make.
+
+### Note (2026-08-06)
+## What does the oracle do DIFFERENTLY on this draw? Measured answer: nothing observable.
+
+Asked directly, and worked as a comparison of inputs rather than as another
+hunt for a defect. For draw 460 every input that can be compared has now been
+compared, and they match.
+
+  * **The shader translator is BYTE-IDENTICAL.** Our runtime translates through
+    `extern/xenia`; the oracle binary was built from
+    `scratch/oracle/xenia-canary`. `spirv_shader_translator.cc`,
+    `spirv_shader_translator_alu.cc` and `spirv_shader_translator_fetch.cc`
+    compare equal between the two checkouts, and our fork's ONLY modifications
+    are in `vulkan_command_processor.{cc,h}` -- instrumentation. Same microcode
+    through the same translator.
+  * **The modification derivation is a verbatim port** of Xenia's
+    `GetCurrentVertexShaderModification` / `GetCurrentPixelShaderModification`,
+    including the interpolator mask (`vs->writes_interpolators() &
+    ps->GetInterpolatorInputMask(...)`). The 832-byte SPIR-V difference against
+    a standalone `xenos_translate` run is that tool using a default
+    modification, not a divergence.
+  * **The constants match** (7/10 byte-identical; the three that differ are the
+    camera basis, proved orthonormal and consistent with the vertex shader's own
+    view-projection to a uniform (1, 16/9, 0.999) ratio -- a MOMENT difference).
+  * **The textures, samplers and clamp modes match**, and the sign/gamma path is
+    not implicated: `GEARS_DRAW_NO_TEX_SIGNS=1` leaves draw 460 at exactly 309
+    of 126,983 non-zero fragments, max 2.166 -- identical to as-shipped.
+  * **The colour mask, the bind counts and the draw submission** were already
+    equal (this entry, claims C019 and the mask note).
+
+So: same microcode, same translator, same constants, same textures, same
+samplers, same masks, same submission. **There is no observable difference
+between what we hand this draw and what the console hands it.**
+
+### Which leaves exactly two readings, and they cannot be separated yet
+
+  1. **The console renders these draws the same way, and the character IS a
+     dark silhouette in these shots.** Both captures that contain this shader
+     are the same backlit prison cutscene -- bright.gfr at "Jack, rip that
+     door!" and black.gfr at "Getting you out. Here. Put this on." -- with the
+     character between the camera and a blown-out courtyard. The closest cached
+     oracle frame to the same beat has the camera on the door with no character
+     in shot at all, and is 3x DARKER than ours. A silhouette against that is
+     not obviously wrong.
+  2. **Something in the vertex shader's EXECUTION differs**, which no comparison
+     of inputs can see, and which would change o4 and therefore the ramp lookup.
+
+### The one measurement that separates them, and it is bounded
+
+Dump interpolator o4 from the ORACLE for a named shader, and compare its
+distribution against ours. The fork already has exactly this shape of
+instrument -- `GEARS_ORACLE_VS_CONSTS`, `GEARS_ORACLE_PS_CONSTS`,
+`GEARS_ORACLE_DUMP_AT_FRAME` -- so this is another of the same, not new
+machinery. It does NOT need a matched moment: the question is whether o4's
+DISTRIBUTION over a character puts the ramp coordinate below 1.0 or above it,
+and ours is above it (median u 1.675) at every camera angle measured.
+
+That is the whole of what is left on difference 1. Everything else is closed.
