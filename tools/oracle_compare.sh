@@ -55,9 +55,22 @@ ours_script() {
 for f in "$ORACLE" "$RUNTIME"; do
     [ -x "$f" ] || { echo "REFUSING: $f is not built. Nothing was run."; exit 2; }
 done
-if [ -z "$ISO" ] || [ ! -f "$ISO" ]; then
-    echo "REFUSING: set GEARS_ISO to the disc image. The oracle boots from the"
-    echo "ISO; our runtime uses the extracted tree in $GAME_DIR."
+# The oracle does NOT need the disc image: it boots the extracted tree exactly
+# as our runtime does. This script refused without GEARS_ISO for weeks and that
+# refusal, not the emulator, is what gated every "needs the disc" note in the
+# catalog. GEARS_ISO is still honoured when set, because booting from the ISO
+# exercises the disc path; when it is not set, fall back to the extracted XEX
+# and SAY WHICH ARM RAN -- a comparison whose input source is ambiguous is not
+# reproducible.
+if [ -n "$ISO" ] && [ -f "$ISO" ]; then
+    ORACLE_TARGET="$ISO"
+    ORACLE_SOURCE="the disc image ($ISO)"
+elif [ -f "$GAME_DIR/default.xex" ]; then
+    ORACLE_TARGET="$GAME_DIR/default.xex"
+    ORACLE_SOURCE="the extracted tree ($GAME_DIR/default.xex); GEARS_ISO unset"
+else
+    echo "REFUSING: neither GEARS_ISO nor $GAME_DIR/default.xex exists, so the"
+    echo "oracle has nothing to boot. Nothing was run."
     exit 2
 fi
 
@@ -88,7 +101,7 @@ echo "== the oracle, headless, ${SECONDS_TO_RUN}s =="
 # run left in a cache is not reproducible.
 SDL_AUDIODRIVER=dummy "$ORACLE" \
     --store_shaders=false \
-    --target="$ISO" \
+    --target="$ORACLE_TARGET" \
     --oracle_out="$OUT/theirs" \
     --oracle_seconds="$SECONDS_TO_RUN" \
     --oracle_interval="$INTERVAL" \
@@ -106,6 +119,7 @@ crashes=$(grep -c "CRASH DUMP" "$OUT/theirs.log" 2>/dev/null || true)
 
 {
     echo "walk: $ORACLE_INPUT (same presses on both sides)"
+    echo "oracle booted from: $ORACLE_SOURCE"
     echo "ours:   $ours_n frames in $OUT/ours"
     echo "theirs: $theirs_n frames in $OUT/theirs"
     echo "oracle guest crashes: $crashes"
