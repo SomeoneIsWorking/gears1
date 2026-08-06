@@ -35,6 +35,13 @@
 // So tf1's sample must be zero, and this build asks the next question: is that
 // the BINDING or the COORDINATE?
 //
+//   (THIS BUILD) R = o4.x raw, G = o4.y raw, B = length(o4*2-1)/4. o4 is the
+//   interpolator the tf1 COORDINATE is built from -- unpacked by c253 = (2,-1)
+//   then normalised, so |o4*2-1| should be about 1. A raw o4 of 0.5 means the
+//   unpack yields zero; a length far from 1 means the vector is not what the
+//   normalise expects.
+//
+//   (PREVIOUS BUILD, kept for the record)
 //   R = tf1 sampled at a FIXED (0.5, 0.5). This is a BINDING test and owes
 //       nothing to the shader's computed coordinate. tf1 (0x32eb000) is a
 //       256x256 k_8 ramp measured 50.8% zero, 30.8% at 255, mean 99.5/255 =
@@ -54,6 +61,7 @@ layout(set = 3, binding = 7) uniform sampler       Tf1Samp;
 
 layout(location = 0) in vec4 InR0;   // r0: .xy is the material coordinate
 layout(location = 2) in vec4 InR2;   // r2: the vector the gate is built from
+layout(location = 4) in vec4 InR4;   // r4: what the tf1 COORDINATE is built from
 layout(location = 0) out vec4 OutColor;
 
 void main() {
@@ -68,8 +76,14 @@ void main() {
     // The layer is 0: the translated shader declares its 2D textures as arrays,
     // so a plain 2D sample here would not match the descriptor and the pipeline
     // would be rejected rather than quietly reading the wrong thing.
-    float tf1_fixed = texture(sampler2DArray(Tf1Tex, Tf1Samp), vec3(0.5, 0.5, 0.0)).x;
-    float tf1_uv    = texture(sampler2DArray(Tf1Tex, Tf1Samp), vec3(InR0.xy, 0.0)).x;
+    // THE COORDINATE'S ACTUAL INPUT. The gate above is built from interpolator
+    // o2, but PS r2 is OVERWRITTEN at instruction 10 before the tf1 coordinate
+    // is built at 11-17 -- that chain starts from o4, via
+    // `mad r5.xyz, r4.xyzz, c253.xxxx, c253.yyyy` with c253 = (2, -1), i.e. the
+    // usual [0,1] -> [-1,1] unpack, then a normalise. So o4 is the input the
+    // failing lookup actually depends on, and o2's length says nothing about it.
+    vec3 o4unpacked = InR4.xyz * 2.0 - 1.0;
+    float o4len = length(o4unpacked);
 
-    OutColor = vec4(tf1_fixed, tf1_uv, gate, 1.0);
+    OutColor = vec4(InR4.x, InR4.y, o4len * 0.25, 1.0);
 }

@@ -466,10 +466,23 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
             const char swz[5] = {kSwz[swizzle & 7], kSwz[(swizzle >> 3) & 7],
                                  kSwz[(swizzle >> 6) & 7],
                                  kSwz[(swizzle >> 9) & 7], '\0'};
+            // The ADDRESS MODE, per axis. It belongs here for the same
+            // reason the swizzle does: a shader that samples outside [0,1]
+            // reads the edge under CLAMP and wraps under REPEAT, and those
+            // differ by the whole texture. Catalog #77's character material
+            // biases its lookup coordinate by +1, so which of the two applies
+            // decides whether it reads real data or the edge texel.
+            static const char* kClamp[8] = {
+                "repeat", "mirror", "clamp-edge", "mirror-clamp-edge",
+                "clamp-half", "mirror-clamp-half", "clamp-border", "?7"};
+            const uint32_t d0 = regs[0x4800 + fc * 6];
+            const uint32_t cx = (d0 >> 10) & 7, cy = (d0 >> 13) & 7;
             lucent::info("draw", "  tex bind ps {:#x}: fc{} base {:#x} dim {}"
-                " exp_adjust {:+d} (x{}) swizzle {} ({:#05x}) -> {}",
+                " exp_adjust {:+d} (x{}) swizzle {} ({:#05x}) clamp x={} y={}"
+                " -> {}",
                 currentPsHash, fc, base, tb.dimension, expAdjust,
-                std::ldexp(1.0, expAdjust), swz, swizzle, how);
+                std::ldexp(1.0, expAdjust), swz, swizzle,
+                kClamp[cx], kClamp[cy], how);
         }
         return v;
     };

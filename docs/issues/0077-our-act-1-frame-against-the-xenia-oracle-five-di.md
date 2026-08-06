@@ -659,3 +659,72 @@ nothing more.
 
 Also still unexplained and worth returning to if this dies: the debug module
 measured `length(r2) >= 4`, where a tangent-space vector should be near 1.
+
+### Note (2026-08-06)
+## o4 is healthy too, and a correction to my own reading of the shader
+
+### CORRECTION: the gate and the coordinate come from DIFFERENT interpolators
+
+Earlier notes treated PS `r2` as one thing. It is not: **r2 is OVERWRITTEN at
+instruction 10** (`mul r2.xyz_, r5.zxyy, r4.wwww`) before the tf1 coordinate is
+built at 11-17. So:
+
+  * the GATE (instructions 4,7,8) reads the INTERPOLATOR o2 -- measured, open;
+  * the COORDINATE (11-17) is built from o4, via `mad r5.xyz, r4.xyzz, c253.x,
+    c253.y` with c253 = (2,-1) and then a normalise.
+
+The "length(r2) >= 4" recorded two notes ago is therefore about o2, which the
+gate only ever uses through `normalize()` -- so it is IRRELEVANT to the failure,
+not the loose end it was flagged as. Withdrawn.
+
+### Eleventh elimination: o4 unpacks to a unit vector
+
+    (200,120)   o4.x 0.978  o4.y 0.503   |o4*2-1| = 1.000
+    (300,500)   o4.x 0.726  o4.y 0.670   |o4*2-1| = 0.967
+
+Exactly what a packed [0,1] tangent-space vector should give. The unpack
+constant is right, the interpolation is right, and the normalise that follows
+has a sane input.
+
+### So every input to the coordinate is now measured and healthy
+
+    o4 unpacks to unit          -> r5 = normalize(...) is unit
+    r4.w = 0.92..1.00           -> r2 (post-10) is unit
+    c0,c1,c2                    -> orthonormal, an exact 180-degree Z rotation
+    c3,c4,c5                    -> orthonormal
+    c254 = (0.7, 1, 0.8, 8)     -> the bias
+    tf1 clamp x=clamp-edge y=clamp-edge, and the guest ASKED for clamp-edge
+       (new column on GEARS_DRAW_TEX_BINDS -- we honour it correctly)
+
+A unit vector through two orthonormal bases gives components in [-1,1], and
+instruction 17 adds +1 to both that become the sample coordinate -- so the
+coordinate lands in [0,2] and roughly half of it clamps to the texture edge. A
+sphere-map lookup normally biases by +0.5 for exactly this reason.
+
+### The constants are NOT mis-packed, checked rather than assumed
+
+The obvious explanation is that c254 should be 0.5 and we hand the shader the
+wrong vec4. It does not look that way: in the same packed block c253 is exactly
+(2,-1,0,0) -- the canonical [0,1]->[-1,1] unpack -- and c255 is exactly
+(0.11, 0.3, 0.59, 0.5), the BT.601 luma weights. Both are unmistakable and both
+land where the microcode expects them, so the block is aligned and
+c254 = (0.7, 1, 0.8, 8) is what the guest really set.
+
+### Where that leaves it
+
+Every measurable input to the failing lookup is correct, and the arithmetic the
+guest asks for still sends the coordinate outside [0,1] on much of the mesh. So
+the fault is in something NOT yet measurable from our side: either the vector
+reaching instruction 11 differs from the console's in SIGN (which would move
+[0,2] to [-1,1] and land it correctly under clamp), or the console resolves this
+lookup differently than a straight clamped 2D sample.
+
+That is the first point in this investigation where the next step needs the
+ORACLE rather than another probe: the same draw's tf1 coordinate as Xenia
+computes it. Cross-emulator per-draw comparison is exactly what catalog #84
+records as unavailable -- neither wall clock nor guest frame count aligns two
+runs, and the fix there is a deterministic guest clock.
+
+ELEVEN causes are now eliminated by measurement, all recorded above. The
+instrument built for it (`GEARS_DRAW_DEBUG_INTERP`, docs/knobs.md) reads any
+interpolator or texture binding of any pixel shader as colour, and stays.
