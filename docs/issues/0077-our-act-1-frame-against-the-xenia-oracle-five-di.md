@@ -915,3 +915,67 @@ The instrument reads o2 directly now, so any change to the vertex path is one
 run from being confirmed or refuted -- and the shader emits the real gate
 alongside the wrong one it used to compute, so the error that cost three notes
 cannot recur silently.
+
+### Note (2026-08-06)
+## THE CHARACTER RENDERS -- demonstrated, with a control arm (not a fix)
+
+Both closed terms opened together, through `GEARS_DRAW_PS_CONST_SET`:
+
+    f662d670789bfac0:8=-1,1,0.8,8            c254.x 0.7 -> -1, opening the gate
+    f662d670789bfac0:3,4,5 = c3,c4,c5 negated, flipping the tf1 coordinate
+
+    character pixel (200,120):  (0,0,0)  ->  (0.365, 0.270, 0.260)
+
+and the frame shows the character -- head, shoulder, upper arm and hand, lit and
+shaded, from the very draw that was producing pure black
+(`scratch/h38/character_lit.png`).
+
+**THIS IS NOT A FIX AND MUST NOT BE READ AS ONE.** Those constants come from the
+guest; overriding them is the control arm this knob exists for ("is the picture
+wrong because of THIS number?"). It also overdrives the shading -- c254.x = -1
+opens the gate to ~1.0 rather than to a correct value, which is why the face
+blows out. What it demonstrates is that the geometry, the skinning, the bone
+palette, the textures and the material arithmetic ALL WORK, and that exactly two
+terms are closed.
+
+## Why one upstream sign explains both
+
+The two terms look independent and are not:
+
+    gate     = saturate(c254.y - c254.x - normalize(o2).z)   needs normalize(o2).z < 0.3
+    coord.x  = t40 + c254.y,  t40 propto normalize(o4*2-1).x  needs t40 < -0.5
+
+o2 and o4 are both built by the vertex shader from the SAME tangent basis --
+instructions 323-325 transform a vector by rows held in r5/r7/r11, a rotating
+accumulation. Negate that basis and normalize(o2).z flips (gate opens) and t40
+flips (coordinate lands at ~0.1, the ramp's bright end) TOGETHER. One sign
+accounts for both closed terms; two independent faults would be a coincidence.
+
+That is also why every single-constant control arm in this session moved nothing:
+c0/c1/c2 forced to identity and c3/c4/c5 negated each moved ONE of the two, and
+the other stayed zero and kept the output at zero. Only opening both shows the
+character. Those null results were evidence, not noise.
+
+## The remaining work, precisely
+
+Find which vertex-shader input carries that sign. o2 is exported at instruction
+439/440 from r5, last written by instructions 323-325:
+
+    323   mul r5.xyz_, r10.xxxx, r5.xyzz
+    324   mad r5.xyz_, r10.yyyy, r7.wyzz, r5.zxyy
+    325   mad r5.xyz_, r10.zzzz, r11.zyxx, r5.yzxx
+
+-- r10 through a basis in (r5, r7.wyz, r11.zyx), with ROTATING accumulator
+swizzles. That rotation is exactly the construct `tools/ucode_reduce.py` was
+built to untangle and exactly the construct that cannot be read off a listing --
+which is how this investigation lost three notes to a dropped `+0.7`.
+
+So the next step is the one already named: teach `ucode_reduce.py` vertex shaders
+(oPos/oN exports and the address register for the bone palette; it currently
+refuses them by name). With the basis reduced, which of r5/r7/r11 is negated --
+and whether it traces to a constant or to the packed streams at offsets 3/4/5 --
+is readable rather than guessable.
+
+EVIDENCE THAT SURVIVES ALL OF THIS, for whoever picks it up: the character is
+drawn, correctly posed, correctly skinned, correctly textured, and one sign away
+from being lit. Everything else on this entry's difference 1 is closed.
