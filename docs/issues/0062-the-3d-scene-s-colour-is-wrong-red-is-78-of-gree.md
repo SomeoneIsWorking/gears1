@@ -5,7 +5,7 @@ status: open
 symptom: Gameplay looks flat grey-green with blown, detail-free lit surfaces; menus and the title screen look correct in the same run
 tags: gpu,draw,colour,tonemap,resolve
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-06
 ---
 
 ## The observation that redirects everything
@@ -306,3 +306,46 @@ Do what was done for the first one -- give each an XELOGE on the fork and rerun
 Draw 0 being prim 8 with 3 vertices (a rectangle list -- UE3's full-screen
 clear) makes `host_draw_vertex_count == 0` a reasonable first suspect, but that
 is a hypothesis and the log will say.
+
+### Note (2026-08-06)
+## The oracle comparison this entry asked for, and the ceiling is EXACT (2026-08-06)
+
+"An oracle settles it in one comparison and there is one available" -- done, with
+a trusted headless oracle (I014/C013, `tools/xenia_oracle`, disc image mounted).
+Same scripted walk, `tools/frame_stats.py` on both sides:
+
+    ORACLE frame_0210s.png   R p99 0.808  G p99 0.784  B p99 0.722   p99.9 1.000
+    OURS   frame_06300.ppm   R p99 0.267  G p99 0.298  B p99 0.298   p99.9 SAME
+
+The reference reaches 1.0. We stop at 0.30, and **p99.9 equals p99 to three
+decimals**, which a tonemap roll-off does not do -- that is a hard clamp.
+
+## The ceiling is the SAME THREE BYTES in every gameplay frame
+
+Maxima of our own presented frames across one scripted walk, per channel, of 255:
+
+    frame_00900   R 255  G 255  B 255      <- menu, no ceiling
+    frame_01800   R  68  G  76  B  76
+    frame_02700   R 196  G 197  B 196      <- transition
+    frame_03600   R  68  G  76  B  76
+    frame_04500   R  68  G  76  B  76
+    frame_05400   R  68  G  76  B  76
+    frame_06300   R  68  G  76  B  76
+
+Five different game moments, byte-identical maxima. No pixel above 200 in any of
+them. That is not scene content and not a roll-off: it is a constant, and
+(68, 76, 76) is a far sharper thing to chase than "flattens at 0.30".
+
+Note the ceiling is per-channel UNEQUAL -- 68 against 76 -- in the same ratio
+(0.895) as the R/G deficit this entry already tracks. Whatever sets the ceiling
+and whatever sets the channel ratio may be the same thing, which the retracted
+red/blue-swap note could not have shown either way.
+
+MENUS DO NOT CLAMP (frame_00900 reaches 255), which agrees with this entry's
+founding observation and keeps the search in the deferred scene path.
+
+## Not re-derived
+
+The red/blue relationship is settled and is the GUEST's own mid-frame exchange
+(see the retraction above and claim C011). Nothing here reopens it. The ceiling
+was always the separate observation, and it is still the open one.
