@@ -1831,6 +1831,26 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             endPass();
             PB.TracePixel(cmd, drawn, lastIssuedPrep, t, base);
         }
+        // The whole surface, in its own format, after a NAMED draw. Offered the
+        // DIAG index of the draw that was last ISSUED -- the probe is sampling
+        // what is on the surface now, which is that draw's output, and naming it
+        // by the index every table in this project uses is the whole point of
+        // the knob (see gpu_draw_probe.h).
+        if (PB.Dumping() && lastIssuedPrep < prepared.size())
+        {
+            SurfaceTarget* t = openTarget ? openTarget : lastTarget;
+            uint32_t base = openTarget ? openSurface : lastSurface;
+            if (PB.PinnedSurface() >= 0)
+            {
+                SurfaceTarget* pinned = nullptr;
+                const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
+                if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
+                { t = pinned; base = pinnedBase; }
+            }
+            endPass();
+            PB.DumpSurface(cmd, drawn, lastIssuedPrep,
+                           prepared[lastIssuedPrep].diagIndex, t, base);
+        }
         // The render comparer: a thumbnail of the surface after every draw.
         // Same pass-boundary requirement as the other two probes.
         if (PB.Comparing())
@@ -1939,6 +1959,25 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             ++openTarget->drawsThisFrame;
         lastIssuedPrep = uint32_t(&pd - prepared.data());
         ++drawn;
+    }
+    // The LAST draw of the frame is never followed by another iteration, so
+    // without this the one draw a dump is most likely to be aimed at -- the
+    // final composite -- would report "never offered" and read as a missing
+    // draw. DumpSurface ignores a diag index it has already taken.
+    if (PB.Dumping() && lastIssuedPrep < prepared.size())
+    {
+        SurfaceTarget* t = openTarget ? openTarget : lastTarget;
+        uint32_t base = openTarget ? openSurface : lastSurface;
+        if (PB.PinnedSurface() >= 0)
+        {
+            SurfaceTarget* pinned = nullptr;
+            const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
+            if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
+            { t = pinned; base = pinnedBase; }
+        }
+        endPass();
+        PB.DumpSurface(cmd, drawn, lastIssuedPrep,
+                       prepared[lastIssuedPrep].diagIndex, t, base);
     }
     endPass();
 
