@@ -1271,3 +1271,103 @@ What is NOT ruled out and is next: which draws are exchanged and which are not.
 The button glyphs are right and the background art is wrong in the SAME frame,
 so a per-draw split exists and is findable -- capture the menu frame and bisect
 it, rather than reasoning about formats.
+
+### Note (2026-08-06)
+## LOCATED: one draw exchanges red and blue -- ps 0x629226076307234e, the final composite (2026-08-06)
+
+A 171-draw menu capture (`scratch/oq6/menu.gfr`, from a 60 s live run) replays in
+about a second and reproduces the blue: R/G 0.755, B/G 2.675. That is the cheap
+repro this entry has wanted; the 744-draw gameplay frame is no longer needed to
+work the channel question.
+
+`GEARS_DRAW_PIXEL_TRACE` on a background pixel (200,150):
+
+    after 64 draws  (0.11212158, 0.03012085, 0.014549255)  <- draw 76 ps 0x9610bf8038af9aaf
+    after 65 draws  (0.014549255, 0.03012085, 0.11212158)  <- draw 78 ps 0x629226076307234e
+
+The same three values, R and B exchanged, across one draw. Confirmed on a second
+pixel 560 px away, inside the B button (758,361):
+
+    after 64 draws  (0.47143555, 0.07519531, 0.023834229)  <- draw 76
+    after 65 draws  (0.023834229, 0.07519531, 0.47143555)  <- draw 78
+
+So up to draw 76 the menu is RED, exactly as the oracle shows it, and draw 78
+writes it back exchanged. Everything upstream -- textures, tint, blending -- is
+correct. The background art itself is a GREYSCALE grunge texture
+(`scratch/screenshots/texdump/01cbf000_k_DXT4_5_1024x512x1_tiled.png`,
+`GEARS_DRAW_TEX_DUMP=1` + `decode_bc.py`), so the colour was never in the
+texture and a texture-decode fault was never a candidate.
+
+## And this explains the button glyphs being RIGHT
+
+The second trace continues:
+
+    after 128 draws (0.37597656, 0.40795898, 0.6542969) <- draw 141 ps 0x501ac5d8692bf7b6
+
+Draw 141 paints the glyph OVER the composite's output. Menu text and the A/B
+icons are drawn AFTER draw 78, so they never pass through it and come out
+correct -- which is why the frame looked partly right and made a whole-frame
+explanation impossible. In gameplay the HUD is missing entirely (#77), so
+nothing escapes the composite and the whole frame is exchanged.
+
+## RETRACTED: "the guest exchanges the channels itself, so there is no defect"
+
+The retraction note further up this entry established that in the gameplay frame
+draws 702/703 write the same pixel with R and B exchanged, and concluded that
+this is the title's own doing and requires no defect. The measurement was right;
+the conclusion is not. 703 is this same full-screen composite, and the oracle
+now says its output should be RED. The exchange is ours.
+
+Claim C011 rests on that conclusion and should be re-checked.
+
+## WHAT IS ESTABLISHED, AND WHAT IS NOT
+
+ESTABLISHED: one named draw, one named pixel shader, on both frame classes, with
+a one-second offline repro and a reference that says which way is right.
+
+NOT ESTABLISHED: why. The shader is 0x629226076307234e -- the same one this entry
+already identified as "the last full-screen pass before the front-buffer
+resolve", whose three texture binds are recorded above. Candidates not yet
+separated: its own microcode channel routing (this is exactly what
+`tools/ucode_reduce.py` exists for -- it reduces swizzle chains that cannot be
+read off a listing), the fetch swizzle on the resolve target it samples, or its
+colour-target export order. Disassemble before hypothesising; two sessions have
+now been spent guessing at this exchange from aggregates.
+
+REPRO:
+    frame_replay scratch/oq6/menu.gfr with GEARS_DRAW_PIXEL_TRACE=758,361
+    the row for draw 78 is the defect
+
+### Note (2026-08-06)
+## The draw that exchanges the channels is MOTION BLUR, and on this frame it must be an IDENTITY pass
+
+Catalog #66 already disassembled ps 0x629226076307234e and named it: it reads
+depth (tf1) and a two-channel SIGNED VELOCITY buffer (tf2, resolved k_16_16),
+derives a screen-space offset and loops sampling the scene colour along it.
+
+#66's own words for the zero-velocity case: "A zero velocity buffer is also the
+CORRECT content for a static camera, and it degrades gracefully (the loop samples
+the same texel and the pass becomes a pass-through)."
+
+On menu.gfr the velocity target is exactly that -- #66 measured 0x cb91000 at
+0 of 2764800 components non-zero. So this draw is sampling one texel and writing
+it back, and A PASS-THROUGH MUST NOT CHANGE THE COLOUR. Ours exchanges red and
+blue while doing it.
+
+That narrows the question a long way. It is not the blur maths, not the velocity
+buffer, not the loop: with zero velocity none of them are reachable. It is how
+this pass gets the scene colour from tf0 (0xc7e9000 per this entry's bind dump)
+to its colour export -- the fetch swizzle on that binding, the microcode's
+channel routing, or the export order. Those three are separable by disassembly,
+and `tools/ucode_reduce.py` exists exactly for the middle one.
+
+NOT ruled out and worth stating, because it would move the fault back to the
+present path: if the guest authors this pass to write EXCHANGED on purpose --
+knowing the ZYX1 scanout swizzle will exchange it back -- then draw 78 is
+faithful and we are presenting the pre-swizzle surface. The evidence against
+that is the CHECKPOINT OVERWRITE frame (scratch/oq3/frame_02400.ppm), where the
+A glyph is green and the B glyph red (most-red pixel in the B disc (255,222,205))
+over a blue background: those glyphs are drawn AFTER this pass (menu.gfr draw 141
+paints over draw 78 in the same pixel trace), so a whole-frame scanout exchange
+would turn the B button blue. It is red. Both cannot be right, so measure the
+microcode rather than choosing.
