@@ -2151,3 +2151,18 @@ proved by a shader census; and a frame gate that records what it actually did.
 NOT achieved: a single same-moment constant comparison, because the two sides do
 not reliably reach the same moment even when driven by frame index. That is the
 one thing standing between this entry and a diff of the bone palette.
+
+### Note (2026-08-06)
+## Also eliminated: a red/blue swap on the character's DXT1 textures
+
+The shader scales its ENTIRE output by `r4.w = normalmap.blue*2 - 1`, so a
+channel swap on that texture would put r4.w at ~0 (a normal map's red is ~0.5)
+and black the character by itself. Catalog #62 found exactly that class of swap
+on resolve-target bindings, which made it worth checking here.
+
+It is not present. `runtime/gpu_draw_xlate.cpp:1351` maps `k_DXT1` to
+`kBc1RgbaUnorm` with `SW(0, 1, 2, 3)` -- the identity swizzle -- and
+`gpu_draw_textures.cpp:50` turns that into `VK_FORMAT_BC1_RGBA_UNORM_BLOCK`.
+Red is red and blue is blue. Consistent with the decoded blob, which
+`tools/decode_bc.py` renders as a correct tangent-space normal map (neutral
+purple-blue, not the orange cast a swap would give).
