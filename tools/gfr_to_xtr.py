@@ -59,6 +59,10 @@ SWAP_SIGNATURE = 0x53574150            # make_fourcc("SWAP")
 # the front buffer from FETCH CONSTANT 0, not from the address in the packet
 # (vulkan_texture_cache.cc RequestSwapTexture), exactly as the hardware does.
 REG_FETCH_CONSTANT_00 = 0x4800
+# The DC_LUT gamma-ramp window (register_table.inc 0x1921..0x1934). Excluded
+# from the per-draw register restore -- see the restore loop for why.
+REG_DC_LUT_FIRST = 0x1921
+REG_DC_LUT_LAST = 0x1934
 # The console maps physical RAM through several virtual aliases; the fetch
 # constant names one of them. Xenia's kernel translates to physical before
 # posting, because the GPU works in physical addresses -- and our capture's
@@ -496,6 +500,10 @@ def emit_swap(w, cap, scratch, present="guest"):
             f"fetch constant 0 posted as the guest's VdSwap does")
 
 
+REGISTER_RESTORE_RANGES = ((0, REG_DC_LUT_FIRST),
+                           (REG_DC_LUT_LAST + 1, XENIA_REG_COUNT))
+
+
 def convert(src: Path, dst: Path, max_draws=None, present="guest"):
     cap = Capture(src)
     w = TraceWriter()
@@ -516,7 +524,25 @@ def convert(src: Path, dst: Path, max_draws=None, present="guest"):
             # authoritative doing it.
             skipped_no_regs += 1
             continue
-        w.registers(0, d["regs"][:XENIA_REG_COUNT])
+        # execute_callbacks=TRUE, and the gamma-ramp window EXCLUDED.
+        #
+        # With callbacks false -- the format's default, and what this converter
+        # sent for its whole life -- CommandProcessor::RestoreRegisters does a
+        # raw memcpy into the register file and NEVER calls WriteRegister, which
+        # is what drives every register side effect Xenia has. The registers
+        # arrive, the draws rasterise, the resolve reports a written length, and
+        # NOTHING lands in shared memory. That is catalog #79's black dump, and
+        # it is why traces this tool produced have never rendered.
+        #
+        # But the callbacks cannot be run over the DC_LUT window. Writing
+        # DC_LUT_30_COLOR auto-increments DC_LUT_RW_INDEX (catalog #78), so
+        # restoring those registers once per draw pushes 844 bogus entries into
+        # the gamma ramp -- measured: the frame comes out uniformly 1.0 on every
+        # channel instead of black. They are pure display state and no draw or
+        # resolve depends on them, so the restore skips them and the ramp keeps
+        # whatever the capture's own kGammaRamp command set.
+        for lo, hi in REGISTER_RESTORE_RANGES:
+            w.registers(lo, d["regs"][lo:hi], execute_callbacks=True)
         # Bind this draw's shaders. Re-emitted only when they CHANGE: the bind
         # is sticky in Xenia, and re-sending every shader for all 744 draws
         # doubled the trace for no effect.
