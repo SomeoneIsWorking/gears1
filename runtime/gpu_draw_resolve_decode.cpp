@@ -130,6 +130,11 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
         pd.clearsDepth = clearsDepthHere;
         pd.depthClearValue = depthClearHere;
         pd.surfaceBase = srcBase;
+        // What the copy reads the source under. Indexed by copy_src_select,
+        // like srcBase just above it -- reading RT0's format here instead is
+        // what hid every resolve's real format behind a uniform 0.
+        pd.resolveSrcFormat = srcSelect < 4
+            ? ((R[kColorInfo[srcSelect & 3]] >> 16) & 0xF) : 0u;
         pd.resolveDest = route->second.first;   // the TEXTURE, not the base
         // The resolve rectangle, per Xenia's GetResolveInfo: three
         // vertices of two floats in vertex fetch constant 0 ("D3D9 HACK:

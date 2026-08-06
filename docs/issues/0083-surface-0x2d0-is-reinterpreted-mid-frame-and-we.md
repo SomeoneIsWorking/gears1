@@ -1,7 +1,7 @@
 ---
 id: 83
 title: Surface 0x2d0 is reinterpreted mid-frame and we store values where EDRAM stores bits
-status: investigating
+status: resolved
 symptom: a draw blends against 1.0 where the console reads 31.875; frame-wide red/green imbalance; the same EDRAM base declared under four bit layouts in one frame
 tags: gpu,draw,edram,format,reinterpret,colour,act1,native-renderer
 created: 2026-08-06
@@ -359,3 +359,79 @@ The pass stays OFF by default; the REINTERP-OFF arm is byte-identical to before
 this change, and validate_all and verify_native_pass both pass. The change is
 kept because it is the more faithful model, is fully reported, and removes work
 -- not because it fixed anything. It did not.
+
+### Note (2026-08-06)
+## RESOLVED: the resolve read its source format from the WRONG REGISTER (2026-08-06)
+
+### The root cause, in one line
+
+A resolve reads its source EDRAM under `RB_COLOR_INFO[RB_COPY_CONTROL.copy_src_select]`.
+We read `RB_COLOR_INFO0` unconditionally. Every resolve in the frame therefore
+reported colour format 0 -- including the bloom copy whose own draws are
+`k_16_16_16_16_FLOAT` -- and the uniformity of that column is the tell that was
+sitting in the diag table the whole time.
+
+Xenia indexes the same four registers (`draw_util.cc` `GetResolveInfo`, and the
+registers are NOT contiguous: 0x2001, 0x2003, 0x2004, 0x2005). Our own resolve
+DECODE already did this correctly for `srcBase` two lines earlier; only the
+format was taken from RT0.
+
+### Why that produced the blow-out
+
+With the source format wrong, a resolve either converted the surface to an
+interpretation the copy did not read it under, or -- because the conversion was
+never triggered for resolves at all -- copied out a surface still sitting in the
+float interpretation a blending draw had left it in. Catalog #62's wall pixel
+(640,350) went to (2.547, 4.031, 11.125) at draw 650 and the resolves at 657 and
+659 carried that away before anything restored it.
+
+Three things had to be right together, and each was measured on its own:
+
+1. **Convert only before a READ.** The hardware converts nothing at a format
+   change; the bits sit in EDRAM and whoever reads them next interprets them. A
+   draw that does not read (blend is the identity) never sees the old bits, and
+   converting for it rewrites every pixel it does not cover. 8 of 12 changes in
+   this frame are now correctly declined, and they are counted and named.
+2. **A resolve IS a read**, and the resolve branch `continue`s long before the
+   trigger, so it needed its own call. Adding `isResolve` to the trigger's
+   condition was DEAD CODE -- recorded because it looked right.
+3. **A resolve reads under its own source format**, above.
+
+With (1) and (2) but not (3), the blow-out went but the mid-tones stayed 2.7x
+bright. All three: the frame gains the top of its range and keeps its mid-tones.
+
+### The result, green channel, walk_gameplay.gfr
+
+                        median   p90     p99     p99.9   max
+    before (pass off)   0.051    0.188   0.294   0.298   0.329
+    AFTER               0.051    0.192   0.549   0.859   1.000
+    ORACLE              0.063    0.176   0.784   1.000   1.000
+
+The median does not move, p90 lands on the oracle's, and the top of the range
+comes back where there was none. Channel balance is preserved: R/G 0.9934,
+B/G 0.7816 against the oracle's 0.9882 and 0.7237, and `chroma_compare` still
+reports IDENTITY on 4 of 4 oracle pairs, inside the null band.
+
+Visibly: the windows carry daylight (the rightmost shows foliage through it)
+against a properly dark room, where they were flat grey slabs. That is #77's
+difference 3.
+
+### Now ON by default
+
+The reason it shipped off -- "it blows the picture out" -- was this bug, not the
+mechanism. `GEARS_DRAW_NOREINTERP=1` is the control arm and reproduces the old
+output byte for byte. 4 conversions on this frame, **0 refused** (the refusals
+were themselves an artefact of the wrong source format asking for pairs the pass
+does not implement).
+
+Gates: `validate_all` PASS on all 8 captures; `verify_native_pass` PASS
+bit-exact with its interface arm clean and its negative control still firing;
+no capture blows out or goes black (`play_v2`'s zero is pre-existing and
+reproduces with the pass off).
+
+### What this does NOT close
+
+p99 0.549 against the oracle's 0.784 -- we still under-reach at the top. That is
+a remaining gap, not a regression, and it belongs to #62 rather than here.
+#81 (bloom) should be re-measured now: this is the change that gives it a
+non-trivial input.
