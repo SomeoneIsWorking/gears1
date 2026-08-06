@@ -58,3 +58,31 @@ twice it was right.
 separate runs diffed by `tools/render_diff.py` give the same answer on
 `GEARS_DRAW_FORCE_LDR`: first divergence at row 435, guest draw 612, arm A max
 2.98/3.24/3.18 against 1.0/1.0/1.0.
+
+### Note (2026-08-06)
+## A FOURTH way it lied, and this one was a real crash (2026-08-06)
+
+Running the comparer over eleven knobs, nine of them produced NO output at all.
+They were not failing the comparison -- they were dumping core, and the driver
+cannot report a crash because the crash takes the process with it.
+
+    #9  gears::draw::ShaderCache::GetShader ... gpu_draw_shaders.cpp:61
+    #8  std::filesystem::path::path(...)  <error: Cannot access memory at 0x31>
+
+ROOT CAUSE, and it is the comparer's own doing:
+
+    static const std::string& spvDir = lucent::config::text("DRAW_SPV_DUMP");
+
+`lucent::config::text` returns a REFERENCE into lucent's config cache. The
+comparer drops that cache deliberately between arms (the prefix bounce) so a
+knob is re-read -- and every `static const std::string&` bound to it then
+dangles. The next draw builds a `std::filesystem::path` from freed memory.
+
+Two sites had it: `gpu_draw_shaders.cpp` and `gpu_draw_resolve_decode.cpp`. Both
+now hold the string BY VALUE, which is correct regardless of what any tool does
+to the cache, and both carry a note saying why.
+
+This is a hazard the API invites: returning `const std::string&` makes
+`static const auto&` look natural and it is a use-after-free waiting for anyone
+who clears the cache. Worth a `refresh()` upstream that keeps entries alive, or
+returning by value.
