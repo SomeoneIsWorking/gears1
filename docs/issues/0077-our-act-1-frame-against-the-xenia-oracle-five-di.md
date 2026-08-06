@@ -2309,3 +2309,69 @@ an inference from our own frame, not a comparison. Anyone continuing here should
 treat "the character has no lit diffuse pass" as the best available reading and
 NOT as established -- the measurement that would settle it is one reliable
 oracle run away, and the instrument for it is already built and in the fork.
+
+### Note (2026-08-06)
+# START HERE (2026-08-06). Current position, after a session of thirteen attempts.
+
+This entry is now ~2300 lines with eight retractions interleaved. Read this
+block first; everything below it is the working record, and several notes in it
+are WITHDRAWN by later ones.
+
+## Difference 1 (the black character): where it actually stands
+
+**The character's base pass is NOT a defect.** Draw 460's material ends in
+`saturate(0.3 - normalize(o2).z)`, which is exactly 0 head-on, and that is
+CORRECT: UE3's `GpuSkinVertexFactory.usf:244` makes o2 the unnormalised
+TangentCameraVector, so this pass is a RIM term meant to contribute ~0 facing
+the camera. Confirmed by `ucode_reduce`'s full reduction; do not re-derive it
+from the instruction listing, which drops the `+ c254.x` (that error has now
+been made twice, most recently by me).
+
+**The reading that follows from that**: the character has no lit diffuse pass in
+our frame, which points CPU-side (catalog #58). **This is an inference from our
+own frame and is NOT verified against the reference.** The test that would
+settle it is built and unrun -- see "next action".
+
+## Verified equivalent to Xenia (do not re-check these)
+
+Constants for the character's PIXEL shader (7 of 10 byte-identical, the other 3
+are the camera basis and both sets are orthonormal); the VERTEX decode constants
+(c253/c254/c255 identical); vertex fetch format and integer normalisation; the
+interpolator mask (0x3f, all six exchanged); param_gen derivation; texture clamp
+modes; the DXT1 channel order; the shader translator itself (unmodified
+upstream); predication; and the draw stream (we drop ZERO draws and issue MORE
+per frame than the oracle -- 3936 against 2141).
+
+## Withdrawn this session, all mine, all by measurement
+
+  * "our guest issues a third of the oracle's draws" -- it issues more;
+  * "the colour-writing character draws die at clip while the same actor
+    survives elsewhere" -- the survivors are SHADOW passes, light-space;
+  * "the rim term measures 0.537, so the env ramp is the only zero" -- decoded
+    the wrong channels off a clamped 8-bit readback of a float target;
+  * "the constant dump broke the oracle by being slow" -- it was a null
+    dereference on depth-only draws;
+  * plus the c1.y infinity, the DXT1 swap, and the draw-drop paths.
+
+## The next action, in one line
+
+Run the oracle once, reliably, with the per-frame bind counter already in the
+fork (`GEARS_ORACLE_VS_CONSTS=15cbc482459fe5b7`, which now also counts binds and
+logs them at each swap) and compare against ours: **our frames bind that shader
+exactly TWICE**, of which one writes colour. If the oracle binds it more, the
+missing draws are the answer and this is NOT CPU-side. If it binds it twice,
+#58 is the road.
+
+The obstacle is harness reliability, not instrumentation: the shader binds at
+different points across runs of the same frame-indexed walk, and the runs hang
+in shutdown past their timeout. Three attempts today produced no reading.
+
+## Tooling built this session (all working, all verified)
+
+`oracle_lockstep.sh`'s frame-driven input **was inert** -- schedule times were
+stored in ms and compared against a guest frame count, so `START@150` fired at
+frame 150,000. Every lockstep comparison this project has ever run compared our
+walked runtime against a title screen. Fixed, verified both ways; the codemap's
+alignment figures for it are withdrawn. The oracle also gained stick input, a
+shader-hash census, pixel and vertex constant dumps keyed on OUR hash function,
+and a frame gate that records the frame it fired at.
