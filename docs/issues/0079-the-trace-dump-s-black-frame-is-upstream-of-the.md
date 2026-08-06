@@ -189,3 +189,63 @@ recorded; the dumps all find their render targets; the copies all have shaders.
 
 The trace carries 68.1 MiB of MemoryRead, spread across every 16 MiB block, so
 it is not obviously missing guest memory wholesale.
+
+### Note (2026-08-06)
+## `readback_resolve` is NOT the cause -- the entry's leading hypothesis is dead
+
+This entry's "NOT YET ESTABLISHED, and it is the next thing to settle" was
+whether `--readback_resolve=full` makes the dump correct. It has now been run,
+on a trace of OUR OWN capture (`tools/gfr_to_xtr.py scratch/frames/bright.gfr
+scratch/traces/bright.xtr --present frame`, 844 draws, 2878 guest pages,
+179.9 MiB emitted):
+
+    readback_resolve=full   100.0% pure black
+    readback_resolve=fast   100.0% pure black
+    readback_resolve=none   100.0% pure black
+
+All three identical. **The cvar is not the mechanism.**
+
+### And our converter's memory emission is NOT the gap either
+
+The entry records "`gfr_to_xtr`'s memory emission is the gap on our side",
+measured on an old synthesised trace whose whole shared-memory buffer held
+213,279 non-zero bytes in two blocks. That is no longer true. The probe at the
+swap reports the buffer holding **32,769,057 non-zero bytes spread across nine
+16 MiB blocks**, and playback records 826 draws with 0 dropped. The trace
+carries the frame.
+
+### Where the picture is actually lost, measured
+
+`--gears_probe_front_buffer=1` at the swap, on that trace:
+
+    shared-memory probe [swap swap #0]: 00311000 (3686400 bytes, tiled):
+        0 non-zero (0.0%), mean 0.00
+
+immediately after the fork's own instrumentation reports
+
+    IssueCopy: entry, dest 00311000
+    DumpRenderTargets: EDRAM base 720 -> 1 rectangle(s)
+    IssueCopy: resolved 3768320 bytes at 00311000
+
+So a render target WAS found to own the EDRAM range (the dump did not take its
+"copy zeros" path), the copy reports 3,768,320 bytes written, and the
+destination in shared memory is entirely zero. The resolve's write is not
+reaching the buffer the swap reads.
+
+Of the frame's eighteen resolve destinations the probe lists, three are
+non-zero -- 0BA50000, 0BCD0000, 0C520000 -- and those are addresses our own
+`kMemoryRead` blocks loaded at trace start. **Not one destination is non-zero
+because a resolve put it there.** So this is not specific to the front buffer:
+no resolve in trace playback lands in shared memory.
+
+### What that makes the next step
+
+Not a cvar and not our converter: it is inside the fork's Vulkan resolve path
+under trace playback, between `IssueCopy` reporting a written length and the
+shared-memory buffer holding the bytes. That is emulator work in
+`extern/xenia`, and it is the whole of what stands between this project and a
+per-draw ground truth for catalog #77 -- which, after this session's
+eliminations, is the only measurement #77 has left.
+
+Recorded with both hypotheses killed so the next session starts here rather
+than re-running the cvar.
