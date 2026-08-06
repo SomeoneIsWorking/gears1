@@ -21,7 +21,10 @@ command -v glslangValidator >/dev/null || {
     echo "glslangValidator not found (Fedora: dnf install glslang)" >&2; exit 1; }
 
 stage=frag
-case "$src" in *.vert) stage=vert;; esac
+case "$src" in
+    *.vert) stage=vert;;
+    *.comp) stage=comp;;
+esac
 
 tmp=$(mktemp -d "${SCRATCH:-scratch}/gen_native_spv.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT

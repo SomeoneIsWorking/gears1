@@ -54,6 +54,19 @@ struct RenderTargetCache
     // reads nothing.
     std::vector<VkDescriptorSet> resolveDepthSets;
     uint32_t resolveDepthSetsUsed = 0;
+    // EDRAM format reinterpretation (gpu_draw_reinterpret.cpp): one descriptor
+    // set per conversion, and counters for what was converted, what was refused
+    // as an unsupported format pair, and what ran out of sets. A refusal is not
+    // a no-op -- the surface keeps a value the console never held -- so it is
+    // counted separately and reported at Warn.
+    std::vector<VkDescriptorSet> reinterpretSets;
+    uint32_t reinterpretSetsUsed = 0;
+    uint32_t reinterpretsDone = 0;
+    uint32_t reinterpretsRefused = 0;
+    uint32_t reinterpretsOutOfSets = 0;
+    std::set<uint64_t> reinterpretPairs;        // (from << 32) | to
+    std::set<uint64_t> reinterpretRefusedPairs;
+
     uint32_t resolvesUnstorable = 0;
     uint32_t resolvesOutOfSets = 0;
     uint32_t midFrameDepthClears = 0;
@@ -97,6 +110,24 @@ struct RenderTargetCache
     bool GetResolveTarget(uint32_t destBase, uint32_t sourceBase, uint32_t destPitch,
                           uint32_t destHeight, uint32_t destFormat, bool isDepth,
                           ResolveTarget*& out, uint32_t& rowOffsetOut);
+
+    // --- EDRAM format reinterpretation, in gpu_draw_reinterpret.cpp ---------
+    // Built once. Returns false, having said why, when the device or the
+    // pipeline cannot serve it -- a frame that then changes format is reported
+    // as unconverted rather than silently rendering on.
+    bool BuildReinterpretPipeline();
+    // Convert a surface's contents from one guest colour format to another, in
+    // place, through the bits the console's EDRAM would hold. Recorded with no
+    // render pass open. Returns false when the pair is one this pass refuses.
+    bool ReinterpretSurface(VkCommandBuffer cmd, SurfaceTarget& t,
+                            uint32_t fromFormat, uint32_t toFormat);
+    // GEARS_DRAW_REINTERP_SELFTEST=1: run the shipping compute module on this
+    // GPU against three cases with arithmetic answers -- two that must convert
+    // and one that must NOT change anything -- before any frame is rendered.
+    bool ReinterpretSelfTest();
+    // The frame's line. `enabled` false still prints, naming how many surfaces
+    // changed format with the pass off: silence would read as "nothing to do".
+    void ReportReinterpretation(bool enabled) const;
 
     // Built once, on the first frame that can have it: the resolve is a DISPATCH
     // and not a vkCmdBlitImage because it applies the guest's copy_dest_exp_bias

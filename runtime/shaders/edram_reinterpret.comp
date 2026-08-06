@@ -1,0 +1,158 @@
+#version 450
+// EDRAM FORMAT REINTERPRETATION.
+//
+// An EDRAM base is a location, not a typed image: the guest re-declares
+// RB_COLOR_INFO.color_format on the same base mid-frame and the bits already
+// there are read back under the NEW format's rules. Measured on the Act 1
+// capture, base 0x2d0 is declared k_8_8_8_8, k_2_10_10_10, k_2_10_10_10_FLOAT
+// and k_16_16 within one frame, and draw 650 BLENDS against what draw 649 wrote
+// one format earlier.
+//
+// This renderer keeps one wide host image per base holding VALUES, so a
+// reinterpretation is invisible to it: draw 649 writes 1.0 (its k_2_10_10_10
+// target's own clamp) and every later draw reads 1.0, where the console reads
+// the bits 0x3FF back as the 7e3 float 31.875.
+//
+// This shader is that reinterpretation, run once per format change: pack the
+// stored value into the 32 bits the console's EDRAM would hold under the OLD
+// format, then unpack those bits under the NEW one. The pack/unpack are ported
+// from Xenia's ownership transfer -- vulkan_render_target_cache.cc for the bit
+// layout of each format, spirv_shader_translator_rb.cc for the 7e3 conversions
+// (NOT xenos.cc's CPU Float7e3To32, which shifts the mantissa by 3 instead of 16
+// and disagrees with the shader path Xenia actually renders through).
+//
+// Only 32-bit-per-pixel formats whose value<->bit mapping this renderer's
+// container can carry are handled; the caller REFUSES and reports the pair
+// rather than letting a wrong container quietly approximate one.
+
+#extension GL_EXT_shader_image_load_formatted : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Read AND written, one invocation per texel, so the pass is in place: no
+// invocation touches another's texel and no ordering is implied.
+layout(binding = 0) uniform image2D xe_surface;
+
+layout(push_constant) uniform XeReinterpretConstants {
+    ivec2 extent;
+    uint srcFormat; // ColorRenderTargetFormat, storage form (10->2, 12->3)
+    uint dstFormat;
+} xe_reinterpret;
+
+// --- 7e3 <-> float32, ported from Xenia's SPIR-V translator ---------------
+
+// UnclampedFloat32To7e3 + PreClampedFloat32To7e3.
+uint xeFloat32To7e3(float f)
+{
+    // NClamp: the NaN-quieting clamp Xenia uses. GLSL clamp() with a NaN
+    // argument is not required to pick either bound, and a NaN reaching the
+    // bit arithmetic below produces an arbitrary 10-bit pattern rather than a
+    // large value, so the NaN case is written out.
+    f = isnan(f) ? 0.0 : clamp(f, 0.0, 31.875);
+    uint u = floatBitsToUint(f);
+    // Too small to be a normalized 7e3: shift the implicit 1 in by hand.
+    uint denorm = bitfieldInsert(u, 1u, 23, 9) >> min(125u - (u >> 23), 24u);
+    uint normal = u - (124u << 23);
+    uint biased = (u < 0x3E800000u) ? denorm : normal;
+    // Round to nearest even, then take the 10 bits.
+    return bitfieldExtract(biased + 0x7FFFu + bitfieldExtract(biased, 16, 1),
+                           16, 10);
+}
+
+// Float7e3To32.
+float xeFloat7e3To32(uint f10)
+{
+    uint e = bitfieldExtract(f10, 7, 3);
+    uint m = bitfieldExtract(f10, 0, 7);
+    // The denormal case: normalize by the mantissa's high bit. When the
+    // mantissa is zero this shift is meaningless but harmless (8, not >= 32),
+    // and the select below discards it.
+    int msb = findMSB(m);
+    uint denormExp = uint(msb) - 6u;
+    uint denormMan = m << (7u - uint(msb));
+    bool nonzeroMantissa = m != 0u;
+    denormExp = nonzeroMantissa ? denormExp : uint(-124);
+    denormMan = nonzeroMantissa ? denormMan : 0u;
+    uint fe = (e != 0u) ? e : denormExp;
+    uint fm = (e != 0u) ? m : denormMan;
+    return uintBitsToFloat(bitfieldInsert(fm, fe + 124u, 7, 8) << (23 - 7));
+}
+
+uint xeToUnorm(float v, float scale)
+{
+    // The fixed-point render target clamps its source colour; a value outside
+    // [0,1] in the container is a value the guest's own target would have
+    // clamped before storing.
+    return uint(clamp(v, 0.0, 1.0) * scale + 0.5);
+}
+
+uint xePack(vec4 c, uint format)
+{
+    uint bits = 0u;
+    if (format == 0u || format == 1u)
+    {
+        // k_8_8_8_8, k_8_8_8_8_GAMMA. The gamma variant stores gamma-encoded
+        // bits on the console; this renderer applies the ramp on the way out
+        // and stores the same value either way, so they pack alike here.
+        bits = xeToUnorm(c.r, 255.0);
+        bits = bitfieldInsert(bits, xeToUnorm(c.g, 255.0), 8, 8);
+        bits = bitfieldInsert(bits, xeToUnorm(c.b, 255.0), 16, 8);
+        bits = bitfieldInsert(bits, xeToUnorm(c.a, 255.0), 24, 8);
+    }
+    else if (format == 2u)
+    {
+        // k_2_10_10_10: 10-bit UNORM RGB, 2-bit UNORM alpha.
+        bits = xeToUnorm(c.r, 1023.0);
+        bits = bitfieldInsert(bits, xeToUnorm(c.g, 1023.0), 10, 10);
+        bits = bitfieldInsert(bits, xeToUnorm(c.b, 1023.0), 20, 10);
+        bits = bitfieldInsert(bits, xeToUnorm(c.a, 3.0), 30, 2);
+    }
+    else if (format == 3u)
+    {
+        // k_2_10_10_10_FLOAT: 7e3 RGB, 2-bit UNORM alpha.
+        bits = xeFloat32To7e3(c.r);
+        bits = bitfieldInsert(bits, xeFloat32To7e3(c.g), 10, 10);
+        bits = bitfieldInsert(bits, xeFloat32To7e3(c.b), 20, 10);
+        bits = bitfieldInsert(bits, xeToUnorm(c.a, 3.0), 30, 2);
+    }
+    return bits;
+}
+
+vec4 xeUnpack(uint bits, uint format)
+{
+    vec4 c = vec4(0.0);
+    if (format == 0u || format == 1u)
+    {
+        c.r = float(bitfieldExtract(bits, 0, 8)) * (1.0 / 255.0);
+        c.g = float(bitfieldExtract(bits, 8, 8)) * (1.0 / 255.0);
+        c.b = float(bitfieldExtract(bits, 16, 8)) * (1.0 / 255.0);
+        c.a = float(bitfieldExtract(bits, 24, 8)) * (1.0 / 255.0);
+    }
+    else if (format == 2u)
+    {
+        c.r = float(bitfieldExtract(bits, 0, 10)) * (1.0 / 1023.0);
+        c.g = float(bitfieldExtract(bits, 10, 10)) * (1.0 / 1023.0);
+        c.b = float(bitfieldExtract(bits, 20, 10)) * (1.0 / 1023.0);
+        c.a = float(bitfieldExtract(bits, 30, 2)) * (1.0 / 3.0);
+    }
+    else if (format == 3u)
+    {
+        c.r = xeFloat7e3To32(bitfieldExtract(bits, 0, 10));
+        c.g = xeFloat7e3To32(bitfieldExtract(bits, 10, 10));
+        c.b = xeFloat7e3To32(bitfieldExtract(bits, 20, 10));
+        c.a = float(bitfieldExtract(bits, 30, 2)) * (1.0 / 3.0);
+    }
+    return c;
+}
+
+void main()
+{
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    // A group covers 8x8 texels, so the last group of a surface whose size is
+    // not a multiple of 8 runs past the edge; those invocations write nothing.
+    if (id.x >= xe_reinterpret.extent.x || id.y >= xe_reinterpret.extent.y)
+        return;
+    vec4 stored = imageLoad(xe_surface, id);
+    uint bits = xePack(stored, xe_reinterpret.srcFormat);
+    imageStore(xe_surface, id, xeUnpack(bits, xe_reinterpret.dstFormat));
+}
