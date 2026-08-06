@@ -1398,3 +1398,61 @@ camera is.
 
 **bright.gfr draw 460 remains the frame to work**: a character demonstrably in
 frame, rasterising 144191 fragments, rendering black.
+
+### Note (2026-08-06)
+## Two of the six character draws are ELIMINATED: they are constant-black by construction
+
+The list of six character draws above marks 655 and 752 as "module has 0
+textures, 0 samplers", which reads as a lost or mistranslated diffuse pass.
+It is not. Their pixel shader, `0xd113bf9d83540000`, is THREE INSTRUCTIONS in
+full:
+
+    alloc colors
+    exece
+    sgt oC0.xyz0, -r_abs[5].xxxx, c255.xxxx
+
+`sgt` is set-greater-than, so oC0.xyz = (-|r5.x| > c255.x) ? 1 : 0, and the `0`
+in the `xyz0` write mask puts a literal zero in alpha. `-|r5.x|` is never
+positive, and the shader packs exactly one vec4 with c255 = (0,0,0,0)
+(`GEARS_DRAW_PS_CONSTS=d113bf9d83540000`), so the comparison is false for every
+pixel of every draw.
+
+**Those draws write pure black with zero alpha because that is what they are
+written to do.** They have no textures because they sample nothing. No renderer
+change can affect them, they are not a candidate for the missing diffuse pass,
+and their 112,984 and 164,528 fragment invocations mean nothing.
+
+That leaves the six-draw list looking like this:
+
+    177  depth prepass, 0 fragments                     -- not a colour pass
+    460  base pass, 144,191 fragments, ps f662d670789bfac0  <- THE ONLY CANDIDATE
+    655  constant black by construction                 -- ELIMINATED
+    690  colour mask 0                                  -- writes no colour
+    738  0 fragments                                    -- nothing rasterised
+    752  constant black by construction                 -- ELIMINATED
+
+### And draw 460's shader is a rim term, which its own arithmetic confirms
+
+`0xf662d670789bfac0` (90 dwords) samples three textures and shades them, then
+ends:
+
+    25   subsc_sat r4.x, c254.y, r4.x     <- saturate(c254.y - r4.x)
+    26   mul  r4.xyz, r5.yxzz, r4.xxxx    <- the shaded colour TIMES that scalar
+    27   mad  r4.xyz, r4.zxyy, r4.wwww, c6.xyzz
+    28   mul  oC0.xyz, r4.xyzz, c254.wwww
+
+and r4.x at instruction 25 traces back to instructions 4-8, `rsq` of
+`dp3(r2.zxy, r2.zxy)` scaled by r2.z -- i.e. the z component of a NORMALISED
+interpolated vector, which is an N.V term. `saturate(1 - N.V)` is a Fresnel/rim
+factor: ~0 across a surface facing the camera, ~1 only at silhouette edges.
+
+So this pass is *supposed* to contribute almost nothing where the character
+faces you. It renders black because it is a rim pass with nothing underneath it.
+
+**The conclusion this entry already reached is now much harder to avoid: the
+character's lit diffuse pass is NOT IN THE FRAME AT ALL.** Of six draws, two are
+constant-black by construction, one is depth-only, one is colour-masked, one
+rasterises nothing, and the last is a rim term. There is no draw here that could
+put a lit character on screen, so nothing the RENDERER does to these draws will
+produce one. The defect is upstream, on the CPU side, exactly as this entry
+suspected -- and that makes it the same class of problem as catalog #73 and #58.
