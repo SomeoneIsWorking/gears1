@@ -584,3 +584,78 @@ cannot distinguish "the guest asked for this" from "we computed the wrong
 interpolator". Both remain possible for r2's length of 4+, which is not what a
 normalised tangent-space vector would be -- worth returning to if the tf1 lead
 dies.
+
+### Note (2026-08-06)
+## Both multipliers healthy, the tf1 binding healthy: it is the COORDINATE
+
+Two more builds of the debug substitution, two more eliminations, and the search
+is now down to twelve instructions.
+
+### Ninth elimination: r4.w and the normal map are fine
+
+`oC0.xyz = ((r5 * gate) * r4.w) * c254.w`, and the debug module read r4.w
+directly (it is `tf0.z * 2 - 1`, tf0 being the normal map):
+
+    (200,120)   r4.w = 1.000   gate = 0.317   tf0.z = 1.000
+    (300,500)   r4.w = 0.916   gate = 0.421   tf0.z = 0.958
+
+With c254.w = 8, `gate * r4.w * c254.w` is about **2.6 -- a BRIGHT multiplier**.
+The normal map samples correctly too. So neither the gate nor the normal map nor
+the constants can be the zero, and since the material's output IS exactly zero,
+arithmetic forces `r5 = albedo * tf1` to be zero. The albedo decodes to real
+character art, so **tf1's sample is zero**. That is deduced from measurements,
+not assumed.
+
+### Tenth elimination: the tf1 binding works
+
+The obvious next suspect was the binding itself -- tf1 is `k_8`, a
+single-channel format with fetch swizzle XXX1, and a mishandled single-channel
+texture would read zero everywhere. It does not:
+
+    R = tf1 at a FIXED (0.5,0.5)   0.000 at both pixels
+    G = tf1 at r0.xy               0.000 and 0.6567
+
+**G is 0.657 at (300,500)**, so real data reaches the shader through that
+binding. The descriptor, the k_8 host format and the XXX1 swizzle all work.
+
+(R being 0 at the fixed probe is NOT a defect and must not be read as one: tf1 is
+50.8% zero by measurement, so (0.5,0.5) landing in its zero half is ordinary
+texture content. The fixed probe was there to catch a binding that reads zero
+EVERYWHERE, and it did not fire.)
+
+### So it is the coordinate, and here is where it is built
+
+`tfetch2D r5.xyz_, r4.zy, tf1` samples at `r4.zy`, built by instructions 11-17:
+
+    11   mul r5.xyz_, r2.xxxx, c1.zyxx
+    12   mad r5.xyz_, r2.zzzz, c0.xzyy, r5.zxyy
+    13   mad r5.xyz_, r2.yyyy, c2.yxzz, r5.zxyy      <- r2 through the (c0,c1,c2) basis
+    14   mul r4._yz_, r5.xxxx, c4.yyxx
+    15   mad r4._yz_, r5.yyyy, c3.xxyy, r4.zzyy
+    16   mad r4._yz_, r5.zzzz, c5.yyxx, r4.zzyy      <- and through (c3,c4,c5)
+    17   add r4.xyz_, r4.xyzz, c254.xyyy             <- BIASED by (0.7, 1, 1)
+
+with, from `GEARS_DRAW_PS_CONSTS` on this draw:
+
+    c0 = (-1, 0, 0, 0)   c1 = (0, -1, 0, 0)   c2 = (0, 0, 1, 0)
+    c3 = (-0.9913, -0.0932, 0.0929, 0)
+    c4 = ( 0.1024, -0.1031, 0.9894, 0)
+    c5 = (-0.0826,  0.9903, 0.1117, 0)     -- both orthonormal
+    c254 = (0.7, 1, 0.8, 8)
+
+Instruction 17 adds **+1** to both components that become the sample coordinate.
+A sphere/hemisphere lookup normally biases by +0.5 to map [-1,1] onto [0,1]; a
++1 bias sends a [-1,1] input to [0,2], and everything above 1 clamps to the edge.
+If the ramp is zero at that edge, every such pixel reads zero -- which is the
+symptom exactly.
+
+WHAT THAT DOES NOT ESTABLISH: whether the +1 is the guest's intent (and our r2
+is wrong, so the pre-bias value sits in the wrong half) or whether we mis-supply
+c254. Both remain open and they call for opposite fixes. The debug module
+deliberately does NOT replicate these twelve instructions -- a mis-replication
+would produce a confidently wrong answer -- so the next step is to extend it to
+output the computed `r4.zy` itself, which is a faithful copy of lines 11-17 and
+nothing more.
+
+Also still unexplained and worth returning to if this dies: the debug module
+measured `length(r2) >= 4`, where a tangent-space vector should be near 1.

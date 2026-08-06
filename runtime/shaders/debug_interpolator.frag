@@ -4,44 +4,72 @@
 // nothing else in this project can see.
 //
 // THE QUESTION (catalog #77). The character renders pure black. Its base pass,
-// ps 0xf662d670789bfac0, multiplies everything it emits by
+// ps 0xf662d670789bfac0, emits
 //
-//     saturate(1 - normalize(r2.xyz).z)
+//     oC0.xyz = ((r5 * gate) * r4.w) * c254.w        c254.w = 8
+//     gate    = saturate(1 - normalize(r2.xyz).z)    r2 = interpolator o2
+//     r4.w    = tf0.z * 2 - 1                        tf0 = the NORMAL MAP
 //
-// built in the microcode from `dp3 r5.w, r2.zxy, r2.zxy`, `rsq`, `mul ..., r2.z`
-// and `subsc_sat r4.x, c254.y, r4.x` with c254.y = 1.0. r2 is interpolator o2,
-// computed by 440 vertex-shader instructions with control flow and an
-// address-register bone-palette lookup -- beyond what `tools/ucode_reduce.py`
-// models, and invisible to every probe the renderer has. Seven candidate causes
-// for the black character have been eliminated by measurement (see #77); all of
-// them were guesses at this value.
+// so with c254.w a bright multiplier, only `gate`, `r4.w` or `r5` can zero it.
+// Eight candidate causes have been eliminated by measurement (catalog #77), and
+// the first version of THIS shader eliminated the gate: it reads 0.32-0.42 on
+// the character, i.e. wide open. So the remaining multipliers are r4.w and r5.
+//
+// r5 is `albedo * tf1`, where tf1's sample coordinate is computed by twelve
+// instructions from c0..c5. Replicating those here would risk a confidently
+// wrong answer, so this shader does NOT attempt it -- it reads the two things it
+// can read exactly, and the tf1 lead is chased separately.
 //
 // Interpolator location N is register rN, exactly as the translated shader
-// receives them (see runtime/shaders/base_pass_lightmap.frag, which reads r0..r4
-// the same way), so this reads the SAME data the title's shader reads.
+// receives them (runtime/shaders/base_pass_lightmap.frag reads r0..r4 the same
+// way), and texture bindings follow FETCH ISSUE ORDER within set 3, textures on
+// even bindings and their samplers from 6 -- the convention
+// runtime/shaders/uber_post_blend.frag documents. This shader's issue order is
+// tf0 (instruction 3), tf1 (18), tf2 (19), so tf0 is binding 0 / sampler 6.
 //
-// WHAT EACH CHANNEL SHOWS, chosen so the failure is legible rather than merely
-// visible:
-//   R = the gate itself, saturate(1 - normalize(r2).z). BLACK here IS the bug.
-//   G = normalize(r2).z mapped to [0,1] (0.5 = zero), so the sign is readable.
-//   B = length(r2) / 4. A tangent-space vector should be near 1 -> ~0.25.
-//       0 means the interpolator is dead; a large value means it is unnormalised.
+// WHAT EACH CHANNEL SHOWS:
+// BOTH multipliers have now been read and both are healthy -- r4.w is 0.92-1.0
+// and the gate is 0.32-0.42, so gate*r4.w*c254.w is about 2.6, a BRIGHT
+// multiplier. Since the material's output is exactly zero, arithmetic forces
+// r5 = albedo * tf1 to be zero, and the albedo decodes to real character art.
+// So tf1's sample must be zero, and this build asks the next question: is that
+// the BINDING or the COORDINATE?
 //
-// So: a red image means the gate is open and the character should be lit; a
-// black image with mid-grey green means normalize(r2).z is pinned at +1; a black
-// image with black blue means o2 arrives as the zero vector.
+//   R = tf1 sampled at a FIXED (0.5, 0.5). This is a BINDING test and owes
+//       nothing to the shader's computed coordinate. tf1 (0x32eb000) is a
+//       256x256 k_8 ramp measured 50.8% zero, 30.8% at 255, mean 99.5/255 =
+//       0.39 -- so a healthy binding reads SOMETHING here on most of the mesh,
+//       and a flat 0 means the fetch itself is broken (format, swizzle XXX1 on
+//       a single-channel texture, or the descriptor).
+//   G = tf1 sampled at the material coordinate r0.xy. NOT the shader's real
+//       coordinate (that is twelve instructions of c0..c5 this refuses to
+//       replicate) -- it is a second, independent probe of the same binding.
+//   B = the gate, kept so one image still carries a known-good reference and a
+//       run cannot be confused with the previous build's output.
 
-layout(location = 2) in vec4 InR2;
+layout(set = 3, binding = 0) uniform texture2DArray Tf0Tex;   // the normal map
+layout(set = 3, binding = 2) uniform texture2DArray Tf1Tex;   // the k_8 ramp
+layout(set = 3, binding = 6) uniform sampler       Tf0Samp;
+layout(set = 3, binding = 7) uniform sampler       Tf1Samp;
+
+layout(location = 0) in vec4 InR0;   // r0: .xy is the material coordinate
+layout(location = 2) in vec4 InR2;   // r2: the vector the gate is built from
 layout(location = 0) out vec4 OutColor;
 
 void main() {
     vec3 r2 = InR2.xyz;
     float len = length(r2);
-    // Guard the divide rather than letting it produce NaN: a NaN would paint
-    // whatever the blend does with it and read as an answer. Zero length is a
-    // real possible finding, so it gets a defined output (green 0.5, blue 0)
-    // rather than being hidden.
+    // Guard the divide rather than emitting NaN: a NaN paints whatever the
+    // blend does with it and reads as an answer. Zero length is a real possible
+    // finding, so it gets a defined output instead of being hidden.
     float nz = len > 0.0 ? (r2.z / len) : 0.0;
     float gate = clamp(1.0 - nz, 0.0, 1.0);
-    OutColor = vec4(gate, nz * 0.5 + 0.5, min(len * 0.25, 1.0), 1.0);
+
+    // The layer is 0: the translated shader declares its 2D textures as arrays,
+    // so a plain 2D sample here would not match the descriptor and the pipeline
+    // would be rejected rather than quietly reading the wrong thing.
+    float tf1_fixed = texture(sampler2DArray(Tf1Tex, Tf1Samp), vec3(0.5, 0.5, 0.0)).x;
+    float tf1_uv    = texture(sampler2DArray(Tf1Tex, Tf1Samp), vec3(InR0.xy, 0.0)).x;
+
+    OutColor = vec4(tf1_fixed, tf1_uv, gate, 1.0);
 }
