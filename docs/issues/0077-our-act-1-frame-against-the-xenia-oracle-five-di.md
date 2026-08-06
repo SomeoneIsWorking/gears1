@@ -3273,3 +3273,73 @@ broadly lit. So the ramp must be open across most of the mesh on hardware, our
 
 **Do not re-derive "the character is meant to be dark" from a percentile.**
 Look at the boosted crop.
+
+### Note (2026-08-06)
+## LOOK AT THE MESH. bright.gfr's character is a close-up HEAD AND ARM, not armoured Marcus
+
+Rendering the ramp coordinate over draw 460's own coverage and just LOOKING at
+it settles several things at once, and it should have been the first thing done
+rather than the twentieth.
+
+The image is a **close-up of a bare head in profile and a forearm and hand**,
+filling the upper-left quadrant -- ear, jaw, brow, individual fingers. It is
+not the armoured Marcus that every oracle frame in this entry shows.
+
+### What that immediately establishes
+
+**The vertex path is healthy, visually and unambiguously.** The coordinate
+field varies smoothly and coherently across the face, over the ear, down the
+arm and around each finger. Skinning, the bone palette, the tangent frame, the
+interpolation -- all of it produces a clean geometric field. No probe of o4's
+statistics could have shown this as convincingly as the picture does.
+
+**And it means this entry has been comparing different SHOTS.** Difference 1
+opened as "NO CHARACTER. Marcus is absent from our frame", measured against
+oracle frames of armoured Marcus crouched behind cover. Our frame's character
+is a head-and-arm close-up in a dark interior. The closest cached oracle
+reference to our frame (`tools/oracle_cache.py match`) is
+`scratch/oracle/vdump/frame_0120s.png` -- the SAME story beat, the "Jack, rip
+that door" moment, sparks at the door -- and in it **the camera is on the door
+and no character is in shot at all.** That frame is also 3x DARKER than ours
+(mean 0.018 against our 0.049).
+
+### The control arm that kills the sign-flip hypothesis
+
+The previous note left o4's orientation as the only free input, and mirroring
+the coordinate about 1.0 (`u -> 2-u`, which is what a sign flip on o4 produces)
+would put 92.5% of the mesh inside the ramp's live range. Run as a control arm,
+rendering the whole material with the coordinate mirrored:
+
+    as computed    309 of 126,983 fragments non-zero   (0.24%)
+    mirrored    10,286 of 126,983 fragments non-zero   (8.1%)   max 2.393
+
+34x more, and the render is a *coherent* one -- rim light along the skull,
+shoulder and hand. But it is **still mostly black, and its median is still 0**.
+So a sign flip on o4 is NOT a sufficient explanation and is not the defect.
+
+### Why no coordinate fix can be, and this is arithmetic
+
+The material is `albedo * ramp * gate * T7 * 8`. Whatever the ramp does, the
+GATE is `saturate(0.3 - normalize(o2).z)` and it is **zero on 87.5% of this
+mesh** -- because o2 is UE3's TangentCameraVector and this is a close-up, so
+almost every visible fragment faces the camera. `normalize(o2).z` was measured
+POSITIVE at two pixels by PIXEL_TRACE (+0.287, +0.691), which is what UE3
+requires and confirms there is no sign error there either.
+
+**Draw 460 cannot broadly light this mesh on any correct implementation**, ours
+or the console's. That is not a statement about our renderer.
+
+### So what this entry needs, stated honestly
+
+Every renderer-side candidate for difference 1 is now closed by measurement:
+the constants, the camera basis, the texture decode, the clamp mode, the
+arithmetic, the interpolators, the shader binding, the colour mask, the draw
+submission. What remains is a comparison this project cannot currently make:
+**the same guest frame rendered by both sides.** Not the same wall clock and
+not the same guest frame index -- #84 says neither aligns two runs -- but the
+same captured frame, which is the trace path #79 records as blocked on
+`gfr_to_xtr`'s memory emission.
+
+Until that exists, "the character is missing" cannot be separated from "the
+character is in a dark room in a different shot". This entry should not spend
+another session on renderer-side eliminations; there are none left to make.

@@ -146,6 +146,15 @@ void main() {
     // are k_2_10_10_10 variants whose guest clamp is ALPHA-ONLY, so a sentinel
     // written there comes back as 0 and the mask silently reads empty. Measured,
     // not assumed -- the alpha version of this shader dumped 0 covered pixels.
+    // BLUE IS THE COVERAGE SENTINEL. Nothing else in a frame writes -7, so the
+    // dump's B == -7 pixels are EXACTLY this draw's fragments, in the SAME run
+    // that carries the values -- every reading gets its own denominator, which
+    // is what three retracted measurements lacked.
+    //
+    // NOT alpha, which would be the natural place: this title's colour surfaces
+    // are k_2_10_10_10 variants whose guest clamp is ALPHA-ONLY, so a sentinel
+    // written there comes back as 0 and the mask silently reads empty. Measured,
+    // not assumed -- the alpha build dumped 0 covered pixels.
     OutColor = vec4(gate, r5.x, -7.0, 1.0);
 #endif
 }
