@@ -249,3 +249,50 @@ eliminations, is the only measurement #77 has left.
 
 Recorded with both hypotheses killed so the next session starts here rather
 than re-running the cvar.
+
+### Note (2026-08-06, same session)
+## Both render-target paths fail identically, so this is not the host-RT dump
+
+The note above localises the loss to "between `IssueCopy` reporting a written
+length and the shared-memory buffer holding the bytes", and the obvious suspect
+was the host-render-target path's extra step: draws land in host render
+targets, `DumpRenderTargets` copies those into the EDRAM buffer, and the
+resolve copy then reads EDRAM into shared memory. Xenia's other path writes the
+EDRAM buffer directly and has no dump step at all.
+
+    --render_target_path_vulkan=fsi   100.0% pure black
+    (default, host render targets)    100.0% pure black
+
+Identical. Both paths report the same resolves (`resolved 3768320 bytes at
+00311000`, and the same for 0BDF0000, 006E4000, 0C7F9000), and both leave the
+destination empty. **The dump step is not the mechanism**, and neither is the
+choice of path.
+
+Also confirmed on the way: the probe reads AFTER `EndSubmission(true)` at the
+end of `IssueSwap` and fences on its own submission before mapping, so this is
+not unsubmitted work. And playback reports "826 recorded, 0 dropped with no
+rasterization", so the draws are not being thrown away.
+
+### Hypotheses now dead, all by measurement
+
+  * `readback_resolve` (full / fast / none -- identical);
+  * `gfr_to_xtr`'s memory emission (180 MiB, 2878 pages, 32.7 MB non-zero in
+    the buffer at swap);
+  * the host-render-target dump step (fsi path fails the same way);
+  * unsubmitted work at probe time;
+  * draws being dropped in playback.
+
+### The hypothesis this leaves, untested
+
+Our synthesised trace restores the ENTIRE register file before every draw
+(`gfr_to_xtr.py`: `w.registers(0, d["regs"][:XENIA_REG_COUNT])`), because a
+.gfr stores per-draw snapshots rather than the PM4 stream. Xenia's render
+target cache tracks EDRAM ownership INCREMENTALLY as the relevant registers
+change. A wholesale restore before every draw may leave ownership in a state
+where the render target the draws rendered into is not the one the resolve
+finds -- which would produce exactly this: draws that rasterise, a resolve that
+reports a written length, and a destination that stays empty.
+
+That is testable without emulator work: emit registers as DELTAS from the
+previous draw rather than a full restore, and see whether the dump gains a
+picture. It is the next thing to try and it is on OUR side of the fence.
