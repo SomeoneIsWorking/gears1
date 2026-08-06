@@ -2753,3 +2753,70 @@ route is `tools/ucode_reduce.py`'s reduction of this shader, read at t42/t70 --
 it is already in the tree and it is what the header's claim rests on. If the
 reduction and this render disagree, one of them is decodable to a specific
 error; they cannot both describe the same shader.
+
+### Note (2026-08-06)
+## RESOLVED, and it names a specific defect: our o2.z has the WRONG SIGN
+
+The contradiction above is resolved against the reduction, and the resolution
+identifies something concrete.
+
+`tools/ucode_reduce.py` on this shader gives, exactly:
+
+    t7  = (t0 * c253.x + c253.y)
+    t11 = (t10 * r2.z)              t10 = rsq(|r2|^2), so t11 = normalize(r2).z
+    t42 = (t11 + c254.x)            = nz + 0.7
+    t70 = saturate((c254.y - t42))  = saturate(1 - nz - 0.7) = saturate(0.3 - nz)
+
+which is precisely the expression the debug shader emits. **The reduction and the
+render agree on the FORMULA.** So the header's "the real gate is exactly 0" was
+never a consequence of the reduction -- it was an unstated assumption that
+`nz ~ 1`, i.e. that o2.z is positive on camera-facing surfaces.
+
+That assumption is exactly right, and it is what our render violates.
+
+### The measurement against UE3's own definition
+
+The header cites the source, correctly: `GpuSkinVertexFactory.usf:244` computes
+o2 as TangentCameraVector -- tangent-space `(CameraPosition - WorldPosition)` --
+so on any surface the viewer can see, the camera is on the OUTSIDE and
+**o2.z must be POSITIVE**.
+
+Measured over 48,441 character pixels of bright.gfr:
+
+    normalize(o2).z    mean -0.237    median -0.514
+    fraction with z < 0.3 (gate open): 70.6%
+
+**The median is NEGATIVE.** On most of the visible character our tangent-space
+camera vector points into the surface rather than out of it. That is
+geometrically impossible for front-facing geometry and it is not a matter of
+viewing angle.
+
+### Why this is a candidate for the whole defect
+
+One sign error in the tangent frame explains both halves at once:
+
+  * o2.z flipped => `saturate(0.3 - nz)` is wrongly OPEN where the console has
+    it shut. That is the anomaly measured above, and it explains why the gate
+    reads open when UE3 says a rim term should be ~0 head-on;
+  * the env-ramp coordinate is built from o4 through the SAME tangent frame
+    (`normalize(o4*2-1)`, then the c3/c4/c5 basis, then `+ c254.y`). A flipped
+    normal sends `u = r4.z + 1` to the opposite end of the ramp -- and the ramp
+    is white only below u ~ 0.3, black across the upper two thirds. That is
+    precisely the exact-zero fetch localised earlier, and the reason
+    `GEARS_DRAW_NOTEX=1` (white stubs, no ramp) takes the character region from
+    max 0 to max 175.
+
+So: gate wrongly open, ramp wrongly black, character black. One cause.
+
+### NOT established, and the next step is narrow
+
+o4 has NOT been measured -- only o2. The debug shader reads location 2; pointing
+it at location 4 and checking whether that normal's sign is likewise inverted is
+a one-line change to the same file, needs no oracle and no matched moment, and
+either confirms this or kills it.
+
+If confirmed, the fault is upstream in the vertex shader's tangent-frame
+construction, and the candidates are narrow: the handedness/sign convention
+applied to the packed 8-8-8-8 tangent vectors (fetched as NumFormat=INTEGER and
+decoded `raw*(2/255) - 1`, verified unit-length but never verified for SIGN), or
+the binormal's sign, which UE3 stores per-vertex.
