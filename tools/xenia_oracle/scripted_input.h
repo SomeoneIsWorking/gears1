@@ -101,6 +101,9 @@ class ScriptedInputDriver final : public xe::hid::InputDriver {
   std::vector<ScriptedPress> presses_;
   std::chrono::steady_clock::time_point start_;
   std::function<uint64_t()> tick_source_;
+  uint64_t UnitScale() const;
+  uint64_t HoldTicks() const;
+
   uint16_t last_buttons_ = 0;
   uint32_t packet_number_ = 1;
   uint32_t presses_reported_ = 0;

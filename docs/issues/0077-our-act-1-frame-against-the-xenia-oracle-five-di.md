@@ -2015,3 +2015,56 @@ leaves the pose, and the interpolator computed from it.
 The stick support added earlier makes both sides runnable on one walk; the
 remaining piece is stepping them by GUEST FRAME so the pose matches, which
 `tools/oracle_lockstep.sh` already has the machinery for.
+
+### Note (2026-08-06)
+## THE LOCKSTEP ORACLE HAS NEVER BEEN DRIVEN. Its input schedule was 1000x out.
+
+`tools/oracle_lockstep.sh` is the project's frame-aligned comparison -- the tool
+every "same moment" question has been waiting on. Its oracle arm has never
+received a single button press.
+
+`ParseInputScript` stored each schedule time as `at_seconds * 1000`, i.e.
+milliseconds. That is right for a wall-clock run. Under `--oracle_by_frame` the
+driver's tick source is `guest_swap_count()`, so the same stored number is
+compared against a GUEST FRAME COUNT -- and the script's `START@150` therefore
+fired at frame **150,000**, which no run reaches.
+
+Measured, before the fix, `--oracle_by_frame=true --oracle_frames=1200` with the
+lockstep script's own `"START@150+270,A@300+120"`:
+
+    button presses reported: 0
+    frames captured:         3 of 3
+
+Three frames of the title screen, indexed by frame, with the emulator never
+touched. That is what every lockstep run has been comparing our WALKED runtime
+against.
+
+### The fix
+
+The schedule's numbers are raw units and are scaled at use time, because only
+the driver knows which clock is installed: `UnitScale()` returns 1000 on a wall
+clock and 1 under frame indexing. Hold time likewise -- 120 ms on a wall clock,
+and 8 FRAMES under frame indexing rather than 120 frames, which would be a
+four-second press.
+
+Verified in both directions rather than assumed:
+
+    FRAME MODE   13 presses, at exactly the scripted frames --
+                 START (0010) at 150, A (1000) at 300,
+                 START+A (1010) at 420 (the 270-frame repeat)
+    WALL CLOCK   START at 25017 ms, A at 30019 ms, LY+ at 45006 ms,
+                 and both its frames still captured
+
+Before: 0 and 0. After: 13 at the right frames, and wall-clock unchanged.
+
+### What this invalidates
+
+Any conclusion drawn from an `oracle_lockstep.sh` run. The script's own control
+arm (running OUR side twice) was still meaningful, but every cross-side number
+it produced compared gameplay against a title screen. The alignment figures
+quoted in `docs/codemap.md` for that tool -- 98.9% identical at frame 300, 17.7%
+by 1200 -- were measured against an undriven oracle and mean nothing about
+alignment.
+
+This is also the reason the same-moment comparison catalog #77 keeps needing has
+never been available: it was not merely hard, the tool for it was inert.
