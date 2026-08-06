@@ -8,6 +8,32 @@ if(NOT PPC_RECOMP_SOURCES)
         "  XenonRecomp config/gears.toml extern/XenonRecomp/XenonUtils/ppc_context.h")
 endif()
 
+# ppc_context.h IS COPIED into the generated directory by XenonRecomp (with a
+# two-line prologue), and the copy -- not the submodule's -- is what the guest
+# code compiles against. So an edit to the submodule header does NOTHING until
+# the recompiler is re-run, and the symptom is a compile error in the RUNTIME
+# about a symbol that is plainly present in the file you just edited. Worse, an
+# edit that happens to compile silently does not reach the guest at all.
+#
+# Compare the bodies and fail loudly. A drift guard is worth it here because the
+# stale copy is gitignored, so nothing else can notice.
+set(_ppc_ctx_generated "${GEARS_PPC_DIR}/ppc_context.h")
+set(_ppc_ctx_source "${CMAKE_SOURCE_DIR}/extern/XenonRecomp/XenonUtils/ppc_context.h")
+if(EXISTS "${_ppc_ctx_generated}" AND EXISTS "${_ppc_ctx_source}")
+    file(READ "${_ppc_ctx_generated}" _ppc_ctx_gen_text)
+    file(READ "${_ppc_ctx_source}" _ppc_ctx_src_text)
+    string(FIND "${_ppc_ctx_gen_text}" "${_ppc_ctx_src_text}" _ppc_ctx_at)
+    if(_ppc_ctx_at EQUAL -1)
+        message(FATAL_ERROR
+            "${_ppc_ctx_generated} is STALE: it does not contain the current "
+            "body of ${_ppc_ctx_source}. The guest code compiles against the "
+            "generated copy, so your edit to the submodule header is not "
+            "reaching it. Re-run XenonRecomp, or refresh the copy:\n"
+            "  { printf '#pragma once\\n#include \"ppc_config.h\"\\n\\n'; "
+            "cat ${_ppc_ctx_source}; } > ${_ppc_ctx_generated}")
+    endif()
+endif()
+
 list(LENGTH PPC_RECOMP_SOURCES PPC_RECOMP_COUNT)
 message(STATUS "gears1: ${PPC_RECOMP_COUNT} recompiled translation units")
 
@@ -105,6 +131,7 @@ add_executable(gears1
     xam_overlapped.cpp
     xnet_null.cpp
     kernel_misc.cpp
+    guest_clock.cpp
     kernel_time.cpp
     kernel_timer.cpp
     kernel_objects.cpp
