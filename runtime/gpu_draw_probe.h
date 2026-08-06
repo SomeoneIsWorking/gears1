@@ -105,6 +105,34 @@ struct FrameProbe
         return onlySurface < 0 || uint32_t(onlySurface) == base;
     }
 
+    // ---- the whole surface, in its own format, after a NAMED draw ---------
+    //
+    // GEARS_DRAW_SURFACE_DUMP=<diag>[,<diag>...]
+    //
+    // The three probes above each answer "which draw painted this" and each
+    // gave a WRONG answer to "what did draw N write across its coverage":
+    //
+    //   * FRAME_STEP goes through an 8-bit blit, so an HDR surface's every
+    //     interesting pixel reads 255, and it is indexed by ISSUED draw while
+    //     every table in this project names draws by DIAG index -- a two-row
+    //     difference that was read as four contradictory instrument readings
+    //     before it was recognised as one mistake made twice (catalog #77);
+    //   * PIXEL_TRACE is exact but is ONE texel, so generalising from it is
+    //     guesswork about where to aim next;
+    //   * the presented screenshot is post-resolve and post-tonemap, so it is
+    //     not this draw's output at all.
+    //
+    // Three separate measurements were retracted for those three reasons, all
+    // of them attempts at the same question. This copies the FULL bound surface
+    // in the surface's OWN format, immediately after the named draw, before any
+    // resolve or post touches it, and writes it as float. Keyed on the DIAG
+    // index and it PRINTS the index it matched together with the draw's pixel
+    // shader hash, so a row cannot be silently about a different draw.
+    bool Dumping() const { return !dumpWanted.empty(); }
+    void DumpSurface(VkCommandBuffer cmd, uint32_t drawsSoFar, uint32_t prepIndex,
+                     uint32_t diagIndex, const SurfaceTarget* t,
+                     uint32_t surfaceBase);
+
     // Both must be called with NO render pass open -- an image copy cannot
     // happen inside one -- and with the target read BEFORE the pass was ended,
     // since ending it nulls the caller's openTarget.
@@ -122,6 +150,8 @@ struct FrameProbe
     void Release();
 
 private:
+    void ReportSurfaceDumps(const std::vector<PreparedDraw>& prepared);
+
     // Each checkpoint costs a full-frame readback buffer, so STEP=1 on a
     // 170-draw frame is capped rather than allocating 170 of them.
     static constexpr size_t kMaxCheckpoints = 48;
@@ -150,6 +180,23 @@ private:
     VkBuffer pixelBuf = VK_NULL_HANDLE;
     VkDeviceMemory pixelMem = VK_NULL_HANDLE;
     int32_t traceX = -1, traceY = -1;
+
+    // The diag indices asked for, and the ones actually taken. BOTH are kept:
+    // reporting only what was taken makes a diag index the frame never reached
+    // indistinguishable from one whose surface was empty, and this project has
+    // spent whole sessions on readings that were of a different draw.
+    std::vector<uint32_t> dumpWanted;
+    struct SurfaceDump
+    {
+        uint32_t draws, prepIndex, diagIndex, surface;
+        VkFormat format;
+        VkBuffer buffer;
+        VkDeviceMemory mem;
+        VkDeviceSize bytes;
+    };
+    std::vector<SurfaceDump> dumps;
+    uint32_t highestDiag = 0;
+    bool anyDrawSeen = false;
 };
 
 // Per-draw pipeline statistics, and the diagnostic table built on them.
