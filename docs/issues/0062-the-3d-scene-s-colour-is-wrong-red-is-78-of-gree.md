@@ -454,3 +454,43 @@ Bloom is a concrete candidate for the missing top of the range: the whole bloom 
 
 ### Note (2026-08-06)
 The bloom path is now explained and is a SYMPTOM of this entry, not a separate defect (catalog #81): the bright pass thresholds every sample with sgt against c255.x = 1.0, and its input resolve target tops out at 0.125, so it writes zero everywhere. That gives this entry a quantitative target for the first time -- for bloom to do anything, surface 0x2d0 must exceed 8.0, because the resolve feeding the bright pass applies copy_dest_exp_bias -3. Ours maxes at exactly 1.0.
+
+### Note (2026-08-06)
+## TWO INDEPENDENT ROUTES NOW AGREE ON A NUMBER: the scene is ~3.5x too dim
+
+Built the missing probe (`GEARS_DRAW_SURFACE_RANGE=1`, knobs.md) and pointed it
+at act1. Per surface, at end of frame:
+
+    surface 0x0    R 0.0000..0.0000  G 0.0000..0.0000  B 0.0000..0.0000
+    surface 0x2d0  R 0.0000..0.3992  G 0.0000..0.4172  B 0.0000..0.4146   0 px > 1.0
+    surface 0x400  R -0.0001..1.9531 G 0.0000..2.1914  B 0.0000..2.0957   1715 px > 1.0 (0.19%)
+    surface 0x5a0  R 0.0000..0.0000  G 0.0000..0.0000  B 0.0000..0.0000
+
+Three things fall out, two of them corrections.
+
+**The HDR scene is NOT clamped.** Surface 0x400 reaches 2.19 with 1715 pixels
+above 1.0. Every "something clamps the scene at 1.0" hypothesis is dead,
+including the one this entry's earlier note inferred from a resolve maximum of
+exactly 0.125.
+
+**CORRECTION to that inference.** I read "resolve destination maxes at exactly
+0.125 = 1.0 x 2^-3" as "surface 0x2d0's max is exactly 1.0". Measured directly,
+0x2d0 ends the frame at 0.417, not 1.0. Both can be true -- the resolve happened
+at draw 670 and the surface kept changing afterwards -- but the inference was
+not sound, and a surface range is now measurable instead of reconstructed.
+
+**And the two routes converge.** Independently:
+
+  * the presented frame tops out around 0.30 where the oracle reaches 1.0
+    -- a shortfall of about 3.4x;
+  * bloom's threshold is 1.0 against a resolve biased by 2^-3, so the source
+    must reach 8.0 for the effect to exist at all, and our scene peaks at 2.19
+    -- a shortfall of about 3.7x.
+
+Two measurements taken from different ends of the pipeline, agreeing on ~3.5x.
+That is the shape of a missing SCALE in the scene's absolute brightness --
+lighting or exposure -- and not of a clamp, a resolve, a format or bloom, all of
+which are now measured and behaving.
+
+NOT established: where the factor is applied or omitted. What is established is
+its size and that it is upstream of everything this entry has ruled out.
