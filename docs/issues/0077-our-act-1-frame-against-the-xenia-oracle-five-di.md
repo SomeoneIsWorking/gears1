@@ -2222,3 +2222,58 @@ as distinct from `o2`, which is the rim's. Both come out of the same
 The cheapest next step is therefore smaller than the same-moment comparison:
 point the debug module at `o4` instead of `o2` and read its direction the same
 way. If `o4` is wrong the whole entry closes on it.
+
+### Note (2026-08-06)
+## RETRACTED: "the rim term is 0.537, healthy; the env ramp is the only zero"
+
+The note immediately above is wrong on both of its claims, and it is wrong in
+the exact way `runtime/shaders/debug_interpolator.frag`'s own header warns
+against. I read `docs/knobs.md`'s description of that shader instead of the
+shader, and the two had diverged.
+
+**1. The channels I decoded are not the channels it writes.** The current build
+emits `o2` RAW, remapped as `v*0.5 + 0.5` -- not the
+`saturate(1 - normalize(r2).z)` / `z remapped` / `length/4` triple that knobs.md
+still describes. So my "R = ..., G = ..., B = length/4" reading was decoding the
+wrong quantity entirely.
+
+**2. I read a CLAMPED 8-bit PPM of a FLOAT target.** The shader's header says so
+explicitly: "The render target is float, so values outside [0,1] are NOT clipped
+and read back as-is", and it records the measured o2 as
+**(-23.47, +13.96, +25.48) with |o2| in 34..65**. Every one of those is far
+outside [0,1] and my screenshot readback clamped them, so the means I averaged
+were means of saturated bytes. The derived "normalize(o2).z ~ -0.237" and
+"gate = 0.537" are artefacts of that clamping.
+
+**3. The header had already recorded the same wrong number, from the same
+mistake.** An earlier build "once computed the gate as saturate(1 - normalize(o2).z),
+DROPPING the + c254.x ... That read 0.32-0.42 -- 'open' -- when the real gate is
+exactly 0." My 0.537 is that error a second time.
+
+### What is actually established, and it was already in the tree
+
+The gate is `saturate(c254.y - c254.x - nz) = saturate(0.3 - nz)`, from
+`ucode_reduce`'s full reduction (t42 = nz + c254.x, t70 = saturate(c254.y - t42)),
+and it is **exactly 0** on a character facing the camera. That is CORRECT
+behaviour: UE3's `GpuSkinVertexFactory.usf:244` computes o2 as
+TangentCameraVector -- tangent-space (CameraPosition - WorldPosition), toward
+the camera, positive z facing the viewer, and unnormalised, which is why |o2| is
+tens rather than 1. **Draw 460 is a rim term and is MEANT to contribute ~0
+head-on. It is not the character's diffuse pass.**
+
+Consequently my "the env ramp is the only zero" framing is also wrong: the ramp
+is DOWNSTREAM of the gate, and the header records that experiment too -- "the
+ramp is downstream of the gate, so lighting it proves nothing about the cause".
+A zero multiplied into a zero says nothing about which zero is the fault.
+
+### The standing position, restored
+
+There is no renderer-side defect demonstrated in draw 460. The character has no
+lit diffuse pass in this frame, which is what the entry concluded long before
+today and is a CPU-side question. Today's contribution to this specific
+question is negative: three of my leads on it (the draw deficit, the rim,
+the ramp) were mine and all three are withdrawn.
+
+**Read the shader, not knobs.md's description of it** -- and knobs.md's
+`GEARS_DRAW_DEBUG_INTERP` row should be corrected to say the channels are
+whatever the file currently emits, since it is edited per question by design.
