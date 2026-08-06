@@ -125,3 +125,66 @@ It now pulls the listing in for the draws it names (and only those, rather than
 a line per draw in the frame), and a hash that matched NO draw says so with the
 frame's draw count, because "you asked about a shader this frame never ran" and
 "the constants are all zero" both print nothing otherwise.
+
+### Note (2026-08-06)
+## WHY it is black, end to end, from the shader's own disassembly (2026-08-06)
+
+The bright pass is `ps a146058ecfeb9122`, 459 dwords. Its shape, from
+`xenos_translate --raw`:
+
+    tfetch2D r2/r11/r9/r6/r8/r3/r4/r1.xyz_, r0.xy, tf0, Offset{X,Y}=...
+    tfetch2D r0/r5/r12.x, r0.xy, tf1, Offset...
+    sgt  r14.xyz_, r1.xyzz, c255.xxxx
+    sgt  r10.x_zw, r4.xyyz, c255.xxxx
+    sgt  r17/r18/r13/r7/r5/r19 ..., c255.xxxx
+    max4 ...
+
+It samples a 4x2 neighbourhood of tf0 (colour) and tf1 (depth), and every one
+of those samples is put through `sgt <sample>, c255.x` -- set-greater-than
+against a single scalar. That is the bloom THRESHOLD, and everything after it is
+a max4 reduction of the results.
+
+**c255.x = 1.0** (0x3f800000, measured on this draw).
+
+**Its input tops out at 0.125.** fc0 binds resolve target 0xbde0000 with
+`exp_adjust +0` -- so no sampling-side exponent compensation is asked for -- and
+that target's measured range is 0.000000 .. 0.125000.
+
+So every `sgt` compares something <= 0.125 against 1.0, every one yields zero,
+and the pass writes black over its whole 322x182 target. Nothing is wrong with
+the draw, the bindings, the raster state or the constants: the shader is doing
+exactly what it was written to do with the numbers it was given.
+
+## So this entry is a SYMPTOM, and the cause is upstream
+
+Bloom being black is not a bloom defect. It is the first place where the scene
+being too dark becomes VISIBLE as a hard zero rather than as a dim image, which
+is why it showed up as "0 of 192192 components non-zero".
+
+The question it hands upstream is sharp and quantitative: **the threshold is
+1.0, and the input reaches it only if the surface behind it exceeds 8.0** (the
+last resolve into 0xbde0000 is draw 670, from surface 0x2d0, with
+copy_dest_exp_bias -3, i.e. x0.125). Our surface 0x2d0 maxes at exactly 1.0.
+For this title's bloom to do anything on hardware, that surface must carry
+values of at least 8, and ours carries 1.
+
+Not yet known: whether 0x2d0 is capped at 1.0 by something we do, or is simply
+receiving a scene that never gets bright. 46 of the draws feeding it are
+colour_fmt 12 (k_2_10_10_10_FLOAT_AS_16_16_16_16), whose guest clamp is
+alpha-only, so those draws are NOT clamped by us and could write above 1.0.
+
+## Missing instrument
+
+Every range measured in this investigation has come from a resolve DESTINATION,
+because that is the only thing the renderer reports a range for. The question
+above is about a SURFACE, and there is no probe that reports one's min/max. That
+is the next thing to build, and it is why this stops here rather than guessing.
+
+## New knob: GEARS_DRAW_TEX_BINDS=<ps hash>
+
+What a named pixel shader actually samples, one line per binding: fetch
+constant, base address, dimension, `exp_adjust` (with the multiplier it means),
+and which of the three sources served it -- this frame's resolve target, a guest
+texture, or a stub. The frame report only ever counted bindings by kind across
+the whole frame, and three separate investigations have had to infer a single
+pass's inputs from those aggregates.

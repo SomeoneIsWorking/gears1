@@ -1,6 +1,7 @@
 // Guest textures and samplers -> host images and samplers. See
 // gpu_draw_textures.h for what this is and why every refusal is counted.
 
+#include <cmath>
 #include "gpu_draw_textures.h"
 
 #include <chrono>
@@ -364,6 +365,40 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
     const uint32_t fc = tb.fetchConstant & 31;
     const uint32_t dword1 = regs[0x4800 + fc * 6 + 1];
     const uint32_t base = (dword1 >> 12) << 12;
+    // GEARS_DRAW_TEX_BINDS=<ps hash>: WHAT THIS DRAW ACTUALLY SAMPLES.
+    //
+    // The frame report counts bindings by KIND across the whole frame, which
+    // cannot answer "this one pass renders black -- is it reading a resolve
+    // target, a guest texture, or a stub, and from what address". Three
+    // separate investigations have needed that and had to infer it from
+    // aggregates. Each line names the fetch constant, the base the constant
+    // points at, the dimension, and which of the three sources served it.
+    //
+    // A base of 0 is reported too: a fetch constant that names nothing is a
+    // real answer and is invisible in every count.
+    const bool logBinds =
+        currentPsHash != 0 &&
+        currentPsHash == std::strtoull(
+            lucent::config::text("DRAW_TEX_BINDS").c_str(), nullptr, 16);
+    const auto say = [&](const char* how, VkImageView v) {
+        if (logBinds)
+        {
+            // exp_adjust, fetch constant word 3 bits 13:18, 6-bit SIGNED. This
+            // is the sampling side of a resolve's copy_dest_exp_bias: a resolve
+            // written with bias -3 stores value/8, and only a +3 here scales it
+            // back. Reported with the binding because "the texture is 8x too
+            // dark" and "the shader is meant to see it 8x darker" look
+            // identical from the image alone.
+            const uint32_t w3 = regs[0x4800 + fc * 6 + 3];
+            int32_t expAdjust = int32_t((w3 >> 13) & 0x3F);
+            if (expAdjust & 0x20)
+                expAdjust -= 64;
+            lucent::info("draw", "  tex bind ps {:#x}: fc{} base {:#x} dim {}"
+                " exp_adjust {:+d} (x{}) -> {}", currentPsHash, fc, base,
+                tb.dimension, expAdjust, std::ldexp(1.0, expAdjust), how);
+        }
+        return v;
+    };
     const bool isRt = base != 0 && resolveDests.count(base) != 0;
     if (base != 0 && depthResolveDests.count(base))
         ++depthDestSamplers[{base, currentPsHash}];
@@ -402,7 +437,7 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
         if (rt != P.resolveTargets.end())
         {
             ++bindsRt;
-            return rt->second.view;
+            return say("this frame's RESOLVE TARGET", rt->second.view);
         }
     }
     // The guest's own texture, decoded from this fetch constant. The stub
@@ -416,15 +451,15 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
         if (v != VK_NULL_HANDLE)
         {
             ++bindsGuest;
-            return v;
+            return say("a GUEST TEXTURE", v);
         }
     }
     ++bindsStub;
     switch (tb.dimension)
     {
-        case 2: return P.stub3D.view;
-        case 3: return P.stubCube.view;
-        default: return P.stub2D.view;
+        case 2: return say("a STUB (decode refused)", P.stub3D.view);
+        case 3: return say("a STUB (decode refused)", P.stubCube.view);
+        default: return say("a STUB (decode refused)", P.stub2D.view);
     }
 }
 
