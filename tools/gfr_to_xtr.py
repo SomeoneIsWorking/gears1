@@ -128,6 +128,28 @@ def final_colour_resolve(cap):
     return None
 
 
+def all_resolves(cap):
+    """Every resolve the frame performs, in draw order, with its draw index.
+
+    Numbered the same way the fork's `IssueCopy` log numbers them, so a resolve
+    named here and a resolve named in an oracle log are the same one.
+    """
+    out = []
+    for i, d in enumerate(cap.draws):
+        regs = d["regs"]
+        if len(regs) <= REG_RB_COPY_DEST_INFO:
+            continue
+        if (regs[REG_RB_MODECONTROL] & 0x7) != 6:
+            continue
+        out.append(dict(index=len(out), draw=i,
+                        depth=(regs[REG_RB_COPY_CONTROL] & 0x7) >= 4,
+                        base=regs[REG_RB_COPY_DEST_BASE] & ~0xFFF,
+                        pitch=regs[REG_RB_COPY_DEST_PITCH] & 0x3FFF,
+                        height=(regs[REG_RB_COPY_DEST_PITCH] >> 16) & 0x3FFF,
+                        info=regs[REG_RB_COPY_DEST_INFO]))
+    return out
+
+
 def fetch_from_resolve(resolve):
     """Describe a resolve destination as a texture fetch constant.
 
@@ -447,6 +469,40 @@ def emit_swap(w, cap, scratch, present="guest"):
                     "predates it. No image will be written.")
     fetch = list(cap.front_fetch) if cap.front_fetch else [0] * 6
     note_prefix = ""
+    if present.startswith("resolve:"):
+        # WHY AN INTERMEDIATE RESOLVE CAN BE PRESENTED AT ALL, and why this is
+        # not cherry-picking. Measured in catalog #79: in trace playback the
+        # frame's EARLY resolves land in shared memory and its LATE ones write
+        # zeros over what is already there, including the final composite the
+        # swap reads. So --present frame shows an emptied buffer even though the
+        # scene did render. Naming a resolve by its own index -- the same index
+        # the fork's IssueCopy log prints -- shows the buffer the frame actually
+        # filled. The caller MUST truncate playback to that resolve's draw
+        # (convert() does it automatically) or a later resolve erases it again.
+        resolves = all_resolves(cap)
+        try:
+            n = int(present.split(":", 1)[1], 0)
+        except ValueError:
+            return f"NO SWAP: --present {present} is not a resolve index."
+        if not 0 <= n < len(resolves):
+            listing = ", ".join(f"{r['index']}:{r['base']:#x}"
+                                f"{'(depth)' if r['depth'] else ''}"
+                                for r in resolves)
+            return (f"NO SWAP: this frame performs {len(resolves)} resolves, so "
+                    f"resolve {n} does not exist. They are: "
+                    f"{listing or '(none at all)'}")
+        resolve = resolves[n]
+        if resolve["depth"]:
+            return (f"NO SWAP: resolve {n} at {resolve['base']:#x} is a DEPTH "
+                    f"resolve. Presenting it would show depth bits decoded as "
+                    f"colour, which looks like an image and is not one.")
+        if not resolve["base"]:
+            return f"NO SWAP: resolve {n} names destination 0."
+        fetch = fetch_from_resolve(resolve)
+        note_prefix = (f"presenting RESOLVE {n} of {len(resolves)} "
+                       f"({resolve['base']:#x}, dest pitch {resolve['pitch']}, "
+                       f"written by draw {resolve['draw']}) rather than the "
+                       f"frame's last -- see --present. ")
     if present == "frame":
         # WHY THIS EXISTS, because it is a deliberate departure from what the
         # guest said and must not be used without knowing that.
@@ -503,8 +559,38 @@ def emit_swap(w, cap, scratch, present="guest"):
 REGISTER_RESTORE_RANGES = ((0, REG_DC_LUT_FIRST),
                            (REG_DC_LUT_LAST + 1, XENIA_REG_COUNT))
 
+# Merging two changed runs separated by a few UNCHANGED registers is cheaper
+# than a second command: each kRegisters command costs 6 dwords of header, so a
+# gap shorter than that is free to re-send.
+REGISTER_RUN_GAP = 6
 
-def convert(src: Path, dst: Path, max_draws=None, present="guest"):
+
+def changed_runs(prev, cur, lo, hi, gap=REGISTER_RUN_GAP):
+    """Contiguous [start, end) runs covering every index in [lo, hi) where
+    prev and cur differ, merging runs separated by fewer than `gap` unchanged
+    registers. prev None means "nothing is known yet" -- the whole span.
+
+    Returns runs, changed_count. The count is the raw number of differing
+    registers, NOT the length of the runs, so the caller can report both and a
+    run list that covers more than it needs cannot masquerade as a tight one.
+    """
+    if prev is None:
+        return [(lo, hi)], hi - lo
+    idx = [i for i in range(lo, hi) if prev[i] != cur[i]]
+    if not idx:
+        return [], 0
+    runs = []
+    start = last = idx[0]
+    for i in idx[1:]:
+        if i - last > gap:
+            runs.append((start, last + 1))
+            start = i
+        last = i
+    runs.append((start, last + 1))
+    return runs, len(idx)
+
+
+def convert(src: Path, dst: Path, max_draws=None, present="guest", regs="full"):
     cap = Capture(src)
     w = TraceWriter()
     w.header()
@@ -513,10 +599,31 @@ def convert(src: Path, dst: Path, max_draws=None, present="guest"):
     for base, data in cap.blocks:
         w.memory_read(base, data)
     scratch = pick_packet_scratch(cap)
+    # --present resolve:N is useless without stopping there: the measured
+    # behaviour is that later resolves zero the buffer again. Truncating is done
+    # HERE rather than left to the caller because a caller who forgets gets a
+    # black image and no hint why -- which is exactly the failure this whole
+    # option exists to escape.
+    if present.startswith("resolve:"):
+        rs = all_resolves(cap)
+        try:
+            n = int(present.split(":", 1)[1], 0)
+        except ValueError:
+            n = -1
+        if 0 <= n < len(rs):
+            stop = rs[n]["draw"] + 1
+            if max_draws is None or max_draws > stop:
+                if max_draws is not None:
+                    print(f"   NOTE: --draws {max_draws} overridden to {stop} "
+                          f"so playback ends at resolve {n}")
+                max_draws = stop
     draws = cap.draws if max_draws is None else cap.draws[:max_draws]
     emitted = skipped_no_regs = 0
     too_big = set()
     last_vs = last_ps = None
+    prev_regs = None
+    reg_writes = reg_changed = reg_commands = 0
+    draws_with_no_change = 0
     for d in draws:
         if len(d["regs"]) < REG_COUNT:
             # A draw whose snapshot is short cannot restore state; dropping it
@@ -541,8 +648,30 @@ def convert(src: Path, dst: Path, max_draws=None, present="guest"):
         # channel instead of black. They are pure display state and no draw or
         # resolve depends on them, so the restore skips them and the ramp keeps
         # whatever the capture's own kGammaRamp command set.
+        #
+        # --regs delta sends only the registers that CHANGED since the previous
+        # draw. A .gfr stores per-draw snapshots rather than the PM4 stream, so
+        # the natural conversion is a wholesale restore -- but Xenia's render
+        # target cache tracks EDRAM ownership INCREMENTALLY, keyed on the
+        # WriteRegister callbacks for the registers that actually move. Re-
+        # writing all 0x5003 registers before every draw fires those callbacks
+        # ~20k times per draw with unchanged values, which is not a state the
+        # cache was ever designed to see. Delta emission reproduces what the
+        # guest's own command stream looks like. Catalog #79.
+        cur = d["regs"]
         for lo, hi in REGISTER_RESTORE_RANGES:
-            w.registers(lo, d["regs"][lo:hi], execute_callbacks=True)
+            if regs == "delta":
+                runs, nchanged = changed_runs(prev_regs, cur, lo, hi)
+            else:
+                runs, nchanged = [(lo, hi)], hi - lo
+            for a, b in runs:
+                w.registers(a, cur[a:b], execute_callbacks=True)
+                reg_writes += b - a
+                reg_commands += 1
+            reg_changed += nchanged
+        if regs == "delta" and prev_regs is not None and cur == prev_regs:
+            draws_with_no_change += 1
+        prev_regs = cur
         # Bind this draw's shaders. Re-emitted only when they CHANGE: the bind
         # is sticky in Xenia, and re-sending every shader for all 744 draws
         # doubled the trace for no effect.
@@ -571,6 +700,21 @@ def convert(src: Path, dst: Path, max_draws=None, present="guest"):
           f"({sum(len(b) for _, b in cap.blocks) / (1 << 20):.1f} MiB)")
     print(f"   packets at guest {scratch:#x} (a page this capture leaves empty)")
     print(f"   trace:   {emitted} draws emitted, {len(dst.read_bytes()) / (1 << 20):.1f} MiB")
+    # ALWAYS printed, in both modes, including when nothing changed. "delta
+    # emitted nothing" and "delta was never asked for" are different failures
+    # and a silent tool cannot tell them apart.
+    full_would_be = emitted * sum(hi - lo for lo, hi in REGISTER_RESTORE_RANGES)
+    print(f"   regs:    --regs {regs}: {reg_writes} register writes in "
+          f"{reg_commands} commands ({reg_changed} actually differed; a full "
+          f"restore would send {full_would_be})")
+    if regs == "delta":
+        print(f"            {draws_with_no_change} of {emitted} draws had a "
+              f"register snapshot identical to the previous draw")
+        if reg_changed == 0 and emitted > 1:
+            print(f"            WARNING: NOTHING changed across {emitted} draws. "
+                  f"Either the capture stores one snapshot for the whole frame "
+                  f"or the .gfr reader is handing back the same list each time; "
+                  f"this trace does NOT carry per-draw state.")
     print(f"   {swap_note}")
     if too_big:
         print(f"   WARNING: {len(too_big)} shaders exceed a PM4 packet's 14-bit "
@@ -752,6 +896,62 @@ def selftest():
     check("--present frame refuses a frame with no colour resolve",
           note.startswith("NO SWAP"), True)
 
+    # --present resolve:N must REFUSE the cases that would produce a confident
+    # non-image, and must accept the one that would not. Both classes run.
+    def _cap_with_resolves(specs):
+        draws = []
+        for mode, src_select, dest in specs:
+            regs = [0] * REG_COUNT
+            regs[REG_RB_MODECONTROL] = mode
+            regs[REG_RB_COPY_CONTROL] = src_select
+            regs[REG_RB_COPY_DEST_BASE] = dest
+            regs[REG_RB_COPY_DEST_PITCH] = 1280 | (720 << 16)
+            draws.append(dict(regs=regs))
+
+        class C:
+            version = 3
+            front_buffer = 0xC1234000
+            front_fetch = [0, (0xC1234 << 12) | 0x086,
+                           (720 - 1) << 13 | (1280 - 1), 0, 0, 0]
+        C.draws = draws
+        return C()
+
+    two = _cap_with_resolves([(6, 0, 0xC4000000), (6, 4, 0xC5000000),
+                              (6, 0, 0xC6000000)])
+    check("all_resolves numbers every resolve, depth included",
+          [(r["index"], r["draw"], r["depth"]) for r in all_resolves(two)],
+          [(0, 0, False), (1, 1, True), (2, 2, False)])
+    note = emit_swap(TraceWriter(), two, 0, present="resolve:0")
+    check("--present resolve:0 presents the FIRST resolve, not the last",
+          "0x4000000" in note and "RESOLVE 0 of 3" in note, True)
+    note = emit_swap(TraceWriter(), two, 0, present="resolve:1")
+    check("--present resolve:N refuses a depth resolve",
+          note.startswith("NO SWAP") and "DEPTH" in note, True)
+    note = emit_swap(TraceWriter(), two, 0, present="resolve:9")
+    check("--present resolve:N out of range lists what does exist",
+          note.startswith("NO SWAP") and "0:0xc4000000" in note
+          and "1:0xc5000000(depth)" in note, True)
+
+    # changed_runs is the whole of --regs delta, and a bug in it makes the
+    # oracle render a frame built from the WRONG state while reporting a
+    # smaller, healthier-looking trace. Both classes are exercised: a case that
+    # must produce runs, and a case that must produce none.
+    check("no prior state sends the whole span",
+          changed_runs(None, [0] * 20, 0, 20), ([(0, 20)], 20))
+    check("an identical snapshot sends nothing",
+          changed_runs([7] * 20, [7] * 20, 0, 20), ([], 0))
+    a = [0] * 20
+    b = list(a); b[3] = 1; b[11] = 1
+    # 3 and 11 are 8 apart, further than the 6-register merge gap, so two runs.
+    check("far-apart changes stay separate runs",
+          changed_runs(a, b, 0, 20), ([(3, 4), (11, 12)], 2))
+    c = list(a); c[3] = 1; c[6] = 1
+    # 3 and 6 are 3 apart, inside the gap, so one run that re-sends 4 and 5.
+    check("near changes merge into one run",
+          changed_runs(a, c, 0, 20), ([(3, 7)], 2))
+    check("changes outside the span are not reported",
+          changed_runs(a, b, 12, 20), ([], 0))
+
     print("\nSELFTEST FAILED: " + ", ".join(failures) if failures
           else "\nselftest passed: the packing matches Xenia's headers by hand-check.")
     return 1 if failures else 0
@@ -766,9 +966,20 @@ def main(argv):
         i = args.index("--present")
         present = args[i + 1]
         del args[i:i + 2]
-        if present not in ("guest", "frame"):
-            print("--present takes 'guest' (what VdSwap named) or 'frame' "
-                  "(this frame's own final colour resolve)")
+        if present not in ("guest", "frame") and not present.startswith("resolve:"):
+            print("--present takes 'guest' (the buffer VdSwap named), 'frame' "
+                  "(this frame's own final colour resolve), or 'resolve:N' "
+                  "(the Nth resolve, numbered as the oracle's IssueCopy log "
+                  "numbers them; playback is truncated to end there)")
+            return 2
+    regs = "full"
+    if "--regs" in args:
+        i = args.index("--regs")
+        regs = args[i + 1]
+        del args[i:i + 2]
+        if regs not in ("full", "delta"):
+            print("--regs takes 'full' (restore the whole register file before "
+                  "every draw) or 'delta' (send only what changed)")
             return 2
     max_draws = None
     if "--draws" in args:
@@ -782,7 +993,7 @@ def main(argv):
     if not src.is_file():
         print(f"REFUSING: {src} does not exist. Nothing was converted.")
         return 1
-    return convert(src, dst, max_draws, present)
+    return convert(src, dst, max_draws, present, regs)
 
 
 if __name__ == "__main__":

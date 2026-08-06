@@ -35,7 +35,7 @@ Status vocabulary — deliberately narrow, so it cannot flatter the project:
 | `runtime/` | The PC-side runtime. See below |
 | `tests/` | `test_vmx_instructions` (fork's instruction implementations) and `test_runtime_logic` (kernel object semantics, path translation). Both mutation-checked |
 | `tools/decode_bc.py` | Decodes a raw BC1/BC3 blob dumped by `GEARS_DRAW_TEX_DUMP=1` to a PNG. Exists to check the guest-texture **decode** (detiling + endian + block layout) independently of the renderer — if these look like game art, any remaining blackness is downstream |
-| `tools/frame_replay/` + `runtime/frame_capture.cpp` | **The renderer's instrument — reach for this before any renderer hypothesis.** `GEARS_DRAW_FRAME_DUMP=<path>` records one frame's whole draw stream (per-draw register snapshots, deduplicated microcode, the non-zero guest pages); `frame_replay <capture>` re-renders it offline in **~550 ms with no guest**. **A capture is not self-contained**: it stores renderer configuration as it was when recorded, and `frame_replay` overrides the guest-memory mirror with the runtime's current value and warns when they differ — a capture from before the mirror was raised replayed with 606 of 722 draws collapsed and produced a plausible, wrong picture (`catalog.py show 57`). Read the **frame geometry reach** line; it warns when any draw fetches past the mirror. Every `GEARS_DRAW_*` knob works, so two arms of a comparison run on **byte-identical input** — which a live run cannot give you, because reaching a gameplay frame costs a 200 s scripted menu walk and each walk lands on a *different* game moment. Validated both ways: byte-identical to the live render of the same frame, and it *changes* when the input does |
+| `tools/frame_replay/` + `runtime/frame_capture.cpp` | **The renderer's instrument — reach for this before any renderer hypothesis.** `GEARS_DRAW_FRAME_DUMP=<path>` records one frame's whole draw stream (per-draw register snapshots, deduplicated microcode, the non-zero guest pages); `frame_replay <capture>` re-renders it offline in **~550 ms with no guest**. **A capture is not self-contained**: it stores renderer configuration as it was when recorded, and `frame_replay` overrides the guest-memory mirror with the runtime's current value and warns when they differ — a capture from before the mirror was raised replayed with 606 of 722 draws collapsed and produced a plausible, wrong picture (`catalog.py show 57`). Read the **frame geometry reach** line; it warns when any draw fetches past the mirror. Every `GEARS_DRAW_*` knob works, so two arms of a comparison run on **byte-identical input** — which a live run cannot give you, because reaching a gameplay frame costs a 200 s scripted menu walk and each walk lands on a *different* game moment. Validated both ways: byte-identical to the live render of the same frame, and it *changes* when the input does. `GEARS_REPLAY_DRAWS=<n>` replays only the first n draws, to pair with `gfr_to_xtr --present resolve:N` on the oracle side — but it is **not a clean prefix across a Xenos tile boundary** (instrument I024): cutting `bright.gfr` at 462 flips 49 draws from `shaded` to `rasterised_no_fragment`, because the untile pass collapses the tile pair using draws from both halves. Cut on a boundary in the `untile: N draw group(s)` line |
 | `tools/validate_all.sh` | **Is the renderer still valid Vulkan?** Replays EVERY capture with the validation layer on and fails on any VUID that is not the known point-list PointSize warning. Exists because `frame_hashes.sh` sets no `GEARS_DRAW_*` knob, so the validator never loads in the routine gate — and "validation clean" drifted until it hid seven VUIDs (`catalog.py show 75`, `76`). It runs all 8 captures because the first investigation ran one, act1_v2, which happens to contain no alpha-tested shader and came back clean while five others did not. **Proven to fire**: re-introducing the `demote_to_helper_invocation` over-claim makes it exit 1 and name the captures |
 | `tools/verify_present_path.sh` | **Proves the swapchain blit alters nothing, with no window.** Renders exactly one frame, lets the presenter repeat it, captures what reaches the swapchain through `VK_EXT_headless_surface` and compares it byte for byte with the renderer's own readback. PASS means the pixels a person sees are the pixels the renderer drew; it refuses rather than passing when a capture is missing. This closed the one gap every other instrument here has -- they all capture BEFORE the blit (`catalog.py show 60`) |
 | `tools/capture_gameplay_frame.sh` | The scripted controller walk from the title screen into Act 1 gameplay (~743 draws, the deferred UE3 pipeline) rather than the title screen (~170 draws, one surface). Use it once to get a capture, then iterate with `frame_replay`. **Add `GEARS_DRAW_FRAME_DUMP_SKINNED=1` when the capture must contain a CHARACTER** — the walk reaches gameplay reliably but does not reliably frame the player, and that knob makes the run scan until it finds one instead of dumping on a timer |
@@ -202,14 +202,27 @@ game moment*, so every colour metric taken across them compares content as much
 as rendering.
 
 The fix for that limit -- replaying ONE captured frame through Xenia
-(`tools/gfr_to_xtr.py` → `xenia-gpu-vulkan-trace-dump`) -- is **still blocked**.
-The dump renders a trace Xenia itself captured as uniform black (instrument
-I013, DISTRUSTED). The blackness is now narrowed rather than mysterious:
-`catalog.py show 79` measures the front buffer as empty in the GPU's
-shared-memory buffer at the swap, and the trace's own snapshot of that page as
-1.22% non-zero, with `readback_resolve=none` as the reason a capture cannot see
-a GPU-written front buffer. Use `--gears_probe_front_buffer` (instrument I014)
-when working on it.
+(`tools/gfr_to_xtr.py` → `xenia-gpu-vulkan-trace-dump`) -- **now works, for a
+named resolve rather than for the frame's final composite**.
+
+`--present resolve:N` points the swap at the Nth resolve (numbered as the fork's
+own `IssueCopy` log numbers them) and truncates playback to end there. On
+`bright.gfr`, `--present resolve:0` renders tile 1 of the scene from our own
+capture: a lit brick wall, three windows, a blown-out courtyard. That is the
+per-draw ground truth `catalog.py show 77` had been blocked on.
+
+What does NOT work is `--present frame`, and the reason is measured (claim
+C020): resolves DO reach shared memory in playback, but the frame's LATE
+resolves write zeros over the early ones, so the final composite is empty by the
+time the swap reads it. **Xenia's own captured trace fails identically**, resolve
+for resolve, so this is Xenia trace playback and not our converter. Probe it with
+`GEARS_PROBE_AFTER_RESOLVE=1` (instrument I022) -- `--gears_probe_front_buffer`
+alone (I014) only samples at the swap and reports a false negative for every
+destination a later resolve has since emptied.
+
+`--regs delta` emits only the registers that changed since the previous draw
+(393x fewer writes); more faithful to a real command stream, and measured NOT to
+be the cause of the black composite.
 
 The much older CPU-side differential harness against Xenia -- per-instruction
 PPC tracing -- was tried and **abandoned** before any of the above; see

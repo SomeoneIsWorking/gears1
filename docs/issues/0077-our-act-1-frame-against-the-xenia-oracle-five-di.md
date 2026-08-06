@@ -3401,3 +3401,56 @@ DISTRIBUTION over a character puts the ramp coordinate below 1.0 or above it,
 and ours is above it (median u 1.675) at every camera angle measured.
 
 That is the whole of what is left on difference 1. Everything else is closed.
+
+### Note (2026-08-06)
+### Note (2026-08-06, later session)
+## The blocker is gone: the oracle renders OUR captured frame
+
+The note above ends "this entry should not spend another session on
+renderer-side eliminations; what it needs is the same guest frame rendered by
+both sides, and that is blocked on #79". That block is lifted.
+
+#79's standing conclusion (no resolve reaches shared memory in trace playback)
+was FALSE and was an artefact of probing only at the swap. Probed at each
+resolve, six of eighteen destinations land 58-84% non-zero; the late resolves
+zero them again before the swap reads them. Xenia's own captured trace fails
+identically, so `gfr_to_xtr` is not the defect. Details in #79.
+
+`tools/gfr_to_xtr.py --present resolve:N` now points the swap at a named resolve
+and truncates playback so nothing overwrites it. On bright.gfr, resolve 0 (the
+colour resolve at draw 461, immediately after character draw 460) renders as:
+
+    scratch/oracle/deltatest/r0/bright_r0.png
+
+a lit brick wall with three window openings, a blown-out courtyard through the
+right one, dark geometry around it. 20.7% non-zero, max 0.80. That is tile 1 of
+this frame as the ORACLE renders it, from OUR capture, with the same draws and
+the same registers.
+
+## What is NOT yet established, and the trap that ate the first attempt
+
+The obvious next move -- replay the same 462 draws on our side and diff -- was
+made and RETRACTED. bright.gfr renders in TWO Xenos tiles (186 draws at window
+offset 0, then 185 replayed at 0x7e000000), our untile pass collapses the pair
+using draws from both, and cutting at draw 462 flips 49 draws from `shaded` to
+`rasterised_no_fragment`. The truncated arm reported "0 of 2,764,800 components
+non-zero" for our resolve 0 against the oracle's 18.4% -- a dramatic-looking
+divergence that is an artefact of the cut, not a finding. It is recorded here so
+the next session does not rediscover it as a result.
+
+`GEARS_REPLAY_DRAWS` now warns about this by name. Cut on a group boundary --
+the `untile: N draw group(s)` line lists them.
+
+## The comparison this entry should make next
+
+Our renderer dumps resolve destinations per TARGET (last write wins), the oracle
+now probes per RESOLVE. On a multiply-resolved address those are different
+moments, which is why only two full-res colour destinations are directly
+comparable today, and both AGREE:
+
+    0CB91000 (resolved once, draw 653)   ours 0.0%    oracle 0.0%
+    0C7F9000                             ours 83.9%   oracle 84.3%
+
+Making our side dump per-resolve rather than per-target is the bounded piece of
+work that turns every one of this frame's eighteen resolves into a paired
+comparison, and it is on our side of the fence.
