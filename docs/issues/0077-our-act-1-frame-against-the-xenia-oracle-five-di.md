@@ -2820,3 +2820,58 @@ construction, and the candidates are narrow: the handedness/sign convention
 applied to the packed 8-8-8-8 tangent vectors (fetched as NumFormat=INTEGER and
 decoded `raw*(2/255) - 1`, verified unit-length but never verified for SIGN), or
 the binormal's sign, which UE3 stores per-vertex.
+
+### Note (2026-08-06)
+## RETRACTED: the gate measurement AND the "o2.z has the wrong sign" finding
+
+Both of my last two notes are invalid. The measurements behind them are
+contaminated in the way I had already identified earlier in this same session
+and then repeated.
+
+**The error.** `GEARS_DRAW_DEBUG_INTERP` substitutes the debug shader for ONE
+pixel shader. Every other draw in the frame renders normally. I then averaged a
+rectangular REGION of the screenshot and called it "character pixels" -- but that
+rectangle is full of wall, floor and props drawn by other shaders, and my mask
+(any non-zero channel) admitted all of them. So:
+
+  * "the gate is open on 70.6% of the character, mean 0.347" -- not measured on
+    the character;
+  * "normalize(o2).z median -0.514, the wrong SIGN for a visible surface,
+    contradicting UE3's TangentCameraVector" -- not measured on the character
+    either, and that was the headline of the previous note;
+  * "the env ramp reads 0.51, so it is not the zero" -- same contamination, and
+    additionally the ramp value there came from the debug shader's REPLICATION
+    of the coordinate chain, not from the real fetch. The shader's own header
+    warns about exactly that replication.
+
+The tell was visible in the numbers and I nearly missed it: three different
+quantities all returned median -0.514 or mean 0.5139. Different expressions over
+different inputs do not agree to four digits; that was the background dominating
+every average.
+
+**The attempted fix failed too.** `GEARS_DRAW_ONLY=459` plus the debug shader
+renders **0 non-black pixels of 921,600**, so the character draw does not
+rasterise in isolation at all -- almost certainly the depth test against a
+cleared depth buffer. DRAW_ONLY cannot isolate this draw, which also means the
+earlier "draw 460 alone produces nothing" observation says nothing about the
+shader.
+
+### What is still standing
+
+Only what was measured without a screen-region average: the ucode reduction
+(`t42 = nz + c254.x`, `t70 = saturate(c254.y - t42)` = `saturate(0.3 - nz)`,
+every colour term gated, `c6.xyz` = 0); the constant comparisons against Xenia;
+the bind counts; the colour-mask equivalence; and `GEARS_DRAW_NOTEX=1` taking
+the character region from max 0 to max 175 -- which is a BEFORE/AFTER on the
+same region and so survives contamination that a single absolute reading does
+not.
+
+The gate's value on the character is UNMEASURED. So is o2's sign.
+
+### How to measure it correctly
+
+Isolate the character's fragments by DIFFERENCE, not by a rectangle: render the
+frame twice with the debug shader -- once as-is, once with that draw suppressed
+-- and take the pixels that changed. Those are exactly the draw's fragments, and
+nothing else contributes to them. Every reading in the two notes above should be
+retaken that way before any of it is believed.

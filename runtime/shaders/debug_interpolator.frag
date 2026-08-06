@@ -123,9 +123,13 @@ void main() {
     // opens at the silhouette, the pass works and the black head-on render is
     // correct for its camera. All three channels are in [0,1] so an 8-bit
     // readback is safe here, unlike the o2-raw build.
-    //   R = gate      = saturate(0.3 - normalize(o2).z)   <- ZERO EVERYWHERE IS THE BUG
-    //   G = normalize(o2).z remapped (0.5 = zero)
-    //   B = gateWrong = saturate(1 - normalize(o2).z), the historical error,
-    //       kept so this run cannot be confused with the builds that measured it
-    OutColor = vec4(gate, nz * 0.5 + 0.5, gateWrong, 1.0);
+    //   R = coordX/2, the env-ramp lookup coordinate. 0.5 here means u = 1.0,
+    //       and the ramp is WHITE only below u ~ 0.3, so R > 0.15 is the black
+    //       two thirds.
+    //   G = n.z remapped (0.5 = zero), where n = normalize(o4*2-1) -- the
+    //       tangent-space normal the coordinate is built from. o2.z measured
+    //       median -0.514, which is the wrong SIGN for a visible surface; this
+    //       asks whether o4 is inverted the same way.
+    //   B = the ramp value we actually fetch. Zero here IS the black character.
+    OutColor = vec4(gate, nz * 0.5 + 0.5, rampAsIs, 1.0);
 }
