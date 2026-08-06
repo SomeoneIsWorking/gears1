@@ -3008,3 +3008,41 @@ frame's draws.** The bind-count measurements say the reference submits the same
 draws we do, so the question is what those draws produce on hardware -- and the
 one instrument that could answer it per-pixel now works, for the first time this
 session.
+
+### Note (2026-08-06)
+## Four instrument readings that contradict each other. Stopping rather than picking one.
+
+After fixing the debug shader's source/blob desync (above), I took a series of
+readings that are mutually inconsistent. Recording all of them, because the
+inconsistency is the finding and any one of them quoted alone would mislead.
+
+  1. `GEARS_DRAW_PIXEL_TRACE` at (150,300), surface 0x400, real shader:
+     draw 460 writes **(0, 0, 0, 1)** -- exactly zero.
+  2. Same trace with the debug shader: **(0.0124, 0.6436, 0, 1)**, i.e. gate
+     nearly shut, normalize(o2).z = +0.287, ramp 0.
+  3. `GEARS_DRAW_FRAME_STEP` checkpoints either side of the draw, debug
+     shader, over the 29,017 pixels that changed: gate mean 0.222 / max 0.867
+     with 99% having z < 0.3, ramp mean 0.300 never zero, albedo mean 0.243
+     never zero. Every factor non-zero, product ~0.09.
+  4. The same checkpoint pair with the REAL shader: 29,017 pixels changed,
+     value written mean 77.59/255, **0% exactly zero** -- contradicting (1)
+     outright at the same draw on the same surface.
+
+And the reading that shows why: **the 29,017 changed pixels sit at x 816..964,
+y 125..417. The character is at roughly x 60..240, y 250..520. They do not
+overlap at all.** So the checkpoint pair is NOT isolating this draw's character
+fragments, whatever else it is isolating, and (3) and (4) are measurements of
+something other than what I labelled them.
+
+I do not know which of these instruments is being misused. Candidates: the
+checkpoint's 'after N draws' indexing against the issued-draw index; the 8-bit
+blit the checkpoints go through; and the fact that a checkpoint is of the whole
+bound surface, so any draw between the two checkpoints contributes.
+
+**Nothing in (2), (3) or (4) should be quoted.** (1) is the narrowest and rests
+on the smallest machinery -- one texel, one surface, its own HDR format -- and it
+says draw 460 writes exact zero at that pixel.
+
+The instruments need validating against each other on a case with a known
+answer before any of them is used again for this question. That is a session's
+work on its own and it is the honest prerequisite for everything above.

@@ -56,8 +56,10 @@
 
 layout(set = 3, binding = 0) uniform texture2DArray Tf0Tex;   // the normal map
 layout(set = 3, binding = 2) uniform texture2DArray Tf1Tex;   // the k_8 ramp
+layout(set = 3, binding = 4) uniform texture2DArray Tf2Tex;   // the DIFFUSE
 layout(set = 3, binding = 6) uniform sampler       Tf0Samp;
 layout(set = 3, binding = 7) uniform sampler       Tf1Samp;
+layout(set = 3, binding = 8) uniform sampler       Tf2Samp;
 
 layout(location = 0) in vec4 InR0;   // r0: .xy is the material coordinate
 layout(location = 2) in vec4 InR2;   // r2: the vector the gate is built from
@@ -131,5 +133,11 @@ void main() {
     //       median -0.514, which is the wrong SIGN for a visible surface; this
     //       asks whether o4 is inverted the same way.
     //   B = the ramp value we actually fetch. Zero here IS the black character.
-    OutColor = vec4(gate, nz * 0.5 + 0.5, rampAsIs, 1.0);
+    // THE LAST UNMEASURED MULTIPLICAND. The material is
+    // albedo * ramp * gate * r4.w * c254.w, and gate, ramp and r4.w have all
+    // now been measured non-zero on the pixels this draw writes -- yet the real
+    // shader writes (0,0,0,1) there. The diffuse fetch (tf2, instruction 19)
+    // is the only factor never sampled, because this shader did not declare it.
+    vec3 albedo = texture(sampler2DArray(Tf2Tex, Tf2Samp), vec3(InR0.xy, 0.0)).xyz;
+    OutColor = vec4(albedo, 1.0);
 }
