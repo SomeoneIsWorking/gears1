@@ -83,3 +83,26 @@ new code.
 `df` says 76% and looks fine while `quota -s` says the user is AT the limit --
 the tmpfs is shared and the per-user quota is what bites. On any unexplained
 SIGBUS from a Xenia-derived binary, check `quota -s` and `ls /dev/shm` first.
+
+### Note (2026-08-06)
+## Verified, and one thing NOT fixed (2026-08-06)
+
+Re-ran the exact configuration that aborted (trace requested at 200 s, run ends
+at 210 s):
+
+    oracle: requesting a Xenia frame trace at 210s
+    oracle: the frame trace finished writing after 1s
+    4D5307D5_14660.xtr   41,617,348 bytes      <- complete, was a 4.4 MB fragment
+    /dev/shm             0 xenia objects       <- was 2 leaked per run
+
+So both fixes hold: no abort, a whole trace, and nothing left in shared memory.
+
+NOT FIXED, and it must not be read as fixed: **the process still does not exit
+on its own.** The run ended on the 420 s `timeout` (exit 124), so teardown hangs
+somewhere after the trace wait returns. The leak fix covers this case -- the
+objects are unlinked at creation, so even a SIGKILL leaves /dev/shm clean -- and
+the trace is safely on disk before it, so nothing is lost. But a run still needs
+an external timeout to end, and that is a separate defect nobody has looked at.
+
+Every oracle invocation should therefore keep its `timeout` wrapper, and it is a
+workaround, not a solution.

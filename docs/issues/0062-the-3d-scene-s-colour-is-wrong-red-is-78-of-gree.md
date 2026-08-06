@@ -349,3 +349,39 @@ founding observation and keeps the search in the deferred scene path.
 The red/blue relationship is settled and is the GUEST's own mid-frame exchange
 (see the retraction above and claim C011). Nothing here reopens it. The ceiling
 was always the separate observation, and it is still the open one.
+
+### Note (2026-08-06)
+## CORRECTION to the note above: it is NOT a ceiling, it is a dark image
+
+The maxima are right; "clamp" is the wrong word for them, and it points at the
+wrong mechanism.
+
+Those frames use EVERY level up to their maximum -- 69 distinct values in red
+(0..68) and 77 in green and blue (0..76). A clamp piles pixels up AT the
+ceiling; this has no pile and nothing above. The image is not a wide range with
+its top cut off. It is a narrow range: the composite never produces a bright
+pixel at all, and then fills the bottom third of the byte smoothly.
+
+So the search is for a MISSING SCALE (255/76 = 3.36x), or a scene that arrives
+at the composite too dim -- not for something that truncates.
+
+That also reconciles it with what ef39f34 measured and I nearly contradicted:
+distinct levels per channel 69/77/77 without the ramp. Same numbers, because
+"levels" and "max+1" are the same thing for a contiguous range. Nothing here is
+a new symptom; the framing was wrong.
+
+## These frames are PRE-RAMP, checked rather than assumed
+
+scratch/oracle/compare/ours dates from 2026-08-05 23:02; the gamma ramp landed
+in 6be02aa at 2026-08-06 00:09. So (68, 76, 76) is the composite's own output
+with no scan-out LUT involved, and the ramp is not a candidate for it. The
+oracle frames compared against them are from the SAME oracle_compare.sh run, so
+the two sides are the same walk rather than two unrelated sessions.
+
+## Still unexplained, and now more sharply
+
+ef39f34 measured that at draw 480 the linear-light scene buffer has the windows
+SATURATED to pure white. So the scene buffer is too BRIGHT at the top while the
+composite's output is too DARK everywhere. Whatever sits between them compresses
+rather than clips, and that pair -- saturated input, 0.3-maximum output -- is
+the shape of the defect to explain.
