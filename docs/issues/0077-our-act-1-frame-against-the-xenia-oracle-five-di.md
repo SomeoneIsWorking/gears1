@@ -2068,3 +2068,40 @@ alignment.
 
 This is also the reason the same-moment comparison catalog #77 keeps needing has
 never been available: it was not merely hard, the tool for it was inert.
+
+### Note (2026-08-06)
+## The frame-driven comparison now works end to end, and it reaches the character
+
+With the unit bug fixed, the oracle can be driven and sampled entirely by the
+GUEST FRAME COUNTER, which is what a same-moment comparison needs. Demonstrated
+on a 5400-frame run of the Act 1 walk expressed in frames:
+
+    --oracle_by_frame=true --oracle_frames=5400 --oracle_frame_interval=1300
+    --oracle_input="START@725,A@870+120,LY+@3915,RX+@4640,LY+@5075"
+
+  * 22 input events fired, each at its scripted GUEST FRAME (the tail of them
+    at 4830, 4950, 5070, 5190 -- the A repeat, exactly 120 frames apart);
+  * four frames captured and NAMED BY GUEST FRAME -- frame_001300,
+    frame_002600, frame_003900, frame_005200, with means 21.2, 6.3, 22.9, 11.9
+    and 15k-56k distinct colours, so it is walking through real content rather
+    than sitting anywhere;
+  * and `GEARS_ORACLE_VS_CONSTS=15cbc482459fe5b7` produced its 256 vec4s, so
+    **the run reaches a frame in which the skinned character is drawn**.
+
+Both halves of the apparatus now exist: our runtime takes `f<N>:` steps
+including sticks, the oracle takes the same walk in frames, and both can dump a
+named shader's constants.
+
+### The one piece still missing before the bone palette can be compared
+
+The dumps fire on the FIRST draw that binds the shader, not at a NAMED frame, so
+the two sides still dump at different poses -- and the pose is precisely what
+has to match for the bone palette (c8..c253) and the camera matrices (c0..c3,
+c233..c236) to be comparable. Everything else about those constants has already
+been compared and agrees.
+
+So the remaining increment is small and specific: gate both dumps on a guest
+frame number (`GEARS_ORACLE_DUMP_AT_FRAME=N` on the oracle, the existing `f<N>:`
+machinery on our side), run both at the same N, and diff. That turns the last
+unverified input on this entry -- the interpolator o2 and the pose behind it --
+from an inference into a diff.
