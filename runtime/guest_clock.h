@@ -38,14 +38,42 @@ uint64_t GuestClockNanoseconds();
 // call site does not need to know which mode is active.
 void AdvanceGuestClockFrame();
 
-// CONTROL ARM, not a mode to ship a comparison on. GEARS_GUEST_CLOCK_ON_VBLANK=1
-// advances the clock from the 60 Hz VBLANK thread instead of from VdSwap. Vblank
-// is paced by a host sleep and fires whether or not the guest presents, so it
-// cannot deadlock -- which makes it the discriminator between "the title stalls
-// because the clock is frozen before the first frame" and "the title stalls for
-// some other reason and the clock is a red herring". It is HOST-PACED and
-// therefore NOT reproducible; never quote a comparison taken under it.
-bool GuestClockOnVblank();
+// WHAT ADVANCES THE CLOCK. GEARS_GUEST_CLOCK_TRIGGER, one of:
+//
+//   present         (default) VdSwap. MEASURED TO DEADLOCK THIS TITLE: it spins
+//                   in guest code waiting for time before its first present, so
+//                   time cannot advance until a frame is presented and a frame
+//                   cannot be presented until time advances. 0 frames in 100 s
+//                   against 9 for the real clock. Kept as the default because it
+//                   is the honest reading of "a step per frame", and because a
+//                   mode that silently substituted another trigger would make
+//                   the deadlock look fixed.
+//   vblank          The 60 Hz vblank thread, which fires whether or not the
+//                   guest presents, so it cannot deadlock -- but it is paced by
+//                   a HOST SLEEP, so a run under it is NOT reproducible. This is
+//                   the control arm that proved the deadlock is the trigger and
+//                   not the virtual clock; never quote a comparison from it.
+//   vblank-freerun  Vblank, delivered as soon as the guest has consumed the
+//                   previous one rather than on a host sleep. MEASURED TO FREEZE
+//                   THE PICTURE: the title keeps presenting (the counter reaches
+//                   10,800) but from about frame 2,700 every presented frame is
+//                   BIT-IDENTICAL to the last, where the real-clock control's
+//                   consecutive frames are 21-34% identical, i.e. alive. Nothing
+//                   is moving. NOT USABLE for a comparison.
+//
+// THE TRAP THIS MODE SETS, because it nearly landed. A frozen picture is
+// trivially reproducible, so the determinism control it is meant to pass looks
+// PERFECT under it -- frames 3,300 and 7,800 bit-identical across independent
+// runs, against 17.65% at frame 1,200 on the real clock. That is a match on a
+// still image, not on reproduced gameplay. Any determinism number from this
+// mode must be read together with "does the picture change at all", and the
+// real-clock arm is the only control that answers it.
+//
+// The likely mechanism, not yet confirmed: free-running vblanks arrive far
+// faster than 60 Hz, so guest time advances at hundreds of times real rate and
+// the title's per-frame delta becomes absurd.
+enum class ClockTrigger { kPresent, kVblank, kVblankFreeRun };
+ClockTrigger GuestClockTrigger();
 
 // Whether a fixed step is in effect, and how big it is. For reporting: a run
 // that silently used the real clock and one that used a fixed step produce
