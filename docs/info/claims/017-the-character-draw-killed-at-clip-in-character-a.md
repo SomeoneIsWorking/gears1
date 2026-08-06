@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-06
 tags: render,clip,catalog-77
 depends: tools/skeleton_where.py
+reconfirmed: 2026-08-06
+verified_at: 2026-08-06 16:25:43
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ tools/skeleton_where.py, calibrated in the same run against bright.gfr draw 460 
 ## What would falsify it
 
 the row-to-component ordering was fixed empirically against the calibration draw rather than unwound from four predicated accumulation sites, so a derivation from the microcode that contradicts the identity composition would falsify it; and this covers vs 0x15cbc482459fe5b7 only -- the killed character draws in prison_turn and play_v2 use different shaders whose layouts are unread
+
+## Re-confirmed 2026-08-06
+
+Strengthened 2026-08-06 after the operator asked whether an oracle compare had been run. It had not, and cannot settle this claim (see below), so the model was instead validated against EVERY draw in the tree whose GPU outcome is known -- all six draws using vs 0x15cbc482459fe5b7 were enumerated, three of which were issued: bright 460 rasterised 1431 prims -> 44 of 45 joints on screen, 0 behind; black 457 rasterised 1004 prims and 176754 fragments -> 14 of 45 on screen, 0 behind, the rest just past the frame edges; character_auto 319 killed at clip -> 0 on screen, 43 of 44 BEHIND THE CAMERA. Two positives from different captures and one negative, all agreeing with the hardware. WHY NO ORACLE: the offline capture->Xenia-trace path is instrument I013, DISTRUSTED (it renders a trace Xenia itself captured of a known-good frame as uniform black), and the live oracle cannot be aligned to a recorded frame -- this project's own control arm measures our run and the oracle at 17.7% identical pixels by guest frame 1200, and character_auto is frame 2913, so driving Xenia there renders a DIFFERENT game moment. The claim is about what the guest's own matrices did to this recorded frame, which the oracle cannot restate.
