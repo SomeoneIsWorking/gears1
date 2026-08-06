@@ -416,3 +416,72 @@ exactly the shape of this defect. That is the thing to measure next -- read the
 vfetch instructions in `vs_15cbc482459fe5b7.ucode.txt` for those three streams
 and check the format and endian we hand the translator against what the guest
 declared.
+
+### Note (2026-08-06)
+## Two candidate causes for the black character KILLED, and the next tool named
+
+Following the tangent-frame lead from the note above. Both plausible causes are
+dead, each by measurement, and both are recorded because each looked convincing.
+
+### KILLED: a byte-order or signedness error unpacking the tangent frame
+
+The previous note proposed this and it is wrong. The character's vertex stride is
+10 dwords and the three packed streams are at offsets 3, 4, 5:
+
+    vfetch_mini r9.zyx_, Offset=3, DataFormat=FMT_8_8_8_8, NumFormat=integer
+    vfetch_mini r4.xzy_, Offset=4, DataFormat=FMT_8_8_8_8, NumFormat=integer
+    vfetch_mini r3.zyx_, Offset=5, DataFormat=FMT_8_8_8_8, NumFormat=integer
+
+`GEARS_DRAW_VDUMP` prints the BYTE-SWAPPED dword, so what it shows is what the
+shader sees after Xenia's `EndianSwap32Uint`. Xenia extracts k_8_8_8_8 with
+x = bits 0-7, y = 8-15, z = 16-23, w = 24-31. Applying that to real vertices:
+
+    off3: x 16 y 81 z169 w 0 -> (-0.875,-0.365,+0.325)  |v| = 1.0019
+    off4: x163 y  9 z 93 w 0 -> (+0.278,-0.929,-0.271)  |v| = 1.0072
+    off5: x178 y109 z243 w 0 -> (+0.396,-0.145,+0.906)  |v| = 0.9993
+
+**Every one is unit length**, across every vertex sampled, and the padding lands
+cleanly in w. A normal, a tangent and a binormal. The unpacking is CORRECT and
+the byte order is right. (Taking the other three bytes gives mean |v| = 1.29,
+which is how this was settled rather than argued.)
+
+### KILLED: "the pixel shader's dead interpolator is the bone-index stream"
+
+The pixel shader reads interpolator r4; the vertex shader exports it with
+`max o4, r2, r2` at instruction 440; and VS r2 is loaded at instruction 64 from
+`vfetch_full r2, Offset=8, FMT_8_8_8_8, NumFormat=integer` -- an attribute that
+is 0x00000000 in every vertex dumped. That chain says o4 is zero, which would
+make the pixel shader's `mad r5.xyz_, r4.xyzz, c253.xxxx, c253.yyyy` produce a
+constant (-1,-1,-1) and collapse everything downstream.
+
+It is wrong: **r2 is written NINE times between instruction 64 and 440**.
+Instructions 65-68 immediately spread the fetched value into r0/r1 for the bone
+palette lookup (`c[10+a0]`, `c[9+a0]`), after which r2 is reused as an ordinary
+temporary. o4 is some computed vector, not the bone indices. Caught before it
+was written down as a cause; recorded so the same chain is not walked again.
+
+(Offsets 8 and 9 ARE the bone indices and weights -- indices 0x00000000 and
+weights 0x000000ff in the four vertices sampled, i.e. fully weighted to bone 0.
+Four vertices of one triangle is not a sample worth concluding from, and the
+character IS correctly posed, so skinning works.)
+
+### What is still true, and the tool that is missing
+
+Unchanged: draw 460 is the character's base pass, it replaces rather than blends,
+it shades 144,191 fragments, and it writes exactly (0,0,0) on every silhouette
+pixel traced. Its output is gated by `saturate(1 - normalize(r2).z)` where r2
+descends from interpolator o4.
+
+To find what o4 actually is, that vertex shader's 440 instructions have to be
+reduced the way `ucode_reduce.py` reduces a pixel shader. It CANNOT do it: it
+models a pixel shader's register file (r0..rN and oC0) and a vertex shader
+exports oPos and o0..o15 and indexes a bone palette through the address
+register. It used to die on `int('Pos')` with a traceback, which reads as "the
+tool is broken" rather than "wrong kind of shader"; it now refuses by name
+through its own refusal mechanism and exits 2. Its 7 selftest cases still pass.
+
+NEXT: either extend the reducer to vertex shaders (address register and o-exports
+are the work), or read o4 out of the running shader by substituting a native pass
+that writes an interpolator as colour -- `runtime/native_pass.{h,cpp}` already
+substitutes on a pixel shader hash, so visualising r4 is a small shader and no
+new mechanism.

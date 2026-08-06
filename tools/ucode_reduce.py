@@ -170,6 +170,20 @@ def run(path, inputs, allow_control=False):
     sim = Sim(inputs)
     prog = parse(path)
     refused = []
+    # WRONG KIND OF SHADER. This models a PIXEL shader's register file: r0..rN
+    # and the single export oC0. A vertex shader exports oPos and o0..o15 and
+    # uses the address register for its bone palette, none of which is
+    # simulated -- and without this check it died on int('Pos') with a
+    # traceback, which reads as "the tool is broken" rather than "that is the
+    # wrong input". Refused up front, by the tool's own refusal mechanism, so
+    # the run reports it the same way it reports control flow it cannot model.
+    text = open(path).read()
+    if 'oPos' in text:
+        return None, ['this is a VERTEX shader (it writes oPos). This tool '
+                      'reduces PIXEL shaders only -- oPos/o0..o15 exports, the '
+                      'address register and the bone palette are outside what '
+                      'it simulates. NOTHING was reduced; do not read a partial '
+                      'result off this run.']
     for op, args, pred in prog:
         if pred:
             refused.append('predicated instruction `%s` (this tool has no predication)' % op)
@@ -284,6 +298,13 @@ def scalar(sim, op, srcs):
 def report(path, inputs):
     sim, refused = run(path, inputs)
     print('== %s ==' % path)
+    if sim is None:
+        # Refused before simulating anything (wrong kind of shader). Say so and
+        # exit non-zero: a caller must not read this as "nothing to report".
+        print('REFUSED -- nothing was reduced:')
+        for r in refused:
+            print('   - %s' % r)
+        return 2
     if sim.fetches:
         print('-- texture fetches, in issue order (binding numbers follow THIS order) --')
         for tex, dst in sim.fetches:
