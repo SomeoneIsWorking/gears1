@@ -344,3 +344,86 @@ unexamined is whether a wholesale per-draw register restore -- even with
 callbacks -- can drive Xenia's EDRAM ownership tracking at all, given it was
 designed for an incremental PM4 stream. Emitting only CHANGED registers per
 draw is the next experiment and is still on our side of the fence.
+
+### Note (2026-08-06)
+### Note (2026-08-06, later session)
+## FALSIFIED: resolves DO reach shared memory in playback. The probe was blind.
+
+This entry's standing conclusion -- "no resolve in trace playback lands in
+shared memory" -- is WRONG, and the reason is a defect in how it was measured,
+not in the emulator.
+
+The probe only ever ran at the SWAP, i.e. after all eighteen resolves. Probing
+each resolve's destination the moment its own submission completes
+(`GEARS_PROBE_AFTER_RESOLVE=1`, new; it flushes with `EndSubmission(true)`
+first, or it would read the buffer as it was BEFORE the copy and manufacture the
+very negative it is testing) gives, on `bright_delta.xtr`:
+
+    #0  0BDF0000  18.4%  mean  13.6      #9   0C7F9000   0.0%
+    #1  0BA50000  74.8%  mean 104.3      #10  0BDF0000   0.4%
+    #2  0C2F0000  62.4%  mean  38.5      #11  0BDF0000   0.4%
+    #3  0BCD0000  69.5%  mean  98.2      #12  0BDF0000   0.4%
+    #4  0CB91000   0.0%                  #13  006E4000   1.9%
+    #5  0BDF0000   0.7%                  #14  006E4000   1.9%
+    #6  0C520000  58.6%  mean 136.4      #15  006E4000   1.9%
+    #7  0C7F9000  84.3%  mean 215.1      #16  0C7F9000   0.0%
+    #8  0BDF0000   1.3%                  #17  00311000   0.0%
+
+Six destinations receive substantial data. The pattern is that EARLY resolves
+land and LATE ones write zeros over what is already there -- #7 puts 84.3% into
+0C7F9000 and #9 and #16 empty it again. At the swap only the survivors are
+visible, and the frame's final composite (#17, 00311000) is one of the
+casualties. That is why every previous reading was zero.
+
+## And Xenia's OWN captured trace fails IDENTICALLY, so this is not our converter
+
+Same probe on `scratch/oracle/xenia_traces/4D5307D5_13457.xtr`, which Xenia
+captured itself:
+
+    #0  137A0000  70.3%   #4  12D97000   0.0%   #10 137A0000   0.0%
+    #1  13ED8000  74.9%   #5  137A0000   1.3%   #11 137A0000   0.0%
+    #2  13CA0000  77.7%   #6  134C7000  72.3%   #12-14 1F557000 1.9%
+    #3  14158000  69.5%   #7  1312F000  97.8%   #15 1312F000   0.0%
+                          #8/#9 134C7000 73.5%  #16 1F606000   0.0%  <- front buffer
+
+Resolve for resolve, the same shape: the early ones land, the late ones zero,
+the front buffer ends empty. `gfr_to_xtr` is EXONERATED -- the remaining defect
+is in Xenia's trace playback, on the far side of the fence.
+
+The structural match is also the best evidence yet that our converter is
+faithful: two independently produced traces of this title yield the same resolve
+sequence, the same sizes, and non-zero counts that agree to within a few
+thousand bytes at matching indices (#3: 796,659 ours against 796,909 theirs).
+
+## Which unblocks catalog #77: the oracle now renders OUR captured frame
+
+`gfr_to_xtr.py --present resolve:N` points the swap at the Nth resolve --
+numbered as the fork's own `IssueCopy` log numbers them -- and truncates
+playback to end there, so a later resolve cannot empty it. Refuses a depth
+resolve and an out-of-range index, and lists what does exist; all three arms are
+in `--selftest`.
+
+`--present resolve:0` on bright.gfr renders tile 1 of the scene as the ORACLE
+renders it: a lit brick wall with three window openings, a blown-out courtyard
+through the right one, dark geometry around it
+(`scratch/oracle/deltatest/r0/bright_r0.png`, 20.7% non-zero, max 0.80).
+This is the per-draw ground truth this project has never had.
+
+## Dead, and not the cause: the per-draw register restore
+
+`--regs delta` emits only the registers that changed since the previous draw
+(43,933 writes in 2,552 commands against 17,270,772 for a full restore, a 393x
+reduction) with the callbacks still on. The dump is still black. The wholesale
+restore was the last untested hypothesis in the note above; it is now dead. The
+option is kept because it is more faithful to what the guest's command stream
+looks like, and it makes traces smaller and faster to play.
+
+## Instrument caveat, caught by its own control
+
+`GEARS_REPLAY_DRAWS=<n>` (new, `tools/frame_replay`) is NOT a clean prefix when
+the cut falls inside a tile group. bright.gfr renders in two Xenos tiles -- 186
+draws at window offset 0, then 185 replayed at 0x7e000000 -- and our untile pass
+collapses the pair using draws from both. Cutting at 462, the end of tile 1,
+flips 49 draws from `shaded` to `rasterised_no_fragment`. The truncated arm was
+built, used, and RETRACTED on this control; anything measured with a cut inside
+a tile group is comparing two different renderers. The tool now says so.

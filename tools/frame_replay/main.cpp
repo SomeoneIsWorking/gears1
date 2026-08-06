@@ -79,6 +79,53 @@ int main(int argc, char** argv)
                 captured >> 20, cap.inputs.guestPhysicalMirrorBytes >> 20);
     }
 
+    // GEARS_REPLAY_DRAWS=<n> replays only the first n draws of the capture.
+    //
+    // This exists to make the two arms of an oracle comparison comparable.
+    // `tools/gfr_to_xtr.py --present resolve:N` truncates the trace so the
+    // oracle's swap shows the buffer that resolve wrote, before a later resolve
+    // overwrites it (catalog #79); without the same truncation on this side,
+    // our resolve target holds its LAST write and the oracle's holds its Nth,
+    // and the two pictures are of different things while looking like a
+    // like-for-like comparison.
+    //
+    // It ALWAYS says what it dropped. A silently-truncated replay renders a
+    // partial frame that looks like a whole one, which is exactly how catalog
+    // #57's wrong picture read as authoritative.
+    //
+    // IT IS NOT A CLEAN PREFIX, AND THIS IS MEASURED, NOT A CAVEAT ADDED FOR
+    // SAFETY. bright.gfr renders in TWO Xenos tiles -- the same 186 draws
+    // replayed at window offset 0x7e000000 -- and the untile pass collapses the
+    // pair using draws from BOTH halves. Cutting at draw 462, the end of tile 1,
+    // leaves the collapse unable to fire, and 49 draws that are `shaded` in the
+    // full replay come out `rasterised_no_fragment`. So a truncation INSIDE a
+    // tile group changes draws that already happened, and any comparison built
+    // on it is comparing two different renderers. Check the `untile: N draw
+    // group(s)` line and cut on a group boundary.
+    if (const long only = lucent::config::number("REPLAY_DRAWS", 0); only > 0)
+    {
+        const size_t have = cap.inputs.draws.size();
+        if (size_t(only) >= have)
+        {
+            lucent::warn("replay", "GEARS_REPLAY_DRAWS={} but the capture has"
+                " only {} draws, so NOTHING was truncated -- this is the whole"
+                " frame, not a prefix", only, have);
+        }
+        else
+        {
+            cap.inputs.draws.resize(size_t(only));
+            lucent::info("replay", "replaying the first {} of {} draws; the"
+                " remaining {} are NOT rendered, so every resolve target below"
+                " holds its state at draw {}, not at the end of the frame",
+                only, have, have - size_t(only), only - 1);
+            lucent::warn("replay", "this is NOT a clean prefix if the cut falls"
+                " inside a tile group: on bright.gfr, cutting at 462 flips 49"
+                " draws from shaded to rasterised_no_fragment because the"
+                " untile collapse needs draws from both tiles. Read the"
+                " 'untile: N draw group(s)' line below and cut on a boundary");
+        }
+    }
+
     // GEARS_REPLAY_DUMP_SHADERS=<dir> writes every distinct microcode blob in the
     // capture, named by its hash, so a specific shader can be disassembled with
     // tools/xenos_translate --raw. Reading what a shader DOES is often the only
