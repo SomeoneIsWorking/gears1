@@ -30,6 +30,7 @@
 
 #include "frame_capture.h"
 #include "gpu_draw.h"
+#include "render_ab.h"
 
 int main(int argc, char** argv)
 {
@@ -113,6 +114,86 @@ int main(int argc, char** argv)
             }
         }
         lucent::info("replay", "dumped {} distinct shader blobs to {}", n, dumpDir);
+    }
+
+    // ---- the interleaved render comparer --------------------------------
+    //
+    // GEARS_DRAW_AB=<KNOB> renders the frame TWICE IN THIS PROCESS -- once with
+    // the knob unset, once with it set -- capturing a per-draw signature of the
+    // surface each time, and reports the FIRST draw at which the two diverge.
+    //
+    // Two separate runs plus a diff cannot do this honestly. The arms have to
+    // issue the SAME draws for "the first divergent draw" to mean anything, and
+    // a knob that changes the draw stream silently invalidates every row after
+    // it; in one process the prepared list is rebuilt identically and the
+    // comparison is checked rather than assumed. It also removes the operator
+    // from the loop: the answer is a draw index and a shader hash, not a pair of
+    // files to eyeball.
+    if (const std::string& arm = lucent::config::text("DRAW_AB"); !arm.empty())
+    {
+        // Under the run's own output directory, never /tmp: this machine's tmpfs
+        // is a per-user quota that logs and dumps exhaust, and a comparer that
+        // fills it breaks every other run on the box (catalog #80).
+        const std::string& dirStr = lucent::config::text("DRAW_DIR");
+        const std::filesystem::path dir =
+            (dirStr.empty() ? std::filesystem::path("scratch/screenshots")
+                            : std::filesystem::path(dirStr)) / "ab";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        const std::string live = (dir / "arm_live.tsv").string();
+        const std::string aPath = (dir / "arm_a.tsv").string();
+        const std::string bPath = (dir / "arm_b.tsv").string();
+        const std::string knobEnv = "GEARS_" + arm;
+        ::setenv("GEARS_DRAW_TRACE_ALL", live.c_str(), 1);
+
+        auto renderInto = [&](const std::string& keep, bool setKnob) {
+            if (setKnob) ::setenv(knobEnv.c_str(), "1", 1);
+            else         ::unsetenv(knobEnv.c_str());
+            // STOPGAP: add lucent::config::refresh() upstream, because lucent
+            // caches every config read and the only public way to drop those
+            // caches is a prefix change, which early-returns when the prefix is
+            // unchanged -- so this bounces the prefix to a dummy and back.
+            // Without it the second arm reads the FIRST arm's cached answers,
+            // both arms render identically, and the comparer reports "no
+            // divergence" for a knob that does plenty. The risk of the bounce is
+            // that it also re-arms the debug channels, so a channel enabled
+            // mid-run would be re-read here; nothing does that today.
+            lucent::config::set_prefix("GEARS_AB_BOUNCE_");
+            lucent::config::set_prefix("GEARS_");
+            // EACH ARM IS A CLEAN RENDER. Almost every knob worth comparing is
+            // consumed while BUILDING persistent state -- a surface's host
+            // format is chosen once, when the surface is created -- so without
+            // this, arm B inherits arm A's surfaces and pipelines and the knob
+            // appears to change nothing, which is indistinguishable from a knob
+            // that genuinely changes nothing.
+            gears::ResetRendererForComparison();
+            cap.inputs.report = false;
+            if (!gears::RenderFrame(cap.inputs))
+                return false;
+            // The probe's output path is read once, so both arms write the same
+            // file; snapshot it rather than trying to re-point it mid-process.
+            std::error_code e;
+            std::filesystem::copy_file(live, keep,
+                std::filesystem::copy_options::overwrite_existing, e);
+            if (e)
+            {
+                lucent::error("replay", "A/B: cannot keep {} as {}: {}", live,
+                              keep, e.message());
+                return false;
+            }
+            return true;
+        };
+        lucent::info("replay", "A/B: arm A is {} UNSET, arm B is {}=1."
+            " Rendering both in this process", knobEnv, knobEnv);
+        if (!renderInto(aPath, false) || !renderInto(bPath, true))
+        {
+            lucent::error("replay", "A/B: a render failed, so NOTHING is"
+                " compared");
+            return 1;
+        }
+        ::unsetenv(knobEnv.c_str());
+        ::unsetenv("GEARS_DRAW_TRACE_ALL");
+        return gears::ReportAbDivergence(aPath, bPath, knobEnv) ? 0 : 1;
     }
 
     bool ok = false;

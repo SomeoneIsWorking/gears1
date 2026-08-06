@@ -2770,6 +2770,16 @@ bool RenderFrame(const FrameDrawInputs& in)
     return ok;
 }
 
+void ResetRendererForComparison()
+{
+    Renderer& r = FrameRenderer();
+    if (r.device != VK_NULL_HANDLE)
+    {
+        vkDeviceWaitIdle(r.device);
+        r.ReleasePersistent();
+    }
+}
+
 const std::vector<uint8_t>& GuestFramePixels() { return draw::g_frame; }
 uint32_t GuestFrameWidth() { return kWidth; }
 uint32_t GuestFrameHeight() { return kHeight; }
