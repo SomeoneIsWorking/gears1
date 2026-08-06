@@ -3095,3 +3095,110 @@ are RESOLVES, and a checkpoint asked for right after a resolve is the case
 knobs.md records as previously vanishing. So the gate's distribution across the
 whole character remains unmeasured, and the route to it is a checkpoint taken
 BEFORE the resolve boundary rather than after.
+
+### Note (2026-08-06)
+## MEASURED, with a denominator at last: draw 460 is a narrow highlight, and TWO captures fail it in OPPOSITE ways
+
+Every previous attempt at "what does draw 460 write across the character"
+was retracted, for three different methodological reasons. The instrument that
+was missing is now built (`GEARS_DRAW_SURFACE_DUMP=<diag>`, docs/knobs.md): the
+WHOLE surface, in its own float format, immediately after a NAMED DIAG draw --
+before any resolve, post or tonemap, with no 8-bit blit and no draw-index
+ambiguity.
+
+### The reading is valid this time, and here is why
+
+Three things that no earlier attempt had, all of them controls rather than
+assurances:
+
+  * **the coverage is measured, not drawn.** The debug shader writes a `-7`
+    SENTINEL into blue; nothing else in a frame writes -7, so the dump's -7
+    pixels are EXACTLY this draw's fragments. bright.gfr: **126,983**. The
+    retracted readings averaged a screen rectangle that was mostly wall.
+    (Alpha would be the natural place for the sentinel and does NOT work: this
+    title's colour surfaces are k_2_10_10_10 variants whose guest clamp is
+    alpha-only, so it comes back 0. Measured -- the alpha build dumped 0
+    covered pixels.)
+  * **the probe's negative speaks.** `SURFACE_DUMP=99999` reports "the frame's
+    draws ran to diag index 842, so this is 'never offered', NOT 'wrote
+    nothing'". And on character_auto it reports NO COVERAGE, which is correct:
+    that capture's draw 319 is killed at clip (claim C017).
+  * **the debug shader is now a PORT, not a model, and it is self-tested.** It
+    transcribes microcode instructions 3..25 one for one and reads the
+    constants from the same UBO the translated shader is handed, rather than
+    pasting measured numbers. Dumping the port's full material output against
+    the REAL shader's on the same draw: **max |difference| 1e-3 or less on
+    99.76% of the 126,983 fragments, and both report exactly 99.8% zero.** So
+    every intermediate read out of it is the real shader's value. Earlier
+    builds replicated the gate from the instruction listing (dropping
+    `+ c254.x`) and the ramp coordinate as a 1D lookup (it is 2D, `r4.zy`);
+    both produced retracted findings.
+
+### What the four multiplicands are, on the draw's own fragments
+
+`oC0.xyz = (albedo' * ramp * (0.8,0.8,1.0) * gate * T7 + c6.xyz) * c254.w`,
+c6.xyz = 0, c254.w = 8.
+
+    bright.gfr, 126,983 fragments
+      gate  saturate(0.3-nz)   zero on 87.5%   mean 0.0167   max 0.774
+      T7    normalmap.z*2-1    zero on  0.0%   median 0.965
+      ramp  the tf1 fetch      zero on 99.4%   mean 0.0024   max 1.000
+      -> both gate and ramp non-zero on 0.24% of the character
+      -> the REAL shader writes non-zero on 309 of 126,983 fragments (0.24%)
+
+### The finding that changes the reading, and it needed a SECOND capture
+
+    black.gfr, 166,906 fragments
+      gate   zero on 94.9%   mean 0.0056
+      ramp   zero on  9.3%   mean 0.7419      <- WIDE OPEN
+      -> both non-zero on 3.61% of the character
+
+**The ramp is not systematically broken.** On black.gfr the same code path,
+the same texture and the same constants produce a healthy lookup on 90.7% of
+the character; on bright.gfr it is dead on 99.4%. The two captures fail in
+OPPOSITE ways -- bright has a live-ish gate and a dead ramp, black has a live
+ramp and a shut gate -- and in both the PRODUCT is near zero.
+
+That is what a narrow-band rim/environment highlight does. It is not a defect
+in the ramp fetch, and it is not a defect in the gate: this material is not the
+character's body colour and cannot be, at any camera angle.
+
+### Ruled out this session, by measurement
+
+  * **the ramp's fetch coordinate is not misbuilt.** u = `1 + T7*proj(n)`,
+    range [0,2]; on bright its median is 1.675 and 93.7% of fragments land
+    outside [0,1]. The guest asks for **clamp-edge** on that binding
+    (`GEARS_DRAW_TEX_BINDS`), so the hardware clamps too, and the ramp texture
+    (0x32eb000, k_8 256x256) is a 64-wide dithered falloff replicated 4x that
+    is white only below u ~ 0.08. black.gfr proves the same arithmetic reaches
+    the white end when the camera is elsewhere.
+  * **o4 is healthy.** The interpolator the coordinate is built from is inside
+    [0,1] on 100% of fragments, and |o4*2-1| has median 0.978 -- a correctly
+    packed unit vector. There is no sign error and no unpack error.
+  * **the oracle runs the SAME pixel shader.** `scratch/oracle/ps_hashes.txt`,
+    the cached census keyed on our hash function, lists
+    `f662d670789bfac0 90 dwords 10 consts` -- our exact shader, size and
+    constant count. This needed no oracle run; it was already on disk and
+    nobody could find it, which is what tools/oracle_cache.py now fixes.
+
+### Where this leaves difference 1
+
+The standing position is upheld and is now measured rather than inferred from
+single pixels: **draw 460 is a narrow highlight behaving correctly, and the
+character's body colour is not in this frame's draws.** Combined with claim
+C019 (both sides submit the same character draws), the remaining possibilities
+are narrower than before:
+
+  * the console's Marcus is ALSO mostly dark in this pass, and what reads as
+    "lit" in the oracle frames is this same narrow highlight plus a scene that
+    is not as dark as ours around him -- in which case difference 1 is a
+    brightness question, not a missing-pass question, and belongs with #62's
+    remaining under-reach at the top of the range;
+  * or the draw's INPUTS differ. Constants are 7/10 byte-identical and the
+    three that differ (c3/c4/c5) are exactly the camera basis that builds the
+    ramp coordinate -- never compared at a matched moment. The interpolators
+    o2/o4 come from a 440-instruction vertex shader whose OUTPUT has never been
+    compared against the console at all, only its vertex FETCH decode.
+
+The vertex shader's interpolator output is the next thing, and it is the first
+time this entry has pointed at something that has never been looked at.

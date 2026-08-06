@@ -3,6 +3,7 @@
 
 #include "gpu_draw_probe.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <cstring>
@@ -82,6 +83,38 @@ void FrameProbe::Build(size_t nDraws, VkDeviceSize readbackBytes)
                 " written and this run says nothing");
             tracePath.clear();
         }
+    }
+    // GEARS_DRAW_SURFACE_DUMP=<diag>[,<diag>...]: the whole surface, in its own
+    // format, after each named draw. Parsed as DECIMAL because every diag index
+    // in this project's tables and issue notes is decimal.
+    if (const std::string& ds = lucent::config::text("DRAW_SURFACE_DUMP"); !ds.empty())
+    {
+        size_t at = 0;
+        while (at < ds.size())
+        {
+            size_t comma = ds.find(',', at);
+            if (comma == std::string::npos) comma = ds.size();
+            const std::string one = ds.substr(at, comma - at);
+            if (!one.empty())
+            {
+                char* end = nullptr;
+                const long v = std::strtol(one.c_str(), &end, 10);
+                if (end == one.c_str() || v < 0)
+                    lucent::warn("draw", "GEARS_DRAW_SURFACE_DUMP: cannot parse"
+                        " '{}' as a diag draw index; that entry is IGNORED and"
+                        " no dump will be taken for it", one);
+                else
+                    dumpWanted.push_back(uint32_t(v));
+            }
+            at = comma + 1;
+        }
+        if (dumpWanted.empty())
+            lucent::warn("draw", "GEARS_DRAW_SURFACE_DUMP={} named no usable"
+                " diag draw index, so NOTHING will be dumped", ds);
+        else
+            lucent::info("draw", "surface dump armed for diag draw(s) {}"
+                " -- the FULL bound surface in its own format, after the draw,"
+                " before any resolve or post", ds);
     }
     stepEvery = lucent::config::number("DRAW_FRAME_STEP", 0);
     stepFrom = lucent::config::number("DRAW_FRAME_STEP_FROM", 0);
@@ -260,6 +293,70 @@ void FrameProbe::TracePixel(VkCommandBuffer cmd, uint32_t drawsSoFar,
     pixelSamples.push_back(PixelSample{drawsSoFar, prepIndex, surfaceBase, t->hostFormat});
 }
 
+// The whole surface, in its own format, after one named draw.
+//
+// No blit and no staging image: a blit is what costs FRAME_STEP its HDR range.
+// The copy is straight out of the target, so what lands in the buffer is the
+// bits the draw wrote.
+void FrameProbe::DumpSurface(VkCommandBuffer cmd, uint32_t drawsSoFar,
+                             uint32_t prepIndex, uint32_t diagIndex,
+                             const SurfaceTarget* t, uint32_t surfaceBase)
+{
+    anyDrawSeen = true;
+    if (diagIndex > highestDiag)
+        highestDiag = diagIndex;
+    if (std::find(dumpWanted.begin(), dumpWanted.end(), diagIndex) == dumpWanted.end())
+        return;
+    // Already taken: a diag index can be offered twice if the caller also
+    // dumps at end of frame, and two copies of one draw is not a finding.
+    for (const SurfaceDump& d : dumps)
+        if (d.diagIndex == diagIndex)
+            return;
+    if (!SurfaceWanted(surfaceBase))
+    {
+        lucent::warn("draw", "GEARS_DRAW_SURFACE_DUMP: diag draw {} rendered"
+            " into surface {:#x}, but GEARS_DRAW_SURFACE pins the probes to"
+            " {:#x}. NO dump was taken -- this is not an empty surface",
+            diagIndex, surfaceBase, onlySurface);
+        return;
+    }
+    if (!t || !t->begunThisFrame)
+    {
+        lucent::warn("draw", "GEARS_DRAW_SURFACE_DUMP: diag draw {} reached, but"
+            " {}. NO dump was taken", diagIndex,
+            t ? "its surface has not been rendered to this frame"
+              : "no surface has been opened yet");
+        return;
+    }
+    uint32_t bpp = 0;
+    if (t->hostFormat == VK_FORMAT_R16G16B16A16_SFLOAT) bpp = 8;
+    else if (t->hostFormat == VK_FORMAT_R8G8B8A8_UNORM) bpp = 4;
+    else
+    {
+        // REFUSE rather than read the bytes as something they are not.
+        lucent::error("draw", "GEARS_DRAW_SURFACE_DUMP: diag draw {} renders to"
+            " host format {} which this probe cannot decode. NO dump was taken,"
+            " and nothing here says the surface is empty",
+            diagIndex, int(t->hostFormat));
+        return;
+    }
+    const VkDeviceSize bytes = VkDeviceSize(W) * H * bpp;
+    VkBuffer b = 0; VkDeviceMemory m = 0;
+    if (!R.MakeBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m))
+    {
+        lucent::error("draw", "GEARS_DRAW_SURFACE_DUMP: could not allocate the"
+            " {} byte readback for diag draw {}. NO dump was taken", bytes, diagIndex);
+        return;
+    }
+    VkBufferImageCopy rg{};
+    rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    rg.imageExtent = {W, H, 1};
+    vkCmdCopyImageToBuffer(cmd, t->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        b, 1, &rg);
+    dumps.push_back(SurfaceDump{drawsSoFar, prepIndex, diagIndex, surfaceBase,
+                                t->hostFormat, b, m, bytes});
+}
+
 // One thumbnail of the surface, blitted down and copied out, per draw.
 void FrameProbe::TraceAll(VkCommandBuffer cmd, uint32_t drawsSoFar,
                           uint32_t prepIndex, const SurfaceTarget* t,
@@ -305,8 +402,149 @@ void FrameProbe::TraceAll(VkCommandBuffer cmd, uint32_t drawsSoFar,
     thumbs.push_back(ThumbSample{drawsSoFar, prepIndex, surfaceBase});
 }
 
+// Decodes each dump to float, writes it as a PFM, and prints what it holds.
+//
+// THE NEGATIVE IS DESIGNED FIRST. Every line carries its denominator, and a
+// diag index that was asked for and never taken is reported by name against the
+// highest index the frame reached -- because "the surface was empty" and "you
+// named a draw this frame never issued" are the two readings this project has
+// repeatedly confused, and silence looks like the first one.
+void FrameProbe::ReportSurfaceDumps(const std::vector<PreparedDraw>& prepared)
+{
+    if (dumpWanted.empty())
+        return;
+    const std::string& dirStr = lucent::config::text("DRAW_DIR");
+    const std::filesystem::path outDir = dirStr.empty()
+        ? std::filesystem::path("scratch/screenshots")
+        : std::filesystem::path(dirStr);
+    std::error_code ec;
+    std::filesystem::create_directories(outDir, ec);
+
+    for (const SurfaceDump& d : dumps)
+    {
+        void* p = nullptr;
+        if (vkMapMemory(R.device, d.mem, 0, d.bytes, 0, &p) != VK_SUCCESS)
+        {
+            lucent::error("draw", "GEARS_DRAW_SURFACE_DUMP: diag draw {} was"
+                " copied but its readback could not be mapped. NO reading",
+                d.diagIndex);
+            continue;
+        }
+        std::vector<uint8_t> raw(size_t(d.bytes));
+        std::memcpy(raw.data(), p, size_t(d.bytes));
+        vkUnmapMemory(R.device, d.mem);
+
+        const size_t px = size_t(W) * H;
+        // ALL FOUR CHANNELS. Alpha is not decoration here: the debug shader
+        // writes a sentinel into it so a dump carries its own coverage mask,
+        // and a three-channel dump would throw away the denominator that three
+        // retracted measurements were missing.
+        std::vector<float> rgba(px * 4);
+        for (size_t k = 0; k < px; ++k)
+            for (int c = 0; c < 4; ++c)
+            {
+                float v;
+                if (d.format == VK_FORMAT_R8G8B8A8_UNORM)
+                    v = float(raw[k * 4 + size_t(c)]) / 255.0f;
+                else
+                {
+                    uint16_t h;
+                    std::memcpy(&h, raw.data() + k * 8 + size_t(c) * 2, 2);
+                    v = HalfToFloat(h);
+                }
+                rgba[k * 4 + size_t(c)] = v;
+            }
+
+        double mn[3] = {1e30, 1e30, 1e30}, mx[3] = {-1e30, -1e30, -1e30};
+        double sum[3] = {0, 0, 0};
+        uint64_t nonZero = 0, above1 = 0;
+        for (size_t k = 0; k < px; ++k)
+        {
+            bool nz = false;
+            for (int c = 0; c < 3; ++c)
+            {
+                const double v = rgba[k * 4 + size_t(c)];
+                if (v < mn[c]) mn[c] = v;
+                if (v > mx[c]) mx[c] = v;
+                sum[c] += v;
+                if (v != 0.0) nz = true;
+                if (v > 1.0) { above1 += 1; break; }
+            }
+            if (nz) ++nonZero;
+        }
+
+        // NumPy .npy, float32, shape (H, W, 4). Chosen over PFM because PFM is
+        // three-channel and alpha carries the coverage sentinel, and over PNG
+        // because an 8-bit image cannot hold what an HDR surface is dumped to
+        // show. The header is 60 bytes of ASCII; np.load reads it with no
+        // helper, which is the whole point -- an analysis that needs a bespoke
+        // reader is one nobody writes.
+        const std::string name =
+            std::format("surface_{:x}_after_diag{}.npy", d.surface, d.diagIndex);
+        const std::filesystem::path path = outDir / name;
+        bool wrote = false;
+        if (std::ofstream f(path, std::ios::binary); f)
+        {
+            std::string hdr = std::format(
+                "{{'descr': '<f4', 'fortran_order': False, 'shape': ({}, {}, 4), }}",
+                H, W);
+            size_t total = 10 + hdr.size() + 1;
+            while (total % 64 != 0) { hdr += ' '; ++total; }
+            hdr += '\n';
+            const uint16_t hlen = uint16_t(hdr.size());
+            f.write("\x93NUMPY\x01\x00", 8);
+            f.write(reinterpret_cast<const char*>(&hlen), 2);
+            f.write(hdr.data(), std::streamsize(hdr.size()));
+            f.write(reinterpret_cast<const char*>(rgba.data()),
+                    std::streamsize(sizeof(float) * rgba.size()));
+            wrote = f.good();
+        }
+
+        const PreparedDraw* by =
+            d.prepIndex < prepared.size() ? &prepared[d.prepIndex] : nullptr;
+        lucent::Line l;
+        l.add("surface dump after DIAG draw {}", d.diagIndex);
+        if (by)
+            l.add(" (ps {:#x}, issued draw {})", by->psHash, d.draws);
+        l.add(", surface {:#x}, {}x{} {}:", d.surface, W, H,
+              d.format == VK_FORMAT_R8G8B8A8_UNORM ? "R8G8B8A8" : "R16G16B16A16_SFLOAT");
+        for (int c = 0; c < 3; ++c)
+            l.add("\n  {}  min {:.5f}  max {:.5f}  mean {:.5f}",
+                  "RGB"[c], mn[c], mx[c], sum[c] / double(px));
+        l.add("\n  {} of {} px non-zero [{:.1f}%], {} px with a channel above 1.0",
+              nonZero, px, 100.0 * double(nonZero) / double(px), above1);
+        l.add("\n  -> {}", wrote ? path.string()
+                                 : std::string("NOT WRITTEN (the statistics above"
+                                               " are still this draw's output)"));
+        l.flush(lucent::Level::Info, "draw");
+    }
+
+    // Asked for and never taken. Named individually: a list of three indices of
+    // which one silently produced nothing is exactly the shape of the reading
+    // that cost catalog #77 a session.
+    for (const uint32_t want : dumpWanted)
+    {
+        bool taken = false;
+        for (const SurfaceDump& d : dumps)
+            if (d.diagIndex == want) { taken = true; break; }
+        if (taken)
+            continue;
+        if (!anyDrawSeen)
+            lucent::warn("draw", "GEARS_DRAW_SURFACE_DUMP={}: NO dump, and no"
+                " draw was offered to this probe at all. The frame issued"
+                " nothing, so this says nothing about diag draw {}", want, want);
+        else
+            lucent::warn("draw", "GEARS_DRAW_SURFACE_DUMP={}: NO dump was taken."
+                " The frame's draws ran to diag index {} ({} prepared entries),"
+                " so this is 'that draw was never offered', NOT 'that draw wrote"
+                " nothing'. A warning above says why if it was offered and"
+                " refused", want, highestDiag, prepared.size());
+    }
+}
+
 void FrameProbe::Report(const std::vector<PreparedDraw>& prepared)
 {
+    ReportSurfaceDumps(prepared);
     // Checkpoint images, each labelled with how many draws had run.
     const std::string& checkpointDirStr = lucent::config::text("DRAW_DIR");
     const std::filesystem::path outDir = checkpointDirStr.empty()
@@ -502,6 +740,12 @@ void FrameProbe::Release()
     }
     checkpoints.clear();
     checkpointMem.clear();
+    for (const SurfaceDump& d : dumps)
+    {
+        vkDestroyBuffer(R.device, d.buffer, nullptr);
+        vkFreeMemory(R.device, d.mem, nullptr);
+    }
+    dumps.clear();
 }
 
 

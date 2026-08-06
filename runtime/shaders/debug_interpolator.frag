@@ -3,141 +3,149 @@
 // never appear in the native-pass roster: it exists to answer one question that
 // nothing else in this project can see.
 //
-// THE QUESTION (catalog #77). The character renders pure black. Its base pass,
-// ps 0xf662d670789bfac0, emits
+// ============================ HOW TO USE THIS ============================
 //
-//     oC0.xyz = ((r5 * gate) * r4.w) * c254.w        c254.w = 8
-//     gate    = saturate(1 - normalize(r2.xyz).z)    r2 = interpolator o2
-//     r4.w    = tf0.z * 2 - 1                        tf0 = the NORMAL MAP
+//   1. edit the body,
+//   2. RUN tools/gen_native_spv.sh runtime/shaders/debug_interpolator.frag \
+//          runtime/debug_interp_spv.h DebugInterpolatorSpirv
+//   3. rebuild, then GEARS_DRAW_DEBUG_INTERP=f662d670789bfac0.
 //
-// so with c254.w a bright multiplier, only `gate`, `r4.w` or `r5` can zero it.
-// Eight candidate causes have been eliminated by measurement (catalog #77), and
-// the first version of THIS shader eliminated the gate: it reads 0.32-0.42 on
-// the character, i.e. wide open. So the remaining multipliers are r4.w and r5.
+// STEP 2 IS NOT OPTIONAL AND HAS BEEN SKIPPED BEFORE. The runtime compiles
+// runtime/debug_interp_spv.h, a GENERATED blob -- NOT this file. Four
+// measurements in one session were taken against a blob built from a different
+// body, and read as answers (catalog #77). If a run's numbers are identical to
+// the previous run's after you changed the body, that is the symptom.
 //
-// r5 is `albedo * tf1`, where tf1's sample coordinate is computed by twelve
-// instructions from c0..c5. Replicating those here would risk a confidently
-// wrong answer, so this shader does NOT attempt it -- it reads the two things it
-// can read exactly, and the tf1 lead is chased separately.
+// Read it with GEARS_DRAW_SURFACE_DUMP=<diag>, which copies the whole surface
+// in its own float format immediately after the draw. Do NOT read it out of the
+// presented screenshot: that is post-resolve and post-tonemap, and reading it
+// there produced two retracted measurements.
 //
-// Interpolator location N is register rN, exactly as the translated shader
-// receives them (runtime/shaders/base_pass_lightmap.frag reads r0..r4 the same
-// way), and texture bindings follow FETCH ISSUE ORDER within set 3, textures on
-// even bindings and their samplers from 6 -- the convention
-// runtime/shaders/uber_post_blend.frag documents. This shader's issue order is
-// tf0 (instruction 3), tf1 (18), tf2 (19), so tf0 is binding 0 / sampler 6.
+// ======================= WHAT THIS BUILD EMITS ===========================
 //
-// WHAT EACH CHANNEL SHOWS (this build): o2 RAW, remapped so 0.5 is zero and
-// 1.0 is +1 -- R = o2.x, G = o2.y, B = o2.z. The render target is float, so
-// values outside [0,1] are NOT clipped and read back as-is; un-remap with
-// (v - 0.5) * 2. Measured on the character: (-23.47, +13.96, +25.48), |o2| in
-// 34..65.
+//   R = gate     saturate(0.3 - normalize(o2).z)   instruction 25
+//   G = ramp     the tf1 env-ramp fetch             instruction 18
+//   B = -7       THE COVERAGE SENTINEL (see below)
+//   A = 1
 //
-// UE3 settles what o2 SHOULD be, and it matches: GpuSkinVertexFactory.usf:244
-// (the skinned factory this mesh uses) computes TangentCameraVector as
-// tangent-space (CameraPosition - WorldPosition) -- toward the camera, hence
-// positive z facing the viewer, and UNNORMALISED. So o2 is correct and the
-// material's saturate(0.3 - normalize(o2).z) is MEANT to be ~0 facing the
-// camera: draw 460 is a rim term, not the character's diffuse.
+// The material is, at the export,
 //
-// Earlier builds of this shader emitted other things; two are worth keeping in
-// mind because each cost several notes on catalog #77:
-//   * it once computed the gate as saturate(1 - normalize(o2).z), DROPPING the
-//     + c254.x that ucode_reduce's full reduction shows (t42 = t11 + c254.x).
-//     That read 0.32-0.42 -- "open" -- when the real gate is exactly 0. Read the
-//     REDUCTION to its end, never the listing.
-//   * it once replicated the tf1 coordinate chain to test a sign flip. That
-//     experiment was sound and its conclusion was not: the ramp is downstream of
-//     the gate, so lighting it proves nothing about the cause.
+//     oC0.xyz = (albedo' * ramp * (0.8,0.8,1.0) * gate * T7 + c6.xyz) * c254.w
 //
-// Edit the body to emit whatever the current question needs, and edit THIS
-// BLOCK in the same change -- a diagnostic whose comment describes different
-// channels than it writes is the worst instrument in the tree.
+// with c6.xyz = (0,0,0) and c254.w = 8. So those four ARE the multiplicands: if
+// the character is black, at least one of them is zero on its pixels, and this
+// build reads all four at once on the draw's own fragments.
+//
+// ==================== WHY THIS IS A PORT, NOT A MODEL ====================
+//
+// Earlier builds REPLICATED parts of the material -- the gate from the
+// instruction listing (which drops the `+ c254.x` and made it read "open" when
+// it is shut), and the ramp coordinate as a 1D lookup (it is 2D: instruction 18
+// fetches at r4.zy). Both produced retracted findings.
+//
+// This build instead ports instructions 3..25 one for one, and reads the
+// constants from the SAME UBO the translated shader is handed
+// (set 1 binding 2, ascending storage index) rather than pasting measured
+// numbers in. There is nothing left to get wrong about a constant, and the
+// rotating swizzles -- which this material uses on nearly every instruction --
+// are transcribed rather than simplified.
+//
+// Packed constant order for this shader, 10 vec4s, ascending storage index:
+//   K.c[0..5] = c0..c5   K.c[6] = c6   K.c[7] = c253   K.c[8] = c254   K.c[9] = c255
+//
+// SENTINEL MODE. Define DEBUG_SENTINEL to emit a constant vec4(-7) instead.
+// Nothing else in a frame writes -7, so the dumped surface's -7 pixels are
+// EXACTLY this draw's coverage -- which is how a reading gets a denominator
+// instead of a hand-drawn rectangle. Averaging a rectangle over the screenshot
+// is what contaminated three earlier attempts: the box was mostly wall.
 
 layout(set = 3, binding = 0) uniform texture2DArray Tf0Tex;   // the normal map
-layout(set = 3, binding = 2) uniform texture2DArray Tf1Tex;   // the k_8 ramp
-layout(set = 3, binding = 4) uniform texture2DArray Tf2Tex;   // the DIFFUSE
+layout(set = 3, binding = 2) uniform texture2DArray Tf1Tex;   // the env ramp
+layout(set = 3, binding = 4) uniform texture2DArray Tf2Tex;   // the diffuse
 layout(set = 3, binding = 6) uniform sampler       Tf0Samp;
 layout(set = 3, binding = 7) uniform sampler       Tf1Samp;
 layout(set = 3, binding = 8) uniform sampler       Tf2Samp;
 
+layout(set = 1, binding = 2) uniform XeFloatConstants { vec4 c[10]; } K;
+
 layout(location = 0) in vec4 InR0;   // r0: .xy is the material coordinate
 layout(location = 2) in vec4 InR2;   // r2: the vector the gate is built from
-layout(location = 4) in vec4 InR4;   // r4: what the tf1 COORDINATE is built from
+layout(location = 4) in vec4 InR4;   // r4: the tangent-space normal, packed
+
 layout(location = 0) out vec4 OutColor;
 
 void main() {
-    vec3 r2 = InR2.xyz;
-    float len = length(r2);
-    // Guard the divide rather than emitting NaN: a NaN paints whatever the
-    // blend does with it and reads as an answer. Zero length is a real possible
-    // finding, so it gets a defined output instead of being hidden.
-    float nz = len > 0.0 ? (r2.z / len) : 0.0;
-    // THE REAL GATE. An earlier build of this shader computed
-    // saturate(1 - nz) and measured it "open" at 0.32-0.42 -- WRONG, and it
-    // sent three commits after the coordinate instead. ucode_reduce's full
-    // reduction has t42 = nz + c254.x and t70 = saturate(c254.y - t42), i.e.
-    //     gate = saturate(c254.y - c254.x - nz) = saturate(0.3 - nz)
-    // with c254 = (0.7, 1, 0.8, 8). The +0.7 was dropped by reading the listing
-    // instead of the reduction. Both forms are emitted below so the mistake
-    // cannot be repeated silently.
-    float gateWrong = clamp(1.0 - nz, 0.0, 1.0);
-    float gate      = clamp(0.3 - nz, 0.0, 1.0);
+    // Constants, named as the microcode names them.
+    vec4 c0 = K.c[0], c1 = K.c[1], c2 = K.c[2];
+    vec4 c3 = K.c[3], c4 = K.c[4], c5 = K.c[5];
+    vec4 c253 = K.c[7], c254 = K.c[8], c255 = K.c[9];
 
-    // The layer is 0: the translated shader declares its 2D textures as arrays,
-    // so a plain 2D sample here would not match the descriptor and the pipeline
-    // would be rejected rather than quietly reading the wrong thing.
-    // THE COORDINATE'S ACTUAL INPUT. The gate above is built from interpolator
-    // o2, but PS r2 is OVERWRITTEN at instruction 10 before the tf1 coordinate
-    // is built at 11-17 -- that chain starts from o4, via
-    // `mad r5.xyz, r4.xyzz, c253.xxxx, c253.yyyy` with c253 = (2, -1), i.e. the
-    // usual [0,1] -> [-1,1] unpack, then a normalise. So o4 is the input the
-    // failing lookup actually depends on, and o2's length says nothing about it.
-    // THE COORDINATE, replicated EXACTLY from tools/ucode_reduce.py's straight-
-    // line reduction of this shader (t13..t40), not from reading the listing:
-    //   n   = normalize(o4*2-1), permuted   t13=n.z t14=n.x t15=n.y
-    //   t7  = tf0.z*2-1
-    //   t40 = t18*c5.x - t19*c3.x - t17*c4.x   with c0,c1,c2 collapsed
-    //   coord.x = t40 + c254.y      (c254.y = 1)
-    // Constants from GEARS_DRAW_PS_CONSTS on this draw.
-    float tf0z = texture(sampler2DArray(Tf0Tex, Tf0Samp), vec3(InR0.xy, 0.0)).z;
-    vec3 n = normalize(InR4.xyz * 2.0 - 1.0);
-    float t7 = tf0z * 2.0 - 1.0;
-    float t17 = n.y * t7, t18 = n.z * t7, t19 = n.x * t7;
-    float t40 = t18 * (-0.0826) + t19 * 0.9913 - t17 * 0.1024;
-    float coordX      = t40 + 1.0;
-    float coordFlipped = -t40 + 1.0;   // the same chain with n.x's sign flipped
+    vec4 r0 = InR0, r2 = InR2, r4 = InR4, r5 = vec4(0.0);
 
-    float rampAsIs    = texture(sampler2DArray(Tf1Tex, Tf1Samp), vec3(coordX, 0.5, 0.0)).x;
-    float rampFlipped = texture(sampler2DArray(Tf1Tex, Tf1Samp), vec3(coordFlipped, 0.5, 0.0)).x;
+    // 3:  tfetch2D r0.__z_, r0.xy, tf0
+    r0.z = texture(sampler2DArray(Tf0Tex, Tf0Samp), vec3(r0.xy, 0.0)).z;
+    // 4:  dp3 r5.___w, r2.zxyy, r2.zxyy
+    r5.w = dot(r2.zxy, r2.zxy);
+    // 5:  mad r5.xyz_, r4.xyzz, c253.xxxx, c253.yyyy
+    r5.xyz = r4.xyz * c253.x + c253.y;
+    // 6:  mad r4.___w, r0.zzzz, c253.xxxx, c253.yyyy      <- T7
+    r4.w = r0.z * c253.x + c253.y;
+    // 7:  dp3 r4._y__, r5.zxyy, r5.zxyy  +  rsq r4.x___, r_abs[5].w
+    //     Both slots read the PRE-instruction registers, so r4.y is computed
+    //     from r5.xyz and r4.x from r5.w in the same step.
+    float i7y = dot(r5.zxy, r5.zxy);
+    float i7x = inversesqrt(max(abs(r5.w), 1e-30));
+    r4.y = i7y; r4.x = i7x;
+    // 8:  mul r4.x___, r4.xxxx, r2.zzzz  +  rsq r4._y__, r_abs[4].y
+    float i8x = r4.x * r2.z;                              // normalize(o2).z
+    float i8y = inversesqrt(max(abs(r4.y), 1e-30));
+    r4.x = i8x; r4.y = i8y;
+    // 9:  mul r5.xyz_, r5.zxyy, r4.yyyy      -> normalize(o4*2-1), rotated
+    r5.xyz = r5.zxy * r4.y;
+    // 10: mul r2.xyz_, r5.zxyy, r4.wwww
+    r2.xyz = r5.zxy * r4.w;
+    // 11: mul r5.xyz_, r2.xxxx, c1.zyxx
+    r5.xyz = r2.x * vec3(c1.z, c1.y, c1.x);
+    // 12: mad r5.xyz_, r2.zzzz, c0.xzyy, r5.zxyy
+    r5.xyz = r2.z * vec3(c0.x, c0.z, c0.y) + r5.zxy;
+    // 13: mad r5.xyz_, r2.yyyy, c2.yxzz, r5.zxyy
+    r5.xyz = r2.y * vec3(c2.y, c2.x, c2.z) + r5.zxy;
+    // 14: mul r4._yz_, r5.xxxx, c4.yyxx
+    float i14y = r5.x * c4.y, i14z = r5.x * c4.x;
+    r4.y = i14y; r4.z = i14z;
+    // 15: mad r4._yz_, r5.yyyy, c3.xxyy, r4.zzyy
+    float i15y = r5.y * c3.x + r4.z, i15z = r5.y * c3.y + r4.y;
+    r4.y = i15y; r4.z = i15z;
+    // 16: mad r4._yz_, r5.zzzz, c5.yyxx, r4.zzyy
+    float i16y = r5.z * c5.y + r4.z, i16z = r5.z * c5.x + r4.y;
+    r4.y = i16y; r4.z = i16z;
+    // 17: add r4.xyz_, r4.xyzz, c254.xyyy
+    r4.xyz = r4.xyz + vec3(c254.x, c254.y, c254.y);
+    float coordU = r4.z, coordV = r4.y;   // the fetch coordinate itself
+    // 18: tfetch2D r5.xyz_, r4.zy, tf1     <- the env ramp, a 2D fetch
+    r5.xyz = texture(sampler2DArray(Tf1Tex, Tf1Samp), vec3(r4.z, r4.y, 0.0)).xyz;
+    // 19: tfetch2D r0.xyz_, r0.xy, tf2     <- the diffuse
+    r0.xyz = texture(sampler2DArray(Tf2Tex, Tf2Samp), vec3(r0.xy, 0.0)).xyz;
+    // 20: dp3 r5.___w, r0.zxyy, c255.xyzz  <- luminance of the diffuse
+    r5.w = dot(r0.zxy, c255.xyz);
+    // 25: subsc_sat r4.x___, c254.y, r4.x  <- THE GATE
+    float gate = clamp(c254.y - r4.x, 0.0, 1.0);
 
-    // R = the ramp AS WE COMPUTE IT (the material's actual lookup)
-    // G = the ramp with the sign flipped (what it would read if o4.x were negative)
-    // B = coordX/2, so the coordinate itself is legible: >0.5 here means >1.0,
-    //     i.e. clamped past the end of the ramp.
-    // R = the REAL gate, saturate(0.3 - normalize(o2).z). Zero here IS the bug.
-    // G = normalize(o2).z remapped (0.5 = zero), the value the gate turns on.
-    // B = the old, wrong gate, kept so a run cannot be confused with the
-    //     earlier builds that measured it.
-    // THE GATE ITSELF, which is the question after three of catalog #77's
-    // four branches closed: if it NEVER opens anywhere on the mesh, the
-    // character cannot rim-light at any angle and the defect is real; if it
-    // opens at the silhouette, the pass works and the black head-on render is
-    // correct for its camera. All three channels are in [0,1] so an 8-bit
-    // readback is safe here, unlike the o2-raw build.
-    //   R = coordX/2, the env-ramp lookup coordinate. 0.5 here means u = 1.0,
-    //       and the ramp is WHITE only below u ~ 0.3, so R > 0.15 is the black
-    //       two thirds.
-    //   G = n.z remapped (0.5 = zero), where n = normalize(o4*2-1) -- the
-    //       tangent-space normal the coordinate is built from. o2.z measured
-    //       median -0.514, which is the wrong SIGN for a visible surface; this
-    //       asks whether o4 is inverted the same way.
-    //   B = the ramp value we actually fetch. Zero here IS the black character.
-    // THE LAST UNMEASURED MULTIPLICAND. The material is
-    // albedo * ramp * gate * r4.w * c254.w, and gate, ramp and r4.w have all
-    // now been measured non-zero on the pixels this draw writes -- yet the real
-    // shader writes (0,0,0,1) there. The diffuse fetch (tf2, instruction 19)
-    // is the only factor never sampled, because this shader did not declare it.
-    vec3 albedo = texture(sampler2DArray(Tf2Tex, Tf2Samp), vec3(InR0.xy, 0.0)).xyz;
-    OutColor = vec4(albedo, 1.0);
+#ifdef DEBUG_SENTINEL
+    // A value nothing else in the frame writes, so the dump's -7 pixels are
+    // exactly this draw's coverage and the reading below gets a denominator.
+    OutColor = vec4(-7.0);
+#else
+    // BLUE IS THE COVERAGE SENTINEL. Nothing else in a frame writes -7, so the
+    // dump's B == -7 pixels are EXACTLY this draw's fragments, in the SAME run
+    // that carries the values -- every reading gets its own denominator, which
+    // is what three retracted measurements lacked (they averaged a hand-drawn
+    // rectangle of the screenshot that was mostly wall).
+    //
+    // NOT alpha, which would be the natural place: this title's colour surfaces
+    // are k_2_10_10_10 variants whose guest clamp is ALPHA-ONLY, so a sentinel
+    // written there comes back as 0 and the mask silently reads empty. Measured,
+    // not assumed -- the alpha version of this shader dumped 0 covered pixels.
+    OutColor = vec4(gate, r5.x, -7.0, 1.0);
+#endif
 }
