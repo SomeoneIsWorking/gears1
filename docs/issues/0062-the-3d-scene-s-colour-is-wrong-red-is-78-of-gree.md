@@ -1189,3 +1189,85 @@ our own decoder, and 0x311000 is the frame's only endian-0 destination (every
 other is endian 2). A decode fault there would move the dump WITHOUT moving the
 presented image. It cannot affect the primary result -- presented-vs-oracle uses
 no dump -- but it does affect the "our front buffer matches at identity" arm.
+
+### Note (2026-08-06)
+## CORRECTION to the note above, and the founding premise of this entry is WRONG (2026-08-06)
+
+Two things in the previous note need retracting, and one blocker turned out not
+to exist.
+
+### THE ORACLE RUNS WITHOUT THE DISC IMAGE
+
+`oracle_compare.sh` REFUSES without `GEARS_ISO` ("the oracle boots from the ISO;
+our runtime uses the extracted tree"). That is not true of the oracle binary:
+
+    xenia_oracle --store_shaders=false --target=scratch/game/default.xex \
+                 --oracle_out=DIR --oracle_seconds=110 --oracle_interval=10 \
+                 --oracle_input="START@25+8"
+
+boots the extracted tree and produces a full menu filmstrip. The ISO was never
+required. Every "needs a person / needs the disc" note on the oracle in this
+catalog was gated on a restriction the script imposed, not the emulator.
+
+### THE MENUS ARE NOT CORRECT. THEY ARE BLUE, AND THEY SHOULD BE RED.
+
+This entry opens with "menus and the title screen look correct in the same run",
+and everything downstream of that -- "it is content-specific, which means it is
+in the part of the pipeline the menus do not use: the deferred scene path" --
+rests on it. It is wrong.
+
+The SAME STATIC MAIN MENU, both sides, which is the first genuinely
+pixel-comparable pair this project has had (a menu does not move, so the
+"different moments" caveat does not apply to it at all):
+
+    ours    scratch/oq3/frame_00600.ppm    R/G 0.83   B/G 2.08    R mean 0.041
+    theirs  scratch/oq5/frame_0060s.png    R/G 5.13   B/G 0.74    R mean 0.183
+
+Identical layout, identical text, identical menu items. Theirs is the Crimson
+Omen red the game is known for. Ours is blue. chroma_compare puts identity at
+0.410 and an R/B exchange at 0.049-0.062 against a null band of 0.0152.
+
+So the defect is NOT confined to the deferred scene path, and the reasoning that
+put it there is void. #77's difference list and this entry's ceiling are still
+about gameplay, but the CHANNEL question is frame-class-independent.
+
+### RETRACTED: that this is a whole-frame exchange, or the present path's choice
+
+The previous note framed it as our present path versus the oracle. It is not,
+and one observation kills that: IN OUR OWN BLUE MENU FRAME, THE XBOX BUTTON
+ICONS ARE THE RIGHT COLOUR. The A glyph is green and the B glyph is red
+(scratch/oq3/buttons.png, magnified from frame_02400 at 600,355..880,395; the
+most-red pixel in that crop is (255,222,205) inside the B disc). Xbox button
+colours are absolute ground truth and they are unaffected.
+
+A whole-frame R/B exchange cannot leave the B button red. So:
+
+  * the present path is NOT applying one swap too few -- and the guest's
+    ZYX1 scanout constant already said so;
+  * part of the frame is exchanged and part is not, which is a per-texture or
+    per-pass fault, not a per-frame one;
+  * the "contradiction" the previous note recorded between the guest's fetch
+    constant and the oracle DISSOLVES. Both are right. The exchange happens
+    upstream of the front buffer, in what gets drawn INTO it.
+
+Also retracted from that note: the caveat about the resolve dump's endian. The
+dump is a readback of the HOST resolve-target image (gpu_draw.cpp ~2107, a
+vkCmdCopyImageToBuffer from r.image), not a decode of guest memory, so guest
+endian cannot affect it. The caveat named a mechanism that does not apply.
+
+### WHERE THIS GOES NEXT, and why the menu is the right place to work
+
+The menu frame is ~170 draws and one surface; the gameplay frame is 744 draws
+and five formats on one EDRAM base. The same channel fault reproduces on both,
+so root-cause it on the cheap one.
+
+The obvious suspect -- that we ignore the texture fetch constant's swizzle -- is
+ALREADY RULED OUT: gpu_draw_xlate.cpp:1443 composes guest swizzle with the host
+format's order exactly as Xenia's GuestToHostSwizzle does, and
+gpu_draw_textures.cpp:263 puts it on the image view's VkComponentMapping, with
+the swizzle bits in the texture cache key. Do not re-derive that.
+
+What is NOT ruled out and is next: which draws are exchanged and which are not.
+The button glyphs are right and the background art is wrong in the SAME frame,
+so a per-draw split exists and is findable -- capture the menu frame and bisect
+it, rather than reasoning about formats.
