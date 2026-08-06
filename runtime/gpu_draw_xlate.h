@@ -48,6 +48,26 @@ struct ShaderVertexBinding
     uint32_t strideWords = 0;   // stride of the whole binding, in dwords
 };
 
+// What a VERTEX shader's MICROCODE ALONE says about how it transforms its
+// vertices -- no registers, no draw, no translation, so it is a pure function of
+// the microcode and is cached by hash exactly as the analysis is.
+//
+// `floatDynamicAddressing` is the load-bearing field: it is set when the shader
+// reads its float constants through the address register (a0) rather than at
+// fixed indices, which is what a BONE PALETTE lookup compiles to. A rigid mesh
+// has no reason to index its constants dynamically, so this separates a skinned
+// character from static world geometry from the microcode itself, rather than
+// from a guess at what the constant VALUES look like.
+struct VertexShaderShape
+{
+    bool ok = false;                     // false: the microcode did not analyse
+    bool floatDynamicAddressing = false; // indexes float constants through a0
+    uint32_t floatCount = 0;             // float4 constants the shader reads
+};
+
+VertexShaderShape AnalyzeVertexShaderShape(const uint8_t* ucode, size_t size,
+                                           uint64_t hash);
+
 struct ShaderXlate
 {
     bool ok = false;
