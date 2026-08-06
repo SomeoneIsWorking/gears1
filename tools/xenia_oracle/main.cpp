@@ -35,6 +35,7 @@
 #include <thread>
 #include <vector>
 
+#include "xenia/gpu/command_processor.h"
 #include "xenia/base/console_app_main.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/filesystem.h"
@@ -87,6 +88,28 @@ DEFINE_int32(oracle_interval, 10,
 // on that tool means anything. Neither answer is available by inspection.
 DEFINE_int32(oracle_trace_at, 0,
              "Seconds in at which to capture a Xenia GPU trace of one frame.",
+             "Oracle");
+
+// FRAME-DRIVEN MODE. With this set, --oracle_input's numbers are GUEST FRAMES
+// rather than seconds, captures happen at frame indices rather than wall-clock
+// offsets, and the run ends after --oracle_frames frames instead of
+// --oracle_seconds. That is what lets a comparison against our renderer mean
+// something per pixel: both sides are driven and sampled by the guest's own
+// frame counter, so frame N is the same game moment on both for as long as the
+// title is deterministic under identical input.
+DEFINE_bool(oracle_by_frame, false,
+            "Drive input and captures by GUEST FRAME instead of wall clock.",
+            "Oracle");
+DEFINE_int32(oracle_frames, 3000,
+             "With --oracle_by_frame: guest frames to run before stopping.",
+             "Oracle");
+DEFINE_int32(oracle_frame_interval, 300,
+             "With --oracle_by_frame: guest frames between captures.",
+             "Oracle");
+DEFINE_int32(oracle_frame_timeout, 240,
+             "With --oracle_by_frame: seconds to wait for the counter to reach "
+             "the next target before giving up. A title that hangs has to end "
+             "the run, not wedge it forever.",
              "Oracle");
 
 DEFINE_string(oracle_input, "START@25+8,A@30+2",
@@ -148,6 +171,7 @@ int oracle_main(const std::vector<std::string>& args) {
   }
 
   std::vector<gears::ScriptedPress> presses;
+  gears::ScriptedInputDriver* scripted_driver = nullptr;
   if (!cvars::oracle_input.empty()) {
     std::string error;
     if (!gears::ParseInputScript(cvars::oracle_input, presses, error)) {
@@ -187,12 +211,18 @@ int oracle_main(const std::vector<std::string>& args) {
       []() -> std::unique_ptr<gpu::GraphicsSystem> {
         return std::make_unique<gpu::vulkan::VulkanGraphicsSystem>();
       },
-      [&presses](ui::Window* window)
+      [&presses, &scripted_driver](ui::Window* window)
           -> std::vector<std::unique_ptr<hid::InputDriver>> {
         std::vector<std::unique_ptr<hid::InputDriver>> drivers;
         if (!presses.empty()) {
-          drivers.push_back(std::make_unique<gears::ScriptedInputDriver>(
-              window, 0, presses));
+          auto driver =
+              std::make_unique<gears::ScriptedInputDriver>(window, 0, presses);
+          // Kept so the frame tick source can be attached once the graphics
+          // system exists. The emulator owns the driver, so this is a borrowed
+          // pointer and must not outlive it -- it is only used below, while the
+          // emulator is alive.
+          scripted_driver = driver.get();
+          drivers.push_back(std::move(driver));
         }
         return drivers;
       });
@@ -212,6 +242,87 @@ int oracle_main(const std::vector<std::string>& args) {
   const std::filesystem::path out_dir = cvars::oracle_out;
   std::error_code ec;
   std::filesystem::create_directories(out_dir, ec);
+
+  // FRAME-DRIVEN: hand the input driver the guest's own frame counter, so the
+  // schedule advances with the game rather than with the wall clock.
+  if (cvars::oracle_by_frame) {
+    if (!scripted_driver) {
+      XELOGE("oracle: --oracle_by_frame needs a scripted input schedule, and "
+             "--oracle_input is empty. Nothing would drive the title, so this "
+             "would produce a filmstrip of the title screen indexed by frame. "
+             "Refusing.");
+      return 5;
+    }
+    gpu::GraphicsSystem* gs = emulator->graphics_system();
+    scripted_driver->SetFrameTickSource([gs]() -> uint64_t {
+      gpu::CommandProcessor* cp = gs ? gs->command_processor() : nullptr;
+      return cp ? cp->guest_swap_count() : 0;
+    });
+    XELOGI("oracle: input and captures are driven by the GUEST FRAME COUNTER; "
+           "--oracle_input numbers are frames, not seconds");
+  }
+
+  if (cvars::oracle_by_frame) {
+    const int32_t total = std::max(1, cvars::oracle_frames);
+    const int32_t step = std::max(1, cvars::oracle_frame_interval);
+    gpu::GraphicsSystem* gs = emulator->graphics_system();
+    int captured_f = 0, attempted_f = 0;
+    bool trace_requested_f = false;
+    uint64_t last_seen = 0;
+    for (int32_t target = step; target <= total; target += step) {
+      // Wait for the guest to REACH this frame. A title that stops presenting
+      // must end the run rather than wedge it, and the timeout says which
+      // frame it died at instead of leaving an empty directory to interpret.
+      const auto deadline =
+          std::chrono::steady_clock::now() +
+          std::chrono::seconds(std::max(1, cvars::oracle_frame_timeout));
+      for (;;) {
+        gpu::CommandProcessor* cp = gs ? gs->command_processor() : nullptr;
+        last_seen = cp ? cp->guest_swap_count() : 0;
+        if (last_seen >= static_cast<uint64_t>(target)) {
+          break;
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+          XELOGE("oracle: STOPPED at guest frame {} waiting for frame {} -- "
+                 "the title stopped presenting. {} of {} captures were taken; "
+                 "the filmstrip is SHORT, not complete.",
+                 last_seen, target, captured_f, attempted_f);
+          target = total + 1;  // end the outer loop
+          break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      if (target > total) {
+        break;
+      }
+      ++attempted_f;
+      if (cvars::oracle_trace_at > 0 && !trace_requested_f &&
+          target >= cvars::oracle_trace_at) {
+        trace_requested_f = true;
+        XELOGI("oracle: requesting a Xenia frame trace at guest frame {}",
+               target);
+        emulator->graphics_system()->RequestFrameTrace();
+      }
+      // Named by the frame index the capture was TAKEN AT, which is the key the
+      // comparison joins on. The counter may have advanced past the target
+      // while the readback ran; the name records the target, and the log the
+      // actual, so a skew is visible rather than assumed away.
+      if (WriteFramePng(emulator->graphics_system(),
+                        out_dir / fmt::format("frame_{:06d}.png", target))) {
+        ++captured_f;
+        XELOGI("oracle: captured guest frame {} (counter was {})", target,
+               last_seen);
+      } else {
+        XELOGI("oracle: nothing to capture at guest frame {} -- the title has "
+               "not presented yet",
+               target);
+      }
+    }
+    XELOGI("oracle: captured {} of {} attempts over {} guest frames into {}",
+           captured_f, attempted_f, total, xe::path_to_utf8(out_dir));
+    emulator.reset();
+    return captured_f > 0 ? 0 : 6;
+  }
 
   const int32_t seconds = std::max(1, cvars::oracle_seconds);
   const int32_t interval = std::max(1, cvars::oracle_interval);

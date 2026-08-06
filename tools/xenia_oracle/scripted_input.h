@@ -14,6 +14,7 @@
 #define GEARS_XENIA_ORACLE_SCRIPTED_INPUT_H_
 
 #include <chrono>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -59,11 +60,30 @@ class ScriptedInputDriver final : public xe::hid::InputDriver {
   // zero has not been driven at all, however healthy its log looks.
   uint32_t presses_reported() const { return presses_reported_; }
 
+  // DRIVE THE SCHEDULE BY GUEST FRAMES INSTEAD OF WALL CLOCK.
+  //
+  // Two emulators of the same title run at different speeds and load at
+  // different rates, so a schedule keyed to the wall clock reaches a different
+  // point in the game on each -- which is exactly why a pixel metric between
+  // our filmstrip and the oracle's has always been meaningless. Keyed to the
+  // guest's OWN frame counter, "frame 1500" is the same game moment on both
+  // sides for as long as the title is deterministic under identical input.
+  //
+  // `source` returns the current guest frame; the schedule's numbers are then
+  // read as frames rather than milliseconds. Unset, the driver uses the clock
+  // exactly as before.
+  void SetFrameTickSource(std::function<uint64_t()> source) {
+    tick_source_ = std::move(source);
+  }
+  bool frame_driven() const { return static_cast<bool>(tick_source_); }
+
  private:
-  uint16_t ButtonsAt(std::chrono::milliseconds elapsed) const;
+  uint16_t ButtonsAt(uint64_t tick) const;
+  uint64_t NowTick() const;
 
   std::vector<ScriptedPress> presses_;
   std::chrono::steady_clock::time_point start_;
+  std::function<uint64_t()> tick_source_;
   uint16_t last_buttons_ = 0;
   uint32_t packet_number_ = 1;
   uint32_t presses_reported_ = 0;
