@@ -1621,3 +1621,83 @@ all four paths.
 Difference 1 (the black character) is NOT in this category: it reproduces on
 every capture that contains a character, and the oracle frame captured today
 shows Marcus clearly lit. That one is real and still unexplained.
+
+### Note (2026-08-06)
+## The black character is localised to ONE texture fetch: the env-lighting ramp lookup
+
+Previous notes established that no renderer-side cause could be found. That was
+because nobody had made the shader's own arithmetic observable. Forcing its
+constants one at a time does exactly that, and the answer is now narrow.
+
+### The draw OVERWRITES the pixel with black; it does not merely fail to add
+
+`GEARS_DRAW_SURFACE=0x400 GEARS_DRAW_PIXEL_TRACE=150,300` on bright.gfr:
+
+    after 386 draws = (0.017837, 0.016708, 0.019882, 1)  <- draw 385
+    after 461 draws = (0, 0, 0, 1)                        <- draw 460, the character
+
+Draw 460 is opaque and writes zero. So the question is exactly "why is this
+shader's output zero", not "which pass is missing".
+
+### The output reaches the screen, so nothing downstream is discarding it
+
+`GEARS_DRAW_PS_CONST_SET='f662d670789bfac0:6=1,1,1,1'` forces c6, the additive
+term of instruction 27 (`mad r4.xyz, r4.zxyy, r4.wwww, c6.xyzz`), which is
+normally (0,0,0). The character becomes a **solid white silhouette** covering his
+whole body. Depth, blend, colour mask and the pass itself are all fine.
+
+### It is a TEXTURE SAMPLE that is zero
+
+`GEARS_DRAW_NOTEX=1` replaces every texture with a white stub. The character
+region (x 60-240, y 250-520) goes from **max 0 to max 175, mean 9.7**. With real
+textures the same region is exactly zero except a handful of texels -- confirmed
+by raising the shader's final multiplier c254.w from 8 to 2000, which lights only
+a few isolated specks. So the product is a true zero, not a small number.
+
+Of the three textures the shader samples, two are healthy:
+
+    fc0  0x1e8f000  k_DXT1 256x256  the NORMAL MAP -- decodes to a correct
+                                    tangent-space map (neutral purple-blue, no
+                                    channel swap), tool: tools/decode_bc.py
+    fc2  0x1722000  k_DXT1 256x256  diffuse, 97.8% non-zero
+    fc1  0x32eb000  k_8    256x256  THE ENV/LIGHTING RAMP
+
+### The ramp, and why our lookup lands in its black half
+
+`fc1` is a horizontal gradient: **white for u below about 0.3, a short ramp, then
+black for the remaining two thirds.** 49% of its texels are zero, uniformly by
+row, because the gradient runs along u.
+
+The shader samples it at instruction 18, `tfetch2D r5.xyz_, r4.zy, tf1`, so
+u = r4.z. Instructions 14-16 build r4.yz by transforming the normal through the
+orthonormal rows in c3/c4/c5 -- note the accumulator swizzle `r4.zzyy` swaps the
+two components at every step, so the terms pair up as
+r4.z = r5.x*c4.x + r5.y*c3.x + r5.z*c5.x -- and instruction 17 then adds
+c254.y = 1. The result is **u = n + 1, which spans [0,2] for a unit normal**,
+sampled with clamp-to-edge. Everything above u = 0.3 reads black, so for almost
+every normal on the character this fetch returns 0 and the whole product with it.
+
+The constant identification is checked, not assumed: the shader packs 10 vec4s
+and the disassembly uses c0..c6 plus c253/c254/c255, so packed index 7 = c253 =
+(2, -1, 0, 0) -- and instruction 5 uses exactly c253.x/c253.y as `r4*2 - 1`, the
+standard normal-map decode. That pins the mapping, hence index 8 = c254.
+
+### What is NOT yet established, and it is the whole remaining question
+
+Whether u is wrong because WE compute it wrong, or because the guest handed the
+shader a constant/interpolator the console would not have. Both remain open:
+
+  * our texture ADDRESS MODE for this fetch is reported as clamp-to-edge. A
+    mirrored mode would fold u = 1.7 back into the white band and light the
+    character. `runtime/gpu_draw_textures.cpp:76-85` maps Xenia's ClampMode
+    enum, and the two half-border modes (4, 5) are collapsed onto edge/mirror-
+    edge -- that collapse is the first thing to check against the real fetch
+    constant bits.
+  * or r2, the interpolator feeding the normal chain, is wrong -- which would
+    ALSO explain the rim term separately measured at ~0 (`saturate(0.3 - N.V)`
+    with our N.V ~ 1). One wrong o2 would produce both symptoms, and o2 comes
+    out of a 440-instruction vertex shader.
+
+The second is the more economical explanation because it accounts for both
+zeros at once. Either way the search is now one fetch and one interpolator wide,
+not "the character is black".
