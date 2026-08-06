@@ -30,7 +30,12 @@ bool g_haveWindow = false;
 // entry's time.
 struct ScriptStep
 {
+    // The step's time. `byFrame` decides what `at` MEANS: guest frames when the
+    // token was written "f1500:", milliseconds otherwise. Both are monotonic
+    // and the cursor logic below is identical for the two, so the only place
+    // the distinction exists is where "now" is read.
     uint64_t atMs = 0;
+    bool byFrame = false;
     uint16_t buttons = 0;
     // Analogue stick deflections. Buttons alone cannot drive this title: Gears
     // moves and aims on the STICKS, so a script limited to buttons can walk the
@@ -38,6 +43,7 @@ struct ScriptStep
     int16_t thumbLX = 0, thumbLY = 0, thumbRX = 0, thumbRY = 0;
 };
 std::vector<ScriptStep> g_script;
+uint64_t (*g_frameSource)() = nullptr;
 size_t g_scriptCursor = 0;
 std::chrono::steady_clock::time_point g_start;
 
@@ -116,7 +122,16 @@ void ParseScript(std::string_view text)
             continue;
         }
         ScriptStep entry;
-        const std::string_view timeText = step.substr(0, colon);
+        std::string_view timeText = step.substr(0, colon);
+        // "f1500:A" is guest FRAME 1500; "1500:A" is 1500 ms. A script that
+        // mixes the two is accepted -- each step carries its own unit -- but
+        // the report below says how many of each there are, because a mixed
+        // script is nearly always a typo.
+        if (!timeText.empty() && (timeText.front() == 'f' || timeText.front() == 'F'))
+        {
+            entry.byFrame = true;
+            timeText.remove_prefix(1);
+        }
         if (std::from_chars(timeText.data(), timeText.data() + timeText.size(),
                 entry.atMs).ec != std::errc{})
         {
@@ -229,6 +244,8 @@ PadState CurrentPad(uint32_t& packetNumber)
     return g_pad;
 }
 
+void SetGuestFrameSource(uint64_t (*source)()) { g_frameSource = source; }
+
 void UpdateScriptedInput()
 {
     // Called both from the presenter thread and from the guest's own
@@ -240,6 +257,32 @@ void UpdateScriptedInput()
         return;
     const uint64_t elapsed = uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now() - g_start).count());
+    uint64_t frames = 0;
+    if (g_frameSource)
+    {
+        frames = g_frameSource();
+    }
+    else
+    {
+        // Said once, and only if the script actually has a frame-indexed step:
+        // a millisecond-only script needs no source and must not warn.
+        static bool warned = false;
+        if (!warned)
+            for (const ScriptStep& st : g_script)
+                if (st.byFrame)
+                {
+                    warned = true;
+                    lucent::warn("input", "GEARS_INPUT_SCRIPT has frame-indexed"
+                        " step(s) but no guest frame source is registered, so"
+                        " NONE of them will ever fire. This run is not being"
+                        " driven the way the script says it is");
+                    break;
+                }
+    }
+    // Each step is due against its OWN unit.
+    const auto due = [&](const ScriptStep& s2) {
+        return s2.byFrame ? (frames >= s2.atMs) : (elapsed >= s2.atMs);
+    };
 
     // EVERY DUE STEP IS CONSUMED AND ONLY THE LAST IS APPLIED, so a step whose
     // successor is already due is SKIPPED -- and it used to be skipped silently.
@@ -253,7 +296,7 @@ void UpdateScriptedInput()
     bool fired = false;
     uint64_t skipped = 0;
     uint64_t firstSkippedAt = 0;
-    while (g_scriptCursor < g_script.size() && g_script[g_scriptCursor].atMs <= elapsed)
+    while (g_scriptCursor < g_script.size() && due(g_script[g_scriptCursor]))
     {
         if (fired)
         {

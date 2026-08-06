@@ -2221,6 +2221,22 @@ void StartCommandProcessor()
 namespace gears
 {
 
+// GUEST FRAMES PRESENTED. The counter VdSwap advances, exposed so the input
+// script can be driven by it instead of by the wall clock: two emulators of one
+// title run at different speeds, so a schedule keyed to the clock reaches a
+// different point in the game on each. Keyed to this, "frame 1500" is the same
+// game moment on both sides. The oracle exposes the same thing
+// (CommandProcessor::guest_swap_count) and counts the same event.
+uint64_t GuestFramesPresented() { return g_frameCount.load(std::memory_order_relaxed); }
+
+// Registered at static init: the pointer is all input.cpp needs, and handing it
+// over here keeps the dependency one-way (GPU -> input), so the kernel tests
+// still link input.cpp without this file.
+const bool g_frameSourceRegistered = [] {
+    gears::SetGuestFrameSource(&GuestFramesPresented);
+    return true;
+}();
+
 // The console's memory-mapped device window. Guest code reaches it through the
 // MMIO macros and through byte-reversed loads and stores (`lwbrx`/`stwbrx`,
 // because device registers are little-endian), never through a Vd* call. The

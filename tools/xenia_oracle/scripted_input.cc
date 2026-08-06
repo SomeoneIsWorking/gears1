@@ -97,21 +97,37 @@ ScriptedInputDriver::~ScriptedInputDriver() = default;
 xe::X_STATUS ScriptedInputDriver::Setup() { return X_STATUS_SUCCESS; }
 
 uint16_t ScriptedInputDriver::ButtonsAt(
-    std::chrono::milliseconds elapsed) const {
+    uint64_t tick) const {
   uint16_t buttons = 0;
   for (const ScriptedPress& press : presses_) {
-    if (elapsed < press.at) {
+    const uint64_t at = static_cast<uint64_t>(press.at.count());
+    const uint64_t hold = static_cast<uint64_t>(press.hold.count());
+    const uint64_t repeat = static_cast<uint64_t>(press.repeat.count());
+    if (tick < at) {
       continue;
     }
-    auto since = elapsed - press.at;
-    if (press.repeat.count() > 0) {
-      since = std::chrono::milliseconds(since.count() % press.repeat.count());
+    uint64_t since = tick - at;
+    if (repeat > 0) {
+      since = since % repeat;
     }
-    if (since < press.hold) {
+    if (since < hold) {
       buttons |= press.button;
     }
   }
   return buttons;
+}
+
+// The current tick: the guest's frame counter when one has been supplied,
+// otherwise milliseconds since the driver was made. Both are monotonic, which
+// is all ButtonsAt needs.
+uint64_t ScriptedInputDriver::NowTick() const {
+  if (tick_source_) {
+    return tick_source_();
+  }
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - start_)
+          .count());
 }
 
 xe::X_RESULT ScriptedInputDriver::GetCapabilities(
@@ -134,17 +150,16 @@ xe::X_RESULT ScriptedInputDriver::GetState(uint32_t user_index,
   if (user_index != 0) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
-  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-      std::chrono::steady_clock::now() - start_);
-  const uint16_t buttons = ButtonsAt(elapsed);
+  const uint64_t tick = NowTick();
+  const uint16_t buttons = ButtonsAt(tick);
   if (buttons != last_buttons_) {
     // The packet number is how a title notices anything happened; leaving it
     // constant makes every press invisible however correct the button mask is.
     ++packet_number_;
     if (buttons && !last_buttons_) {
       ++presses_reported_;
-      XELOGI("oracle input: button mask {:04X} at {}ms (press {})", buttons,
-             elapsed.count(), presses_reported_);
+      XELOGI("oracle input: button mask {:04X} at {} {} (press {})", buttons,
+             tick, tick_source_ ? "guest frames" : "ms", presses_reported_);
     }
     last_buttons_ = buttons;
   }
