@@ -57,6 +57,13 @@ def main(argv):
     ap = argparse.ArgumentParser(add_help=True, description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--dir", default="scratch/oracle/lockstep")
+    ap.add_argument("--ours", default="ours",
+                    help="which of our runs to use, 'ours' or 'ours2'. The two"
+                         " are the determinism control arm and they do not"
+                         " always agree on how far they got -- a measured"
+                         " 9-of-25 against 25-of-25 on the same walk -- so"
+                         " which one is being shown has to be a stated choice,"
+                         " never whichever happens to be first")
     ap.add_argument("--out", default=None)
     ap.add_argument("--gamma", type=float, default=0.3,
                     help="exponent applied to luminance; 1 leaves the image alone")
@@ -84,7 +91,7 @@ def main(argv):
               f" compared.")
         return 1
 
-    ours = collect(root / "ours", OURS_RE)
+    ours = collect(root / args.ours, OURS_RE)
     theirs = collect(root / "theirs", THEIRS_RE)
     if not ours or not theirs:
         print(f"REFUSING: ours has {len(ours)} frame(s) and theirs has"
@@ -96,7 +103,7 @@ def main(argv):
     only_ours = sorted(set(ours) - set(theirs))
     only_theirs = sorted(set(theirs) - set(ours))
 
-    print(f"ours   {len(ours)} frames, {min(ours)}..{max(ours)}")
+    print(f"{args.ours:<6} {len(ours)} frames, {min(ours)}..{max(ours)}")
     print(f"theirs {len(theirs)} frames, {min(theirs)}..{max(theirs)}")
     print(f"shared {len(shared)} frame index(es)"
           + (f" in [{args.lo},{args.hi}]" if args.hi < (1 << 30) or args.lo else ""))
