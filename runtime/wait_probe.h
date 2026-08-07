@@ -56,6 +56,8 @@ void StartStallDetector();
 // independently: a run has been seen where the renderer kept drawing at full
 // rate while the title's audio pipeline stopped dead, and a single global
 // progress signal calls that healthy. `channel` must be a string literal.
+uint64_t GuestKernelCalls();
+
 void NoteGuestProgress(const char* channel);
 
 // Times one potentially-blocking region. Free (one thread-local load and a

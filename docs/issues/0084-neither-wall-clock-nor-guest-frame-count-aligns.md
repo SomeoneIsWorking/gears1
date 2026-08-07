@@ -271,3 +271,137 @@ run nondeterministically, which may or may not matter and has not been measured.
 
 Roughly two runs in five stall early (max guest frame 300) under every mode
 tried. That is catalog #44, not this work.
+
+### Note (2026-08-07)
+### Note (2026-08-07) -- third design: pin vblanks to presents. Starves after 3 frames.
+
+The note above stated the problem exactly: guest time must advance BEFORE the
+first present (or boot deadlocks) and at a fixed rate PER PRESENT afterwards (or
+the picture freezes), and said those conflict only during boot. So the obvious
+design is to separate the phases: free-run vblanks until the first present, then
+allow at most `presents + slack` of them. Built as
+`GEARS_GUEST_CLOCK_TRIGGER=vblank-paced`. It does not work, and the reason kills
+the whole family.
+
+    vblank-paced, slack 2    0 presents past boot
+    vblank-paced, slack 64   0 presents past boot
+
+The gate now reports why instead of leaving it to be inferred from a dump count:
+
+    vblank-paced is STARVED: 67 vblanks delivered since the first present,
+    budget 67 (3 presents + 64 slack), and the guest has not presented again.
+
+**Presents are not a proxy for time.** The title presents three times, then
+loads -- and while loading it presents rarely and still expects time to pass.
+Any budget expressed in presents starves there, and no constant slack fixes it
+because the deficit grows without bound during a load. On hardware the same
+title gets 60 vblanks a second regardless of whether it is presenting, and its
+present rate floats underneath that (measured: ~27 fps against 60 Hz vblank in
+normal play, far less while loading).
+
+### The three failures, and the one thing they have in common
+
+    present-triggered   boot deadlocks         the boot spin waits on TIME
+    vblank-freerun      the picture freezes    guest time outruns the rendering
+    vblank-paced        starves after 3 frames presents are not a proxy for time
+
+Guest time has to advance independently of presents (or 1 and 3), but at a rate
+that does not outrun the work actually being done (or 2). Presents, vblanks and
+the host clock have each now been tried as the anchor and each fails one of
+those two requirements.
+
+### What is left, and it is a different kind of anchor
+
+Derive vblank delivery from a deterministic measure of GUEST WORK rather than
+from presents or from the host clock -- deliver a vblank every K guest kernel
+calls, say, with K set so the rate is about 60 Hz under typical load. That
+satisfies both requirements by construction: loading does work, so time advances
+during a load; rendering does work, so time cannot outrun it.
+
+The open question, and it should be measured before the design is built: the
+kernel-call count is summed across all guest threads, and their interleaving is
+still scheduled by the host, so the count at a given point is not obviously
+reproducible. Cheap to check -- run twice and compare the kernel-call count at
+each present -- and that measurement should come BEFORE any more emulator work.
+
+### An instrument defect fixed on the way
+
+"0 frames" was being read as "never presented" when the dump interval was 300
+frames; the paced mode was in fact presenting 3 times and then starving. The
+diagnosis was wrong for one round because of it. Progress is now measured with
+`GEARS_DRAW_FRAME_REPORT_EVERY=10`, and the gate reports its own starvation.
+
+### Note (2026-08-07)
+### Note (2026-08-07) -- the fourth candidate is dead too, and the reason is structural
+
+The note above named the next design (derive the clock from a deterministic
+measure of GUEST WORK rather than from presents or the host clock) and said the
+prerequisite measurement -- is guest work itself reproducible? -- should come
+BEFORE building it. It has been made, and the answer is no.
+
+`GEARS_WORK_TRACE=<path>` logs the guest's kernel-call count at every present.
+Two runs, same binary, same input script, both under a fixed-step clock:
+
+    present      run 1            run 2         difference
+          1          1,006            1,006      0.00%
+          2        165,119          164,352      0.46%
+          3        193,547          208,850      7.91%
+          5        297,935          367,338     23.29%
+         10        454,228          535,529     17.90%
+        100      2,598,721        2,706,966      4.17%
+      1,000     64,598,380       72,536,681     12.29%
+      5,000    351,719,228      393,047,733     11.75%
+     20,000  1,547,925,251    1,585,164,696      2.41%
+
+Of 22,209 presents common to both runs, the count matches at exactly **one** --
+the first. By the third present the two runs differ by 8%, and they stay roughly
+12% apart for the rest of the run.
+
+### Why this is bigger than the fourth design
+
+The kernel-call count is summed across all guest threads, and those threads run
+on host threads that the OS schedules. How much work has happened by present N
+therefore depends on host scheduling, and **any clock anchored to observed guest
+activity inherits that**. This is not a property of kernel calls specifically;
+it would be equally true of retired blocks, instructions, or any other aggregate.
+
+So the conclusion is structural, and it applies to every design in this entry:
+
+**A deterministic guest clock requires deterministic SCHEDULING of the guest's
+threads.** As long as the title's threads are real host threads preempted by the
+OS, no choice of clock anchor -- presents, vblanks, host time, or guest work --
+makes two runs reach the same state at the same frame. Four anchors have now
+been tried and each fails for its own reason, but this is the reason underneath
+all of them.
+
+That is a serialised or cooperatively-scheduled guest, on BOTH emulators. It is
+a large piece of work and it should be a deliberate decision, not something a
+harness session drifts into.
+
+### What this means for the comparison the entry exists to enable
+
+A per-pixel, frame-indexed cross-emulator comparison is BLOCKED on that
+scheduling work and should not be attempted before it. The alternative, which
+needs none of it, is to compare things that do not require frame-exact
+alignment: the set of shaders and passes each side runs, per-pass draw counts,
+the resolve structure, regional colour statistics, and content-aligned frame
+matching (`tools/oracle_cache.py match`) instead of index-aligned. Those answer
+"what does the game do differently" without requiring the two runs to be the
+same run.
+
+### Note (2026-08-07)
+### Note (2026-08-07) -- the audio-pump control, which was the obvious objection
+
+The claim above (guest work is not reproducible, so no clock anchored to it can
+be) had one cheap alternative explanation: our audio pump submits at a fixed
+187.5 Hz against REAL time, so it is a host-paced guest thread that would inject
+nondeterminism into the kernel-call count on its own, regardless of scheduling in
+general. Run with `GEARS_AUDIO_PUMP=0`:
+
+    audio pump ON    identical at 1 of 22,209 presents, ~12% apart by present 1,000
+    audio pump OFF   identical at 1 of 18,500 presents,  ~3% apart by present 1,000
+
+So the audio pump is roughly three quarters of the MAGNITUDE and none of the
+CAUSE. With it disabled the count still matches at exactly one present out of
+eighteen thousand. The structural conclusion stands: it is the scheduling of the
+guest's threads, not any one host-paced thread.
