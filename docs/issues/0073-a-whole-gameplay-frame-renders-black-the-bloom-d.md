@@ -5,7 +5,7 @@ status: open
 symptom: a captured gameplay frame renders completely black (0 of 921600 px non-black) although every draw issues and the scene colour target is full of content; other captures of the same scene render fine
 tags: gpu,draw,post,black,frame,constants,guest,native-renderer
 created: 2026-08-05
-updated: 2026-08-06
+updated: 2026-08-07
 ---
 
 ## Symptom
@@ -372,3 +372,36 @@ of one invalid operation. They may be a bone-palette region the shader never
 indexes, in which case they are harmless and normal. **This is an observation,
 not a finding**: no capture that renders was checked for the same pattern in a
 region its shaders do not read, so nothing here says these are abnormal.
+
+### Note (2026-08-07)
+## 2026-08-07: this is the LIVE first gameplay render, not one bad capture
+
+Reproduced without a capture file, on the frame selected BY CONTENT (the frame
+after the first with >= 400 draws -- see #89 and GEARS_DRAW_FRAME_MIN_DRAWS),
+i.e. the first gameplay render of a fresh boot + menu walk. Three independent
+runs, three different guest frame indices (2926, 2935, 2942), same result:
+
+    frame 2942, 757 draws:  0 of 921600 px non-black, 921600 px written
+    pixel trace (640,360) on surface 0x2d0, one sample after EVERY draw:
+      after 502 draws = (0.0273, 0.0273, 0.0332)   <- draw 682 ps 0x63c971f5e9d59913
+      after 558 draws = (0, 0, 0)                  <- draw 743 ps 0x9610bf8038af9aaf
+
+So the same shader this page already names -- UE3's uber post-process blend --
+takes a lit frame to black, live, on the frame the game starts on. The constant
+census on that same frame reports exactly one NaN vec4 in the whole frame, in
+that shader, at the same index:
+
+    pixel shader 0x9610bf8038af9aaf  c[8] = [ffc00000 ffc00000 ffc00000 00000000]
+
+The per-resolve dumps of that frame show the scene itself is fine and only the
+post chain is not:
+
+    srcC400 -> 0xbdf0000  (HDR scene colour)   mean 0.0378, 98.7% non-zero
+    srcC2D0 -> 0xc7f9000  at draw 531          mean 0.0308, 77.7% non-zero
+    srcC2D0 -> 0xc7f9000  at draw 665          ZERO
+    srcC2D0 -> 0x311000   at draw 756 (front)  ZERO
+
+This does NOT yet say whether the console renders the same moment black -- the
+paired oracle capture is what settles that, and it is not in hand yet. If the
+console is also black here, this frame is a legitimate fade-in and the black
+gameplay the user reports is a different (or longer-lived) fault.

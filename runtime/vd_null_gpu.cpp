@@ -717,6 +717,14 @@ struct CommandProcessor
     uint32_t skinnedScans = 0;
     uint32_t skinnedBestIndices = 0;
     uint32_t skinnedBestDraws = 0;
+    // GEARS_DRAW_FRAME_MIN_DRAWS: the content selector's state. Armed by the
+    // first frame that reaches the threshold, opened on the frame after it, and
+    // what the scan has SEEN so far -- a scan that finds nothing has to be able
+    // to say what it looked at.
+    bool contentArmed = false;
+    bool contentGateOpen = false;
+    uint32_t contentScans = 0;
+    uint32_t contentBusiest = 0;
     // EVERY DRAW THE GUEST ISSUED, AND EVERY REASON WE DROPPED ONE. Four paths
     // in CaptureFrameDraw discard a draw, and none of them was counted, so
     // "this frame had 800 draws" could never be distinguished from "this frame
@@ -1345,8 +1353,70 @@ struct CommandProcessor
         // phase; a run that survives further can target a later, richer frame
         // with GEARS_DRAW_FRAME_AT=N. Frames before the target are discarded so
         // the captured list is exactly one frame's worth of draws.
+        //
+        // GEARS_DRAW_FRAME_MIN_DRAWS=N SELECTS BY CONTENT INSTEAD, and for a
+        // gameplay capture that is the only selector that works. A frame index
+        // is not a landmark (catalog #89): the level load takes a variable
+        // number of presents, so the index at which one run reaches gameplay is
+        // still a loading screen in the next -- 2920 was a 586-draw gameplay
+        // frame in the run the number came from and a 3-draw loading frame in
+        // the two runs that used it. Worse, GEARS_DRAW_FRAME_AT perturbs what it
+        // measures: skipping the render until frame N changes how long the
+        // loading frames take, so the guest reaches gameplay at a different
+        // count than in a run that rendered throughout.
+        //
+        // A loading frame submits a handful of draws and a gameplay frame
+        // several hundred, so "the first frame with at least N draws" names the
+        // moment rather than an integer -- the same shape as
+        // GEARS_DRAW_FRAME_DUMP_SKINNED below. The frame AFTER the one that
+        // passes is the one rendered, because the count is only known once the
+        // frame has ended; the oracle fork applies the IDENTICAL rule
+        // (GEARS_ORACLE_DUMP_MIN_DRAWS), so both sides land on the same game
+        // moment and the two captures stay paired.
+        const long minDraws = lucent::config::number("DRAW_FRAME_MIN_DRAWS", 0);
         const long target = lucent::config::number("DRAW_FRAME_AT", 0);
-        if (long(frameSwaps) < target)
+        if (minDraws > 0 && !contentGateOpen)
+        {
+            ++contentScans;
+            contentBusiest = std::max(contentBusiest, uint32_t(frameDraws.size()));
+            if (contentArmed)
+            {
+                contentGateOpen = true;
+                lucent::info("gpu", "guest-draw: frame {} follows the first frame"
+                    " with >= {} draws, so it is gameplay; rendering it after {}"
+                    " frames scanned", frameSwaps, minDraws, contentScans);
+            }
+            else
+            {
+                if (long(frameDraws.size()) >= minDraws)
+                {
+                    contentArmed = true;
+                    lucent::info("gpu", "guest-draw: frame {} has {} draws (>= {})"
+                        " after {} frames scanned; the NEXT frame is the capture",
+                        frameSwaps, frameDraws.size(), minDraws, contentScans);
+                }
+                else if (contentScans == 1 || contentScans % 300 == 0)
+                {
+                    // The periodic NEGATIVE with its denominator: a run that
+                    // never reaches the threshold must not be silent, or it
+                    // reads as a run that rendered gameplay and dumped nothing.
+                    lucent::info("gpu", "guest-draw: {} frames scanned, none with"
+                        " >= {} draws yet (busiest so far: {} draws). NOTHING has"
+                        " been rendered or captured.",
+                        contentScans, minDraws, contentBusiest);
+                }
+                if (target > 0)
+                    lucent::warn("gpu", "GEARS_DRAW_FRAME_AT={} is set but"
+                        " GEARS_DRAW_FRAME_MIN_DRAWS={} selects the frame; the"
+                        " index is IGNORED", target, minDraws);
+                drawsOffered = drawsNoShaderPair = drawsZeroIndices = 0;
+                drawsImmediateIndex = drawsAfterFrameDone = 0;
+                ++frameSwaps;
+                frameDraws.clear();
+                return;
+            }
+        }
+        if (minDraws <= 0 && long(frameSwaps) < target)
         {
             // Info, not debug: this line IS the draws-per-frame profile used to
             // choose which frame to capture. One line per frame, no other cost.
