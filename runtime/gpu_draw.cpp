@@ -973,12 +973,37 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     DB.ssbo = biSsbo;
     DB.stubSampler = samp;
 
+    // WHAT THE GUEST PROGRAMMED, counted BEFORE any drop. The draw-stream
+    // emitter at the end of this function records from `prepared`, so a draw
+    // this loop drops -- at any of the ten `CN.Skip(...); continue` sites below
+    // -- is invisible to it. That is the stated falsifier on claim C023: the
+    // eight pixel shaders the oracle binds and our stream never shows could be
+    // shaders the guest never asks for, OR shaders it asks for and we throw
+    // away, and the prepared-level recording cannot tell those apart. This map
+    // is filled at the TOP of the loop body, above every early exit, so the
+    // difference between it and the prepared counts IS the set we drop.
+    std::map<std::pair<uint64_t, uint64_t>, uint32_t> rawCounts;
+    static const std::string& rawStreamPath = lucent::config::text("DRAW_STREAM_RAW");
+    const bool wantRawStream = !rawStreamPath.empty();
+
     for (const FrameDrawItem& d : in.draws)
     {
         const double stateBegin = sinceStartMs();
         const uint32_t* R = d.registers();
         if (!R)
         { CN.Skip(1); continue; }
+
+        if (wantRawStream)
+        {
+            // Same two normalisations the prepared-level emitter applies, so
+            // the two are comparable to each other AND to the oracle: resolve
+            // (kCopy) draws are not IssueDraw on the Xenia side and are left
+            // out, and a draw with no fragment stage records ps = 0 because
+            // Xenia sets pixel_shader = nullptr there.
+            const uint32_t rawMode = R[0x2208] & 0x7;
+            if (rawMode != 6 /*kCopy*/)
+                ++rawCounts[{d.vsHash, rawMode == 4 /*kColorDepth*/ ? d.psHash : 0}];
+        }
 
         // Which EDRAM surface this draw targets (RB_COLOR_INFO: color_base is
         // the low 12 bits in tiles, color_format bits 16..19), and what the
@@ -2667,6 +2692,46 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 line += '\n';
                 std::fwrite(line.data(), 1, line.size(), sf);
                 std::fflush(sf);
+            }
+        }
+    }
+
+    // GEARS_DRAW_STREAM_RAW=<path>: the same one-line-per-frame format, but
+    // counted from what the GUEST PROGRAMMED rather than from what survived
+    // preparation. Comparing this against the oracle answers a question the
+    // prepared-level stream cannot: a shader missing from our stream is either
+    // one the guest never binds (a CPU-emulation divergence) or one we bind and
+    // drop (a renderer bug), and only a pre-drop recording separates them.
+    if (wantRawStream)
+    {
+        static std::FILE* rf = std::fopen(rawStreamPath.c_str(), "wb");
+        static uint64_t rawFrame = 0;
+        const uint64_t thisFrame = rawFrame++;
+        if (rf)
+        {
+            uint32_t rawTotal = 0;
+            for (const auto& [pair, n] : rawCounts)
+                rawTotal += n;
+            std::string line = std::format("{}\t{}", thisFrame, rawTotal);
+            for (const auto& [pair, n] : rawCounts)
+                line += std::format("\t{:016x}:{:016x}:{}", pair.first,
+                                    pair.second, n);
+            line += '\n';
+            std::fwrite(line.data(), 1, line.size(), rf);
+            std::fflush(rf);
+        }
+        else
+        {
+            // A path that would not open must not read as "the guest programmed
+            // nothing" -- the whole point of this arm is to distinguish an empty
+            // answer from an absent one.
+            static bool warned = false;
+            if (!warned)
+            {
+                warned = true;
+                lucent::error("draw", "GEARS_DRAW_STREAM_RAW={} could not be"
+                    " opened for writing; NOTHING was recorded and this run says"
+                    " nothing about what the guest programmed", rawStreamPath);
             }
         }
     }
