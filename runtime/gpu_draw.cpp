@@ -1199,7 +1199,40 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // control arm for A/B-ing exactly this, never a fix.
         static const bool depthOnlyRunsPs =
             lucent::config::flag("DRAW_DEPTHONLY_PS");
-        const bool pixelShaderUsed = edramMode == 4 /*kColorDepth*/ || depthOnlyRunsPs;
+        bool pixelShaderUsed = edramMode == 4 /*kColorDepth*/ || depthOnlyRunsPs;
+        // AND THE OTHER TWO CONDITIONS XENIA APPLIES. edram_mode is only the
+        // middle one of three; see draw::ClassifyDraw. Measured at the same
+        // guest frame as the console, on the title screen, the mode test alone
+        // put 50 of 55 draws of one vertex shader through a pixel shader where
+        // the console put 2 -- the other 48 are a Z-prepass whose colour writes
+        // are entirely masked off by RB_COLOR_MASK.
+        //
+        // GEARS_DRAW_MODE_ONLY=1 restores the mode-only test: a DIAGNOSTIC
+        // control arm for A/B-ing exactly this, never a fix.
+        static const bool modeOnly = lucent::config::flag("DRAW_MODE_ONLY");
+        if (!modeOnly && !depthOnlyRunsPs)
+        {
+            draw::DrawClassification dc;
+            if (!draw::ClassifyDraw(R, d.psUcode, d.psUcodeSize, d.psHash, dc))
+            {
+                // UNDECIDED, not "no". Counted and skipped rather than guessed:
+                // treating a shader we could not analyse as depth-only would
+                // silently drop its colour and look exactly like the console's
+                // own Z-prepass.
+                ++CN.drawsClassifyFailed;
+            }
+            else if (!dc.rasterisationDone)
+            {
+                // Xenia SKIPS these entirely -- the draw covers nothing.
+                ++CN.drawsNoRasterisation;
+                CN.Skip(9);
+                continue;
+            }
+            else if (!dc.pixelShaderNeeded)
+            {
+                pixelShaderUsed = false;
+            }
+        }
         if (!pixelShaderUsed)
             ++CN.drawsNoPixelShader;
         VkPipeline pipe = VK_NULL_HANDLE;
