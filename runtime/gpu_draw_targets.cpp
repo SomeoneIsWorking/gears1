@@ -253,6 +253,7 @@ bool RenderTargetCache::GetResolveTarget(uint32_t destBase, uint32_t sourceBase,
     r.pitch = destPitch;
     r.height = destHeight;
     r.bpp = bpp;
+    r.guestFormat = destFormat;
     VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ci.imageType = VK_IMAGE_TYPE_2D;
     ci.format = hostFormat;

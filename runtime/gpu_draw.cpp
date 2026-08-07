@@ -1685,7 +1685,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // all eight of the console's near 0x13xxxxxx), so an address join pairs
         // nothing. These come from the guest's own registers, so both sides
         // necessarily agree on them.
-        uint32_t sourceBase, destPitch, destHeight;
+        uint32_t sourceBase, destPitch, destHeight, guestFormat;
         bool isDepth;
         VkBuffer buf;
         VkDeviceMemory mem;
@@ -1734,8 +1734,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb2);
         resolveDumps.push_back({r.base, r.width, r.imageHeight, r.sourceBase,
-                                r.pitch, r.height, r.isDepth, b, m,
-                                ordinal, drawIndex});
+                                r.pitch, r.height, r.guestFormat, r.isDepth,
+                                b, m, ordinal, drawIndex});
         return true;
     };
 
@@ -2389,8 +2389,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb2);
             resolveDumps.push_back({r.base, r.width, r.imageHeight,
-                                    r.sourceBase, r.pitch, r.height, r.isDepth,
-                                    b, m, UINT32_MAX, 0});
+                                    r.sourceBase, r.pitch, r.height,
+                                    r.guestFormat, r.isDepth, b, m,
+                                    UINT32_MAX, 0});
         }
     }
 
@@ -2607,10 +2608,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // pairing.
                 (rd.ordinal == UINT32_MAX
                      ? std::format("resolve_{:08x}.ppm", rd.base)
-                     : std::format("resolve_{:02}_src{}{:03X}_{}x{}_{:08x}_draw{}.ppm",
+                     : std::format("resolve_{:02}_src{}{:03X}_{}x{}_f{}_{:08x}"
+                                   "_draw{}.ppm",
                                    rd.ordinal, rd.isDepth ? 'D' : 'C',
                                    rd.sourceBase, rd.destPitch, rd.destHeight,
-                                   rd.base, rd.drawIndex));
+                                   rd.guestFormat, rd.base, rd.drawIndex));
             if (WritePpm(out, rgba.data(), rd.w, rd.h))
             {
                 const double lo = samples ? minSeen : 0.0;

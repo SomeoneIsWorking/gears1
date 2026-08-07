@@ -2,11 +2,12 @@
 # Capture the SAME game moment's pass outputs from both renderers, then diff
 # them layer by layer with tools/layer_compare.py.
 #
-# The moment is chosen BY CONTENT, identically on both sides: the frame after
-# the first frame that submits at least GEARS_LAYER_MIN_DRAWS draws. A loading
-# frame carries a handful of draws and a gameplay frame several hundred, so that
-# predicate names "the first gameplay render" -- which is the frame this
-# investigation is supposed to start from -- without naming an integer.
+# The moment is chosen BY CONTENT, identically on both sides: GEARS_LAYER_AFTER
+# frames after the first frame that submits at least GEARS_LAYER_MIN_DRAWS draws.
+# A loading frame carries a handful of draws and a gameplay frame several
+# hundred, so that predicate names the start of gameplay without naming an
+# integer; the offset walks past the fade-in, which is black on BOTH emulators
+# and therefore says nothing when compared.
 #
 # It is NOT selected by frame index, and that is the whole point of this script.
 # The level load takes a variable number of presents, so the index at which one
@@ -34,6 +35,11 @@ RUNTIME="${GEARS_BUILD_DIR:-$REPO/scratch/build}/runtime/gears1"
 # SAME number: a threshold that differed would select different moments while
 # the output still called them a pair.
 : "${GEARS_LAYER_MIN_DRAWS:=400}"
+# ... and then this many frames LATER. The first gameplay frame is a fade from
+# black: the console's own capture of it resolves its post-chain output and its
+# front buffer entirely zero, so a comparison taken there compares two black
+# frames. 300 presents is about ten seconds of guest time, well past a fade.
+: "${GEARS_LAYER_AFTER:=300}"
 
 OURS_SCRIPT=$(gears_walk_ours)
 THEIRS_INPUT=$(gears_walk_theirs)
@@ -47,14 +53,22 @@ for f in "$ORACLE" "$RUNTIME"; do
 done
 [ -f "$GAME_DIR/default.xex" ] || {
     echo "REFUSING: $GAME_DIR/default.xex is missing. Nothing was run." >&2; exit 2; }
-if [ -n "${GEARS_ISO:-}" ] && [ -f "${GEARS_ISO:-}" ]; then
+# THE EXTRACTED TREE, not the disc image, unless GEARS_LAYER_ISO=1 asks for it.
+# Two runs off the .iso stalled mid-boot -- the guest stopped presenting at swap
+# 123 and again at 553, with every emulator thread idle in a futex wait -- and
+# the same build off the local extracted tree walked to gameplay every time. The
+# image lives on a slow mount here; the tree is what our runtime reads anyway,
+# so this also removes one difference between the two arms.
+if [ "${GEARS_LAYER_ISO:-0}" = "1" ] && [ -n "${GEARS_ISO:-}" ] && \
+   [ -f "${GEARS_ISO:-}" ]; then
     ORACLE_TARGET="$GEARS_ISO"
 else
     ORACLE_TARGET="$GAME_DIR/default.xex"
 fi
 
 rm -rf "$OUT"; mkdir -p "$OUT/ours" "$OUT/theirs"
-echo "selector: the frame after the first with >= $GEARS_LAYER_MIN_DRAWS draws,"
+echo "selector: $GEARS_LAYER_AFTER frame(s) after the first with"
+echo "          >= $GEARS_LAYER_MIN_DRAWS draws,"
 echo "          applied identically to both sides; $SECONDS_TO_RUN s per side"
 
 # Both sides run in the background and are killed BY PID. TERM first, with a
@@ -71,6 +85,7 @@ echo "== our renderer =="
 GEARS_NO_WINDOW=1 \
 GEARS_INPUT_SCRIPT="$OURS_SCRIPT" \
 GEARS_DRAW_FRAME_MIN_DRAWS="$GEARS_LAYER_MIN_DRAWS" \
+GEARS_DRAW_FRAME_AFTER_GAMEPLAY="$GEARS_LAYER_AFTER" \
 GEARS_DRAW_FRAME_COUNT=1 \
 GEARS_DRAW_RESOLVE_DUMP_EACH=1 \
 GEARS_DRAW_DIR="$OUT/ours" \
@@ -90,6 +105,7 @@ echo "== the oracle =="
 SDL_AUDIODRIVER=dummy \
 GEARS_ORACLE_RESOLVE_DUMP="$OUT/theirs" \
 GEARS_ORACLE_DUMP_MIN_DRAWS="$GEARS_LAYER_MIN_DRAWS" \
+GEARS_ORACLE_DUMP_AFTER_GAMEPLAY="$GEARS_LAYER_AFTER" \
     "$ORACLE" \
     --store_shaders=false \
     --target="$ORACLE_TARGET" \
@@ -115,7 +131,7 @@ stop "$theirs_pid"; trap - EXIT INT TERM
 # prevent, and it is invisible in the images themselves.
 echo
 echo "== what each side selected =="
-grep -h "is gameplay\|frames scanned, none\|NOTHING has been" "$OUT/ours.log" | tail -3
+grep -h "is the capture\|frames scanned, none\|NOTHING has been" "$OUT/ours.log" | tail -3
 grep -h "so it is gameplay\|none with >=" "$OUT/theirs.log" | tail -3
 echo
 exec python3 "$REPO/tools/layer_compare.py" --ours "$OUT/ours" --theirs "$OUT/theirs" \
