@@ -5,7 +5,7 @@ status: open
 symptom: our in-game frame is missing the character and HUD, windows are flat grey blocks, vertical streaking, lifted blacks
 tags: render,oracle,gameplay-scene
 created: 2026-08-05
-updated: 2026-08-06
+updated: 2026-08-07
 ---
 
 The first oracle-backed comparison of an in-game frame, both sides headless and
@@ -3540,3 +3540,87 @@ the same run renders a real, non-uniform picture. So the fetch descriptor
 casts ColorFormat straight onto TextureFormat, which is what Xenia does, but a
 float destination presented that way saturates. **Do not read a uniformly white
 resolve image as content.** Recorded against instrument I023.
+
+### Note (2026-08-07)
+### Note (2026-08-07) -- LIVE oracle comparison at the same scene. Eight pixel shaders we never bind.
+
+The comparison this entry has needed since it opened has now been made, with
+both cores driven to Act 1 and neither side replaying the other's data. It does
+not need the frame-exact determinism catalog #84 shows is unavailable, because
+it compares the guest's OWN OUTPUT -- the draw stream -- rather than pixels.
+
+`GEARS_DRAW_STREAM=<path>` (our runtime) and `GEARS_ORACLE_DRAW_STREAM=<path>`
+(the Xenia fork) each write one line per presented frame: the multiset of
+(vertex shader, pixel shader) pairs the guest bound, hashed identically on both
+sides. `tools/draw_stream_compare.py` reads both.
+
+Runs: ours 7,461 frames / 3.66M draws; the oracle 6,005 frames / 6.49M draws,
+both from the title screen into Act 1 on the same START-then-A walk.
+
+### The result, and it is one-directional
+
+    vertex shaders   ours 62, theirs 61
+      the oracle binds and we NEVER do:  NONE
+      we bind and the oracle never does: none (bar a 0000 sentinel, see below)
+
+    pixel shaders    ours 262, theirs 270
+      the oracle binds and we NEVER do:  EIGHT
+        2cff262892b471cc  576a520e27020b3e  5c89d93b82909724  716db212afe61ac9
+        84e14f58de37e54b  b72e0f5009ac6f2a  dbd9703d3a7104bc  ebbfc05467ebde02
+      we bind and the oracle never does: NONE
+
+**Every vertex shader the console runs, we run.** The geometry work the guest
+asks for is the same. Eight PIXEL shaders are bound on the console and never on
+our side, and nothing goes the other way -- an asymmetry that is much harder to
+explain as the two runs being at different moments than a two-sided difference
+would be.
+
+Three of the vertex shaders those pixel shaders pair with first appear exactly
+when gameplay starts and persist to the end of the run:
+
+    vs 7fd789deee60420b  first frame 1248, last 6004, 41,609 draws
+    vs eac78cc6081f57c8  first frame 1248, last 5971, 18,330 draws
+    vs bff17775a314aa7a  first frame 1257, last 6004, 42,675 draws
+    vs 40651253027b2de1  first frame  310, last 6004, 23,744 draws (from the menu on)
+
+### And the pictures, same scene, both live
+
+The oracle at frame 6000 is Act 1 gameplay: armoured Marcus in the foreground,
+the HUD's weapon icon and ammo count ("312"), the brick wall with three windows.
+
+Ours at frame 7200 is the SAME wall, the SAME three windows, the SAME camera
+framing -- and:
+
+  * **no character.** Marcus is absent. This is difference 1 of this entry, and
+    it is the first time it has been seen against a live oracle IN THE SAME
+    SCENE rather than against a cached frame of a different shot. The earlier
+    note "this entry has been comparing different SHOTS" no longer applies.
+  * **no HUD at all.** No weapon icon, no ammo counter.
+  * **the scene is INSET.** Our lit content spans x 155..962 of 1280 (63% of the
+    width) and y 43..708; the oracle's fills 0..1279 edge to edge. Coverage above
+    0.02 luminance: ours 44.5%, the oracle's 89.1%. That is a new difference this
+    entry has never recorded, and it is filed separately.
+
+### A recording-convention trap, caught and fixed
+
+The first run of this comparison reported 33 shader pairs unique to one side, led
+by 680,525 draws of `b43e461d505488c5:63c971f5e9d59913` "the oracle never
+binds". That was an artifact: Xenia sets `pixel_shader = nullptr` on a draw with
+no fragment stage, so its stream records ps = 0 there, while we recorded whatever
+the guest last programmed. Normalising ours the same way (`hasFragmentStage ?
+psHash : 0`) collapsed 33 unique pairs to 10 and left the eight-pixel-shader
+result above. **A difference in what two instruments MEAN by a field read as the
+headline divergence.**
+
+Still unnormalised and visible in the output: our stream records 105,930
+`0000:0000` entries, which are the resolve/copy entries in `prepared` rather than
+draws with shaders.
+
+### What this comparison cannot see
+
+Which shader ran and how often, and nothing else. Identical draws carrying
+different constants, vertex data or textures are invisible to it -- a pass
+present on both sides and wrong on ours looks identical here. The per-frame
+draw-count ratios it also prints mix different scene compositions between two
+runs of different lengths and are much weaker evidence than the set difference;
+do not quote them without checking both sides were in comparable scenes.
