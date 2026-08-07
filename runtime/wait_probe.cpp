@@ -243,6 +243,12 @@ void NoteGuestProgress(const char* channel)
 // wait, a 500 us poll loop -- keep entering the kernel forever, so a completely
 // stuck guest still ticks. Kernel calls are still counted, but as a
 // DESCRIPTION of the stall (dead, or spinning?) rather than as the test for it.
+// How many kernel calls the guest has made, for the reproducibility question in
+// catalog #84: if a deterministic clock is to be derived from GUEST WORK rather
+// than from presents or the host clock, the first thing to establish is whether
+// a measure of guest work is itself reproducible across runs.
+uint64_t GuestKernelCalls() { return g_kernelCalls.load(std::memory_order_relaxed); }
+
 void ReportStall(const char* channel, uint32_t seconds, uint64_t kernelCalls)
 {
     lucent::warn("stall", "{} has made no progress for {} s. The guest made {}"

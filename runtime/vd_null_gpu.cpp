@@ -2468,6 +2468,8 @@ void VblankThread()
         g_graphicsInterruptCallback);
 
     uint32_t tick = 0;
+    uint64_t vblanksDelivered = 0;
+    uint64_t paceBase = 0;
     while (true)
     {
         // FREE-RUNNING VBLANK: no host sleep at all. `state.Dispatch` below runs
@@ -2477,11 +2479,62 @@ void VblankThread()
         // host clock anywhere in the loop. That is what takes real time out of
         // the guest's notion of time; see runtime/guest_clock.h.
         const gears::ClockTrigger trigger = gears::GuestClockTrigger();
-        if (trigger != gears::ClockTrigger::kVblankFreeRun)
+        if (trigger == gears::ClockTrigger::kVblankPaced)
+        {
+            // PHASE 1, before the first present: free-run, because the boot spin
+            // waits on TIME and nothing else releases it.
+            // PHASE 2, after it: deliver a vblank only while the vblank count is
+            // within `slack` of the present count, so guest time advances at the
+            // rate the guest actually renders at. Free-running instead is what
+            // froze the picture -- guest time ran hundreds of times ahead of the
+            // frames being drawn.
+            //
+            // `paceBase` is the vblank count at the first present, so phase 1's
+            // consumption does not count against phase 2's budget. Without it
+            // the gate would block until presents caught up with the whole boot,
+            // which is a hang that looks exactly like the deadlock this mode
+            // exists to avoid.
+            const uint64_t presents = g_frameCount.load(std::memory_order_relaxed);
+            if (presents == 0)
+            {
+                paceBase = vblanksDelivered;
+            }
+            else
+            {
+                const uint64_t budget =
+                    presents + gears::GuestClockVblankSlack();
+                // yield, not sleep: waiting on the guest to present is waiting on
+                // GUEST progress, and putting a host duration here would be the
+                // real time this whole mode exists to keep out.
+                // A GATE THAT BLOCKS FOREVER MUST SAY SO. Silence here is
+                // indistinguishable from the boot deadlock this mode was built
+                // to avoid, and telling the two apart by dump count alone is
+                // what sent this design down a wrong diagnosis once already.
+                uint64_t spins = 0;
+                while (vblanksDelivered - paceBase >= budget &&
+                       g_frameCount.load(std::memory_order_relaxed) == presents)
+                {
+                    if (++spins == 20000000ull)
+                        lucent::warn("time", "vblank-paced is STARVED: {} vblanks"
+                            " delivered since the first present, budget {} ({}"
+                            " presents + {} slack), and the guest has not"
+                            " presented again. The title needs more vblanks per"
+                            " present than this gate allows -- which it"
+                            " legitimately does while loading, when it presents"
+                            " rarely and still expects time to pass",
+                            vblanksDelivered - paceBase, budget, presents,
+                            gears::GuestClockVblankSlack());
+                    std::this_thread::yield();
+                }
+            }
+        }
+        else if (trigger != gears::ClockTrigger::kVblankFreeRun)
+        {
             std::this_thread::sleep_for(std::chrono::microseconds(16667));
+        }
+        ++vblanksDelivered;
 
-        if (trigger == gears::ClockTrigger::kVblank ||
-            trigger == gears::ClockTrigger::kVblankFreeRun)
+        if (trigger != gears::ClockTrigger::kPresent)
             gears::AdvanceGuestClockFrame();
 
         // YIELD, BUT DO NOT SLEEP. Dispatch below holds g_interruptMutex for the
@@ -2495,7 +2548,13 @@ void VblankThread()
         // thread, and it puts nothing into the clock the guest reads. That is
         // the line this mode has to hold -- no host duration may enter guest
         // time -- and a yield does not cross it.
-        if (trigger == gears::ClockTrigger::kVblankFreeRun)
+        // Every host-sleep-free mode needs this, not just free-run: without a
+        // sleep the loop re-takes g_interruptMutex with no gap at all and
+        // starves every other path that needs it. Measured -- vblank-paced
+        // without the yield presented 0 frames on two runs, which reads exactly
+        // like the boot deadlock and is not it.
+        if (trigger == gears::ClockTrigger::kVblankFreeRun ||
+            trigger == gears::ClockTrigger::kVblankPaced)
             std::this_thread::yield();
 
         // Sampled from here rather than from VdSwap: the title submits one
@@ -2550,6 +2609,24 @@ void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
     // See runtime/guest_clock.h for why `present` deadlocks this title.
     if (gears::GuestClockTrigger() == gears::ClockTrigger::kPresent)
         gears::AdvanceGuestClockFrame();
+    // GEARS_WORK_TRACE=<path>: the guest's kernel-call count at every present.
+    // Catalog #84's fourth candidate clock is "advance time per unit of GUEST
+    // WORK", and it is only worth building if a measure of guest work is itself
+    // reproducible. Two runs, same script, diff the files -- that is the whole
+    // experiment, and it costs one atomic read per frame.
+    {
+        static const std::string& workTrace = lucent::config::text("WORK_TRACE");
+        if (!workTrace.empty())
+        {
+            static std::FILE* f = std::fopen(workTrace.c_str(), "wb");
+            if (f)
+            {
+                std::fprintf(f, "%llu %llu\n", (unsigned long long)frame,
+                             (unsigned long long)gears::GuestKernelCalls());
+                std::fflush(f);
+            }
+        }
+    }
     gears::HleDumpCensus("swap");
     gears::HleWorkerCensus();
     gears::HleShaderCaptureFrame(frame);
