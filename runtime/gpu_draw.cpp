@@ -2619,6 +2619,58 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 " run says nothing about any resolve");
     }
 
+    // GEARS_DRAW_STREAM=<path>: ONE LINE PER FRAME describing WHAT THE GUEST
+    // ASKED THE GPU TO DO -- the multiset of (vertex shader, pixel shader) pairs
+    // it bound, with counts.
+    //
+    // This is the cross-emulator comparison that does not need determinism.
+    // Catalog #84 establishes that no clock anchor makes two runs reach the same
+    // state at the same frame while guest threads are host-scheduled, so a
+    // per-pixel frame-indexed diff against the oracle is not available. But the
+    // DRAW STREAM is the guest's own output -- it is what our CPU emulation
+    // produces and hands to the GPU -- so if our emulation differs from the
+    // console's, the work requested differs, and that shows up as a shader the
+    // other side never binds or a count that does not match. Aligning two runs
+    // by SIGNATURE SIMILARITY rather than by frame index tolerates the two sides
+    // being at different moments, which they always are.
+    //
+    // The Xenia fork emits the identical format at its own swap, and
+    // tools/draw_stream_compare.py reads both.
+    {
+        static const std::string& streamPath = lucent::config::text("DRAW_STREAM");
+        if (!streamPath.empty())
+        {
+            static std::FILE* sf = std::fopen(streamPath.c_str(), "wb");
+            static uint64_t streamFrame = 0;
+            const uint64_t thisFrame = streamFrame++;
+            if (sf)
+            {
+                std::map<std::pair<uint64_t, uint64_t>, uint32_t> counts;
+                for (const draw::PreparedDraw& pd : prepared)
+                {
+                    // NORMALISED TO WHAT THE OTHER SIDE MEANS BY IT. Xenia sets
+                    // pixel_shader = nullptr on a draw with no fragment stage,
+                    // so its stream records ps = 0 there. We record whatever the
+                    // guest last programmed, which is a real pixel shader hash --
+                    // and the two conventions made every depth-only draw look
+                    // like a shader pair one side "never binds": 8 of the 13
+                    // pairs in the first comparison's ONLY-OURS list were this,
+                    // 680,525 draws at the top of it. A recording convention
+                    // reading as the headline divergence.
+                    ++counts[{pd.vsHash, pd.hasFragmentStage ? pd.psHash : 0}];
+                }
+                std::string line = std::format("{}\t{}", thisFrame,
+                                               prepared.size());
+                for (const auto& [pair, n] : counts)
+                    line += std::format("\t{:016x}:{:016x}:{}", pair.first,
+                                        pair.second, n);
+                line += '\n';
+                std::fwrite(line.data(), 1, line.size(), sf);
+                std::fflush(sf);
+            }
+        }
+    }
+
     DS.Report(drawn, prepared);
 
     // PUBLISH THE IMAGE, so the presenter can blit it instead of receiving these
