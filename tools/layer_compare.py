@@ -50,16 +50,24 @@ import sys
 from pathlib import Path
 
 OURS_RE = re.compile(
-    r"resolve_(\d+)_src([CD])([0-9A-F]{3})_(\d+)x(\d+)_([0-9a-f]{8})_draw(\d+)\.ppm$",
-    re.I)
+    r"resolve_(\d+)_src([CD])([0-9A-F]{3})_(\d+)x(\d+)_f(\d+)_([0-9a-f]{8})"
+    r"_draw(\d+)\.ppm$", re.I)
 THEIRS_RE = re.compile(
-    r"oracle_f(\d+)_copy(\d+)_src([CD])([0-9A-F]{3})_(\d+)x(\d+)_"
+    r"oracle_f(\d+)_copy(\d+)_src([CD])([0-9A-F]{3})_(\d+)x(\d+)_f(\d+)_"
     r"([0-9A-F]{8})_(\d+)\.bin$", re.I)
+
+# RB_COPY_DEST_INFO.copy_dest_format values this tool can DECODE. Only one, on
+# purpose: k_8_8_8_8 (6). Everything else -- 32 is k_16_16_16_16_FLOAT, and this
+# frame carries several -- is REFUSED per pass rather than read as 8888, because
+# an eight-byte buffer read as four-byte bytes produces a recognisable image of
+# the wrong thing. That mistake was made here first: three rows of the first
+# paired run reported a difference for buffers this tool had mis-decoded.
+DECODABLE_FORMATS = {6: "k_8_8_8_8"}
 
 
 def key_str(k):
-    src, base, w, h, nth = k
-    return f"src{src}{base:03X} {w}x{h} #{nth}"
+    src, base, w, h, fmt, nth = k
+    return f"src{src}{base:03X} {w}x{h} f{fmt} #{nth}"
 
 
 def tiled_offset_2d(x, y, width, log2_bpp):
@@ -131,11 +139,12 @@ def selftest(work, np, Image):
             for x in range(w):
                 off = tiled_offset_2d(x, y, w, 2)
                 raw[off:off + 4] = bytes(src[y, x])
-        name = f"_src C000_{w}x{h}_00000000_{nth}".replace(" ", "")
-        (theirs_dir / f"oracle_f1_copy{nth}{name}_{w * h * 4}.bin"
+        (theirs_dir /
+         f"oracle_f1_copy{nth}_srcC000_{w}x{h}_f6_00000000_{w * h * 4}.bin"
          ).write_bytes(bytes(raw))
         Image.fromarray(img[..., :3]).save(
-            ours_dir / f"resolve_{nth:02}_srcC000_{w}x{h}_00000000_draw{nth}.ppm")
+            ours_dir /
+            f"resolve_{nth:02}_srcC000_{w}x{h}_f6_00000000_draw{nth}.ppm")
         back = untile_8888(bytes(raw), w, h, np)
         if back is None:
             print(f"SELFTEST FAIL: the {note} case did not decode at all")
@@ -191,10 +200,10 @@ def main(argv):
         if not m:
             continue
         k = (m.group(2).upper(), int(m.group(3), 16), int(m.group(4)),
-             int(m.group(5)))
+             int(m.group(5)), int(m.group(6)))
         nth = seen.get(k, 0)
         seen[k] = nth + 1
-        ours[k + (nth,)] = (p, int(m.group(6), 16))
+        ours[k + (nth,)] = (p, int(m.group(7), 16))
     seen = {}
     for p in sorted(theirs_dir.iterdir(),
                     key=lambda q: int(THEIRS_RE.search(q.name).group(2))
@@ -203,10 +212,10 @@ def main(argv):
         if not m:
             continue
         k = (m.group(3).upper(), int(m.group(4), 16), int(m.group(5)),
-             int(m.group(6)))
+             int(m.group(6)), int(m.group(7)))
         nth = seen.get(k, 0)
         seen[k] = nth + 1
-        theirs[k + (nth,)] = (p, int(m.group(7), 16), int(m.group(8)))
+        theirs[k + (nth,)] = (p, int(m.group(8), 16), int(m.group(9)))
 
     print(f"ours   {len(ours)} pass dump(s)")
     print(f"theirs {len(theirs)} pass dump(s)")
@@ -234,20 +243,30 @@ def main(argv):
     out_dir = Path(args.out) if args.out else theirs_dir.parent / "layers"
     out_dir.mkdir(parents=True, exist_ok=True)
     undecoded = 0
-    print(f"\n{'pass':>22} {'dest ours':>10} {'dest theirs':>11} {'size':>10} "
+    print(f"\n{'pass':>26} {'dest ours':>10} {'dest theirs':>11} {'size':>10} "
           f"{'mean ours':>10} {'mean theirs':>11}  note")
     for k in shared:
         our_path, our_dest = ours[k]
         their_path, their_dest, their_len = theirs[k]
         oi = np.asarray(Image.open(our_path).convert("RGB")).astype(np.float32) / 255.0
         h, w = oi.shape[:2]
+        fmt = k[4]
         raw = their_path.read_bytes()
+        if fmt not in DECODABLE_FORMATS:
+            # REFUSED, not skipped and not guessed. Named with its format so the
+            # gap in coverage is visible in the same table as the results.
+            undecoded += 1
+            print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
+                  f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  REFUSED: dest format "
+                  f"{fmt} is not decoded here (only "
+                  f"{'/'.join(DECODABLE_FORMATS.values())})")
+            continue
         ti = untile_8888(raw, w, h, np)
         if ti is None:
             # REFUSE THIS ROW, loudly, rather than skip it: a pass that could not
             # be decoded is not a pass that matched.
             undecoded += 1
-            print(f"  {key_str(k):>22} {our_dest:>10x} {their_dest:>11x} "
+            print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
                   f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
                   f"{their_len} bytes is not {w}x{h}x4 tiled k_8_8_8_8")
             continue
@@ -260,12 +279,12 @@ def main(argv):
             note = f"DIFFER, mean |d| {d:.3f}"
             side = np.concatenate([oi, t], axis=1)
             Image.fromarray((np.clip(side, 0, 1) ** 0.45 * 255).astype(np.uint8)
-                            ).save(out_dir / ("pass_%s%03X_%dx%d_%d.png" % k))
-        print(f"  {key_str(k):>22} {our_dest:>10x} {their_dest:>11x} {w}x{h} "
+                            ).save(out_dir / ("pass_%s%03X_%dx%d_f%d_%d.png" % k))
+        print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} {w}x{h} "
               f"{oi.mean():>10.4f} {t.mean():>11.4f}  {note}")
 
-    print(f"\n{undecoded} pass(es) could not be decoded and are NOT counted as "
-          f"matching.\nSide-by-side images for differing passes: {out_dir}"
+    print(f"\n{undecoded} pass(es) were REFUSED (format not decoded here) and are "
+          f"NOT counted as matching.\nSide-by-side images for differing passes: {out_dir}"
           f" (ours left, console right, gamma 0.45)")
     print("BLIND SPOT: this compares resolve DESTINATIONS. A pass whose output "
           "is consumed\nwithout a resolve does not appear here at all.")
