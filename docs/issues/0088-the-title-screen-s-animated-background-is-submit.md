@@ -128,3 +128,42 @@ around the draws between the BEGIN and END events, resolved back into this
 record. It is a stopgap over a WRONG answer rather than over a missing one, and
 it errs in the only safe direction: over-reporting visibility costs drawing
 something hidden, under-reporting deletes geometry the title asked for.
+
+### Note (2026-08-07)
+SECOND GAP CLOSED: the fragment-stage classification now matches the console's.
+
+draw::ClassifyDraw (runtime/gpu_draw_xlate.cpp) calls Xenia's own
+draw_util::IsRasterizationPotentiallyDone and
+draw_util::IsPixelShaderNeededWithRasterization against the analyzed pixel
+shader this backend already caches, and gpu_draw.cpp applies both alongside the
+edram_mode test it had. Measured at guest frame 600 against the console:
+
+    before   vs 760aacf6212e632c ps 63c971f5e9d59913   ours 50   theirs  2
+             vs 760aacf6212e632c ps 0000000000000000   ours  5   theirs 53
+    after    that pair no longer differs at all
+
+Draws issued with no fragment stage went from 15 to 64 per title frame, and in
+gameplay from 789 to 837 of 2,256. Nothing was skipped for non-rasterisation (0)
+and no pixel shader failed to analyse (0), on both screens.
+
+WHAT IT DID NOT DO, stated because the reason for making the change was
+faithfulness and it would be easy to imply more. It does not visibly improve the
+title screen: mean R/G went 2.851 -> 2.495 against the console's 3.518, i.e. it
+moved slightly and not clearly closer. The two runs are different phases of an
+animated screen so a small difference is expected either way. The value here is
+that our draw classification now matches the console's exactly, which removes it
+as a candidate for every remaining difference, not that it fixed one.
+
+Undecided is a THIRD state and is counted, not folded into "no". A pixel shader
+that fails to analyse leaves the question to the edram_mode test and increments
+drawsClassifyFailed, which the mode census always prints -- including its zero.
+Answering "no fragment stage" on our own failure would silently turn every draw
+of a broken shader into a depth-only pass, which looks exactly like the
+console's own Z-prepass and would be invisible in every diagnostic here.
+
+GEARS_DRAW_MODE_ONLY=1 restores the mode-only test as the control arm.
+
+STILL OPEN on this issue: the title screen is closer but not at parity -- the
+console's fire is brighter and its shape is not reproduced. With the draw set
+and the classification now both matching, the remaining difference is in what
+those shared draws PRODUCE, not in which draws run.

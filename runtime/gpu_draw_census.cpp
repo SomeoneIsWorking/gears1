@@ -51,6 +51,12 @@ void FrameCensus::ReportModes() const
         ml.add(" {}={}", name, n);
     }
     ml.add("; {} draws issued with no fragment stage", drawsNoPixelShader);
+    ml.add(", {} not rasterised at all (skipped, as Xenia skips them)",
+           drawsNoRasterisation);
+    // ALWAYS printed, including the zero: "no shader failed to analyse" and
+    // "nobody checked" must not read the same.
+    ml.add(", {} left UNDECIDED by a pixel shader that would not analyse",
+           drawsClassifyFailed);
     ml.flush(lucent::Level::Info, "draw");
 }
 
@@ -96,7 +102,8 @@ void FrameCensus::ReportSkips(size_t) const
             code == 5 ? "index buffer failed" :
             code == 6 ? "descriptor alloc failed" :
             code == 7 ? "quad list with fewer than 4 vertices" :
-            code == 8 ? "no host target for the draw's EDRAM surface format"
+            code == 8 ? "no host target for the draw's EDRAM surface format" :
+            code == 9 ? "rasterises nothing (Xenia skips these too, not a loss)"
                       : "unknown";
         lucent::warn("draw", "  skipped {}x: {}", n, why);
     }
