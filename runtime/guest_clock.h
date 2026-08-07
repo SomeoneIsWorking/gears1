@@ -72,7 +72,28 @@ void AdvanceGuestClockFrame();
 // The likely mechanism, not yet confirmed: free-running vblanks arrive far
 // faster than 60 Hz, so guest time advances at hundreds of times real rate and
 // the title's per-frame delta becomes absurd.
-enum class ClockTrigger { kPresent, kVblank, kVblankFreeRun };
+//
+//   vblank-paced    Vblank, free-running until the FIRST present and pinned to
+//                   the present rate afterwards. This is what the two failures
+//                   above jointly point at: guest time must advance before the
+//                   first present (or boot deadlocks -- the boot spin waits on
+//                   TIME, proved by a present-triggered arm that had 60 Hz
+//                   vblanks arriving throughout and still reached 0 frames) and
+//                   at a fixed rate per present afterwards (or the picture
+//                   freezes). Those conflict only during boot, so the two phases
+//                   are separated explicitly.
+//
+//                   Still NO host time: "free-running" here means "delivered as
+//                   soon as the guest has consumed the previous one", which is a
+//                   function of guest execution, and the pinned phase is a
+//                   function of the present count. Neither reads a host clock.
+//
+//                   GEARS_GUEST_CLOCK_VBLANK_SLACK (default 2) is how far
+//                   vblanks may run ahead of presents once pinned. It must not
+//                   be 0: the guest needs a vblank in flight to produce the
+//                   present that authorises the next one, and exact lockstep
+//                   deadlocks for that reason.
+enum class ClockTrigger { kPresent, kVblank, kVblankFreeRun, kVblankPaced };
 ClockTrigger GuestClockTrigger();
 
 // Whether a fixed step is in effect, and how big it is. For reporting: a run
@@ -80,6 +101,10 @@ ClockTrigger GuestClockTrigger();
 // different data and must not be told apart by guesswork.
 bool GuestClockIsFixedStep();
 uint64_t GuestClockStepNanoseconds();
+
+// How far vblanks may run ahead of presents once the paced trigger has pinned
+// them. See kVblankPaced.
+uint32_t GuestClockVblankSlack();
 
 // Reads GEARS_GUEST_CLOCK_STEP_NS and reports what it decided, ALWAYS -- both
 // when a step is configured and when one is not. "the clock is fixed" and "I
