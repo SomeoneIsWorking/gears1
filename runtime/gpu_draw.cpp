@@ -1677,6 +1677,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     struct ResolveDump
     {
         uint32_t base, w, h;
+        // The pass's STRUCTURAL IDENTITY -- which EDRAM surface it copies out
+        // of, and the destination's guest dimensions. This, not the destination
+        // ADDRESS, is what pairs a pass with the console's: the title's physical
+        // allocations land in different places in the two emulators (a paired
+        // gameplay capture had all seven of our destinations near 0x0Cxxxxxx and
+        // all eight of the console's near 0x13xxxxxx), so an address join pairs
+        // nothing. These come from the guest's own registers, so both sides
+        // necessarily agree on them.
+        uint32_t sourceBase, destPitch, destHeight;
         bool isDepth;
         VkBuffer buf;
         VkDeviceMemory mem;
@@ -1724,7 +1733,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         rb2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb2);
-        resolveDumps.push_back({r.base, r.width, r.imageHeight, r.isDepth, b, m,
+        resolveDumps.push_back({r.base, r.width, r.imageHeight, r.sourceBase,
+                                r.pitch, r.height, r.isDepth, b, m,
                                 ordinal, drawIndex});
         return true;
     };
@@ -2378,7 +2388,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             rb2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb2);
-            resolveDumps.push_back({r.base, r.width, r.imageHeight, r.isDepth, b, m, UINT32_MAX, 0});
+            resolveDumps.push_back({r.base, r.width, r.imageHeight,
+                                    r.sourceBase, r.pitch, r.height, r.isDepth,
+                                    b, m, UINT32_MAX, 0});
         }
     }
 
@@ -2588,10 +2600,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // A per-resolve snapshot is named by its ORDINAL FIRST, so the
                 // files sort in the order the oracle's IssueCopy log lists them
                 // and resolve N pairs with resolve N by filename alone.
+                // Ordinal first so the files sort in execution order, then the
+                // structural key the cross-emulator join needs (see ResolveDump)
+                // and finally this run's own destination address and draw index,
+                // which are ours alone and are for reading the log, not for
+                // pairing.
                 (rd.ordinal == UINT32_MAX
                      ? std::format("resolve_{:08x}.ppm", rd.base)
-                     : std::format("resolve_{:02}_{:08x}_draw{}.ppm",
-                                   rd.ordinal, rd.base, rd.drawIndex));
+                     : std::format("resolve_{:02}_src{}{:03X}_{}x{}_{:08x}_draw{}.ppm",
+                                   rd.ordinal, rd.isDepth ? 'D' : 'C',
+                                   rd.sourceBase, rd.destPitch, rd.destHeight,
+                                   rd.base, rd.drawIndex));
             if (WritePpm(out, rgba.data(), rd.w, rd.h))
             {
                 const double lo = samples ? minSeen : 0.0;
