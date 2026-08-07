@@ -1,7 +1,7 @@
 ---
 id: 89
 title: Guest frame 2920 is not the first gameplay render in every run, so a frame index is not a landmark
-status: open
+status: resolved
 symptom: captured pass layers at guest frame 2920 on both sides; ours rendered a 3-draw loading frame with 1 resolve and the oracle dumped 1 copy, where the run the index came from had 586 draws there
 tags: oracle,tooling,workflow,gameplay-scene
 created: 2026-08-07
@@ -41,3 +41,6 @@ RANGE of frames and picking the gameplay ones afterwards, which is expensive on
 the oracle: each resolve dump flushes the deferred command buffer and reads the
 whole 512 MiB shared-memory buffer back, so dumping every resolve of every frame
 runs at about 0.8 fps and never reaches gameplay at all.
+
+### Resolution (2026-08-07)
+content selection replaces the frame index on both sides: GEARS_DRAW_FRAME_MIN_DRAWS in the runtime, GEARS_ORACLE_DUMP_MIN_DRAWS in the fork, same rule (the frame AFTER the first with >= N draws) so the two land on the same game moment. Verified: three of our runs selected 2926/2935/2942 and the oracle selected 2947 from its own 2946, all genuine gameplay frames, where the fixed index 2920 had been a loading screen in both.
