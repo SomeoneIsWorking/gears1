@@ -192,6 +192,30 @@ constexpr uint32_t kOpEventWriteShd = 0x58;
 constexpr uint32_t kOpEventWriteExt = 0x5A;
 constexpr uint32_t kOpEventWriteZpd = 0x5B;
 
+// The record EVENT_WRITE_ZPD writes, exactly as Xenia's
+// xe_gpu_depth_sample_counts declares it: eight little-endian counters, A and B
+// summed by D3D, and the query result is END minus BEGIN. Named here rather
+// than written as raw offsets because the ONE field that matters (ZPass) sits
+// at +16, and a hand-counted offset into an eight-field record is how a
+// diagnostic ends up reporting a different counter than it claims to.
+struct GuestDepthSampleCounts
+{
+    uint32_t total_A, total_B;
+    uint32_t zfailA, zfailB;
+    uint32_t zpassA, zpassB;
+    uint32_t stencilFailA, stencilFailB;
+};
+static_assert(sizeof(GuestDepthSampleCounts) == 0x20,
+    "the ZPD record is 0x20 bytes; the write below memsets that much");
+static_assert(offsetof(GuestDepthSampleCounts, zpassA) == 16,
+    "D3D reads the occlusion result from ZPass, at +16 in this record");
+
+// How much the reported ZPass counter grows per query under
+// GEARS_GPU_ZPD_VISIBLE. Only the SIGN of END-BEGIN matters to a visibility
+// test, but a title that scales an effect by the sample count wants a number
+// with a plausible magnitude, so this is roughly a 720p screenful.
+constexpr uint32_t kZpdSamplesPerQuery = 1280 * 720;
+
 // RB_SAMPLE_COUNT_ADDR: where EVENT_WRITE_ZPD writes its sample-count record.
 constexpr uint32_t kRegSampleCountAddr = 0x2325;
 
@@ -1971,15 +1995,66 @@ struct CommandProcessor
             // zero-filled, which also clears the sentinel. Layout and
             // addressing per Xenia's xenos_zpd_report.h (record = addr &
             // ~0x1F; END at slot+0, BEGIN at slot+0x20).
+            //
+            // ZERO IS NOT A NEUTRAL ANSWER, IT IS "NOTHING WAS VISIBLE". D3D
+            // computes the query result as END.ZPass - BEGIN.ZPass (A and B
+            // summed), so zero-filling every record answers every occlusion
+            // query with "no pixels passed" -- and the title BELIEVES it. That
+            // was harmless when this was written, because the renderer really
+            // did rasterise nothing; it stopped being harmless the moment the
+            // renderer started drawing, and nothing brought the comment or the
+            // code back.
+            //
+            // So the default answers "everything was visible", by making the
+            // counter MONOTONICALLY INCREASING so that any END minus any
+            // earlier BEGIN is positive. Conservative in the only direction
+            // that is safe: over-reporting visibility costs drawing something
+            // that was hidden, while under-reporting DELETES geometry the title
+            // asked for. Measured on the title screen -- the post-processing
+            // pass group went from 2.0% of frames to 100.0%, draws per frame
+            // from a median of 161 to 171 against the console's 173, and the
+            // screen from grey-brown to red (R/G 1.79 -> 2.68, console 3.52).
+            //
+            // GEARS_GPU_ZPD_ZERO=1 restores the old all-zero answer. A
+            // DIAGNOSTIC control arm for exactly this measurement, never a fix.
+            //
+            // STOPGAP: the proper fix is real occlusion queries -- a Vulkan
+            // OCCLUSION query pool around the draws between the BEGIN and END
+            // events, resolved back into this record -- because this reports a
+            // fixed answer rather than measuring one. It is a stopgap and not
+            // the fix, but it is a stopgap over a WRONG answer rather than
+            // over a missing one.
             {
                 const uint32_t reportAddress = g_gpuRegisters[kRegSampleCountAddr];
                 const uint32_t recordBase = reportAddress & ~0x1Fu;
                 if (recordBase != 0)
                 {
                     uint8_t* record = gears::Memory().Translate<uint8_t>(recordBase);
+                    // The zero-fill stays: it is what clears D3D's 0xFFFFFEED
+                    // sentinel, which is how GetData learns the query is done.
                     memset(record, 0, 0x20);
-                    lucent::debug("gpu", "EVENT_WRITE_ZPD: zero samples -> {:#x}"
-                        " (initiator {:#x})", recordBase, count >= 1 ? data[0] : 0u);
+                    static const bool reportVisible =
+                        !lucent::config::flag("GPU_ZPD_ZERO");
+                    if (reportVisible)
+                    {
+                        // Per query, not per pixel: the value only has to grow
+                        // between the BEGIN record and the END record that
+                        // follows it. Guest-side little-endian, which is the
+                        // host's own order here, so a plain store is correct.
+                        static std::atomic<uint32_t> zpassCounter{0};
+                        const uint32_t samples =
+                            zpassCounter.fetch_add(kZpdSamplesPerQuery,
+                                std::memory_order_relaxed) + kZpdSamplesPerQuery;
+                        std::memcpy(record + offsetof(GuestDepthSampleCounts,
+                                                      zpassA), &samples, 4);
+                        std::memcpy(record + offsetof(GuestDepthSampleCounts,
+                                                      total_A), &samples, 4);
+                    }
+                    lucent::debug("gpu", "EVENT_WRITE_ZPD: {} -> {:#x}"
+                        " (initiator {:#x})",
+                        reportVisible ? "visible (monotonic ZPass)"
+                                      : "zero samples",
+                        recordBase, count >= 1 ? data[0] : 0u);
                 }
             }
             break;

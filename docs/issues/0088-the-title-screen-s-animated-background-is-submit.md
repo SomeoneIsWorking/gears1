@@ -80,3 +80,51 @@ conditions, and we implement only the middle one:
 So we run a pixel shader on ~48 draws per title frame that the console runs
 depth-only. Whether that changes any pixel depends on whether our colour write
 mask is honoured; it is at minimum wasted work and it is a faithfulness gap.
+
+### Note (2026-08-07)
+ROOT CAUSE FOUND AND FIXED (title screen). Every occlusion query was answering
+"nothing was visible".
+
+runtime/vd_null_gpu.cpp's EVENT_WRITE_ZPD handler zero-filled the whole
+xe_gpu_depth_sample_counts record. D3D computes an occlusion result as
+END.ZPass - BEGIN.ZPass (A and B summed), so an all-zero record is not a
+neutral answer -- it is a positive report that no pixels passed, and the title
+believes it and culls. The handler's own comment justified it: "A GPU that
+rasterises nothing has zero samples in every counter." That was true when it was
+written. It stopped being true when the renderer started drawing, and neither
+the code nor the comment came back.
+
+It also explains the shape of the symptom exactly. The first title frame renders
+the group because no query has reported yet; from the second frame the results
+say invisible and it is culled; periodic re-tests produce the scattered bursts
+(566, 679-681, 753-769, 1249-1262, 1477, 1502) rather than a clean off.
+
+THE FIX, A/B ON THE SAME SCREEN, same walk, same frames:
+
+    GEARS_GPU_ZPD_ZERO=1 (the old answer)  post group on   11 of 562 frames (2.0%)
+    default (monotonic ZPass)              post group on  563 of 563 frames (100.0%)
+
+    draws per frame, median   161 -> 171   (console 173)
+    title screen mean red     0.0863 -> 0.1571   (console 0.2508)
+    title screen R/G          1.79 -> 2.68       (console 3.52)
+
+The screen goes from grey-brown to red. Not parity: the console's fire is
+brighter still and its shape is not reproduced, so something in that pass group
+remains wrong -- but the group now runs on every frame instead of 2% of them,
+which is a cause removed rather than a symptom moved.
+
+WHAT THIS DOES NOT FIX, measured rather than assumed. In GAMEPLAY the pass group
+was already present on 100% of frames on BOTH arms (6,091 frames on the control,
+4,014 on the fixed run, 100.0% each). So this is a title/menu-screen fix and the
+gameplay scene's darkness (#62) is NOT explained by it. A run under the fix does
+show Marcus rendered where earlier runs showed no character, but that is NOT
+attributable here: the control run's walk ended facing a wall, so the two runs
+were at different positions and the comparison does not support the claim. The
+character question stays open on #77.
+
+STOPGAP, and marked as one in the code. Reporting a fixed "everything visible"
+is not measuring occlusion. The proper fix is a real Vulkan OCCLUSION query pool
+around the draws between the BEGIN and END events, resolved back into this
+record. It is a stopgap over a WRONG answer rather than over a missing one, and
+it errs in the only safe direction: over-reporting visibility costs drawing
+something hidden, under-reporting deletes geometry the title asked for.
