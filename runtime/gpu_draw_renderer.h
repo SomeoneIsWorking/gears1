@@ -142,6 +142,12 @@ struct ResolveTarget
     uint32_t base = 0;       // RB_COPY_DEST_BASE of the texture's first row
     uint32_t pitch = 0, height = 0; // in pixels, from RB_COPY_DEST_PITCH
     uint32_t bpp = 0;        // bytes per pixel of the guest destination format
+    // The raw RB_COPY_DEST_INFO.copy_dest_format. Kept beside the derived bpp
+    // because the cross-emulator pass comparison has to DECODE these bytes, and
+    // one frame carries four-byte and eight-byte destinations under otherwise
+    // identical keys -- reading a 16-bit-float buffer as k_8_8_8_8 makes a
+    // plausible picture of the wrong pass.
+    uint32_t guestFormat = 0;
     uint32_t width = 0, imageHeight = 0; // what the host image was created with
     bool everWritten = false; // whether a resolve has landed in it yet
     // A DEPTH destination. It is not a copy of a colour surface: the guest reads

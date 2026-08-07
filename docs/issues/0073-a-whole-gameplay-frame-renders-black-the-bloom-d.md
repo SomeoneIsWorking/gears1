@@ -405,3 +405,27 @@ This does NOT yet say whether the console renders the same moment black -- the
 paired oracle capture is what settles that, and it is not in hand yet. If the
 console is also black here, this frame is a legitimate fade-in and the black
 gameplay the user reports is a different (or longer-lived) fault.
+
+### Note (2026-08-07)
+### Correction, same day: the CONSOLE renders that frame black too
+
+The paired capture landed. At the first gameplay render the console's own last
+two copies are entirely zero -- read back off its GPU immediately after each
+copy, before anything else can touch them:
+
+    copy11  srcC2D0 1280x720 f6 -> 1312F000   mean 0.2028, 23.6% non-zero
+    copy17  srcC2D0 1280x720 f6 -> 1312F000   0.0000,  0.0% non-zero
+    copy18  srcC2D0 1280x720 f6 -> 1F606000   0.0000,  0.0% non-zero   (front buffer)
+
+So the level opens on a fade FROM black and the first gameplay frame is black on
+both emulators. A comparison taken there compares two black frames, and the
+"we are black and they are not" reading that the previous note was heading
+towards would have been wrong.
+
+What survives from the previous note: the frame IS black on our side, the scene
+colour surface upstream of the post chain does carry content, and the NaN
+constant in 0x9610bf8038af9aaf is real and present. What it does NOT establish
+is that any of that is a defect at THIS frame -- black is the correct answer
+here. Whether the NaN persists past the fade is the open question, and the
+selector now takes GEARS_DRAW_FRAME_AFTER_GAMEPLAY / GEARS_ORACLE_DUMP_AFTER_
+GAMEPLAY so the pair can be taken 300 frames later instead.

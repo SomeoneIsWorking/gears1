@@ -725,6 +725,7 @@ struct CommandProcessor
     bool contentGateOpen = false;
     uint32_t contentScans = 0;
     uint32_t contentBusiest = 0;
+    uint32_t contentWait = 0;   // GEARS_DRAW_FRAME_AFTER_GAMEPLAY, counted down
     // EVERY DRAW THE GUEST ISSUED, AND EVERY REASON WE DROPPED ONE. Four paths
     // in CaptureFrameDraw discard a draw, and none of them was counted, so
     // "this frame had 800 draws" could never be distinguished from "this frame
@@ -1379,21 +1380,39 @@ struct CommandProcessor
         {
             ++contentScans;
             contentBusiest = std::max(contentBusiest, uint32_t(frameDraws.size()));
+            if (contentArmed && contentWait > 0)
+            {
+                // GEARS_DRAW_FRAME_AFTER_GAMEPLAY frames of slack. The FIRST
+                // gameplay frame is a fade from black -- the console's own
+                // capture of it resolves its post-chain output and its front
+                // buffer entirely zero -- so a comparison taken there compares
+                // two black frames and says nothing. The oracle fork takes the
+                // same offset (GEARS_ORACLE_DUMP_AFTER_GAMEPLAY).
+                --contentWait;
+                drawsOffered = drawsNoShaderPair = drawsZeroIndices = 0;
+                drawsImmediateIndex = drawsAfterFrameDone = 0;
+                ++frameSwaps;
+                frameDraws.clear();
+                return;
+            }
             if (contentArmed)
             {
                 contentGateOpen = true;
-                lucent::info("gpu", "guest-draw: frame {} follows the first frame"
-                    " with >= {} draws, so it is gameplay; rendering it after {}"
-                    " frames scanned", frameSwaps, minDraws, contentScans);
+                lucent::info("gpu", "guest-draw: frame {} is the capture -- it"
+                    " follows the first frame with >= {} draws, after {} frames"
+                    " scanned", frameSwaps, minDraws, contentScans);
             }
             else
             {
                 if (long(frameDraws.size()) >= minDraws)
                 {
                     contentArmed = true;
+                    contentWait = uint32_t(std::max<long>(0,
+                        lucent::config::number("DRAW_FRAME_AFTER_GAMEPLAY", 0)));
                     lucent::info("gpu", "guest-draw: frame {} has {} draws (>= {})"
-                        " after {} frames scanned; the NEXT frame is the capture",
-                        frameSwaps, frameDraws.size(), minDraws, contentScans);
+                        " after {} frames scanned; capturing {} frame(s) later",
+                        frameSwaps, frameDraws.size(), minDraws, contentScans,
+                        contentWait + 1);
                 }
                 else if (contentScans == 1 || contentScans % 300 == 0)
                 {
