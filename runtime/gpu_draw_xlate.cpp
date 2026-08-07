@@ -1143,6 +1143,28 @@ bool IsPrimitivePolygonal(const uint32_t* registerFile)
     return draw_util::IsPrimitivePolygonal(regs);
 }
 
+bool ClassifyDraw(const uint32_t* registerFile, const uint8_t* psUcode,
+                  size_t psSize, uint64_t psHash, DrawClassification& out)
+{
+    const RegisterFile& regs = AsRegisterFile(registerFile);
+    out = DrawClassification{};
+    out.rasterisationDone = draw_util::IsRasterizationPotentiallyDone(
+        regs, draw_util::IsPrimitivePolygonal(regs));
+    if (!out.rasterisationDone)
+        return true; // a decided answer: nothing is rasterised, so no stage runs
+    // The remaining question needs the shader's ANALYSIS -- whether it kills
+    // pixels, writes depth, exports memory, and which colour targets it writes
+    // -- so it needs the same analyzed Shader the translator uses. Cached by
+    // hash there, so this is a lookup on all but the first draw of a shader.
+    xe::gpu::SpirvShader* ps =
+        GetAnalyzedShader(xenos::ShaderType::kPixel, psUcode, psSize, psHash);
+    if (!ps)
+        return false; // UNDECIDED, and the caller must not read the fields
+    out.pixelShaderNeeded =
+        draw_util::IsPixelShaderNeededWithRasterization(*ps, regs);
+    return true;
+}
+
 std::vector<uint8_t> DeriveSystemConstants(const uint32_t* registerFile)
 {
     const RegisterFile& regs = AsRegisterFile(registerFile);

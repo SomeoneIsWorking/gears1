@@ -56,6 +56,16 @@ struct FrameCensus
     // Draws issued with NO fragment stage because their edram_mode is not
     // kColorDepth.
     uint32_t drawsNoPixelShader = 0;
+    // Draws Xenia would not issue at all -- IsRasterizationPotentiallyDone is
+    // false, so the draw covers nothing. Counted rather than dropped silently:
+    // a frame where this is large and the picture is empty has a very different
+    // cause from one where the draws were issued and shaded nothing.
+    uint32_t drawsNoRasterisation = 0;
+    // Draws whose pixel shader could not be analysed, so the fragment-stage
+    // question was left UNDECIDED and the mode test alone decided it. Not zero
+    // by construction, and a non-zero value means the numbers above are a
+    // partial answer -- which is why it is reported next to them.
+    uint32_t drawsClassifyFailed = 0;
 
     std::set<uint32_t> depthBases;   // distinct RB_DEPTH_INFO.depth_base
     std::map<std::pair<uint32_t, uint32_t>, uint64_t> surfaceDepthPairs;

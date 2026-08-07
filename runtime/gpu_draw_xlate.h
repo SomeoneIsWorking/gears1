@@ -200,6 +200,39 @@ bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv);
 // applying them to points or lines would drop geometry the hardware keeps.
 bool IsPrimitivePolygonal(const uint32_t* registerFile);
 
+// WHETHER THIS DRAW RASTERISES AT ALL, AND WHETHER IT NEEDS ITS PIXEL SHADER.
+//
+// Xenia's IssueDraw decides the fragment stage with THREE tests and this backend
+// implemented only the middle one (edram_mode == kColorDepth). Measured against
+// the console at the same guest frame, on the title screen: the same vertex
+// shader 760aacf6212e632c splits 50 draws with a pixel shader and 5 without on
+// our side, and 2 with / 53 without on the console's -- the same 55 draws
+// classified oppositely, because 48 of them are a Z-PREPASS the console runs
+// with no pixel shader at all.
+//
+//   rasterisationDone  -- draw_util::IsRasterizationPotentiallyDone. False means
+//                         the draw covers nothing; Xenia SKIPS it outright
+//                         (memexport aside) rather than issuing it.
+//   pixelShaderNeeded  -- draw_util::IsPixelShaderNeededWithRasterization: false
+//                         when the shader does not kill pixels, does not write
+//                         depth, has no memory export, and every colour target
+//                         it writes is fully masked out by RB_COLOR_MASK for
+//                         that target's own component count. Only meaningful
+//                         when rasterisationDone.
+//
+// Returns FALSE when it could not decide -- the pixel shader's microcode failed
+// to analyse -- and the caller must then not read the fields. A classifier that
+// answered "no fragment stage" on its own failure would silently turn every
+// draw of a broken shader into a depth-only pass, which looks exactly like the
+// console's own Z-prepass and would be invisible in every diagnostic here.
+struct DrawClassification
+{
+    bool rasterisationDone = false;
+    bool pixelShaderNeeded = false;
+};
+bool ClassifyDraw(const uint32_t* registerFile, const uint8_t* psUcode,
+                  size_t psSize, uint64_t psHash, DrawClassification& out);
+
 // Translates a single stage (vertex or pixel) under the given modification --
 // the value DeriveShaderModifications produced for the draw's pair. Lets the
 // whole-frame backend translate and cache each distinct (shader, modification)
