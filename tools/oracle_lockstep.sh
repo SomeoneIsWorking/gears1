@@ -184,6 +184,17 @@ run_ours() {
         [ "$n" -ge $((FRAMES / INTERVAL)) ] && break
         sleep 5; waited=$((waited + 5))
     done
+    # TERM FIRST, AND WAIT FOR IT. A SIGKILL lands mid-vkQueueSubmit and can
+    # leave the GPU wedged: the oracle run that followed one here died with
+    # VK_ERROR_DEVICE_LOST and radv's "the CS has been cancelled because the
+    # context is lost -- this context is innocent", i.e. it was reset by
+    # somebody else's hang. Killing our own side politely is what makes the
+    # oracle arm survivable.
+    kill -TERM "$ours_pid" 2>/dev/null || true
+    grace=0
+    while [ "$grace" -lt 20 ] && kill -0 "$ours_pid" 2>/dev/null; do
+        sleep 1; grace=$((grace + 1))
+    done
     kill -9 "$ours_pid" 2>/dev/null || true
     wait "$ours_pid" 2>/dev/null || true
     trap - EXIT INT TERM
@@ -210,10 +221,25 @@ while [ "$waited" -lt "$THEIRS_TIMEOUT" ]; do
     kill -0 "$theirs_pid" 2>/dev/null || break
     sleep 5; waited=$((waited + 5))
 done
+kill -TERM "$theirs_pid" 2>/dev/null || true
+grace=0
+while [ "$grace" -lt 20 ] && kill -0 "$theirs_pid" 2>/dev/null; do
+    sleep 1; grace=$((grace + 1))
+done
 kill -9 "$theirs_pid" 2>/dev/null || true
 wait "$theirs_pid" 2>/dev/null || true
+# Xenia pops a zenity dialog on a lost device and then sits on it forever. The
+# run that hit this was still "in progress" 10 minutes after it had stopped
+# writing frames, which reads as a slow oracle rather than a dead one.
+#
+# Matched on the dialog's OWN TITLE, never on the bare program name: zenity is a
+# shared binary and the operator may well have a dialog of their own open. The
+# same rule as killing by PID rather than by "gears1".
+ps -eo pid,args 2>/dev/null | grep '[z]enity.*Xenia Error' | awk '{print $1}' |
+    while read -r zpid; do kill -TERM "$zpid" 2>/dev/null || true; done
 trap - EXIT INT TERM
 
+expected_n=$((FRAMES / INTERVAL))
 ours_n=$(find "$OUT/ours" -name '*.ppm' | wc -l)
 ours2_n=$(find "$OUT/ours2" -name '*.ppm' | wc -l)
 theirs_n=$(find "$OUT/theirs" -name '*.png' | wc -l)
@@ -227,6 +253,25 @@ theirs_n=$(find "$OUT/theirs" -name '*.png' | wc -l)
     echo "walk (theirs): $THEIRS_INPUT"
     echo "oracle booted from: $ORACLE_SOURCE"
     echo "ours:   $ours_n frames   ours2: $ours2_n frames   theirs: $theirs_n frames"
+    echo "expected on each side: $expected_n"
+    echo
+    # A SIDE THAT DIED IS NOT A SIDE THAT DISAGREED, and a short filmstrip looks
+    # like neither unless it is named. Both readings have already been made here:
+    # a run cut off at 5 of 25 frames, and an oracle killed by a GPU reset at
+    # frame 3,900 that then sat on an error dialog for ten minutes looking slow.
+    for side in ours ours2 theirs; do
+        eval "n=\$${side}_n"
+        [ "$n" -ge "$expected_n" ] && continue
+        echo "SHORT: $side wrote $n of $expected_n frames -- it did not finish the"
+        echo "  walk, so its last frames are NOT the gameplay ones. Do not read a"
+        echo "  difference at any frame beyond its last as a rendering difference."
+    done
+    if grep -qi 'device lost\|DEVICE_LOST' "$OUT/theirs.log" 2>/dev/null; then
+        echo "ORACLE LOST THE GPU: theirs.log reports a lost device. radv reports"
+        echo "  \"this context is innocent\" when some OTHER process wedged the"
+        echo "  GPU, so check what else was running. The oracle frames after that"
+        echo "  point do not exist and the ones before it are still valid."
+    fi
     echo
     echo "Frame N on the two sides is the same GAME MOMENT only as far as the"
     echo "title is deterministic under identical input. ours vs ours2 is the"
