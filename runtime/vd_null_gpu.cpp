@@ -703,6 +703,12 @@ struct CommandProcessor
     uint32_t drawsImmediateIndex = 0;
     uint32_t drawsAfterFrameDone = 0;
     long framesRendered = 0;
+    // Which GEARS_DRAW_FRAME_REPORT_EVERY bucket of the GUEST'S present counter
+    // has already been reported. A bucket index rather than a modulo, because
+    // the present counter can skip values between two rendered frames and a
+    // `presents % every == 0` test would silently miss every report whose exact
+    // multiple fell in a skipped run -- a cadence that quietly emits nothing.
+    uint64_t reportedAtPresent = 0;
     uint64_t lastRenderFrames = 0;
     uint64_t lastDroppedFrames = 0;
     uint64_t lastBusyMillis = 0;
@@ -1384,18 +1390,38 @@ struct CommandProcessor
         // unless GEARS_DRAW_FRAME_REPORT_EVERY=N asks for a periodic census and
         // screenshot -- it costs ~40 ms, so it is a visible hitch by design.
         const long reportEvery = lucent::config::number("DRAW_FRAME_REPORT_EVERY", 0);
+        // CADENCED AND NUMBERED BY THE GUEST'S PRESENT COUNTER, NOT BY OUR OWN
+        // RENDERED-FRAME COUNTER.
+        //
+        // The two are not the same number. This backend returns early from a
+        // present it has nothing to render, so `framesRendered` counts frames WE
+        // drew while `g_frameCount` counts frames the GUEST presented -- and the
+        // gap is not small: two runs of the same walk measured 7,800 rendered
+        // against 7,920 presented (98%) and 1,500 against 12,540 (12%).
+        //
+        // It matters because this is the index the cross-emulator comparison
+        // JOINS ON. The oracle names its captures by guest_swap_count and our
+        // input script's "f<N>:" steps are driven by GuestFramesPresented(), so
+        // numbering the filmstrip by anything else put our frame 1,500 -- the
+        // 12,540th present -- beside the oracle's 1,500th present, eight times
+        // further into the game, while the manifest said they were the same
+        // moment. Same counter on both sides, or the join is meaningless.
+        const uint64_t guestPresents = g_frameCount.load(std::memory_order_relaxed);
         in.report = frameCount > 0
             ? framesRendered >= frameCount
-            : reportEvery > 0 && framesRendered % reportEvery == 0;
+            : reportEvery > 0 && guestPresents / uint64_t(reportEvery) > reportedAtPresent;
+        if (in.report && frameCount <= 0)
+            reportedAtPresent = guestPresents / uint64_t(reportEvery);
         // The title's own texture-slot table, on exactly the frames the renderer
         // censuses its own texture bases -- the two lines are meant to be read
         // next to each other.
         if (in.report)
             gears::ReportTitleTextureSlots();
         // Number the reported screenshots in a live run so a menu walk leaves a
-        // filmstrip rather than overwriting one file.
+        // filmstrip rather than overwriting one file. By the GUEST PRESENT
+        // counter, for the reason above: the filename IS the join key.
         if (frameCount <= 0 && in.report)
-            in.sequence = framesRendered;
+            in.sequence = long(guestPresents);
 
         // GEARS_DRAW_FRAME_DUMP=<path>: write this frame's whole draw stream to a
         // file that tools/frame_replay renders offline. Reaching a gameplay frame
