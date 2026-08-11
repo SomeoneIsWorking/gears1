@@ -5,7 +5,7 @@ status: resolved
 symptom: layer_compare reported mean |d| 0.695 on the shadow mask; the console had rendered ONE shadow-casting light where the port rendered two
 tags: oracle,layer-compare,methodology,instrument
 created: 2026-08-11
-updated: 2026-08-11
+updated: 2026-08-12
 ---
 
 ## What was measured
@@ -72,3 +72,6 @@ A fixed guest clock would fix OUR side's run-to-run variance outright, which is
 half of what makes this issue's numbers noisy (the shadow-mask pass varies
 105k..157k shadowed pixels between runs of one build). It would NOT align us
 with the oracle, which has no such knob -- that still needs the window.
+
+### Note (2026-08-12)
+THE OBVIOUS ROOT-CAUSE FIX -- give the ORACLE the same fixed guest timestep our side has, so both advance deterministically and land on identical frame content -- IS A DEAD END, and it is already measured. Do not build it. Xenia funnels every guest clock through Clock::UpdateGuestClock() and even exposes GetGuestTickCountPointer(), so a fixed-step mode there is small and tractable; the problem is not the plumbing. It is that all three ways of driving a fixed step were tried on OUR side and every one fails on this title (runtime/guest_clock.h documents each with its measurement): 'present' DEADLOCKS -- the title spins in guest code waiting for time before its first present, so time cannot advance until a frame is presented and a frame cannot be presented until time advances, 0 frames in 100 s against 9 on the real clock; 'vblank' cannot deadlock but is paced by a HOST SLEEP, so a run under it is not reproducible and no comparison may be quoted from it; 'vblank-freerun' FREEZES THE PICTURE -- the title keeps presenting to frame 10,800 but every frame from about 2,700 is bit-identical to the last, where the real-clock control's consecutive frames are 21-34% identical. That last one sets the trap worth remembering: a frozen picture is trivially reproducible, so the determinism control it exists to pass looks PERFECT under it, and the only thing that catches it is asking 'does the picture change at all'. Mirroring any of these into the oracle inherits the same failure, and a matched pair of deadlocks or a matched pair of frozen pictures would look like success. SO THE PRACTICAL ROUTE STAYS A WORKAROUND, and it should be built as one rather than dressed up: an OUTCOME-GATED capture. The frame gate currently decides before the frame renders, on draw count and content, and neither can express 'the frame in which this draw clipped to zero' because prims_after_clip is a pipeline statistic that exists only after rendering. The shape that fits the existing renderer: keep rendering past the gate and let the per-frame report test the condition, stopping the run on the first frame that satisfies it -- the diag table and the dumps are rewritten each frame, so the ones left on disk are that frame's. That is a real instrument, it selects by what HAPPENED rather than by identity, and it does not pretend to have fixed the non-determinism.
