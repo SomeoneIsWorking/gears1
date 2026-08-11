@@ -218,6 +218,46 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
         (!noDepth && ((om.depthControl >> 1) & 1)) ? VK_TRUE : VK_FALSE;
     ds.depthWriteEnable = ((om.depthControl >> 2) & 1) ? VK_TRUE : VK_FALSE;
     ds.depthCompareOp = CompareOpOf(om.depthControl >> 4);
+    // STENCIL, from RB_DEPTHCONTROL (enable +0, func +8, fail +11, zpass +14,
+    // zfail +17, and the back-face set at +20..+31 when backface_enable is set)
+    // and RB_STENCILREFMASK (ref, read mask, write mask, 8 bits each).
+    //
+    // Ignoring it was not neutral. This title's shadow passes MARK stencil and
+    // the passes that follow are meant to be confined to the marked pixels;
+    // with no stencil test every one of them ran over the whole screen
+    // (catalog #91). GEARS_DRAW_NOSTENCIL=1 restores that as a control arm.
+    static const bool noStencil = lucent::config::flag("DRAW_NOSTENCIL");
+    ds.stencilTestEnable =
+        (!noStencil && (om.depthControl & 1)) ? VK_TRUE : VK_FALSE;
+    // Counted so "this title never uses stencil" and "nobody looked" cannot
+    // read the same. Reported once per frame with its denominator.
+    ++pipelinesBuilt;
+    if (om.depthControl & 1)
+        ++pipelinesWithStencil;
+    ds.front.compareOp = CompareOpOf(om.depthControl >> 8);
+    ds.front.failOp = StencilOpOf(om.depthControl >> 11);
+    ds.front.passOp = StencilOpOf(om.depthControl >> 14);
+    ds.front.depthFailOp = StencilOpOf(om.depthControl >> 17);
+    ds.front.reference = om.stencilRefMask & 0xFF;
+    ds.front.compareMask = (om.stencilRefMask >> 8) & 0xFF;
+    ds.front.writeMask = (om.stencilRefMask >> 16) & 0xFF;
+    // backface_enable (+7) selects whether the back-face set is its own state.
+    // Without it the hardware uses the front-face ops for both, so mirroring is
+    // the faithful default rather than a shortcut.
+    if ((om.depthControl >> 7) & 1)
+    {
+        ds.back.compareOp = CompareOpOf(om.depthControl >> 20);
+        ds.back.failOp = StencilOpOf(om.depthControl >> 23);
+        ds.back.passOp = StencilOpOf(om.depthControl >> 26);
+        ds.back.depthFailOp = StencilOpOf(om.depthControl >> 29);
+        ds.back.reference = om.stencilRefMaskBf & 0xFF;
+        ds.back.compareMask = (om.stencilRefMaskBf >> 8) & 0xFF;
+        ds.back.writeMask = (om.stencilRefMaskBf >> 16) & 0xFF;
+    }
+    else
+    {
+        ds.back = ds.front;
+    }
     // Colour write mask from RB_COLOR_MASK's RT0 nibble (r,g,b,a in bits
     // 0..3), and blending from RB_BLENDCONTROL0. A draw the guest masked off
     // entirely writes nothing, as on hardware.

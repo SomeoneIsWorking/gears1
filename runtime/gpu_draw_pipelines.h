@@ -41,6 +41,10 @@ struct PipelineCache
     // shader. Reported by the frame census: a rectangle drawn as a bare triangle
     // list is missing half of itself, so the two numbers have to be comparable.
     uint32_t rectDraws = 0, rectDrawsExpanded = 0;
+    // How many pipelines this frame built, and how many of those the guest
+    // asked to STENCIL TEST. Both, always: a bare "0 use stencil" is
+    // indistinguishable from a counter nobody incremented.
+    uint32_t pipelinesBuilt = 0, pipelinesWithStencil = 0;
 
     // What building pipelines cost this run, accumulated inside GetPipeline so
     // the number covers the misses and not the lookups. The frame timing line

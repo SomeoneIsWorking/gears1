@@ -84,6 +84,9 @@ uint32_t ColorFormatBytesPerPixel(uint32_t colorFormat);
 // (k_24_8).
 uint32_t DepthDestFormat(uint32_t rbDepthInfo);
 
+// RB_DEPTHCONTROL's stencil ops (xenos::StencilOp) -> Vulkan.
+VkStencilOp StencilOpOf(uint32_t op);
+
 const char* PrimName(uint32_t primType);
 
 // The host format one EDRAM base is given, from every RB_COLOR_INFO.color_format
@@ -117,12 +120,20 @@ struct OutputMergerState
     // primitives -- Xenia gates the whole block on that, and faceness is
     // meaningless for points and lines.
     uint32_t suScModeCntl = 0;
+    // RB_STENCILREFMASK (0x210D) and its back-face twin (0x210C): the reference
+    // value, the read mask and the write mask, 8 bits each. Part of the
+    // pipeline key because two draws differing only in stencil reference are
+    // two different pipelines.
+    uint32_t stencilRefMask = 0;
+    uint32_t stencilRefMaskBf = 0;
     bool polygonal = false;
 
     bool operator<(const OutputMergerState& o) const
     {
-        return std::tie(colorMask, blend0, depthControl, suScModeCntl, polygonal) <
-               std::tie(o.colorMask, o.blend0, o.depthControl, o.suScModeCntl, o.polygonal);
+        return std::tie(colorMask, blend0, depthControl, suScModeCntl,
+                        stencilRefMask, stencilRefMaskBf, polygonal) <
+               std::tie(o.colorMask, o.blend0, o.depthControl, o.suScModeCntl,
+                        o.stencilRefMask, o.stencilRefMaskBf, o.polygonal);
     }
 };
 

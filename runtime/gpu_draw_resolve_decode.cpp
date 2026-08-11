@@ -111,8 +111,10 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
     // real even when the copy is not.
     const bool clearsDepthHere = ((R[0x2318] >> 9) & 1) != 0;
     float depthClearHere = 0.0f;
+    uint32_t stencilClearHere = 0;
     if (clearsDepthHere)
     {
+        stencilClearHere = R[0x231D] & 0xFF;
         const uint32_t d24 = R[0x231D] >> 8;
         depthClearHere = ((R[0x2002] >> 16) & 1) == 1 /*kD24FS8*/
             ? Depth20e4To32(d24) : DepthUnorm24To32(d24);
@@ -129,6 +131,7 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
         pd.diagIndex = uint32_t(&d - in.draws.data());
         pd.clearsDepth = clearsDepthHere;
         pd.depthClearValue = depthClearHere;
+        pd.stencilClearValue = stencilClearHere;
         pd.surfaceBase = srcBase;
         pd.resolveDestFormat = (R[0x231B] >> 7) & 0x3F;
         // What the copy reads the source under. Indexed by copy_src_select,
@@ -201,6 +204,7 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
             pd.copyIsServed = false;
             pd.clearsDepth = clearsDepthHere;
             pd.depthClearValue = depthClearHere;
+        pd.stencilClearValue = stencilClearHere;
             if (isDepthResolve)
             {
                 pd.resolveIsDepth = true;
