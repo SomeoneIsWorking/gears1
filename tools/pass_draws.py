@@ -179,6 +179,28 @@ def compare(ours, theirs, out=print):
     for k in tiled:
         out(f"  [2x, the tiling] {key_str(k)}:"
             f" ours {ours[k]}, theirs {theirs[k]}")
+    # THE QUESTION THE STATE FIELDS EXIST FOR, asked directly instead of left to
+    # be reconstructed from the lists above: for a shader BOTH sides run, do they
+    # run it with the same set of depth/stencil/blend states? A renderer that
+    # binds the wrong stencil ref or the wrong blend shows up here and nowhere
+    # else -- in the raw key it looks like one pair only-ours and one
+    # only-theirs, which is the same shape as a shader one side never ran.
+    if any(len(k) == 5 for k in list(ours) + list(theirs)):
+        o_by, t_by = {}, {}
+        for k in ours:
+            o_by.setdefault(k[:2], set()).add(k[2:])
+        for k in theirs:
+            t_by.setdefault(k[:2], set()).add(k[2:])
+        both = set(o_by) & set(t_by)
+        differing_state = sorted(s for s in both if o_by[s] != t_by[s])
+        out(f"shaders BOTH sides run: {len(both)};"
+            f" {len(both) - len(differing_state)} with exactly the same set of"
+            f" draw states, {len(differing_state)} with a different set")
+        for sh in differing_state:
+            out(f"  vs {sh[0]} ps {sh[1]} runs with different STATE:")
+            out(f"    ours  : {sorted(o_by[sh])}")
+            out(f"    theirs: {sorted(t_by[sh])}")
+
     for label, s, src in (("only ours", only_o, ours), ("only theirs", only_t, theirs)):
         for k in sorted(s, key=lambda q: -src[q])[:12]:
             out(f"  {label}: {key_str(k)} x{src[k]}")
@@ -231,9 +253,10 @@ def selftest():
                 and t == {("aa", "bb", "2b", "0", "0")}
                 and any("depthctl 1a" in l for l in lines)
                 and any("depthctl 2b" in l for l in lines))
+    state_ok = state_ok and any("runs with different STATE" in l for l in lines)
     print(f"selftest: same shaders and the same count with DIFFERENT depth"
-          f" control read as one pair each side, not as agreement:"
-          f" {state_ok} (expected True)")
+          f" control read as one pair each side AND are named as one shader"
+          f" running with different state: {state_ok} (expected True)")
     # ...AND THROUGH THE REAL READERS, on real file formats. The check above
     # exercises the comparison with keys handed to it; these two readers are
     # where a wide record silently becomes a narrow one (a missing column, a
