@@ -46,3 +46,31 @@ and does NOT decode colour clears at all -- gpu_draw_resolve_decode.cpp reads
 only bit 9, and the frontier notes a non-zero colour clear has never been
 decoded because every one this title programs is 0x00000000. A clear to zero is
 exactly what this looks like.
+
+### Note (2026-08-11)
+THE PREMISE IS WRONG: no clear is involved, and this is mostly not a defect.
+
+The copies that write the shadow atlas do NOT program a colour clear -- the
+frame's resolve census says "clears: none" for every one of them, and only four
+copies in the whole frame clear anything. What the region actually is: a copy
+writes a RECTANGLE into a texture (the atlas copy is 448x448 into an 864-wide
+destination), and the rest of the destination is whatever the guest's memory
+already held, which is zeros. Our side is a host image whose unwritten area
+holds whatever it holds. Neither renderer wrote there, so comparing there says
+nothing about either.
+
+The comparison now reports both numbers on every depth row, and the shadow maps
+read:
+
+    #0  whole destination |d| 0.196; over the 78.9% the console did not leave
+        at zero, |d| 0.0084 -- they agree where both wrote
+    #1  whole destination |d| 0.227; over the 78.8%, |d| 0.0439
+
+So #0 is not a finding at all. #1's 0.0439 over the written region is above the
+0.02 the tool calls a match and is the only part of this worth keeping -- one of
+the two shadow-map copies differs where both sides wrote, and the other does
+not.
+
+Retitled in effect: what remains is "one shadow-map copy differs by 0.044 over
+its written region", which is a much smaller and much better-posed question
+than the one this entry opened with.

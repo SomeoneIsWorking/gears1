@@ -573,12 +573,26 @@ def main(argv):
                         | (ti[..., 2].astype(np.uint32) << 16)
                         | (ti[..., 3].astype(np.uint32) << 24))
             td = depth24_to_float(word >> 8, fmt == 23, np)
-            od = oi[..., 0]           # our depth target is written out as grey
             # OUR SIDE IS 8-BIT, so this is a coarse comparison and says so: it
             # answers "is this the same depth buffer", not "is it exact".
-            od = oi[..., 0]
+            od = oi[..., 0]           # our depth target is written out as grey
             d = float(np.abs(np.clip(td, 0.0, 1.0) - od).mean())
+            # A DESTINATION IS NOT ALL WRITTEN. A copy writes a RECTANGLE into a
+            # texture -- the shadow atlas takes a 448x448 region of an 864-wide
+            # one -- and the rest is whatever the guest's memory held, which is
+            # zeros; ours is a host image whose unwritten area holds whatever it
+            # holds. Comparing there says nothing about either renderer, so the
+            # row carries BOTH numbers. When they disagree it is the second that
+            # means something: the shadow maps report 0.196 over the whole
+            # destination and 0.0084 over the part the console actually wrote.
+            wrote = td >= 0.01
             note = ("match" if d < 0.02 else f"DIFFER, mean |d| {d:.3f}")
+            if wrote.any() and not wrote.all():
+                dw = float(np.abs(np.clip(td, 0.0, 1.0) - od)[wrote].mean())
+                note += (f"; over the {100 * wrote.mean():.1f}% the console did"
+                         f" NOT leave at zero, mean |d| {dw:.4f}"
+                         + (" -- they agree where both wrote" if dw < 0.02
+                            else ""))
             note += (" [depth: theirs decoded from the guest's 24:8;"
                      " ours is an 8-bit grey dump, so this is coarse]" + dshort)
             depth_compared += 1
