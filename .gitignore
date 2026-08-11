@@ -17,5 +17,6 @@ xconfig.settings
 # rewrites, so leaving it tracked put a 10 MB blob in the staged set of every
 # commit that happened to follow a run.
 modules/
-shaders/local/
-shaders/shareable/
+# Xenia's own shader cache, written beside the binary when it runs from the
+# repo root. Our shaders live in runtime/shaders/, which this does not touch.
+/shaders/
