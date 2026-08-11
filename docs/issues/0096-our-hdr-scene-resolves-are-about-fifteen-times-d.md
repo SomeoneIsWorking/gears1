@@ -91,3 +91,25 @@ state the decode depends on, which was in the capture the whole time.
 
 The 352x182 buffers are still garbage under BOTH byte orders (1.86% and 1.91%
 non-finite), so they have a separate problem and stay refused.
+
+### Note (2026-08-11)
+THE 352x182 f32 BUFFERS: what has been ruled out, so the next attempt does not
+redo it.
+
+* The TILER is not wrong. Our tiled_offset_2d was checked against Xenia's
+  CURRENT texture_address::Tiled2D + TiledCombine -- a structurally different
+  derivation of the same address -- over x in steps of 7 and y in 0..63, at
+  bytes-per-block 4 and 8, at widths 352 and 1280: zero mismatches in all four
+  combinations.
+* No LAYOUT works. Untiling the 540,672-byte buffer at every width that divides
+  it (176, 192, 352, 704) at 8 bytes per pixel, in both byte orders, gives
+  0.55%-1.9% non-finite and a range of -61568 .. 64768 in every case. The best
+  is not close to clean, so it is not a matter of finding the right width.
+* The endian IS known now (1 = k8in16, from the dump name) and it is the order
+  that decodes the 1280x736 buffers of the SAME format cleanly, so the format
+  code and the byte order are not in question either.
+
+Which leaves the content: those three copies may not hold what their
+copy_dest_format says, or they hold something the guest wrote in another format
+first. Our side renders 0.0000 for all three, so nothing is lost by leaving
+them refused -- and the refusal is now evidenced rather than assumed.
