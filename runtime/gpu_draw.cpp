@@ -147,6 +147,7 @@ bool Renderer::Init()
             hasPipelineStats = adoptedCaps.pipelineStatistics;
             hasGeometryShader = adoptedCaps.geometryShader;
             hasStorageImageWithoutFormat = adoptedCaps.storageImageWithoutFormat;
+            hasDepthClamp = adoptedCaps.depthClamp;
 
             // Says only what is true. Sharing the device makes it POSSIBLE to
             // stop reading the frame back and re-uploading it, because the image
@@ -256,6 +257,7 @@ bool Renderer::Init()
     hasPipelineStats = caps.pipelineStatistics;
     hasGeometryShader = caps.geometryShader;
     hasStorageImageWithoutFormat = caps.storageImageWithoutFormat;
+    hasDepthClamp = caps.depthClamp;
 
     VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     di.queueCreateInfoCount = 1;
@@ -1260,6 +1262,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         om.stencilRefMaskBf = R[0x210C];
         om.suScModeCntl = R[0x2205];
         om.polygonal = draw::IsPrimitivePolygonal(R);
+        // PA_CL_CLIP_CNTL.clip_disable (bit 16): the guest wants no near/far
+        // clipping. Xenia gates the same state on the same device feature, so a
+        // device without depthClamp renders as this one did before -- with the
+        // primitives whose Z is a hair outside [0,1] clipped away.
+        om.depthClamp = hasDepthClamp && ((R[0x2204] >> 16) & 1) != 0;
         // Rectangle lists go through the geometry shader that builds the fourth
         // vertex. Everything else runs with no geometry stage at all.
         VkShaderModule gsMod = VK_NULL_HANDLE;

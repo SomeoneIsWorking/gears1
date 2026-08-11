@@ -326,6 +326,9 @@ struct Renderer
     bool hasPipelineStats = false; // pipelineStatisticsQuery feature enabled
     bool hasGeometryShader = false;
     bool hasStorageImageWithoutFormat = false;
+    // VkPhysicalDeviceFeatures.depthClamp -- see DeviceCapabilities::depthClamp
+    // for what a device without it costs.
+    bool hasDepthClamp = false;
     VkDeviceSize uniformOffsetAlignment = 256;
     // THE HOST VIEWPORT IS NOT BOUNDED BY THE RENDER TARGET. With clipping
     // disabled (PA_CL_CLIP_CNTL.clip_disable) the guest expects no near/far or

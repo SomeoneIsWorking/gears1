@@ -186,6 +186,13 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
     dyn.pDynamicStates = dynStates;
     VkPipelineRasterizationStateCreateInfo rs{
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    // PA_CL_CLIP_CNTL.clip_disable, as the guest asked for it. Clamping rather
+    // than clipping is the only host way to say "do not clip against near and
+    // far", and a full-screen fill written at z = -3.7e-09 is precisely the
+    // primitive that needs it (catalog #91). GEARS_DRAW_NOCLAMP=1 is the control
+    // arm: it renders as this did before, with those primitives clipped away.
+    static const bool noClamp = lucent::config::flag("DRAW_NOCLAMP");
+    rs.depthClampEnable = (om.depthClamp && !noClamp) ? VK_TRUE : VK_FALSE;
     rs.polygonMode = VK_POLYGON_MODE_FILL;
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;

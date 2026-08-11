@@ -40,6 +40,15 @@ struct DeviceCapabilities
     // returns garbage, so the shader declares Unknown and these two features carry
     // it.
     bool storageImageWithoutFormat = false;
+
+    // PA_CL_CLIP_CNTL.clip_disable says the guest wants no near/far clipping at
+    // all, and the host way to say that is depthClampEnable on the rasterizer.
+    // Without it a primitive whose Z is a hair outside [0,1] is CLIPPED AWAY
+    // rather than clamped -- and a full-screen fill written at z = -3.7e-09 is
+    // exactly that case, which is how two of this title's mask fills vanished
+    // before rasterisation (catalog #91). Xenia gates the same state on the same
+    // feature, so a device without it renders as we did before.
+    bool depthClamp = false;
 };
 
 // Fills `enable` with what to ask for on this physical device, and `caps` with what
