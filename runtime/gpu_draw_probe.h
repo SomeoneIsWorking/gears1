@@ -271,6 +271,18 @@ struct DrawStats
 
     Renderer& R;
 
+    // GEARS_DRAW_CLIP_WATCH=<16-hex vertex shader hash>: per frame, how many
+    // draws of that shader assembled primitives and then lost EVERY one to
+    // clipping. The frame gate cannot select on this -- it decides before the
+    // frame renders and prims_after_clip only exists after it -- so a run aimed
+    // at an intermittent clip failure could previously only hope to catch it.
+    // Parsed in Build(); reported per frame whether or not it fires.
+    uint64_t clipWatchHash = 0;
+    uint32_t clipWatchDraws = 0;
+    uint32_t clipWatchKilled = 0;
+    // Once it fires the table STOPS being rewritten -- see g_clipWatchHeld in
+    // the .cpp, which is process-wide because this struct is rebuilt per frame.
+
     // Reads the knobs and creates the query pool. `nDraws` bounds it.
     // GEARS_DRAW_DIAG=<path.tsv> writes the table, which is only useful joined
     // with the statistics -- so it turns them on rather than making the user
