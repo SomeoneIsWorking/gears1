@@ -109,6 +109,11 @@ stop() {
     wait "$1" 2>/dev/null || true
 }
 
+# THE PER-DRAW TABLE IS TAKEN IN THE SAME RUN AS THE DUMPS. Without it a pass
+# that differs can only be chased in a SEPARATE run, and this frame's passes
+# vary run to run -- one shadow-atlas tile is empty in one run and takes 68,622
+# fragments in the next (catalog #91). Attributing a pass difference to a draw
+# from a different run is attributing it to a different frame.
 echo "== our renderer =="
 GEARS_NO_WINDOW=1 \
 GEARS_INPUT_SCRIPT="$OURS_SCRIPT" \
@@ -116,6 +121,7 @@ GEARS_DRAW_FRAME_MIN_DRAWS="$GEARS_LAYER_MIN_DRAWS" \
 GEARS_DRAW_FRAME_AFTER_GAMEPLAY="$GEARS_LAYER_AFTER" \
 GEARS_DRAW_FRAME_COUNT=1 \
 GEARS_DRAW_RESOLVE_DUMP_EACH=1 \
+GEARS_DRAW_DIAG="$OUT/ours/draws.tsv" \
 GEARS_DRAW_DIR="$OUT/ours" \
     "$RUNTIME" "$GAME_DIR/default.xex" "$GAME_DIR" > "$OUT/ours.log" 2>&1 &
 ours_pid=$!
