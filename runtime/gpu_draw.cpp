@@ -2327,7 +2327,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         {
             endPass();
             PB.DumpDepth(cmd, drawn, lastIssuedPrep,
-                         prepared[lastIssuedPrep].diagIndex, P.depth, depthFormat);
+                         prepared[lastIssuedPrep].diagIndex, P.depth, depthFormat,
+                         prepared[lastIssuedPrep].psHash,
+                         prepared[lastIssuedPrep].colorMask);
         }
         // The render comparer: a thumbnail of the surface after every draw.
         // Same pass-boundary requirement as the other two probes.
@@ -2545,7 +2547,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     {
         endPass();
         PB.DumpDepth(cmd, drawn, lastIssuedPrep,
-                     prepared[lastIssuedPrep].diagIndex, P.depth, depthFormat);
+                     prepared[lastIssuedPrep].diagIndex, P.depth, depthFormat,
+                     prepared[lastIssuedPrep].psHash,
+                     prepared[lastIssuedPrep].colorMask);
     }
     endPass();
 
