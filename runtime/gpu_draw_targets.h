@@ -178,16 +178,19 @@ struct RenderTargetCache
     // kD24FS8) or unorm24 (kD24S8) according to `isFloat24`, which is
     // RB_DEPTH_INFO.depth_format at the copy. It differs BETWEEN COPIES of one
     // frame: the scene depth is kD24FS8 and the shadow maps kD24S8.
+    // `srcRect` is in the copy's PIXELS; `smp` says how those map onto the
+    // source surface's samples, and is the identity for a 1X source.
     void ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
                         const VkRect2D& srcRect, int32_t dstX, int32_t dstY,
-                        bool isFloat24);
+                        bool isFloat24, const ResolveSampling& smp);
 
     // Colour. `scale` is the guest's copy_dest_exp_bias applied as a multiplier
     // and `swapRB` its copy_dest_swap -- neither of which the blit control arm
     // (GEARS_DRAW_RESOLVE_BLIT=1) can do.
     void ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarget& srcTarget,
                           ResolveTarget& dst, const VkRect2D& srcRect,
-                          int32_t dstX, int32_t dstY, float scale, bool swapRB);
+                          int32_t dstX, int32_t dstY, float scale, bool swapRB,
+                          const ResolveSampling& smp);
 };
 
 } // namespace gears::draw
