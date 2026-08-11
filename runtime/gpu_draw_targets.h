@@ -31,16 +31,14 @@ namespace gears::draw
 struct RenderTargetCache
 {
     RenderTargetCache(Renderer& r, RendererPersistent& p, const FrameDrawInputs& inputs,
-                      uint32_t w, uint32_t h, VkFormat depthFmt, VkImageView depthImageView)
-        : R(r), P(p), in(inputs), W(w), H(h),
-          depthFormat(depthFmt), depthView(depthImageView) {}
+                      uint32_t w, uint32_t h, VkFormat depthFmt)
+        : R(r), P(p), in(inputs), W(w), H(h), depthFormat(depthFmt) {}
 
     Renderer& R;
     RendererPersistent& P;
     const FrameDrawInputs& in;
     const uint32_t W, H;
     const VkFormat depthFormat;
-    const VkImageView depthView;
 
 
         std::map<uint32_t, std::set<uint32_t>> formatsPerBase;
@@ -112,6 +110,15 @@ struct RenderTargetCache
 // filled by the pre-pass further down and read by getSurfaceTarget, which
 // sizes one host image per base wide enough to hold all of them.
     bool GetSurfaceTarget(uint32_t base, SurfaceTarget*& out);
+
+// The depth+stencil image an RB_DEPTH_INFO.depth_base owns, created on demand
+// and BOUND as a side effect (see the comment on the definition): P.depth and
+// its three views become this target's, so every user of them works on the base
+// last asked for.
+    bool GetDepthTarget(uint32_t base, DepthTarget*& out);
+
+// The framebuffer pairing a colour surface with a depth base, created on demand.
+    bool GetFramebuffer(SurfaceTarget& s, uint32_t depthBase, VkFramebuffer& out);
 
 // The host image a resolve destination owns.
 //

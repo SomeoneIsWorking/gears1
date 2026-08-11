@@ -34,7 +34,17 @@ struct PreparedDraw
     // console the depth and stencil it writes land in that surface's colour
     // bits -- which a later blending draw then reads as its destination
     // (catalog #91).
+    // RB_DEPTH_INFO.depth_base as the guest programmed it. Read by the EDRAM
+    // colour/depth aliasing trigger, among others -- NOT a target selector.
     uint32_t depthBase = 0;
+    // Which host depth image the draw renders into: the base itself with
+    // GEARS_DRAW_SPLIT_DEPTH on, and 0 (one shared image) with it off.
+    uint32_t depthTargetBase = 0;
+    // The same value as depthBase, for the diag table, so the column keeps
+    // meaning "what the guest asked for" whatever the knob does.
+    uint32_t guestDepthBase = 0;
+    // RB_STENCILREFMASK, for the diag table: ref in bits 0-7, mask in 8-15.
+    uint32_t stencilRefMask = 0;
     // A resolve (RB_MODECONTROL.edram_mode == kCopy) is not geometry: it
     // copies `surface`'s host target out to `resolveDest`'s host image, and
     // issues no draw at all.
