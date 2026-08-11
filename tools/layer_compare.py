@@ -540,12 +540,34 @@ def main(argv):
     # the dump counts, because it is a caveat on the TABLE.
     alignment_note = None
     if scored and -scored[0][1] != 0:
-        alignment_note = (
-            f"NOTE: no dumped console frame has our pass structure -- the best"
-            f" is frame {theirs_frame} with {-scored[0][1]} pass(es) unmatched."
-            f" The two sides are NOT known to be at the same moment, and a"
-            f" per-pass difference below may be a difference of SCENE rather"
-            f" than of renderer.")
+        # WHICH KIND OF UNMATCHED IS IT. A pass missing from EVERY frame of the
+        # window is not a timing artefact -- the console rendered it in all of
+        # them and we rendered it in none, which is a renderer difference and
+        # the most interesting row this tool can produce. A pass missing from
+        # SOME frames is the scene moving under the comparison. Saying only
+        # "not aligned" for both would bury a real gap under a caveat: the
+        # first window measured here had two 1280x208 passes the port never
+        # renders, in all five frames, and the undifferentiated note called
+        # that a possible difference of scene.
+        unmatched_each = [set(d) ^ our_keys for _, _, _, d in scored]
+        always = set.intersection(*unmatched_each) if unmatched_each else set()
+        varies = set.union(*unmatched_each) - always if unmatched_each else set()
+        parts = [f"NOTE: no dumped console frame has our pass structure -- the"
+                 f" best is frame {theirs_frame} with {-scored[0][1]} pass(es)"
+                 f" unmatched."]
+        if always:
+            parts.append(
+                f" UNMATCHED IN EVERY ONE of the {len(scored)} dumped frame(s),"
+                f" so this is a renderer difference and not the scene moving: "
+                + ", ".join(key_str(k) for k in sorted(always)) + ".")
+        if varies:
+            parts.append(
+                f" Unmatched in SOME frames only, which is the scene moving"
+                f" under the comparison: "
+                + ", ".join(key_str(k) for k in sorted(varies))
+                + ". A per-pass difference below may be a difference of SCENE"
+                  " rather than of renderer.")
+        alignment_note = "".join(parts)
 
     print(f"ours   {len(ours)} pass dump(s)")
     print(f"theirs {len(theirs)} pass dump(s)")
