@@ -114,6 +114,13 @@ struct PreparedDraw
     uint32_t suScModeCntl = 0;   // PA_SU_SC_MODE_CNTL 0x2205
     uint32_t vteCntl = 0;        // PA_CL_VTE_CNTL    0x206C
     uint32_t windowOffset = 0;   // PA_SC_WINDOW_OFFSET 0x2080
+    // RB_SURFACE_INFO 0x2000: the EDRAM surface's pitch in the low 14 bits and
+    // msaa_samples in bits 16-17. This renderer sizes every host target at the
+    // presented resolution and ignores both, so they belong in the table that
+    // exists to show the state a draw's coverage depends on: a guest rendering
+    // 640x360 into a 2x2-multisampled surface covers a 1280x720 image, and
+    // nothing else in this row would say so.
+    uint32_t surfaceInfo = 0;
     float vportXScale = 0, vportXOffset = 0, vportYScale = 0, vportYOffset = 0;
     float vportZScale = 0, vportZOffset = 0;
 };
