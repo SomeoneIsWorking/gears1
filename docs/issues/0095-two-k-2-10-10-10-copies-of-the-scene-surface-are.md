@@ -1,7 +1,7 @@
 ---
 id: 95
 title: Two k_2_10_10_10 copies of the scene surface are near-black where the console has content
-status: open
+status: resolved
 symptom: layer_compare srcC2D0 1280x720 f7 #0/#1: ours 0.0151, console 0.1760, in BOTH the pixel and the sample model
 tags: oracle,layer-compare,resolve,reinterpret
 created: 2026-08-11
@@ -146,3 +146,36 @@ comparer now says so rather than printing the table straight.
 Being retaken with the frame window in place. The prediction under test is
 unchanged: of the frame's three conversion pairs only 3-2 moves these copies,
 and it moves them the whole way.
+
+### Resolution (2026-08-11)
+NOT A RENDERER DEFECT. The comparison was decoding the CONSOLE's side wrongly.
+
+`layer_compare.py` applied `copy_dest_endian` to the eight-byte destination
+format and to depth and to nothing else. Every k_2_10_10_10 dump in this title
+is k8in32, so its dword's four bytes were read in the wrong order -- which does
+not shift a value, it scrambles the bit fields. The 2-bit alpha lands in the low
+bits and comes out as RED:
+
+    console f7 #0, per channel     mean            zero-fraction
+      decoded without the endian   0.009 0.344 0.176   0.969 0.128 0.120
+      decoded with it              0.015 0.013 0.012   0.180 0.186 0.194
+      ours                         0.018 0.014 0.013   0.159 0.171 0.188
+
+With the endian applied both copies MATCH: ours 0.0147 against the console's
+0.0135 and 0.0136, 4.0% of pixels differing by more than 0.1.
+
+What this retracts, from this issue's own notes:
+  * "the copies are near-black on our side" -- they are not; both sides are
+    near-black there, and that is what the pass writes.
+  * the whole hunt for what surface 0x2d0 contains before diag 639.
+  * the prediction that suppressing the 3-2 conversion would move them the
+    whole way. Measured on an aligned pair: it moves them from 0.0147 to 0.0310
+    and BREAKS the three HDR resolves that matched exactly (0.0035 -> 0.0253).
+    The conversion is right and is needed.
+
+What SURVIVED, and is worth keeping: the console's own log now shows what it
+does at these copies, and it is what our renderer does. At EDRAM base 720, 867
+resolves read the surface as k_2_10_10_10_AS_10_10_10_10 while the render
+target owning it holds k_2_10_10_10_FLOAT -- a 7e3-to-fixed reinterpretation,
+the exact pair our pass converts. The reinterpretation self-test's sixth case
+(3.0 as 0x240 -> 576/1023) stands on its own.
