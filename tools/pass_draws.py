@@ -217,7 +217,69 @@ def selftest():
     print(f"selftest: an exactly-2x pair is separated as the tiling collapse"
           f" while a 4-vs-3 pair beside it is still reported as a difference:"
           f" {tiled_ok} (expected True)")
-    ok = same_ok and diff_ok and tiled_ok
+    # THE WIDE KEY, which is the whole point of the state fields: two draws of
+    # the SAME shader pair with different depth/stencil state are different
+    # draws, and if the key collapsed them a state difference would vanish into
+    # an equal count. Here each side runs the same shaders the same number of
+    # times and only the depth control differs -- which must read as one pair
+    # only ours and one only theirs, not as agreement.
+    lines = []
+    d, o, t = compare(Counter({("aa", "bb", "1a", "0", "0"): 4}),
+                      Counter({("aa", "bb", "2b", "0", "0"): 4}),
+                      out=lines.append)
+    state_ok = (not d and o == {("aa", "bb", "1a", "0", "0")}
+                and t == {("aa", "bb", "2b", "0", "0")}
+                and any("depthctl 1a" in l for l in lines)
+                and any("depthctl 2b" in l for l in lines))
+    print(f"selftest: same shaders and the same count with DIFFERENT depth"
+          f" control read as one pair each side, not as agreement:"
+          f" {state_ok} (expected True)")
+    # ...AND THROUGH THE REAL READERS, on real file formats. The check above
+    # exercises the comparison with keys handed to it; these two readers are
+    # where a wide record silently becomes a narrow one (a missing column, a
+    # cell with the wrong number of fields), and that failure looks like
+    # agreement rather than an error.
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        (d / "ours.tsv").write_text(
+            "draw\tvs_hash\tps_hash\tfrag_stage\tdepth_control"
+            "\tstencil_ref_mask_raw\tblend0\n"
+            # a shaded draw, a depth-only draw (ps must key as 0), and a draw
+            # differing from the first ONLY in its stencil ref/mask
+            "1\taa\tbb\t1\t0x1a\t0x2\t0x10001\n"
+            "2\taa\tbb\t0\t0x1a\t0x2\t0x10001\n"
+            "3\taa\tbb\t1\t0x1a\t0x9\t0x10001\n")
+        (d / "theirs.tsv").write_text(
+            "7\t3\t"
+            "00000000000000aa:00000000000000bb:0000001a:00000002:00010001:1\t"
+            "00000000000000aa:0000000000000000:0000001a:00000002:00010001:1\t"
+            "00000000000000aa:00000000000000bb:0000001a:00000009:00010001:1\n")
+        buf = []
+        import io, contextlib
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc = main(["pass_draws", "--ours", str(d / "ours.tsv"),
+                       "--theirs", str(d / "theirs.tsv"), "--frame", "7"])
+        text = out.getvalue()
+        e2e_ok = (rc == 0 and "[wide key" in text
+                  and "3 on both sides, 0 only ours, 0 only theirs" in text
+                  and "none of the 3 shared pairs differs" in text)
+        print(f"selftest: a wide table and a wide stream round-trip through the"
+              f" REAL readers -- 3 pairs, none differing, and the depth-only"
+              f" draw keyed ps 0 on both sides: {e2e_ok} (expected True)")
+        # ...and the negative: drop the state columns from ours and the two
+        # records must REFUSE rather than compare a wide key against a narrow one.
+        (d / "narrow.tsv").write_text(
+            "draw\tvs_hash\tps_hash\tfrag_stage\n1\taa\tbb\t1\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            rc2 = main(["pass_draws", "--ours", str(d / "narrow.tsv"),
+                        "--theirs", str(d / "theirs.tsv"), "--frame", "7"])
+        refuse_ok = rc2 == 1 and "REFUSING" in out.getvalue()
+        print(f"selftest: a narrow table against a wide stream is REFUSED, not"
+              f" compared to nothing: {refuse_ok} (expected True)")
+    ok = same_ok and diff_ok and tiled_ok and state_ok and e2e_ok and refuse_ok
     print("SELFTEST PASS" if ok else "SELFTEST FAIL: do not trust this tool")
     return 0 if ok else 1
 
