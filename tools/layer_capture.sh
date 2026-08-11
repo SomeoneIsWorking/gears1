@@ -171,6 +171,24 @@ if [ -z "$(find "$OUT/theirs" -name 'oracle_f*.bin' 2>/dev/null | head -1)" ]; t
     echo "the oracle dumped NOTHING. Its own errors, if any:"
     grep -h "oracle:" "$OUT/theirs.log" | grep -i "refus\|STOPPED\|failed" | tail -5
 fi
+# THE TWO SIDES MUST HAVE CAPTURED THE SAME GUEST FRAME. The selector is
+# content-based and applied identically, but it is applied to two runs: ours
+# reached gameplay at guest frame 573 in one run and 482 in the next, while the
+# oracle's boot is steadier. A pair taken 91 frames apart is two different game
+# moments, and every row of the comparison would report that difference as the
+# renderer's -- which is catalog #89, and it is invisible in the images.
+ours_frame=$(sed -n 's/.*guest-draw: frame \([0-9]*\) is the capture.*/\1/p' \
+             "$OUT/ours.log" | tail -1)
+theirs_frame=$(sed -n 's/.*dumping every resolve of frame \([0-9]*\).*/\1/p' \
+               "$OUT/theirs.log" | tail -1)
+echo "frame selected: ours ${ours_frame:-NONE}, theirs ${theirs_frame:-NONE}"
+if [ -n "$ours_frame" ] && [ -n "$theirs_frame" ] && \
+   [ "$ours_frame" != "$theirs_frame" ]; then
+    echo "REFUSING to compare: the two sides captured DIFFERENT guest frames" >&2
+    echo "($ours_frame and $theirs_frame). That is two game moments, and every" >&2
+    echo "row would report the difference between them as the renderer's." >&2
+    exit 3
+fi
 echo
 exec python3 "$REPO/tools/layer_compare.py" --ours "$OUT/ours" --theirs "$OUT/theirs" \
      --out "$OUT/layers"
