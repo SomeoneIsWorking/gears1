@@ -78,6 +78,10 @@ struct RenderTargetCache
     std::set<uint64_t> reinterpretPairs;        // (from << 32) | to
     std::set<uint64_t> reinterpretRefusedPairs;
     std::set<uint64_t> reinterpretNotReadPairs;
+    // GEARS_DRAW_NOCONVERT: conversions this run was told to skip, so a control
+    // arm that matched no pair cannot read as one that changed nothing.
+    uint32_t reinterpretsSuppressed = 0;
+    std::set<uint64_t> reinterpretSuppressedPairs;
 
     uint32_t resolvesUnstorable = 0;
     uint32_t resolvesOutOfSets = 0;
