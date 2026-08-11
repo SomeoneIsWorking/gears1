@@ -129,7 +129,19 @@ while [ "$waited" -lt "$SECONDS_TO_RUN" ]; do
 done
 stop "$ours_pid"; trap - EXIT INT TERM
 
-echo "== the oracle =="
+# THE ORACLE'S BOOT IS FLAKY, and a paired capture costs seven minutes. Twice
+# in four runs it stopped presenting at guest frame 1 -- the title never got
+# going -- and the run then produced nothing and had to be noticed and started
+# again by hand. That is retried here, a bounded number of times, and ONLY on
+# that signature: a run that reached gameplay and dumped nothing for some other
+# reason must still fail loudly. Every attempt is counted and the count is
+# printed, so a capture that needed three tries never looks like one that
+# worked first time.
+: "${GEARS_LAYER_ORACLE_TRIES:=3}"
+oracle_try=0
+while : ; do
+    oracle_try=$((oracle_try + 1))
+echo "== the oracle (attempt $oracle_try of $GEARS_LAYER_ORACLE_TRIES) =="
 SDL_AUDIODRIVER=dummy \
 GEARS_ORACLE_RESOLVE_DUMP="$OUT/theirs" \
 GEARS_ORACLE_DUMP_MIN_DRAWS="$GEARS_LAYER_MIN_DRAWS" \
@@ -154,6 +166,24 @@ while [ "$waited" -lt "$SECONDS_TO_RUN" ]; do
     sleep 5; waited=$((waited + 5))
 done
 stop "$theirs_pid"; trap - EXIT INT TERM
+    if [ -n "$(find "$OUT/theirs" -name 'oracle_f*.bin' 2>/dev/null | head -1)" ]; then
+        break
+    fi
+    if [ "$oracle_try" -ge "$GEARS_LAYER_ORACLE_TRIES" ]; then
+        echo "the oracle produced nothing in $oracle_try attempt(s); giving up"
+        break
+    fi
+    if grep -q "STOPPED at guest frame 1 waiting" "$OUT/theirs.log" 2>/dev/null; then
+        echo "the oracle stopped presenting at guest frame 1 -- a boot that did"
+        echo "not take. Retrying (attempt $((oracle_try + 1)))."
+        rm -f "$OUT/theirs.log"
+        continue
+    fi
+    echo "the oracle dumped nothing and did NOT stall at frame 1, so this is not"
+    echo "the flaky boot. Not retrying -- read theirs.log."
+    break
+done
+echo "oracle attempts: $oracle_try"
 
 # WHICH FRAME EACH SIDE ACTUALLY SELECTED, always printed. A capture whose two
 # halves came from different moments is the failure this script exists to
