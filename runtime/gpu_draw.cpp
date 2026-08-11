@@ -138,6 +138,8 @@ bool Renderer::Init()
             vkGetPhysicalDeviceProperties(physical, &adoptedProps);
             uniformOffsetAlignment = std::max<VkDeviceSize>(
                 adoptedProps.limits.minUniformBufferOffsetAlignment, 4);
+            maxViewportDim[0] = adoptedProps.limits.maxViewportDimensions[0];
+            maxViewportDim[1] = adoptedProps.limits.maxViewportDimensions[1];
 
             VkPhysicalDeviceFeatures adoptedFeats{};
             gears::DeviceCapabilities adoptedCaps{};
@@ -237,6 +239,8 @@ bool Renderer::Init()
     // Suballocating uniform blocks out of one buffer means honouring the
     // device's uniform-buffer offset alignment; index offsets need 4.
     uniformOffsetAlignment = std::max<VkDeviceSize>(p.limits.minUniformBufferOffsetAlignment, 4);
+    maxViewportDim[0] = p.limits.maxViewportDimensions[0];
+    maxViewportDim[1] = p.limits.maxViewportDimensions[1];
 
     const float prio = 1.0f;
     VkDeviceQueueCreateInfo qi{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -1436,10 +1440,45 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     gv.x, gv.y, gv.w, gv.h, gv.scissorX, gv.scissorY,
                     gv.scissorW, gv.scissorH)];
             }
-            pd.viewport.x = float(std::min(gv.x, W));
-            pd.viewport.y = float(std::min(gv.y, H));
-            pd.viewport.width = float(std::min(gv.w, W - std::min(gv.x, W)));
-            pd.viewport.height = float(std::min(gv.h, H - std::min(gv.y, H)));
+            // THE VIEWPORT IS BOUNDED BY THE DEVICE, NOT BY THE TARGET.
+            //
+            // It used to be clamped to the render target, which looks obviously
+            // right and is wrong: with PA_CL_CLIP_CNTL.clip_disable the guest
+            // wants no clipping, and the emulation of that is a viewport larger
+            // than the target (Xenia returns up to 8192) with the vertex shader
+            // rescaling into it through the ndc_scale it hands the same
+            // function. Clamping one side of that pair and not the other
+            // shrinks the draw by the ratio between them.
+            //
+            // MEASURED, on walk_gameplay.gfr: draw 640 is a rectangle list with
+            // window-space vertices spanning (-0.5,-0.5)..(639.5,359.5) -- the
+            // top-left quadrant, 230,400 px -- and with the clamp it wrote depth
+            // and stencil over exactly 3,200 px in a 100x32 corner. 640 * 1280/
+            // 8192 = 100 and 360 * 720/8192 = 31.6. That draw is the shadow
+            // mask's depth+stencil fill (catalog #91), so the whole pass was
+            // built on a 1/72 of the coverage the console has.
+            //
+            // The scissor still IS clamped to the target: it is what keeps the
+            // large viewport from writing outside the image, which is exactly
+            // the division of labour Xenia's viewport code assumes.
+            // `R` in this function is the REGISTER FILE; the renderer is this.
+            const uint32_t vpMaxW = maxViewportDim[0], vpMaxH = maxViewportDim[1];
+            if (gv.w > vpMaxW || gv.h > vpMaxH)
+            {
+                // A clamp here DOES shrink the draw, for the same reason the
+                // old one did -- so it is said out loud rather than applied
+                // quietly. 8192 is the largest Xenia's viewport code returns and
+                // every device this has run on allows 16384.
+                lucent::warn("draw", "diag draw {}: the guest wants a {}x{} host"
+                    " viewport (clipping disabled) and this device allows only"
+                    " {}x{}. It is clamped, and this draw's geometry WILL be"
+                    " smaller than the console's by that ratio",
+                    pd.diagIndex, gv.w, gv.h, vpMaxW, vpMaxH);
+            }
+            pd.viewport.x = float(gv.x);
+            pd.viewport.y = float(gv.y);
+            pd.viewport.width = float(std::min(gv.w, vpMaxW));
+            pd.viewport.height = float(std::min(gv.h, vpMaxH));
             pd.viewport.minDepth = gv.zMin;
             pd.viewport.maxDepth = gv.zMax;
             pd.scissor.offset = {int32_t(std::min(gv.scissorX, W)),
@@ -2113,6 +2152,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             PB.DumpSurface(cmd, drawn, lastIssuedPrep,
                            prepared[lastIssuedPrep].diagIndex, t, base);
         }
+        // The DEPTH buffer after a NAMED draw. There is one depth image, so no
+        // surface is chosen and GEARS_DRAW_SURFACE does not apply -- what makes
+        // this the right depth is that it is taken immediately after the draw.
+        if (PB.DumpingDepth() && lastIssuedPrep < prepared.size())
+        {
+            endPass();
+            PB.DumpDepth(cmd, drawn, lastIssuedPrep,
+                         prepared[lastIssuedPrep].diagIndex, P.depth, depthFormat);
+        }
         // The render comparer: a thumbnail of the surface after every draw.
         // Same pass-boundary requirement as the other two probes.
         if (PB.Comparing())
@@ -2298,6 +2346,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         endPass();
         PB.DumpSurface(cmd, drawn, lastIssuedPrep,
                        prepared[lastIssuedPrep].diagIndex, t, base);
+    }
+    // The last draw's depth, for the same reason: aimed at the final draw, the
+    // in-loop site never comes round again.
+    if (PB.DumpingDepth() && lastIssuedPrep < prepared.size())
+    {
+        endPass();
+        PB.DumpDepth(cmd, drawn, lastIssuedPrep,
+                     prepared[lastIssuedPrep].diagIndex, P.depth, depthFormat);
     }
     endPass();
 

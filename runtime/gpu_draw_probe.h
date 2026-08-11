@@ -133,6 +133,28 @@ struct FrameProbe
                      uint32_t diagIndex, const SurfaceTarget* t,
                      uint32_t surfaceBase);
 
+    // ---- the DEPTH buffer, depth and stencil, after a NAMED draw ----------
+    //
+    // GEARS_DRAW_DEPTH_DUMP=<diag>[,<diag>...]
+    //
+    // The same probe as SURFACE_DUMP, aimed at the other attachment, and it
+    // exists for the same reason: every reading this project has taken of the
+    // depth buffer so far has been INDIRECT -- a colour surface written by the
+    // aliasing pass, or the frame's behaviour under a forced clear value. Both
+    // are inferences, and one of them (catalog #91) was a test that could not
+    // have failed, because the value it looked for was also the value a far fill
+    // writes. There is one depth image, so this takes no surface argument;
+    // whether it is the depth the draw was writing is decided by WHEN it is
+    // taken, which is immediately after that draw.
+    //
+    // Writes float depth AND the stencil byte, per pixel, because the question
+    // that keeps arising needs both: a full-screen depth-only draw against a
+    // far-cleared buffer changes nothing visible in depth while changing every
+    // stencil byte it covers.
+    bool DumpingDepth() const { return !depthWanted.empty(); }
+    void DumpDepth(VkCommandBuffer cmd, uint32_t drawsSoFar, uint32_t prepIndex,
+                   uint32_t diagIndex, VkImage depthImage, VkFormat depthFormat);
+
     // Both must be called with NO render pass open -- an image copy cannot
     // happen inside one -- and with the target read BEFORE the pass was ended,
     // since ending it nulls the caller's openTarget.
@@ -151,6 +173,7 @@ struct FrameProbe
 
 private:
     void ReportSurfaceDumps(const std::vector<PreparedDraw>& prepared);
+    void ReportDepthDumps(const std::vector<PreparedDraw>& prepared);
 
     // Each checkpoint costs a full-frame readback buffer, so STEP=1 on a
     // 170-draw frame is capped rather than allocating 170 of them.
@@ -197,6 +220,19 @@ private:
     std::vector<SurfaceDump> dumps;
     uint32_t highestDiag = 0;
     bool anyDrawSeen = false;
+
+    // The depth probe's asked-for and taken lists, kept apart for the same
+    // reason the surface probe keeps its two: a diag index the frame never
+    // reached must not read as a depth buffer that held nothing.
+    std::vector<uint32_t> depthWanted;
+    struct DepthDump
+    {
+        uint32_t draws, prepIndex, diagIndex;
+        VkBuffer buffer;
+        VkDeviceMemory mem;
+        VkDeviceSize bytes;   // W*H*4 of depth, then W*H of stencil
+    };
+    std::vector<DepthDump> depthDumps;
 };
 
 // Per-draw pipeline statistics, and the diagnostic table built on them.
