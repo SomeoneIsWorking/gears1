@@ -68,9 +68,13 @@ from pathlib import Path
 OURS_RE = re.compile(
     r"resolve_(\d+)_src([CD])([0-9A-F]{3})_(\d+)x(\d+)_f(\d+)_([0-9a-f]{8})"
     r"_draw(\d+)\.ppm$", re.I)
+# The trailing _e<N> is RB_COPY_DEST_INFO.copy_dest_endian and is OPTIONAL only
+# so that captures taken before the oracle recorded it still parse -- they are
+# then REFUSED per pass rather than decoded under an assumption, because
+# assuming it is exactly what produced a retracted finding (catalog #96).
 THEIRS_RE = re.compile(
-    r"oracle_f(\d+)_copy(\d+)_src([CD])([0-9A-F]{3})_(\d+)x(\d+)_f(\d+)_"
-    r"([0-9A-F]{8})_(\d+)\.bin$", re.I)
+    r"oracle_f(\d+)_copy(\d+)_src([CD])([0-9A-F]{3})_(\d+)x(\d+)_f(\d+)"
+    r"(?:_e(\d+))?_([0-9A-F]{8})_(\d+)\.bin$", re.I)
 
 # RB_COPY_DEST_INFO.copy_dest_format values this tool can DECODE, as
 # (name, bytes per pixel). Anything not here is REFUSED per pass rather than
@@ -123,7 +127,7 @@ def stored_rows(nbytes, width, bpp):
 # attempt starts from.
 
 
-def unpack_dest(px, fmt, np):
+def unpack_dest(px, fmt, np, endian=0):
     """Decoded bytes -> HxWx3 float32, in the same space as our PPM (0..1+).
 
     px is HxWxN uint8 straight out of the untiler, N being the format's bytes
@@ -145,12 +149,17 @@ def unpack_dest(px, fmt, np):
         g = ((w32 >> 16) & 0xFFFF).astype(np.float32) / 65535.0
         return np.stack([r, g, np.zeros_like(r)], axis=-1)
     if fmt == 32:                                  # k_16_16_16_16_FLOAT
-        # Reached only by --selftest: 32 is not in DECODABLE_FORMATS, for the
-        # reason recorded there. Kept because it is verified against synthetic
-        # data and is where the next attempt at that layout starts.
         h = px.view(np.uint8).reshape(px.shape[0], px.shape[1], 8)
-        halves = (h[..., 0::2].astype(np.uint16)
-                  | (h[..., 1::2].astype(np.uint16) << 8))
+        # k8in16 (endian 1) swaps the bytes WITHIN each 16-bit half, which is
+        # what every 8-byte destination in this title uses. Reading one of them
+        # the other way gives a range of -34368..34400 and a mean 15x the truth
+        # (catalog #96), so the two orders are not close enough to guess between.
+        if endian == 1:
+            halves = ((h[..., 0::2].astype(np.uint16) << 8)
+                      | h[..., 1::2].astype(np.uint16))
+        else:
+            halves = (h[..., 0::2].astype(np.uint16)
+                      | (h[..., 1::2].astype(np.uint16) << 8))
         return halves[..., :3].view(np.float16).astype(np.float32)
     raise AssertionError(f"format {fmt} is in DECODABLE_FORMATS with no unpack")
 
@@ -220,8 +229,17 @@ def selftest(work, np, Image):
     second.
     """
     ours_dir, theirs_dir = work / "st_ours", work / "st_theirs"
+    # EMPTIED FIRST. A self-test that runs in a directory holding a previous
+    # run's files is testing the union of the two: when the dump names gained
+    # an endian field, the old and new names for the SAME copy both matched,
+    # the ordinal paired ours #1 against theirs' second copy of #0, and the
+    # difference case reported a match. The test caught it -- and only because
+    # it has a difference case at all.
     for d in (ours_dir, theirs_dir):
         d.mkdir(parents=True, exist_ok=True)
+        for old_file in d.iterdir():
+            if old_file.is_file():
+                old_file.unlink()
     w, h = 64, 64
     ys, xs = np.meshgrid(np.arange(h), np.arange(w), indexing="ij")
     img = np.stack([(xs * 4) % 256, (ys * 4) % 256, (xs + ys) % 256,
@@ -235,7 +253,7 @@ def selftest(work, np, Image):
                 off = tiled_offset_2d(x, y, w, 2)
                 raw[off:off + 4] = bytes(src[y, x])
         (theirs_dir /
-         f"oracle_f1_copy{nth}_srcC000_{w}x{h}_f6_00000000_{w * h * 4}.bin"
+         f"oracle_f1_copy{nth}_srcC000_{w}x{h}_f6_e2_00000000_{w * h * 4}.bin"
          ).write_bytes(bytes(raw))
         Image.fromarray(img[..., :3]).save(
             ours_dir /
@@ -305,7 +323,7 @@ def selftest(work, np, Image):
     # from the join reads as "only the console resolves it", which is the exact
     # false reading (issue #90) that the depth snapshots were added to end.
     dw, dh = 32, 32
-    (theirs_dir / f"oracle_f1_copy9_srcD000_{dw}x{dh}_f6_00000000_{dw * dh * 4}.bin"
+    (theirs_dir / f"oracle_f1_copy9_srcD000_{dw}x{dh}_f6_e2_00000000_{dw * dh * 4}.bin"
      ).write_bytes(bytes(dw * dh * 4))
     Image.fromarray(np.zeros((dh, dw, 3), dtype=np.uint8)).save(
         ours_dir / f"resolve_09_srcD000_{dw}x{dh}_f6_00000000_draw9.ppm")
@@ -394,7 +412,9 @@ def main(argv):
              int(m.group(6)), int(m.group(7)))
         nth = seen.get(k, 0)
         seen[k] = nth + 1
-        theirs[k + (nth,)] = (p, int(m.group(8), 16), int(m.group(9)))
+        # group(8) is the optional endian; the address and length shift by one.
+        endian = int(m.group(8)) if m.group(8) is not None else None
+        theirs[k + (nth,)] = (p, int(m.group(9), 16), int(m.group(10)), endian)
 
     print(f"ours   {len(ours)} pass dump(s)")
     print(f"theirs {len(theirs)} pass dump(s)")
@@ -427,7 +447,7 @@ def main(argv):
           f"{'mean ours':>10} {'mean theirs':>11}  note")
     for k in shared:
         our_path, our_dest = ours[k]
-        their_path, their_dest, their_len = theirs[k]
+        their_path, their_dest, their_len, their_endian = theirs[k]
         oi = np.asarray(Image.open(our_path).convert("RGB")).astype(np.float32) / 255.0
         h, w = oi.shape[:2]
         fmt = k[4]
@@ -474,6 +494,17 @@ def main(argv):
                   f"{implied}")
             continue
         fmt_name, bpp = DECODABLE_FORMATS[fmt]
+        # NO ENDIAN, NO DECODE for a format whose byte order changes what the
+        # values MEAN. An old capture (taken before the oracle recorded
+        # copy_dest_endian) refuses here rather than being read under an
+        # assumption -- which is the mistake this check exists because of.
+        if bpp > 4 and their_endian is None:
+            undecoded += 1
+            print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
+                  f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  REFUSED: this capture"
+                  f" does not record copy_dest_endian, and {fmt_name} cannot be"
+                  f" read without it. Re-capture with the current oracle")
+            continue
         # DECODE AT THE HEIGHT THE BUFFER ACTUALLY HAS, then crop or refuse.
         rows = stored_rows(len(raw), w, bpp)
         short = ""
@@ -504,7 +535,7 @@ def main(argv):
                   f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
                   f"{their_len} bytes is not {w}x{h}x{bpp} tiled {fmt_name}")
             continue
-        t = unpack_dest(ti, fmt, np)
+        t = unpack_dest(ti, fmt, np, their_endian or 0)
         # OUR SIDE IS AN 8-BIT PPM, so it is already clamped to 0..1. A float
         # destination on the console is not, and this frame's scene colour
         # reaches 3.66 -- comparing them raw reports the PPM's clamp as the

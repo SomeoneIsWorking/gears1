@@ -1,7 +1,7 @@
 ---
 id: 96
 title: Our HDR scene resolves are about fifteen times darker than the console's
-status: open
+status: resolved
 symptom: layer_compare srcC2D0/srcC400 f32: ours 0.0032-0.0036, console 0.0537-0.0739
 tags: oracle,layer-compare,hdr,resolve
 created: 2026-08-11
@@ -68,3 +68,26 @@ first. Xenia's texture_util address has a term
 (((y & 8) >> 2) + (x >> 3)) & 3) << 6 whose interaction with the row parity is
 the natural suspect at 8 bytes per pixel, and the 8-byte path has only ever
 been exercised here at width 1280.
+
+### Resolution (2026-08-11)
+RETRACTED. This was my decoder reading the console's bytes with the wrong
+endianness, not a renderer defect, and the numbers in the entry above are void.
+
+The oracle logs RB_COPY_DEST_INFO.copy_dest_endian per copy and every 8-byte
+destination in the frame is endian 1 = k8in16 -- each 16-bit half byte-swapped.
+The decode read them little-endian. Reading the same buffer both ways:
+
+    1280x736 f32, halves little-endian   range -34368.0 .. 34400.0  mean 4.3112
+    1280x736 f32, halves 8in16           range      0.0 ..     0.3  mean 0.0035
+
+The second is physically sensible scene colour -- no negatives, no 34400 -- and
+OUR side's mean for that pass is 0.0036. So the two sides agree to three
+decimal places, and "fifteen times darker" was the byte order.
+
+The lesson is the one this project keeps relearning: the decode round-tripped
+synthetic data and produced plausible-looking means, and neither of those is
+evidence about real bytes. What caught it was the console's own log of the
+state the decode depends on, which was in the capture the whole time.
+
+The 352x182 buffers are still garbage under BOTH byte orders (1.86% and 1.91%
+non-finite), so they have a separate problem and stay refused.
