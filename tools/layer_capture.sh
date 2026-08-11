@@ -212,14 +212,27 @@ stop "$theirs_pid"; trap - EXIT INT TERM
         echo "the oracle produced nothing in $oracle_try attempt(s); giving up"
         break
     fi
-    if grep -q "STOPPED at guest frame 1 waiting" "$OUT/theirs.log" 2>/dev/null; then
-        echo "the oracle stopped presenting at guest frame 1 -- a boot that did"
-        echo "not take. Retrying (attempt $((oracle_try + 1)))."
-        rm -f "$OUT/theirs.log"
+    # A BOOT THAT DID NOT TAKE IS A STALL BEFORE GAMEPLAY, at whatever frame.
+    # The gate used to be the exact string "guest frame 1", and a run then
+    # wedged at frame 123 -- the process alive, its log untouched for five
+    # minutes, the same worthless capture -- and was not retried because the
+    # number was different. What distinguishes "the boot did not take" from a
+    # real finding is not WHICH frame it died at: it is that the title stopped
+    # presenting before it ever reached gameplay, which the oracle says in the
+    # same line, and that it dumped nothing.
+    if grep -q "STOPPED at guest frame .* waiting" "$OUT/theirs.log" 2>/dev/null &&
+       ! grep -q "so it is gameplay" "$OUT/theirs.log" 2>/dev/null; then
+        stalled_at=$(grep -o "STOPPED at guest frame [0-9]*" "$OUT/theirs.log" |
+                     tail -1 | grep -o "[0-9]*$")
+        echo "the oracle stopped presenting at guest frame ${stalled_at:-?}, before"
+        echo "reaching gameplay -- a boot that did not take. Retrying"
+        echo "(attempt $((oracle_try + 1)))."
+        mv -f "$OUT/theirs.log" "$OUT/theirs.attempt$oracle_try.log" 2>/dev/null || true
         continue
     fi
-    echo "the oracle dumped nothing and did NOT stall at frame 1, so this is not"
-    echo "the flaky boot. Not retrying -- read theirs.log."
+    echo "the oracle dumped nothing, and it is NOT the flaky boot: it either"
+    echo "reached gameplay or failed some other way. Not retrying -- read"
+    echo "theirs.log."
     break
 done
 echo "oracle attempts: $oracle_try"
@@ -230,7 +243,11 @@ echo "oracle attempts: $oracle_try"
 echo
 echo "== what each side selected =="
 grep -h "is the capture\|frames scanned, none\|NOTHING has been" "$OUT/ours.log" | tail -3
-grep -h "so it is gameplay\|none with >=" "$OUT/theirs.log" | tail -3
+# EVERY attempt's log, not just the last: a retried boot moves the failed one
+# aside, and a report that read only the survivor would say nothing about the
+# attempts that did not take.
+grep -h "so it is gameplay\|none with >=\|STOPPED at guest frame" \
+    "$OUT"/theirs*.log 2>/dev/null | tail -4
 # WHY THE ORACLE PRODUCED NOTHING, when it produced nothing. Its own refusals
 # are the first thing to read and they are 900 lines into a boot log, so a run
 # that dumps zero passes reads as "the emulator was too slow" -- which is what a
@@ -238,7 +255,8 @@ grep -h "so it is gameplay\|none with >=" "$OUT/theirs.log" | tail -3
 # capture. Printed only in the failing case, so a good run stays quiet.
 if [ -z "$(find "$OUT/theirs" -name 'oracle_f*.bin' 2>/dev/null | head -1)" ]; then
     echo "the oracle dumped NOTHING. Its own errors, if any:"
-    grep -h "oracle:" "$OUT/theirs.log" | grep -i "refus\|STOPPED\|failed" | tail -5
+    grep -h "oracle:" "$OUT"/theirs*.log 2>/dev/null |
+        grep -i "refus\|STOPPED\|failed" | tail -5
 fi
 # THE TWO SIDES MUST HAVE CAPTURED THE SAME GUEST FRAME. The selector is
 # content-based and applied identically, but it is applied to two runs: ours
@@ -249,7 +267,7 @@ fi
 ours_frame=$(sed -n 's/.*guest-draw: frame \([0-9]*\) is the capture.*/\1/p' \
              "$OUT/ours.log" | tail -1)
 theirs_frame=$(sed -n 's/.*dumping every resolve of frame \([0-9]*\).*/\1/p' \
-               "$OUT/theirs.log" | tail -1)
+               "$OUT"/theirs*.log 2>/dev/null | tail -1)
 # A SMALL GAP IS EXPECTED AND IS REPORTED ANYWAY. Both sides compute "the
 # first frame with >= 400 draws, plus 300", and they cross that threshold a
 # frame or two apart -- measured at 573 vs 574 on one run and 573 vs 573 on
