@@ -1,0 +1,131 @@
+#version 450
+// EDRAM COLOUR/DEPTH ALIASING: the depth buffer written INTO a colour surface.
+//
+// EDRAM is one memory addressed by a base register, and nothing stops the guest
+// from pointing RB_DEPTH_INFO at the same base a colour surface occupies. This
+// title does exactly that -- measured on the Act 1 gameplay frame, three draws
+// carry RB_COLOR_INFO base 0x2d0 and RB_DEPTH_INFO base 0x2d0 together -- and it
+// is not incidental: the shadow-mask pass depends on it.
+//
+//   draw 640  full-screen, depth-only, depth base == the colour surface's base.
+//             On the console its depth and stencil writes land IN that
+//             surface's colour bits, which for a far-cleared depth buffer with
+//             stencil is 0xFFFFFFFF -- 1.0 in every channel read as k_8_8_8_8.
+//   draw 647  blends src x dst against that. dst is 1.0, so the shadow mask
+//             survives the blend unattenuated.
+//
+// This renderer keeps one colour image per EDRAM base and ONE shared depth
+// image, so the colour bits keep the scene and the mask comes out multiplied by
+// it -- the frame's shadows and ambient fill are wrong as a result
+// (catalog #91). This shader is that aliasing: encode the depth the guest's
+// format would hold, pack the stencil under it, and hand the colour surface the
+// value a read of those bits under ITS format would produce.
+//
+// The depth encode is the one from the depth resolve (float24/20e4 for kD24FS8,
+// unorm24 for kD24S8) and the unpack is the one from edram_reinterpret.comp,
+// because this is the same question both of those answer: what do these bits
+// mean under that format.
+//
+// NOT MODELLED, and it does not arise in this title's frames: the reverse
+// direction, a colour write landing in a depth buffer that aliases it, and any
+// PARTIAL overlap where the two bases differ but their tile ranges intersect.
+// Both would need EDRAM held as bits rather than as images.
+
+#extension GL_EXT_shader_image_load_formatted : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// The depth image, sampled through a DEPTH-aspect view, and its stencil through
+// a STENCIL-aspect view of the same image. They are two bindings because a
+// Vulkan image view carries one aspect, not because they are two images.
+layout(binding = 0) uniform sampler2D xe_depth;
+layout(binding = 1) uniform usampler2D xe_stencil;
+// The colour surface that shares this EDRAM. Written, never read: what was
+// there is exactly what the console's depth write destroys.
+layout(binding = 2, rgba16f) uniform writeonly image2D xe_surface;
+
+layout(push_constant) uniform XeDepthAliasConstants {
+    ivec2 extent;
+    uint isFloat24;   // 1 = kD24FS8 (float24 20e4), 0 = kD24S8 (unorm24)
+    uint dstFormat;   // the surface's storage ColorRenderTargetFormat
+} xe_alias;
+
+// --- float32 -> float24 (20e4), the depth resolve's encode -----------------
+// Xenia's PreClampedDepthTo20e4. The value is clamped first, as there.
+uint xeDepthTo20e4(float d)
+{
+    d = isnan(d) ? 0.0 : clamp(d, 0.0, 1.0);
+    uint u = floatBitsToUint(d);
+    uint denorm = ((u & 0x7FFFFFu) | 0x800000u) >> min(113u - (u >> 23), 24u);
+    uint normal = u - (112u << 23);
+    uint biased = (u < 0x38800000u) ? denorm : normal;
+    // Round to nearest even, then take the 24 bits.
+    return bitfieldExtract(biased + 3u + bitfieldExtract(biased, 3, 1), 3, 24);
+}
+
+// --- 7e3 -> float32, for unpacking a 2:10:10:10_FLOAT surface --------------
+float xeFloat7e3To32(uint bits)
+{
+    uint mantissa = bits & 0x7Fu;
+    uint exponent = bits >> 7;
+    if (exponent == 0u)
+    {
+        // Denormal: normalise it by hand, exactly as the translator does.
+        if (mantissa == 0u)
+            return 0.0;
+        uint mantissaLZ = 0u;
+        uint m = mantissa;
+        while ((m & 0x80u) == 0u) { m <<= 1; ++mantissaLZ; }
+        exponent = 1u - (mantissaLZ - 17u) - 17u;
+        mantissa = (mantissa << (mantissaLZ - 16u)) & 0x7Fu;
+    }
+    return uintBitsToFloat(((exponent + 124u) << 23) | (mantissa << 16));
+}
+
+// The unpack from edram_reinterpret.comp: what a read of these 32 bits under
+// `format` produces. Kept identical to that file on purpose -- two copies that
+// drift are worse than one shared answer, and the next change to either belongs
+// in both.
+vec4 xeUnpack(uint bits, uint format)
+{
+    vec4 c = vec4(0.0);
+    if (format == 0u || format == 1u)
+    {
+        c.r = float(bitfieldExtract(bits, 0, 8)) * (1.0 / 255.0);
+        c.g = float(bitfieldExtract(bits, 8, 8)) * (1.0 / 255.0);
+        c.b = float(bitfieldExtract(bits, 16, 8)) * (1.0 / 255.0);
+        c.a = float(bitfieldExtract(bits, 24, 8)) * (1.0 / 255.0);
+    }
+    else if (format == 2u)
+    {
+        c.r = float(bitfieldExtract(bits, 0, 10)) * (1.0 / 1023.0);
+        c.g = float(bitfieldExtract(bits, 10, 10)) * (1.0 / 1023.0);
+        c.b = float(bitfieldExtract(bits, 20, 10)) * (1.0 / 1023.0);
+        c.a = float(bitfieldExtract(bits, 30, 2)) * (1.0 / 3.0);
+    }
+    else if (format == 3u)
+    {
+        c.r = xeFloat7e3To32(bitfieldExtract(bits, 0, 10));
+        c.g = xeFloat7e3To32(bitfieldExtract(bits, 10, 10));
+        c.b = xeFloat7e3To32(bitfieldExtract(bits, 20, 10));
+        c.a = float(bitfieldExtract(bits, 30, 2)) * (1.0 / 3.0);
+    }
+    return c;
+}
+
+void main()
+{
+    ivec2 id = ivec2(gl_GlobalInvocationID.xy);
+    if (id.x >= xe_alias.extent.x || id.y >= xe_alias.extent.y)
+        return;
+    float d = texelFetch(xe_depth, id, 0).x;
+    uint s = texelFetch(xe_stencil, id, 0).x & 0xFFu;
+    // The console's D24S8 word: depth in the high 24 bits, stencil in the low 8.
+    // This is the same layout RB_DEPTH_CLEAR uses (depth >> 8, stencil & 0xFF),
+    // which is how the frame's clear value is already decoded.
+    uint depth24 = xe_alias.isFloat24 != 0u
+                       ? xeDepthTo20e4(d)
+                       : uint(round(clamp(d, 0.0, 1.0) * 16777215.0));
+    uint bits = (depth24 << 8) | s;
+    imageStore(xe_surface, id, xeUnpack(bits, xe_alias.dstFormat));
+}

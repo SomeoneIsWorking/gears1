@@ -228,6 +228,16 @@ struct RendererPersistent
     VkDescriptorSetLayout reinterpretSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout reinterpretLayout = VK_NULL_HANDLE;
     VkPipeline reinterpretPipeline = VK_NULL_HANDLE;
+    // EDRAM COLOUR/DEPTH ALIASING (runtime/shaders/edram_depth_alias.comp):
+    // the pass that writes the depth buffer's bits into a colour surface that
+    // shares its EDRAM base. Separate from the reinterpretation pipeline
+    // because it reads two images and writes a third.
+    VkShaderModule depthAliasModule = VK_NULL_HANDLE;
+    VkDescriptorSetLayout depthAliasSetLayout = VK_NULL_HANDLE;
+    VkPipelineLayout depthAliasLayout = VK_NULL_HANDLE;
+    VkPipeline depthAliasPipeline = VK_NULL_HANDLE;
+    VkSampler depthAliasSampler = VK_NULL_HANDLE;
+    VkDescriptorPool depthAliasDescPool = VK_NULL_HANDLE;
     VkDescriptorPool reinterpretDescPool = VK_NULL_HANDLE;
     uint32_t reinterpretDescCapacity = 0;
     bool reinterpretSelfTested = false;
@@ -238,6 +248,9 @@ struct RendererPersistent
     VkPipelineLayout resolveDepthLayout = VK_NULL_HANDLE;
     VkPipeline resolveDepthPipeline = VK_NULL_HANDLE;
     VkImageView depthSampledView = VK_NULL_HANDLE;
+    // The STENCIL aspect of the same depth image. A Vulkan image view carries
+    // one aspect, so reading depth and stencil in one shader needs two views.
+    VkImageView stencilSampledView = VK_NULL_HANDLE;
 
     // Depth is shared by every surface for now; the frame's distinct
     // RB_DEPTH_INFO bases are counted per frame so the moment that stops being

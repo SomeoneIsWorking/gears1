@@ -133,6 +133,29 @@ struct RenderTargetCache
     // render pass open. Returns false when the pair is one this pass refuses.
     bool ReinterpretSurface(VkCommandBuffer cmd, SurfaceTarget& t,
                             uint32_t fromFormat, uint32_t toFormat);
+    // --- EDRAM colour/depth aliasing, in gpu_draw_reinterpret.cpp -----------
+    // Built once, like the reinterpretation pipeline. Returns false having said
+    // why; a frame that then aliases is reported as unserved rather than
+    // silently rendering on.
+    bool BuildDepthAliasPipeline();
+    // Write the depth buffer's bits into a colour surface that shares its EDRAM
+    // base, as the console's single memory does. `isFloat24` is
+    // RB_DEPTH_INFO.depth_format at the draw; the surface's own storage format
+    // decides how those bits read back. Recorded with no render pass open.
+    bool AliasDepthIntoSurface(VkCommandBuffer cmd, SurfaceTarget& t,
+                               bool isFloat24);
+    // Aliasing draws served, and the two ways one can fail, kept apart because
+    // they mean different things: no descriptor set left is this renderer's
+    // budget, a refused surface format is a gap in the shader. Reported at zero
+    // as well -- "this frame has no aliasing" and "the pass never ran" are the
+    // same silence otherwise.
+    uint32_t depthAliasesDone = 0;
+    uint32_t depthAliasOutOfSets = 0;
+    uint32_t depthAliasRefused = 0;
+    std::set<uint32_t> depthAliasRefusedFormats;
+    std::vector<VkDescriptorSet> depthAliasSets;
+    uint32_t depthAliasSetsUsed = 0;
+
     // GEARS_DRAW_REINTERP_SELFTEST=1: run the shipping compute module on this
     // GPU against three cases with arithmetic answers -- two that must convert
     // and one that must NOT change anything -- before any frame is rendered.

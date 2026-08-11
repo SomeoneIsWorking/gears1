@@ -195,6 +195,15 @@ struct ReinterpretPushConstants
 // components. `swapRB` in the push constants selects the format: 1 = float24.
 bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv);
 
+// EDRAM colour/depth aliasing, laid out to match the push-constant block in
+// runtime/shaders/edram_depth_alias.comp exactly.
+struct DepthAliasPushConstants
+{
+    int32_t extent[2];
+    uint32_t isFloat24;
+    uint32_t dstFormat;
+};
+
 // Whether this draw's primitive is POLYGONAL -- Xenia's
 // draw_util::IsPrimitivePolygonal. Culling and faceness apply only to polygons;
 // applying them to points or lines would drop geometry the hardware keeps.

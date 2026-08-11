@@ -34,6 +34,8 @@
 #include <lucent/log.h>
 
 #include "edram_reinterpret_spv.h"
+#include "edram_depth_alias_spv.h"
+#include "edram_depth_alias_spv.h"
 #include "gpu_draw_formats.h"
 #include "gpu_draw_pixels.h"
 
@@ -109,6 +111,159 @@ bool RenderTargetCache::BuildReinterpretPipeline()
         return false;
     }
     lucent::info("draw", "EDRAM reinterpretation compute pipeline built");
+    return true;
+}
+
+// EDRAM COLOUR/DEPTH ALIASING. The shader says what this IS and why the title
+// needs it; this is the plumbing. Built lazily, like the reinterpretation
+// pipeline, and reported once either way -- a frame that aliases with the pass
+// unavailable must not look like a frame that does not alias.
+bool RenderTargetCache::BuildDepthAliasPipeline()
+{
+    if (P.depthAliasPipeline != VK_NULL_HANDLE)
+        return true;
+    const std::vector<uint32_t>& spirv = gears::native::EdramDepthAliasSpirv();
+    VkShaderModuleCreateInfo smi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    smi.codeSize = spirv.size() * sizeof(uint32_t);
+    smi.pCode = spirv.data();
+    if (vkCreateShaderModule(R.device, &smi, nullptr, &P.depthAliasModule) != VK_SUCCESS)
+        return false;
+    // A sampler is required for the two sampled bindings even though the shader
+    // only ever texelFetches: the binding type is COMBINED_IMAGE_SAMPLER.
+    VkSamplerCreateInfo sai{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    sai.magFilter = sai.minFilter = VK_FILTER_NEAREST;
+    sai.addressModeU = sai.addressModeV = sai.addressModeW =
+        VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    if (vkCreateSampler(R.device, &sai, nullptr, &P.depthAliasSampler) != VK_SUCCESS)
+        return false;
+    const VkDescriptorSetLayoutBinding binds[3] = {
+        {0, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {1, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
+        {2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr}};
+    VkDescriptorSetLayoutCreateInfo sli{
+        VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    sli.bindingCount = 3;
+    sli.pBindings = binds;
+    if (vkCreateDescriptorSetLayout(R.device, &sli, nullptr,
+                                    &P.depthAliasSetLayout) != VK_SUCCESS)
+        return false;
+    VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                            sizeof(DepthAliasPushConstants)};
+    VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    pli.setLayoutCount = 1;
+    pli.pSetLayouts = &P.depthAliasSetLayout;
+    pli.pushConstantRangeCount = 1;
+    pli.pPushConstantRanges = &pcr;
+    if (vkCreatePipelineLayout(R.device, &pli, nullptr, &P.depthAliasLayout) != VK_SUCCESS)
+        return false;
+    VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+    cpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    cpi.stage.module = P.depthAliasModule;
+    cpi.stage.pName = "main";
+    cpi.layout = P.depthAliasLayout;
+    if (vkCreateComputePipelines(R.device, VK_NULL_HANDLE, 1, &cpi, nullptr,
+                                 &P.depthAliasPipeline) != VK_SUCCESS)
+    {
+        P.depthAliasPipeline = VK_NULL_HANDLE;
+        return false;
+    }
+    lucent::info("draw", "EDRAM depth-alias compute pipeline built");
+    return true;
+}
+
+bool RenderTargetCache::AliasDepthIntoSurface(VkCommandBuffer cmd, SurfaceTarget& t,
+                                              bool isFloat24)
+{
+    if (P.depthAliasPipeline == VK_NULL_HANDLE || t.storageView == VK_NULL_HANDLE)
+        return false;
+    if (depthAliasSetsUsed >= depthAliasSets.size())
+    {
+        ++depthAliasOutOfSets;
+        return false;
+    }
+    // The surface's own storage format decides what the depth bits READ AS, so
+    // a surface whose format this shader does not unpack is refused rather than
+    // written with a value from a format it does not implement.
+    const uint32_t fmt = t.storageFormat;
+    if (fmt != 0 && fmt != 1 && fmt != 2 && fmt != 3)
+    {
+        ++depthAliasRefused;
+        depthAliasRefusedFormats.insert(fmt);
+        return false;
+    }
+
+    VkImageMemoryBarrier pre[2]{};
+    pre[0] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    pre[0].srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    pre[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    pre[0].oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    pre[0].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    pre[0].srcQueueFamilyIndex = pre[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre[0].image = P.depth;
+    pre[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT |
+                               VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
+    pre[1] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    pre[1].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    pre[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    pre[1].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    pre[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    pre[1].srcQueueFamilyIndex = pre[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    pre[1].image = t.color;
+    pre[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd,
+        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
+
+    VkDescriptorSet set = depthAliasSets[depthAliasSetsUsed++];
+    VkDescriptorImageInfo d{P.depthAliasSampler, P.depthSampledView,
+                            VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo st{P.depthAliasSampler, P.stencilSampledView,
+                             VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+    VkDescriptorImageInfo c{VK_NULL_HANDLE, t.storageView, VK_IMAGE_LAYOUT_GENERAL};
+    VkWriteDescriptorSet w[3]{};
+    for (int i = 0; i < 3; ++i)
+    {
+        w[i] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        w[i].dstSet = set;
+        w[i].dstBinding = uint32_t(i);
+        w[i].descriptorCount = 1;
+    }
+    w[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[0].pImageInfo = &d;
+    w[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER; w[1].pImageInfo = &st;
+    w[2].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;          w[2].pImageInfo = &c;
+    vkUpdateDescriptorSets(R.device, 3, w, 0, nullptr);
+
+    DepthAliasPushConstants pc{};
+    pc.extent[0] = int32_t(W);
+    pc.extent[1] = int32_t(H);
+    pc.isFloat24 = isFloat24 ? 1u : 0u;
+    pc.dstFormat = fmt;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, P.depthAliasPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+        P.depthAliasLayout, 0, 1, &set, 0, nullptr);
+    vkCmdPushConstants(cmd, P.depthAliasLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
+        sizeof(pc), &pc);
+    vkCmdDispatch(cmd, (W + 7) / 8, (H + 7) / 8, 1);
+
+    VkImageMemoryBarrier post[2]{};
+    post[0] = pre[0];
+    post[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    post[0].dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    post[0].oldLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+    post[0].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    post[1] = pre[1];
+    post[1].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    post[1].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                            VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    post[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    post[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+            VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        0, 0, nullptr, 0, nullptr, 2, post);
+    ++depthAliasesDone;
     return true;
 }
 
