@@ -151,9 +151,10 @@ struct FrameProbe
     // that keeps arising needs both: a full-screen depth-only draw against a
     // far-cleared buffer changes nothing visible in depth while changing every
     // stencil byte it covers.
-    bool DumpingDepth() const { return !depthWanted.empty(); }
+    bool DumpingDepth() const { return !depthWanted.empty() || depthPsHash != 0; }
     void DumpDepth(VkCommandBuffer cmd, uint32_t drawsSoFar, uint32_t prepIndex,
-                   uint32_t diagIndex, VkImage depthImage, VkFormat depthFormat);
+                   uint32_t diagIndex, VkImage depthImage, VkFormat depthFormat,
+                   uint64_t psHash = 0, uint32_t colorMask = 0);
 
     // Both must be called with NO render pass open -- an image copy cannot
     // happen inside one -- and with the target read BEFORE the pass was ended,
@@ -225,6 +226,16 @@ private:
     // reason the surface probe keeps its two: a diag index the frame never
     // reached must not read as a depth buffer that held nothing.
     std::vector<uint32_t> depthWanted;
+    // GEARS_DRAW_DEPTH_DUMP_PS: aim the depth dump by PIXEL SHADER instead of
+    // by diag index. A diag index is not stable across runs -- this title's
+    // frame varies draw for draw -- so a dump aimed at one cannot be repeated,
+    // and the pass under investigation is identified by its shader, not by its
+    // position. depthPsMaskedOnly picks the MARKING draw of a marking/shading
+    // pair (colour mask 0), which is the state the shading draw then tests.
+    uint64_t depthPsHash = 0;
+    bool depthPsMaskedOnly = false;
+    uint32_t depthPsMatches = 0;   // draws that matched the hash
+    uint32_t depthPsHashSeen = 0;  // draws that matched hash AND mask rule
     struct DepthDump
     {
         uint32_t draws, prepIndex, diagIndex;
