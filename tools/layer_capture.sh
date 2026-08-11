@@ -129,6 +129,15 @@ while [ "$waited" -lt "$SECONDS_TO_RUN" ]; do
 done
 stop "$ours_pid"; trap - EXIT INT TERM
 
+# THE CONSOLE DUMPS A WINDOW OF FRAMES, NOT ONE. Both emulators advance the
+# guest by WALL-CLOCK delta time, so the same frame INDEX is not the same game
+# time: two runs of this oracle dumped their frame 875 and their frame 873 with
+# a DIFFERENT NUMBER OF SHADOW-CASTING LIGHTS, and every per-pass number in the
+# second was read as a renderer difference when the two sides were not looking
+# at the same scene. layer_compare picks the frame whose PASS STRUCTURE matches
+# ours, prints what each candidate scored, and says so loudly when none does.
+: "${GEARS_LAYER_ORACLE_FRAMES:=5}"
+
 # THE ORACLE IS GIVEN THE SCRIPT'S OWN PATIENCE, not its built-in default.
 # Its per-target wait defaults to 240 s while this script waits 420, so a boot
 # that is merely SLOW was ending the oracle at guest frame 546 with three
@@ -153,6 +162,7 @@ SDL_AUDIODRIVER=dummy \
 GEARS_ORACLE_RESOLVE_DUMP="$OUT/theirs" \
 GEARS_ORACLE_DUMP_MIN_DRAWS="$GEARS_LAYER_MIN_DRAWS" \
 GEARS_ORACLE_DUMP_AFTER_GAMEPLAY="$GEARS_LAYER_AFTER" \
+GEARS_ORACLE_DUMP_FRAMES="$GEARS_LAYER_ORACLE_FRAMES" \
     "$ORACLE" \
     --store_shaders=false \
     --target="$ORACLE_TARGET" \
@@ -169,8 +179,11 @@ waited=0
 while [ "$waited" -lt "$SECONDS_TO_RUN" ]; do
     kill -0 "$theirs_pid" 2>/dev/null || break
     [ -n "$(find "$OUT/theirs" -name 'oracle_f*.bin' 2>/dev/null | head -1)" ] && {
-        # The dump covers one frame; give it time to finish that frame's copies.
-        sleep 20; break; }
+        # The dump covers a WINDOW of frames; give it time to finish them.
+        # It runs at roughly one dumped frame per second, and stopping the
+        # oracle early truncates the window into a partial last frame that
+        # would then look like a console that resolved fewer passes.
+        sleep $((10 + GEARS_LAYER_ORACLE_FRAMES * 10)); break; }
     sleep 5; waited=$((waited + 5))
 done
 stop "$theirs_pid"; trap - EXIT INT TERM
