@@ -100,3 +100,38 @@ from RB_COLOR_INFO[copy_src_select], and if the surface genuinely is
 k_2_10_10_10_FLOAT there then the conversion is firing on a format change that
 did not happen and the trigger is the bug. The draw table carries
 resolve_dest_fmt but not the SOURCE format; adding it answers this in one run.
+
+### Note (2026-08-11)
+THE CONVERSION IS CORRECT, AND CORRECTLY TRIGGERED. Both suspects are now ruled
+out by measurement rather than by argument.
+
+TRIGGERED: the draw table now carries resolve_src_fmt. The two f7 copies read
+their source as format 10, k_2_10_10_10_AS_10_10_10_10, which stores identically
+to k_2_10_10_10 -- while the surface holds k_2_10_10_10_FLOAT, written by draw
+615. So a 7e3-to-fixed reinterpretation is exactly what the console's read of
+those bits is, and the pass is right to fire.
+
+IMPLEMENTED: the reinterpretation self-test covered four pairs and NOT this one,
+which is the shape of every instrument failure here. Adding it:
+
+    k_2_10_10_10_FLOAT -> k_2_10_10_10 (HDR 3.0 as fixed point)
+      (3, 3, 3, 1) -> (0.5629883, 0.5629883, 0.5629883, 1)
+
+3.0 in 7e3 is the bits 0x240 -- exponent field 4, mantissa 64, i.e. 1.5 * 2^1 --
+and 576/1023 = 0.5630. The shader is exact. 6 of 6 cases pass.
+
+## So the question moves upstream: what does the surface actually hold?
+
+The console's copies land at 0.1760, which is near our UNCONVERTED values
+(0.1804) and far from the correctly-converted ones (0.0869). If the conversion
+is right and fires at the right moment, then the surface's CONTENTS differ from
+the console's before the copy.
+
+The nearest suspect is the approximation the pass already documents: storage
+format is per SURFACE, so a NON-BLENDING draw that covers only part of it
+relabels the whole thing. Draw 615 is that draw here -- mask 0xf, identity
+blend, so the not-read branch relabels to k_2_10_10_10_FLOAT without converting
+-- and under the EDRAM sample model a 1X full-screen draw covers 1,280x720 of a
+1,280x1,440 grid, which is HALF. The f7 copies are 1X and read only the covered
+half, so that does not explain them by itself, but the label is now provably
+coarser than the coverage and that is worth measuring before anything else.
