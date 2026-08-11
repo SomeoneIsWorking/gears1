@@ -45,3 +45,26 @@ colour. The decode round-trips synthetic data and produces plausible means and
 a plausible image, and three sibling passes at 352x182 still decode 1.4%
 non-finite and are refused -- so the layout is right for these and not yet for
 those. Treat the magnitudes as provisional until the 352x182 case decodes too.
+
+### Note (2026-08-11)
+THE 352x182 REFUSAL IS CORRECT, and now it is evidenced rather than assumed.
+
+Decoding one of those buffers at 352x192x8 (its length, 540,672, is exactly
+that) and looking at WHERE the non-finite pixels fall:
+
+    columns with NaN, by index mod 16:  25 25 175 175 176 176 176 176
+                                        18 19 19 20 18 20 18 20
+    rows    with NaN, by index mod 16:  60 60 61 60 60 61 228 229
+                                        55 54 56 54 54 54 55 55
+    finite values range -61568.0 .. 61312.0, mean 1.92
+
+Periodic in BOTH axes on a 16 stride, and a range no scene colour buffer has.
+That is a tiling artifact, not a render target with NaNs in it -- so the 1%
+refusal is refusing a real decode failure and not a real signal.
+
+What separates this case from the 1280x720 ones that DO decode is the width:
+1280 is 40 tiles of 32 and 352 is 11, so the odd tile count is where to look
+first. Xenia's texture_util address has a term
+(((y & 8) >> 2) + (x >> 3)) & 3) << 6 whose interaction with the row parity is
+the natural suspect at 8 bytes per pixel, and the 8-byte path has only ever
+been exercised here at width 1280.
