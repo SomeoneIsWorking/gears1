@@ -55,7 +55,14 @@ struct ResolvePlan
     // dispatches, so four silently reused a set a later dispatch overwrote, and
     // the resolves those sets belonged to wrote nothing.
     uint32_t drawCount = 0;
-    uint32_t unmatched = 0, fromDepth = 0;
+    // A depth copy this plan ROUTED to a host destination against one it could
+    // not. `fromDepth` used to count every depth copy and the report called all
+    // of them unserved, which was false from the day the depth chain landed:
+    // on courtyard.gfr it said "3 from depth (no host depth texture chain yet)"
+    // while the execute-time counter in the same log said "2 executed, 0
+    // skipped". That line is what issue #90 read as "five copies never
+    // executed".
+    uint32_t unmatched = 0, depthRouted = 0, depthUnrouted = 0;
 };
 
 // Fills RT.formatsPerBase and returns the routing. Nothing here touches the

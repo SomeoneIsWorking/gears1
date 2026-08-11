@@ -144,10 +144,14 @@ struct RenderTargetCache
     // into an open command buffer with no render pass active, and both leave
     // the destination in SHADER_READ_ONLY_OPTIMAL so a later draw can sample it.
 
-    // Reads the host depth image through a sampled view and writes the depth the
-    // guest's k_24_8_FLOAT fetch would produce.
+    // Reads the host depth image through a sampled view and writes the depth a
+    // guest fetch of the destination would produce -- encoded as float24 (20e4,
+    // kD24FS8) or unorm24 (kD24S8) according to `isFloat24`, which is
+    // RB_DEPTH_INFO.depth_format at the copy. It differs BETWEEN COPIES of one
+    // frame: the scene depth is kD24FS8 and the shadow maps kD24S8.
     void ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
-                        const VkRect2D& srcRect, int32_t dstX, int32_t dstY);
+                        const VkRect2D& srcRect, int32_t dstX, int32_t dstY,
+                        bool isFloat24);
 
     // Colour. `scale` is the guest's copy_dest_exp_bias applied as a multiplier
     // and `swapRB` its copy_dest_swap -- neither of which the blit control arm

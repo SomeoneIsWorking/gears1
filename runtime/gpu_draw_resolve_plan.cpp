@@ -42,10 +42,12 @@ ResolvePlan PlanResolves(const FrameDrawInputs& in, RenderTargetCache& RT)
     // that runs after -- sizing from an empty list gave 8 sets for 12
     // dispatches, so four of them silently reused a set that a later dispatch
     // then overwrote, and the resolves those sets belonged to wrote nothing.
-    // Depth resolve destinations. We do not serve them yet, so a binding that
-    // names one reads stale guest memory -- and which SHADER does that is the
-    // evidence needed to settle how the packed depth is laid out across the
-    // destination's four components (catalog #35).
+    // Depth resolve destinations. These ARE served -- ResolveDepthTo dispatches
+    // into the destination's own host image -- so what is counted here is
+    // whether the copy could be ROUTED to one, not whether depth is supported.
+    // Which SHADER samples a depth destination is still the evidence needed to
+    // settle how the packed depth is laid out across the destination's four
+    // components (catalog #35).
     for (const FrameDrawItem& d : in.draws)
     {
         const uint32_t* R = d.registers();
@@ -56,17 +58,41 @@ ResolvePlan PlanResolves(const FrameDrawInputs& in, RenderTargetCache& RT)
         const uint32_t srcSelect = R[0x2318] & 0x7;
         if (srcSelect >= 4) // a DEPTH resolve
         {
-            ++plan.fromDepth;
             const uint32_t dd = R[0x2319] & ~0xFFFu;
             if (!dd)
+            {
+                ++plan.depthUnrouted;
                 continue;
+            }
             plan.depthDests.insert(dd);
             ResolveTarget* drt = nullptr;
             uint32_t drow = 0;
-            if (!RT.GetResolveTarget(dd, 0xFFFFFFFFu, R[0x231A] & 0x3FFF,
-                    (R[0x231A] >> 16) & 0x3FFF, (R[0x231B] >> 7) & 0x3F,
+            // THE SOURCE IS RB_DEPTH_INFO (0x2002), exactly as copy_src_select
+            // >= 4 means on the console: the sentinel 0xFFFFFFFF that used to
+            // go here printed the pass as `srcDFFFFFFFF` in the per-resolve
+            // snapshot's name, so it could never pair with the oracle's
+            // `srcD000` / `srcD5A0` even once the snapshots existed.
+            //
+            // AND SO IS THE DESTINATION FORMAT. For a depth copy the hardware
+            // ignores RB_COPY_DEST_INFO.copy_dest_format and takes the format
+            // from RB_DEPTH_INFO.depth_format -- Xenia's own rule
+            // (draw_util.cc GetResolveInfo: `dest_format =
+            // DepthRenderTargetToTextureFormat(rb_depth_info.depth_format)`
+            // when is_depth, overwriting copy_dest_info.copy_dest_format with
+            // it). MEASURED on the paired capture: this title's depth copies
+            // carry copy_dest_format 6 in the register on BOTH sides, while the
+            // console names the same two passes f23 (k_24_8_FLOAT, the scene
+            // depth) and f22 (k_24_8, the shadow maps). Taking the register at
+            // face value keyed our depth passes f6 and they paired with
+            // nothing.
+            if (!RT.GetResolveTarget(dd, R[0x2002] & 0xFFF, R[0x231A] & 0x3FFF,
+                    (R[0x231A] >> 16) & 0x3FFF, DepthDestFormat(R[0x2002]),
                     /*isDepth=*/true, drt, drow))
+            {
+                ++plan.depthUnrouted;
                 continue;
+            }
+            ++plan.depthRouted;
             plan.routing[dd] = {drt->base, drow};
             plan.dests.insert(drt->base);
             ++plan.drawCount;
@@ -98,10 +124,14 @@ ResolvePlan PlanResolves(const FrameDrawInputs& in, RenderTargetCache& RT)
 
 void ReportResolvePlan(const ResolvePlan& plan)
 {
-    if (plan.fromDepth || plan.unmatched)
-        lucent::info("draw", "frame resolves not served: {} from depth (no host depth"
-            " texture chain yet), {} from an EDRAM base this frame never rendered",
-            plan.fromDepth, plan.unmatched);
+    // Printed at zero as well: "no depth copy went unrouted" and "nobody
+    // counted" must not read the same.
+    lucent::info("draw", "frame depth copies routed to a host destination: {};"
+        " NOT routed: {} (no destination base, or no host image for it)",
+        plan.depthRouted, plan.depthUnrouted);
+    if (plan.unmatched)
+        lucent::info("draw", "frame resolves not served: {} from an EDRAM base"
+            " this frame never rendered", plan.unmatched);
     {
         lucent::Line rd;
         rd.add("frame: {} resolve destinations (from kCopy draws):",

@@ -71,6 +71,19 @@ uint32_t StorageColorFormat(uint32_t colorFormat);
 // texture at the wrong stride.
 uint32_t ColorFormatBytesPerPixel(uint32_t colorFormat);
 
+// The destination format of a DEPTH resolve, from RB_DEPTH_INFO (0x2002).
+//
+// A depth copy's RB_COPY_DEST_INFO.copy_dest_format does not describe what is
+// written: the hardware takes the format from RB_DEPTH_INFO.depth_format, and
+// Xenia does the same (draw_util.cc GetResolveInfo overwrites copy_dest_format
+// with DepthRenderTargetToTextureFormat(depth_format) when the source is
+// depth). Measured on this title: the register says 6 (k_8_8_8_8) for every
+// depth copy while the surfaces are really k_24_8_FLOAT and k_24_8.
+//
+// Returns a xenos::TextureFormat: 23 (k_24_8_FLOAT) for kD24FS8, else 22
+// (k_24_8).
+uint32_t DepthDestFormat(uint32_t rbDepthInfo);
+
 const char* PrimName(uint32_t primType);
 
 // The host format one EDRAM base is given, from every RB_COLOR_INFO.color_format

@@ -184,12 +184,20 @@ uint32_t ColorFormatBytesPerPixel(uint32_t colorFormat)
     case 3: case 4: case 5: case 10: case 15:
     case 24: case 30:                             return 2; // 16-bit
     case 6: case 7: case 14: case 16: case 17:
+    case 22: case 23: // k_24_8, k_24_8_FLOAT -- a DEPTH resolve destination
     case 25: case 31: case 36:                    return 4; // 32-bit
     case 26: case 32: case 37: case 50: case 54:
     case 55: case 56:                             return 8; // 64-bit
     case 38:                                      return 16;
     default:                                      return 0;
     }
+}
+
+// RB_DEPTH_INFO.depth_format is one bit at +16: 0 = kD24S8, 1 = kD24FS8. The
+// texture formats they resolve to are k_24_8 (22) and k_24_8_FLOAT (23).
+uint32_t DepthDestFormat(uint32_t rbDepthInfo)
+{
+    return ((rbDepthInfo >> 16) & 1) ? 23u : 22u;
 }
 
 // Xenia's ui::FloatToD3D11Fixed16p8, for the resolve rectangle's vertices.
