@@ -384,6 +384,24 @@ def selftest(work, np, Image):
                     .astype(np.uint8)).save(
         ours_dir / f"resolve_08_srcD001_{kw}x{kh}_f22_00000000_draw8.ppm")
 
+    # FOURTH CASE: a SECOND console frame that agrees BETTER and is structurally
+    # WRONG. The window the oracle now dumps exists because equal frame indices
+    # are not equal game time, and the frame is chosen on pass STRUCTURE -- so
+    # the way this choice can fail silently is by drifting to "whichever frame
+    # compares best", which would make every future comparison self-confirming.
+    # Frame 2 here holds ONE pass, byte-identical to ours, where frame 1 holds
+    # four including the shifted one that must be reported as differing. A tool
+    # that picked by agreement would choose frame 2, print a clean table, and
+    # lose the difference entirely.
+    raw_same = bytearray(w * h * 4)
+    for y in range(h):
+        for x in range(w):
+            off = tiled_offset_2d(x, y, w, 2)
+            raw_same[off:off + 4] = bytes(img[y, x])
+    (theirs_dir /
+     f"oracle_f2_copy0_srcC000_{w}x{h}_f6_e2_00000000_{w * h * 4}.bin"
+     ).write_bytes(bytes(raw_same))
+
     # Run the REAL comparison over these three pairs and read what it printed --
     # checking the filename patterns alone would leave the depth branch itself
     # unexercised, which is the branch being proven.
@@ -409,6 +427,13 @@ def selftest(work, np, Image):
          [ln for ln in out.splitlines() if "srcD001" in ln][0]),
         ("the colour difference still fires alongside it",
          "DIFFER" in out),
+        ("the console frame is chosen on STRUCTURE, not on agreement: the"
+         " 4-pass frame wins over a 1-pass frame that matches perfectly",
+         any("frame 1:" in ln and "<- used" in ln for ln in out.splitlines())),
+        ("...and choosing it KEPT the difference that the flattering frame"
+         " would have hidden",
+         "srcC000" in out and any("srcC000" in ln and "DIFFER" in ln
+                                  for ln in out.splitlines())),
     ]
     for note, passed in checks:
         print(f"selftest: {note}: {passed} (expected True)")
@@ -463,20 +488,64 @@ def main(argv):
         nth = seen.get(k, 0)
         seen[k] = nth + 1
         ours[k + (nth,)] = (p, int(m.group(7), 16))
-    seen = {}
+    # THE CONSOLE MAY HAVE DUMPED SEVERAL FRAMES, and they are kept apart.
+    # Both emulators advance the guest by WALL-CLOCK delta time, so the same
+    # frame INDEX is not the same game time: two runs of the oracle dumped
+    # their frames 875 and 873 with a DIFFERENT NUMBER OF SHADOW-CASTING
+    # LIGHTS, and every per-pass number in the second run was read as a
+    # renderer difference when the two sides were not looking at the same
+    # scene. With a window (GEARS_ORACLE_DUMP_FRAMES) the frame is CHOSEN and
+    # the choice is shown.
+    by_frame = {}
     for p in sorted(theirs_dir.iterdir(),
                     key=lambda q: int(THEIRS_RE.search(q.name).group(2))
                     if THEIRS_RE.search(q.name) else -1):
         m = THEIRS_RE.search(p.name)
         if not m:
             continue
+        frame = int(m.group(1))
         k = (m.group(3).upper(), int(m.group(4), 16), int(m.group(5)),
              int(m.group(6)), int(m.group(7)))
-        nth = seen.get(k, 0)
-        seen[k] = nth + 1
+        d = by_frame.setdefault(frame, ({}, {}))
+        nth = d[1].get(k, 0)
+        d[1][k] = nth + 1
         # group(8) is the optional endian; the address and length shift by one.
         endian = int(m.group(8)) if m.group(8) is not None else None
-        theirs[k + (nth,)] = (p, int(m.group(9), 16), int(m.group(10)), endian)
+        d[0][k + (nth,)] = (p, int(m.group(9), 16), int(m.group(10)), endian)
+
+    # CHOSEN BY STRUCTURE, NEVER BY AGREEMENT. The frame is picked on which
+    # passes it contains -- the same set of copies means the same set of lights
+    # and post steps -- and NOT on how small the differences come out, which
+    # would be an instrument that selects the answer it wants to report.
+    # Every candidate is printed with its score, so a choice that barely won
+    # says so and a window where nothing aligned cannot be mistaken for a
+    # window where the first frame was right.
+    our_keys = set(ours)
+    scored = []
+    for frame, (dumps, _) in sorted(by_frame.items()):
+        ks = set(dumps)
+        scored.append((len(ks & our_keys), -len(ks ^ our_keys), frame, dumps))
+    scored.sort(reverse=True)
+    if len(by_frame) > 1:
+        print(f"\nthe console dumped {len(by_frame)} frame(s); the one whose"
+              f" PASS STRUCTURE is closest to ours is used, and the choice is"
+              f" made on structure alone -- never on how well the values agree")
+        for shared_n, neg_sym, frame, dumps in scored:
+            print(f"  frame {frame}: {len(dumps)} pass(es), {shared_n} shared"
+                  f" with ours, {-neg_sym} unmatched either way"
+                  + ("   <- used" if frame == scored[0][2] else ""))
+    theirs_frame = scored[0][2] if scored else None
+    theirs = scored[0][3] if scored else {}
+    # Held, and printed next to the pass lists it qualifies rather than above
+    # the dump counts, because it is a caveat on the TABLE.
+    alignment_note = None
+    if scored and -scored[0][1] != 0:
+        alignment_note = (
+            f"NOTE: no dumped console frame has our pass structure -- the best"
+            f" is frame {theirs_frame} with {-scored[0][1]} pass(es) unmatched."
+            f" The two sides are NOT known to be at the same moment, and a"
+            f" per-pass difference below may be a difference of SCENE rather"
+            f" than of renderer.")
 
     print(f"ours   {len(ours)} pass dump(s)")
     print(f"theirs {len(theirs)} pass dump(s)")
@@ -496,6 +565,8 @@ def main(argv):
           + (", ".join(key_str(k) for k in only_o) or "(none)"))
     print(f"  only theirs ({len(only_t)}): "
           + (", ".join(key_str(k) for k in only_t) or "(none)"))
+    if alignment_note:
+        print("\n" + alignment_note)
     if not shared:
         print("REFUSING: the two sides share NO pass, so nothing can be paired. "
               "Nothing was written.")
