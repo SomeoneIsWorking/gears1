@@ -165,11 +165,26 @@ def unpack_dest(px, fmt, np, endian=0):
     per pixel. Each branch is the guest's own packing, and a format with no
     branch cannot reach here -- DECODABLE_FORMATS gates it.
     """
+    # THE ENDIAN APPLIES TO THE FOUR-BYTE FORMATS TOO. It was applied to the
+    # eight-byte one and to depth and NOWHERE ELSE, so every k_2_10_10_10 dump
+    # in this title -- all of them k8in32 -- was decoded with its dword's bytes
+    # in the wrong order, which scrambles the bit fields: the 2-bit alpha lands
+    # in the low bits and comes out as RED, 96.9% of it zero. That is exactly
+    # what "two k_2_10_10_10 copies of the scene are near-black on our side"
+    # was measuring (catalog #95) -- on the CONSOLE's side of the comparison.
+    # The same mistake, in the same file, one format wider, was retracted as
+    # catalog #96. b = the dword's bytes in guest order.
+    b0, b1, b2, b3 = (px[..., i].astype(np.uint32) for i in range(4))
+    if endian == 2:                                # k8in32: the dword reverses
+        b0, b1, b2, b3 = b3, b2, b1, b0
+    elif endian == 1:                              # k8in16: within each half
+        b0, b1, b2, b3 = b1, b0, b3, b2
+    w32 = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
     if fmt == 6:                                   # k_8_8_8_8, 8-bit unorm x4
-        return px[..., :3].astype(np.float32) / 255.0
-    w32 = (px[..., 0].astype(np.uint32) | (px[..., 1].astype(np.uint32) << 8)
-           | (px[..., 2].astype(np.uint32) << 16)
-           | (px[..., 3].astype(np.uint32) << 24))
+        return np.stack([(w32 & 0xFF).astype(np.float32) / 255.0,
+                         ((w32 >> 8) & 0xFF).astype(np.float32) / 255.0,
+                         ((w32 >> 16) & 0xFF).astype(np.float32) / 255.0],
+                        axis=-1)
     if fmt == 7:                                   # k_2_10_10_10
         r = (w32 & 0x3FF).astype(np.float32) / 1023.0
         g = ((w32 >> 10) & 0x3FF).astype(np.float32) / 1023.0
@@ -331,7 +346,7 @@ def selftest(work, np, Image):
                 off = tiled_offset_2d(x, y, w, 2)
                 raw[off:off + 4] = bytes(src[y, x])
         (theirs_dir /
-         f"oracle_f1_copy{nth}_srcC000_{w}x{h}_f6_e2_00000000_{w * h * 4}.bin"
+         f"oracle_f1_copy{nth}_srcC000_{w}x{h}_f6_e0_00000000_{w * h * 4}.bin"
          ).write_bytes(bytes(raw))
         Image.fromarray(img[..., :3]).save(
             ours_dir /
@@ -401,7 +416,7 @@ def selftest(work, np, Image):
     # from the join reads as "only the console resolves it", which is the exact
     # false reading (issue #90) that the depth snapshots were added to end.
     dw, dh = 32, 32
-    (theirs_dir / f"oracle_f1_copy9_srcD000_{dw}x{dh}_f6_e2_00000000_{dw * dh * 4}.bin"
+    (theirs_dir / f"oracle_f1_copy9_srcD000_{dw}x{dh}_f6_e0_00000000_{dw * dh * 4}.bin"
      ).write_bytes(bytes(dw * dh * 4))
     Image.fromarray(np.zeros((dh, dw, 3), dtype=np.uint8)).save(
         ours_dir / f"resolve_09_srcD000_{dw}x{dh}_f6_00000000_draw9.ppm")
@@ -446,7 +461,7 @@ def selftest(work, np, Image):
             off = tiled_offset_2d(x, y, w, 2)
             raw_same[off:off + 4] = bytes(img[y, x])
     (theirs_dir /
-     f"oracle_f2_copy0_srcC000_{w}x{h}_f6_e2_00000000_{w * h * 4}.bin"
+     f"oracle_f2_copy0_srcC000_{w}x{h}_f6_e0_00000000_{w * h * 4}.bin"
      ).write_bytes(bytes(raw_same))
 
     # FIFTH CASE: a console pass resolved in two BANDS must be rejoined, and a
@@ -467,15 +482,39 @@ def selftest(work, np, Image):
                 off = tiled_offset_2d(x, y, bw, 2)
                 rawb[off:off + 4] = bytes(src)
         (theirs_dir / f"oracle_f1_copy{20 + part}_srcC111_{bw}x"
-                      f"{bh if part == 0 else 16}_f6_e2_{dest:08X}_"
+                      f"{bh if part == 0 else 16}_f6_e0_{dest:08X}_"
                       f"{bw * rows * 4}.bin").write_bytes(bytes(rawb))
     Image.fromarray(band_img[..., :3]).save(
         ours_dir / f"resolve_20_srcC111_{bw}x{bh}_f6_00000000_draw20.ppm")
     # ...and a buffer of the same shape at an address that is NOT contiguous.
-    (theirs_dir / f"oracle_f1_copy22_srcC222_{bw}x16_f6_e2_09999999_"
+    (theirs_dir / f"oracle_f1_copy22_srcC222_{bw}x16_f6_e0_09999999_"
                   f"{bw * 32 * 4}.bin").write_bytes(bytes(bw * 32 * 4))
     Image.fromarray(np.zeros((16, bw, 3), dtype=np.uint8)).save(
         ours_dir / f"resolve_22_srcC222_{bw}x16_f6_00000000_draw22.ppm")
+
+    # SIXTH CASE: THE ENDIAN, on a four-byte format. It was applied to the
+    # eight-byte format and to depth and to nothing else, so every
+    # k_2_10_10_10 dump in this title -- all k8in32 -- had its dword's bytes in
+    # the wrong order, which scrambles the bit fields rather than shifting a
+    # value: the 2-bit alpha lands in the low bits and comes out as RED. That
+    # read as "two copies of the scene are near-black on our side" for a whole
+    # session (catalog #95), and the identical mistake one format wider had
+    # already been retracted once (catalog #96). Both classes here: the SAME
+    # pixel written in guest order under e0 and byte-reversed under e2 must
+    # decode to the SAME colour, and each must be wrong under the other tag.
+    px = np.array([[0x11, 0x22, 0x33, 0x44]], dtype=np.uint8).reshape(1, 1, 4)
+    rev = px[..., ::-1].copy()
+    plain = unpack_dest(px, 7, np, 0)[0, 0]
+    swapped = unpack_dest(rev, 7, np, 2)[0, 0]
+    same = bool(np.allclose(plain, swapped))
+    print(f"selftest: k_2_10_10_10 under k8in32 decodes the reversed bytes to"
+          f" the same colour: {same} (expected True)")
+    # ...and the tag is not decorative: the wrong one must give a DIFFERENT
+    # answer, or the test above would pass on a decoder that ignored it.
+    differs = not bool(np.allclose(unpack_dest(rev, 7, np, 0)[0, 0], plain))
+    print(f"selftest: ...and reading those same bytes as k8in16 does NOT:"
+          f" {differs} (expected True)")
+    ok = ok and same and differs
 
     # Run the REAL comparison over these three pairs and read what it printed --
     # checking the filename patterns alone would leave the depth branch itself
