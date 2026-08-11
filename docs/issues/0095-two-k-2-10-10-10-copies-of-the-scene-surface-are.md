@@ -67,3 +67,36 @@ k_2_10_10_10_FLOAT->k_2_10_10_10). One of those is between the copies and their
 source. The next step is a per-conversion arm -- convert all but one -- rather
 than the whole-pass switch, because "the pass off is right" and "one conversion
 is wrong" look identical from a single number.
+
+### Note (2026-08-11)
+NARROWED TO ONE CONVERSION, with a per-pair control arm (GEARS_DRAW_NOCONVERT,
+added for this).
+
+f7 copy at diag 639, mean, on walk_gameplay.gfr:
+
+    default (all conversions)                       0.0869
+    suppress k_2_10_10_10       -> k_8_8_8_8        0.0869   (no effect)
+    suppress k_2_10_10_10       -> k_2_10_10_10_FLOAT 0.0869 (no effect)
+    suppress k_2_10_10_10_FLOAT -> k_2_10_10_10     0.1804   <-- the whole of it
+    suppress a pair that does not occur (9-9)       0.0869   (negative control)
+    whole pass off (GEARS_DRAW_NOREINTERP=1)        0.1804
+    THE CONSOLE                                     0.1760
+
+So one conversion -- k_2_10_10_10_FLOAT -> k_2_10_10_10, reading a 7e3 float
+surface back as fixed-point 2:10:10:10 -- accounts for the entire difference,
+and without it we land within 0.004 of the console. The other two pairs change
+nothing, and the pair that does not occur changes nothing and SAYS it matched
+none, so the arm is not reporting a difference it cannot make.
+
+## What that does NOT settle
+
+Whether the conversion is wrongly IMPLEMENTED or wrongly TRIGGERED. The console
+agreeing with our unconverted values is weak evidence for the second -- if the
+console were reinterpreting 7e3 bits as fixed 2:10:10:10 it would not generally
+land near the float values -- but "generally" is not a measurement.
+
+The next step is to read RB_COLOR_INFO at that copy: pd.resolveSrcFormat comes
+from RB_COLOR_INFO[copy_src_select], and if the surface genuinely is
+k_2_10_10_10_FLOAT there then the conversion is firing on a format change that
+did not happen and the trigger is the bug. The draw table carries
+resolve_dest_fmt but not the SOURCE format; adding it answers this in one run.

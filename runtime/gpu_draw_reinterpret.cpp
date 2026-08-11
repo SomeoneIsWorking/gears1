@@ -274,6 +274,37 @@ bool RenderTargetCache::ReinterpretSurface(VkCommandBuffer cmd, SurfaceTarget& t
     const uint32_t to = StorageColorFormat(toFormat);
     if (from == to)
         return true; // k_2_10_10_10 and its _AS_ variant store the same bits
+    // GEARS_DRAW_NOCONVERT=<from>-<to>[,<from>-<to>...]: suppress ONE format
+    // pair, in STORAGE form (0 k_8_8_8_8, 2 k_2_10_10_10, 3 k_2_10_10_10_FLOAT).
+    //
+    // The whole-pass switch (GEARS_DRAW_NOREINTERP) cannot answer "which
+    // conversion is wrong": with it off the frame changes for six reasons at
+    // once, and "the pass off is closer to the console" and "one of its six
+    // conversions is wrong" produce the same single number. This is the arm
+    // that separates them, and it reports what it suppressed so a run that
+    // matched nothing cannot read as a run that changed nothing.
+    // BY VALUE -- a reference into lucent's config cache dangles when the cache
+    // is dropped (see gpu_draw_shaders.cpp).
+    static const std::string suppress{lucent::config::text("DRAW_NOCONVERT")};
+    if (!suppress.empty())
+    {
+        const std::string pair = std::to_string(from) + "-" + std::to_string(to);
+        size_t at = 0;
+        while (at < suppress.size())
+        {
+            size_t comma = suppress.find(',', at);
+            if (comma == std::string::npos) comma = suppress.size();
+            if (suppress.compare(at, comma - at, pair) == 0)
+            {
+                ++reinterpretsSuppressed;
+                reinterpretSuppressedPairs.insert((uint64_t(from) << 32) | to);
+                // NOT converted and NOT relabelled: the surface keeps the bits
+                // and the format it had, which is exactly what this arm is for.
+                return false;
+            }
+            at = comma + 1;
+        }
+    }
     if (!ReinterpretSupportedFormat(from) || !ReinterpretSupportedFormat(to))
     {
         ++reinterpretsRefused;
@@ -748,6 +779,20 @@ void RenderTargetCache::ReportReinterpretation(bool enabled) const
                  " reads the old bits nor replaces them -- the surface keeps its"
                  " previous format until a draw that does write arrives",
                  reinterpretsNoWrite);
+    // GEARS_DRAW_NOCONVERT. ALWAYS reported when the knob is set, INCLUDING at
+    // zero: a control arm that matched no pair and one that changed nothing are
+    // the same silence otherwise, and this arm exists to be believed.
+    if (!lucent::config::text("DRAW_NOCONVERT").empty())
+    {
+        line.add("; GEARS_DRAW_NOCONVERT={} suppressed {} conversion(s)",
+                 lucent::config::text("DRAW_NOCONVERT"), reinterpretsSuppressed);
+        for (uint64_t p : reinterpretSuppressedPairs)
+            line.add(" {}->{}", ColorFormatName(uint32_t(p >> 32)),
+                     ColorFormatName(uint32_t(p)));
+        if (reinterpretsSuppressed == 0)
+            line.add(" -- NONE, so this run is the same as the default and says"
+                     " nothing about any conversion");
+    }
     if (reinterpretsDone == 0 && reinterpretsRefused == 0 &&
         reinterpretsOutOfSets == 0)
         line.add(" -- no surface changed storage format this frame, so this"
