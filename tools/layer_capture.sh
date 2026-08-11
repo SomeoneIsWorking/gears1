@@ -41,12 +41,30 @@ RUNTIME="${GEARS_BUILD_DIR:-$REPO/scratch/build}/runtime/gears1"
 # frames. 300 presents is about ten seconds of guest time, well past a fade.
 : "${GEARS_LAYER_AFTER:=300}"
 
-OURS_SCRIPT=$(gears_walk_ours)
-THEIRS_INPUT=$(gears_walk_theirs)
-if [ -z "$OURS_SCRIPT" ] || [ -z "$THEIRS_INPUT" ]; then
-    echo "REFUSING: the walk generator produced an empty schedule, so neither" >&2
-    echo "side would be driven and both would sit on the title screen." >&2
-    exit 2
+# THE WALK IS ONLY NEEDED WHEN THE TITLE BOOTS TO ITS FRONT END. If the game's
+# own startup map has been pointed at a level (tools/startup_map.py set <map>),
+# both emulators boot into that level directly -- they read the same extracted
+# tree, so neither needs a hook and neither needs driving. Measured: gameplay at
+# guest frame 572 on BOTH sides, against 3219/3222 after a seven-minute walk.
+STARTUP_MAP=$(python3 "$REPO/tools/startup_map.py" show --game-dir "$GAME_DIR" \
+    2>/dev/null | sed -n 's/.*LocalMap=\([^ ]*\).*/\1/p' | head -1)
+case "${STARTUP_MAP:-}" in
+    ""|[Ww]ar[Ss]tart*) DIRECT_BOOT=0 ;;
+    *) DIRECT_BOOT=1 ;;
+esac
+if [ "$DIRECT_BOOT" = "1" ]; then
+    echo "startup map is '$STARTUP_MAP', so neither side is driven: both boot"
+    echo "into that level from the game's own config."
+    OURS_SCRIPT=""
+    THEIRS_INPUT=""
+else
+    OURS_SCRIPT=$(gears_walk_ours)
+    THEIRS_INPUT=$(gears_walk_theirs)
+    if [ -z "$OURS_SCRIPT" ] || [ -z "$THEIRS_INPUT" ]; then
+        echo "REFUSING: the walk generator produced an empty schedule, so neither" >&2
+        echo "side would be driven and both would sit on the title screen." >&2
+        exit 2
+    fi
 fi
 for f in "$ORACLE" "$RUNTIME"; do
     [ -x "$f" ] || { echo "REFUSING: $f is not built. Nothing was run." >&2; exit 2; }
