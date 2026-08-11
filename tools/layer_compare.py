@@ -195,6 +195,53 @@ def unpack_dest(px, fmt, np, endian=0):
     raise AssertionError(f"format {fmt} is in DECODABLE_FORMATS with no unpack")
 
 
+def merge_bands(dumps, np):
+    """Join a console pass that was resolved in horizontal BANDS into one pass.
+
+    The console cannot hold a 1280x720 colour+depth surface in 10 MiB of EDRAM,
+    so UE3 resolves the frame in two bands -- 512 rows and then 208 -- to two
+    destinations that are exactly contiguous in guest memory. Our renderer
+    collapses the tiling and resolves once, so without this the second band is
+    reported as a pass "only theirs" resolves (which reads as a missing pass)
+    and the first is reported as "only 512 of 720 rows are in the console's
+    buffer" (which silently drops the bottom 29% of every full-screen
+    comparison in the frame).
+
+    Joined ONLY on arithmetic: same source surface, width and format, and a
+    destination address exactly one band's worth of bytes past the previous
+    one. Anything else is left alone -- a guess here would concatenate two
+    unrelated buffers into a plausible image.
+
+    Returns the list of (kept-key, joined-key) it merged, for printing.
+    """
+    merged = []
+    changed = True
+    while changed:                       # a surface could be split in 3+ bands
+        changed = False
+        for k in sorted(dumps):
+            path, dest, length, endian, extra = dumps[k]
+            bpp = 4 if k[0] == "D" else DECODABLE_FORMATS.get(k[4], (None, 4))[1]
+            rows = stored_rows(length, k[2], bpp)
+            if not rows:
+                continue
+            want = dest + k[2] * rows * bpp
+            nxt = next((k2 for k2 in sorted(dumps)
+                        if k2 != k
+                        and (k2[0], k2[1], k2[2], k2[4]) ==
+                            (k[0], k[1], k[2], k[4])
+                        and k2[3] < k[3]          # a band is SHORTER than the whole
+                        and dumps[k2][1] == want), None)
+            if nxt is None:
+                continue
+            p2, _, l2, e2, x2 = dumps.pop(nxt)
+            dumps[k] = (path, dest, length + l2, endian,
+                        extra + [(p2, l2, e2)] + x2)
+            merged.append((k, nxt))
+            changed = True
+            break
+    return merged
+
+
 def key_str(k):
     src, base, w, h, fmt, nth = k
     return f"src{src}{base:03X} {w}x{h} f{fmt} #{nth}"
@@ -402,6 +449,34 @@ def selftest(work, np, Image):
      f"oracle_f2_copy0_srcC000_{w}x{h}_f6_e2_00000000_{w * h * 4}.bin"
      ).write_bytes(bytes(raw_same))
 
+    # FIFTH CASE: a console pass resolved in two BANDS must be rejoined, and a
+    # buffer that is NOT contiguous with it must NOT be. The join is arithmetic
+    # -- same source, width and format, destination exactly one band of bytes
+    # on -- and the failure it guards against is joining two unrelated buffers
+    # into a plausible image, so both classes are run.
+    bw, bh, b1 = 32, 48, 32          # 32 rows, then 16, at a 32-row alignment
+    band_img = np.stack([(xs[:bh, :bw] * 5) % 256, (ys[:bh, :bw] * 5) % 256,
+                         (xs[:bh, :bw] * ys[:bh, :bw]) % 256,
+                         np.full((bh, bw), 255)], axis=-1).astype(np.uint8)
+    for part, (y0, rows, dest) in enumerate(
+            [(0, b1, 0x1000000), (b1, 32, 0x1000000 + b1 * bw * 4)]):
+        rawb = bytearray(bw * rows * 4)
+        for y in range(rows):
+            for x in range(bw):
+                src = band_img[y0 + y, x] if y0 + y < bh else band_img[-1, x]
+                off = tiled_offset_2d(x, y, bw, 2)
+                rawb[off:off + 4] = bytes(src)
+        (theirs_dir / f"oracle_f1_copy{20 + part}_srcC111_{bw}x"
+                      f"{bh if part == 0 else 16}_f6_e2_{dest:08X}_"
+                      f"{bw * rows * 4}.bin").write_bytes(bytes(rawb))
+    Image.fromarray(band_img[..., :3]).save(
+        ours_dir / f"resolve_20_srcC111_{bw}x{bh}_f6_00000000_draw20.ppm")
+    # ...and a buffer of the same shape at an address that is NOT contiguous.
+    (theirs_dir / f"oracle_f1_copy22_srcC222_{bw}x16_f6_e2_09999999_"
+                  f"{bw * 32 * 4}.bin").write_bytes(bytes(bw * 32 * 4))
+    Image.fromarray(np.zeros((16, bw, 3), dtype=np.uint8)).save(
+        ours_dir / f"resolve_22_srcC222_{bw}x16_f6_00000000_draw22.ppm")
+
     # Run the REAL comparison over these three pairs and read what it printed --
     # checking the filename patterns alone would leave the depth branch itself
     # unexercised, which is the branch being proven.
@@ -430,6 +505,17 @@ def selftest(work, np, Image):
         ("the console frame is chosen on STRUCTURE, not on agreement: the"
          " 4-pass frame wins over a 1-pass frame that matches perfectly",
          any("frame 1:" in ln and "<- used" in ln for ln in out.splitlines())),
+        ("a pass the console resolved in two BANDS is rejoined and compared"
+         " over its WHOLE height, not just the first band",
+         any("srcC111" in ln and "32x48" in ln and "match" in ln
+             and "rows are in the console's buffer" not in ln
+             for ln in out.splitlines())
+         and any("srcC111" in ln and "in bands" in ln
+                 for ln in out.splitlines())),
+        ("...and a buffer that is NOT contiguous with it is left alone",
+         any("srcC222" in ln and "32x16" in ln for ln in out.splitlines())
+         and not any("srcC222" in ln and "in bands" in ln
+                     for ln in out.splitlines())),
         ("...and choosing it KEPT the difference that the flattering frame"
          " would have hidden",
          "srcC000" in out and any("srcC000" in ln and "DIFFER" in ln
@@ -511,7 +597,19 @@ def main(argv):
         d[1][k] = nth + 1
         # group(8) is the optional endian; the address and length shift by one.
         endian = int(m.group(8)) if m.group(8) is not None else None
-        d[0][k + (nth,)] = (p, int(m.group(9), 16), int(m.group(10)), endian)
+        d[0][k + (nth,)] = (p, int(m.group(9), 16), int(m.group(10)), endian,
+                            [])
+
+    # THE CONSOLE RESOLVES A FULL-SCREEN SURFACE IN BANDS, because 1280x720 of
+    # colour plus depth does not fit in 10 MiB of EDRAM. Rejoined here, per
+    # frame, before anything is scored or paired -- otherwise the second band
+    # reads as a pass only the console renders, and the first reads as a
+    # 1280x512 buffer that quietly drops the bottom 29% of every full-screen
+    # comparison in the frame.
+    band_joins = []
+    for frame, (dumps, _) in by_frame.items():
+        for kept, joined in merge_bands(dumps, np):
+            band_joins.append((frame, kept, joined))
 
     # CHOSEN BY STRUCTURE, NEVER BY AGREEMENT. The frame is picked on which
     # passes it contains -- the same set of copies means the same set of lights
@@ -536,6 +634,12 @@ def main(argv):
                   + ("   <- used" if frame == scored[0][2] else ""))
     theirs_frame = scored[0][2] if scored else None
     theirs = scored[0][3] if scored else {}
+    # Never silent: a join changes what every row below is measuring.
+    for frame, kept, joined in band_joins:
+        if frame == theirs_frame:
+            print(f"the console resolved {key_str(kept)} in bands;"
+                  f" {key_str(joined)} is its continuation in guest memory and"
+                  f" is joined onto it")
     # Held, and printed next to the pass lists it qualifies rather than above
     # the dump counts, because it is a caveat on the TABLE.
     alignment_note = None
@@ -603,11 +707,32 @@ def main(argv):
           f"{'mean ours':>10} {'mean theirs':>11}  note")
     for k in shared:
         our_path, our_dest = ours[k]
-        their_path, their_dest, their_len, their_endian = theirs[k]
+        their_path, their_dest, their_len, their_endian, their_extra = theirs[k]
         oi = np.asarray(Image.open(our_path).convert("RGB")).astype(np.float32) / 255.0
         h, w = oi.shape[:2]
         fmt = k[4]
         raw = their_path.read_bytes()
+
+        # EACH BAND IS TILED IN ITS OWN DESTINATION, so they are untiled
+        # separately and stacked -- concatenating the raw bytes and untiling
+        # once would swizzle across the seam and produce a plausible image of
+        # the wrong thing.
+        def their_image(bpp, _raw=raw, _extra=their_extra):
+            rows = stored_rows(len(_raw), w, bpp)
+            first = untile(_raw, w, rows, np, bpp) if rows else None
+            if first is None:
+                return None, 0
+            bands, total = [first], rows
+            for p2, _l2, _e2 in _extra:
+                b = p2.read_bytes()
+                r2 = stored_rows(len(b), w, bpp)
+                t2 = untile(b, w, r2, np, bpp) if r2 else None
+                if t2 is None:
+                    return None, 0
+                bands.append(t2)
+                total += r2
+            return (bands[0] if len(bands) == 1
+                    else np.concatenate(bands, axis=0)), total
         # A DEPTH destination is present on both sides but NOT comparable here,
         # and saying "DIFFER" for one would be the tool's own defect reported as
         # the renderer's. The two sides hold different things: ours is the host
@@ -635,8 +760,7 @@ def main(argv):
                          if fmt not in (22, 23)
                          else "this capture does not record copy_dest_endian"))
                 continue
-            rows = stored_rows(len(raw), w, 4)
-            ti = untile(raw, w, rows, np, 4) if rows else None
+            ti, rows = their_image(4)
             if ti is None:
                 print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
                       f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
@@ -737,7 +861,8 @@ def main(argv):
                   f" read without it. Re-capture with the current oracle")
             continue
         # DECODE AT THE HEIGHT THE BUFFER ACTUALLY HAS, then crop or refuse.
-        rows = stored_rows(len(raw), w, bpp)
+        ti, rows = their_image(bpp)
+        rows = rows or stored_rows(len(raw), w, bpp)
         short = ""
         if rows is None:
             undecoded += 1
@@ -746,7 +871,6 @@ def main(argv):
                   f"{their_len} bytes over {w} px at {bpp} B/px is not a whole"
                   f" number of rows, so the layout is not what this assumes")
             continue
-        ti = untile(raw, w, rows, np, bpp)
         if ti is not None and rows != h:
             if rows > h:
                 ti = ti[:h]           # padding to the tile alignment
