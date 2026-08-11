@@ -136,7 +136,11 @@ stop "$ours_pid"; trap - EXIT INT TERM
 # second was read as a renderer difference when the two sides were not looking
 # at the same scene. layer_compare picks the frame whose PASS STRUCTURE matches
 # ours, prints what each candidate scored, and says so loudly when none does.
-: "${GEARS_LAYER_ORACLE_FRAMES:=5}"
+# TWELVE, not five: OUR side drifts too, and a five-frame window twice failed
+# to contain a frame with our pass structure -- the number of shadow-casting
+# lights differs between neighbouring frames. Each dumped frame costs about
+# 57 MB of scratch and a second of the oracle's run.
+: "${GEARS_LAYER_ORACLE_FRAMES:=12}"
 
 # THE ORACLE IS GIVEN THE SCRIPT'S OWN PATIENCE, not its built-in default.
 # Its per-target wait defaults to 240 s while this script waits 420, so a boot
