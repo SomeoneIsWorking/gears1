@@ -59,6 +59,11 @@ def read_ours(path):
     for need in ("vs_hash", "ps_hash", "frag_stage"):
         if need not in cols:
             return None, f"the table has no {need} column (it predates it)"
+    # THE WIDE KEY when the table carries the raw registers, the narrow one when
+    # it does not -- an older capture is still comparable, at less resolution,
+    # and the caller is told which it got rather than left to assume.
+    wide = all(c in cols for c in
+               ("depth_control", "stencil_ref_mask_raw", "blend0"))
     counts = Counter()
     for line in lines[1:]:
         f = line.split("\t")
@@ -72,9 +77,17 @@ def read_ours(path):
             shaded = f[cols["frag_stage"]].strip() == "1"
         except (IndexError, KeyError):
             shaded = True                 # a table without the column: unchanged
-        counts[(vs.lower().lstrip("0") or "0",
-                (ps.lower().lstrip("0") or "0") if shaded else "0")] += 1
-    return counts, None
+        key = [vs.lower().lstrip("0") or "0",
+               (ps.lower().lstrip("0") or "0") if shaded else "0"]
+        if wide:
+            for c in ("depth_control", "stencil_ref_mask_raw", "blend0"):
+                try:
+                    key.append(f[cols[c]].strip().lower().removeprefix("0x")
+                               .lstrip("0") or "0")
+                except IndexError:
+                    key.append("0")
+        counts[tuple(key)] += 1
+    return counts, ('wide' if wide else 'narrow')
 
 
 def read_theirs(path, frame=None):
@@ -107,14 +120,18 @@ def read_theirs(path, frame=None):
         counts = Counter()
         for cell in f[2:]:
             parts = cell.split(":")
-            if len(parts) != 3:
+            # Six fields is the wide record (shaders plus RB_DEPTHCONTROL,
+            # RB_STENCILREFMASK and RB_BLENDCONTROL0); three is the record
+            # before the state was added. Anything else is not parsed, and the
+            # total check below is what makes that visible.
+            if len(parts) not in (3, 6):
                 continue
-            vs, ps, n = parts
             try:
-                counts[(vs.lower().lstrip("0") or "0",
-                        ps.lower().lstrip("0") or "0")] += int(n)
+                n = int(parts[-1])
             except ValueError:
                 continue
+            counts[tuple(p.lower().lstrip("0") or "0"
+                         for p in parts[:-1])] += n
         if best is None or sum(counts.values()) > sum(best.values()):
             best, best_frame, best_total = counts, f[0], total
         if frame is not None and f[0] == str(frame):
@@ -122,6 +139,13 @@ def read_theirs(path, frame=None):
     if frame is not None:
         return None, None, seen, 0
     return best, best_frame, seen, best_total
+
+
+def key_str(k):
+    s = f"vs {k[0]} ps {k[1]}"
+    if len(k) == 5:
+        s += f" depthctl {k[2]} stencil {k[3]} blend {k[4]}"
+    return s
 
 
 def compare(ours, theirs, out=print):
@@ -150,14 +174,14 @@ def compare(ours, theirs, out=print):
             f" missing draw -- listed last")
     for k in real:
         ratio = (f"{theirs[k] / ours[k]:.2f}x" if ours[k] else "ours has none")
-        out(f"  vs {k[0]} ps {k[1]}: ours {ours[k]}, theirs {theirs[k]}"
+        out(f"  {key_str(k)}: ours {ours[k]}, theirs {theirs[k]}"
             f"  ({ours[k] - theirs[k]:+d}, {ratio})")
     for k in tiled:
-        out(f"  [2x, the tiling] vs {k[0]} ps {k[1]}:"
+        out(f"  [2x, the tiling] {key_str(k)}:"
             f" ours {ours[k]}, theirs {theirs[k]}")
     for label, s, src in (("only ours", only_o, ours), ("only theirs", only_t, theirs)):
         for k in sorted(s, key=lambda q: -src[q])[:12]:
-            out(f"  {label}: vs {k[0]} ps {k[1]} x{src[k]}")
+            out(f"  {label}: {key_str(k)} x{src[k]}")
     return differing, only_o, only_t
 
 
@@ -216,9 +240,9 @@ def main(argv):
             print(f"REFUSING: {p} does not exist, so this run read NOTHING."
                   f" Nothing was compared.")
             return 1
-    ours, why = read_ours(args.ours)
+    ours, width = read_ours(args.ours)
     if ours is None:
-        print(f"REFUSING: {args.ours}: {why}. Nothing was compared.")
+        print(f"REFUSING: {args.ours}: {width}. Nothing was compared.")
         return 1
     theirs, frame, frames_seen, their_total = read_theirs(
         args.theirs, args.frame)
@@ -231,7 +255,20 @@ def main(argv):
         print(f"REFUSING: {args.ours} holds no draws with a shader."
               f" Nothing was compared.")
         return 1
-    print(f"ours: {args.ours}")
+    # THE TWO RECORDS MUST BE THE SAME SHAPE. A wide table against a narrow
+    # stream would share no key at all and report every pass as one-sided --
+    # a total mismatch that reads exactly like a real divergence.
+    their_width = "wide" if any(len(k) == 5 for k in theirs) else "narrow"
+    if their_width != width:
+        print(f"REFUSING: our table is the {width} key (shaders"
+              + (" plus depth/stencil/blend state)" if width == "wide" else " only)")
+              + f" and the console's stream is the {their_width} one. They share"
+              f" no key, so every pass would read as one-sided. Re-capture both"
+              f" sides with the current build. Nothing was compared.")
+        return 1
+    print(f"ours: {args.ours}  [{width} key: shaders"
+          + (" + depth control, stencil ref/mask, blend]" if width == "wide"
+             else " only]"))
     print(f"theirs: {args.theirs}, frame {frame} of {frames_seen} recorded"
           + ("" if args.frame else " (the busiest, which is the gameplay frame)"))
     # The stream's own total against what was parsed out of it: a cell this
