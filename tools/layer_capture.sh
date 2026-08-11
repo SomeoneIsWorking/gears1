@@ -212,6 +212,21 @@ stop "$theirs_pid"; trap - EXIT INT TERM
         echo "the oracle produced nothing in $oracle_try attempt(s); giving up"
         break
     fi
+    # A DEVICE LOSS IS NEVER RETRIED. The kernel is resetting the card that is
+    # also drawing the desktop, and a retry loop into that is how a lost
+    # measurement becomes a lost session. This gate comes FIRST because a lost
+    # device also stops the title presenting, so the "boot did not take" gate
+    # below would otherwise match it and retry -- the oracle really did lose
+    # the device once here (radv "the CS has been cancelled because the context
+    # is lost"), and the run after it looked like an ordinary flaky boot.
+    if grep -qi "DEVICE_LOST\|Graphics device lost" "$OUT/theirs.log" 2>/dev/null; then
+        echo "REFUSING TO RETRY: the oracle LOST THE VULKAN DEVICE. That is a" >&2
+        echo "GPU fault, not a flaky boot, and retrying submits more work to a" >&2
+        echo "card the kernel is resetting. Nothing further was run. The lines:" >&2
+        grep -i "DEVICE_LOST\|Graphics device lost\|context is lost" \
+            "$OUT/theirs.log" 2>/dev/null | head -5 >&2
+        exit 3
+    fi
     # A BOOT THAT DID NOT TAKE IS A STALL BEFORE GAMEPLAY, at whatever frame.
     # The gate used to be the exact string "guest frame 1", and a run then
     # wedged at frame 123 -- the process alive, its log untouched for five
