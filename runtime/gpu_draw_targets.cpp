@@ -155,16 +155,9 @@ bool RenderTargetCache::GetSurfaceTarget(uint32_t base, SurfaceTarget*& out)
         if (vkCreateImageView(R.device, &si, nullptr, &s.storageView) != VK_SUCCESS)
             return false;
     }
-    VkImageView atts[2] = {s.colorView, depthView};
-    VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-    fi.renderPass = rp->first;
-    fi.attachmentCount = 2;
-    fi.pAttachments = atts;
-    fi.width = W;
-    fi.height = H;
-    fi.layers = 1;
-    if (vkCreateFramebuffer(R.device, &fi, nullptr, &s.fb) != VK_SUCCESS)
-        return false;
+    // The framebuffers come later, one per DEPTH BASE this surface is drawn
+    // with: a framebuffer names its attachments, and this surface is rendered
+    // against more than one depth target in a frame.
     {
         lucent::Line nl;
         nl.add("render-target cache: new surface {:#x} ->", base);
@@ -205,6 +198,122 @@ uint32_t resolveNoRect = 0;
 // destination being seen for the first time mid-frame, because a draw before
 // that point resolved the same binding to a stub or to guest memory.
 uint64_t resolveGeneration = 0;
+
+// ONE DEPTH+STENCIL IMAGE PER RB_DEPTH_INFO.depth_base, created on demand.
+//
+// The console addresses depth by an EDRAM base exactly as it addresses colour.
+// This renderer held ONE image for the frame, and this title uses two bases:
+// the scene renders against 0x0 and the shadow atlas against 0x5a0. The atlas
+// passes therefore scribbled over the SCENE's stencil, and the shadow-mask pass
+// that tests it was rejected everywhere they had drawn -- three full-screen mask
+// draws rasterising and invoking no fragment shader, with the mask surviving
+// exactly where neither 422x422 atlas tile had reached (catalog #91).
+//
+// Binding is a side effect on purpose: `P.depth` and the three views are the
+// handles of the CURRENT target, so the mid-frame clear, the depth resolve, the
+// aliasing pass and the probes all keep reading one place. A caller that asks
+// for a base is asking to work on it.
+// The framebuffer pairing this colour surface with one depth base, made on
+// first use. A framebuffer names its attachments, so a surface rendered against
+// two depth targets needs two of them -- and surface 0x2d0 of a gameplay frame
+// is rendered against both the scene's depth and the shadow atlas's.
+bool RenderTargetCache::GetFramebuffer(SurfaceTarget& s, uint32_t depthBase,
+                                       VkFramebuffer& out)
+{
+    auto it = s.fbs.find(depthBase);
+    if (it != s.fbs.end())
+    { out = it->second; return true; }
+    DepthTarget* d = nullptr;
+    if (!GetDepthTarget(depthBase, d) || !d)
+        return false;
+    std::pair<VkRenderPass, VkRenderPass>* rp = nullptr;
+    if (!GetPasses(s.hostFormat, rp))
+        return false;
+    VkImageView atts[2] = {s.colorView, d->attachView};
+    VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    fi.renderPass = rp->first;
+    fi.attachmentCount = 2;
+    fi.pAttachments = atts;
+    fi.width = W;
+    fi.height = H;
+    fi.layers = 1;
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    if (vkCreateFramebuffer(R.device, &fi, nullptr, &fb) != VK_SUCCESS)
+        return false;
+    out = s.fbs.emplace(depthBase, fb).first->second;
+    return true;
+}
+
+bool RenderTargetCache::GetDepthTarget(uint32_t base, DepthTarget*& out)
+{
+    auto bind = [&](DepthTarget& d) {
+        P.depth = d.image;
+        P.depthMem = d.mem;
+        P.depthView = d.attachView;
+        P.depthSampledView = d.depthSampledView;
+        P.stencilSampledView = d.stencilSampledView;
+        P.boundDepthBase = base;
+        out = &d;
+    };
+    auto it = P.depthTargets.find(base);
+    if (it != P.depthTargets.end())
+    { bind(it->second); return true; }
+
+    DepthTarget d;
+    VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ci.imageType = VK_IMAGE_TYPE_2D;
+    ci.format = depthFormat;
+    ci.extent = {W, H, 1};
+    ci.mipLevels = 1;
+    ci.arrayLayers = 1;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    // SAMPLED: the depth resolve and the aliasing pass read it in compute, and a
+    // depth image cannot be a storage image. TRANSFER_DST: the guest's own
+    // mid-frame depth clear is a vkCmdClearDepthStencilImage, which requires it.
+    ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+               VK_IMAGE_USAGE_SAMPLED_BIT |
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    if (vkCreateImage(R.device, &ci, nullptr, &d.image) != VK_SUCCESS)
+    {
+        lucent::warn("draw", "render-target cache: could not create the depth"
+            " target for base {:#x}; draws against it will use the last one"
+            " bound, which is the shared-depth behaviour this replaced", base);
+        return false;
+    }
+    VkMemoryRequirements req{};
+    vkGetImageMemoryRequirements(R.device, d.image, &req);
+    uint32_t type = 0;
+    if (!R.FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
+        R.FindMemory(req.memoryTypeBits, 0, type);
+    VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = type;
+    if (vkAllocateMemory(R.device, &ai, nullptr, &d.mem) != VK_SUCCESS ||
+        vkBindImageMemory(R.device, d.image, d.mem, 0) != VK_SUCCESS)
+        return false;
+    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    vi.image = d.image;
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.format = depthFormat;
+    // The ATTACHMENT view names both aspects; a sampled view may name only one,
+    // which is why there are three.
+    vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
+                           0, 1, 0, 1};
+    if (vkCreateImageView(R.device, &vi, nullptr, &d.attachView) != VK_SUCCESS)
+        return false;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(R.device, &vi, nullptr, &d.depthSampledView) != VK_SUCCESS)
+        return false;
+    vi.subresourceRange = {VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
+    if (vkCreateImageView(R.device, &vi, nullptr, &d.stencilSampledView) != VK_SUCCESS)
+        return false;
+    lucent::info("draw", "render-target cache: new DEPTH target for base {:#x}"
+        " ({}x{}), {} in this run so far", base, W, H,
+        P.depthTargets.size() + 1);
+    bind(P.depthTargets.emplace(base, d).first->second);
+    return true;
+}
 
 bool RenderTargetCache::GetResolveTarget(uint32_t destBase, uint32_t sourceBase,
                                          uint32_t destPitch, uint32_t destHeight,

@@ -96,7 +96,11 @@ struct SurfaceTarget
     // attachment view cannot serve: a storage image binding must be 2D, and
     // colorView is what the framebuffer holds.
     VkImageView storageView = VK_NULL_HANDLE;
-    VkFramebuffer fb = VK_NULL_HANDLE;
+    // ONE FRAMEBUFFER PER DEPTH BASE this surface is drawn with. A framebuffer
+    // names its attachments, so a surface rendered against two different depth
+    // targets needs two -- and this title renders surface 0x2d0 against both
+    // the scene depth and the shadow atlas's.
+    std::map<uint32_t, VkFramebuffer> fbs;
     bool begunThisFrame = false;
     uint32_t drawsThisFrame = 0;
     // The guest colour format (in STORAGE form -- see StorageColorFormat) the
@@ -104,6 +108,24 @@ struct SurfaceTarget
     // frame's first draw into it. A draw declaring a different one needs the
     // contents converted first.
     uint32_t storageFormat = UINT32_MAX;
+};
+
+// A depth+stencil buffer, one per RB_DEPTH_INFO.depth_base. Same size, format
+// and usage for all of them -- what differs is only that they are SEPARATE
+// memories, which is what the console's EDRAM bases are.
+struct DepthTarget
+{
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory mem = VK_NULL_HANDLE;
+    // The attachment view (both aspects), and the two single-aspect views the
+    // depth resolve and the EDRAM aliasing pass sample through.
+    VkImageView attachView = VK_NULL_HANDLE;
+    VkImageView depthSampledView = VK_NULL_HANDLE;
+    VkImageView stencilSampledView = VK_NULL_HANDLE;
+    // Whether a pass has rendered into it THIS FRAME. The render pass that
+    // clears is chosen by the COLOUR surface's first use, so a depth target
+    // whose first use lands on a load pass is cleared explicitly instead.
+    bool usedThisFrame = false;
 };
 
 // A resolve destination: the main-memory address the guest copies an EDRAM
@@ -247,14 +269,32 @@ struct RendererPersistent
     VkDescriptorSetLayout resolveDepthSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout resolveDepthLayout = VK_NULL_HANDLE;
     VkPipeline resolveDepthPipeline = VK_NULL_HANDLE;
+    // The bound depth target's sampled views (see depthTargets below).
     VkImageView depthSampledView = VK_NULL_HANDLE;
     // The STENCIL aspect of the same depth image. A Vulkan image view carries
     // one aspect, so reading depth and stencil in one shader needs two views.
     VkImageView stencilSampledView = VK_NULL_HANDLE;
 
-    // Depth is shared by every surface for now; the frame's distinct
-    // RB_DEPTH_INFO bases are counted per frame so the moment that stops being
-    // faithful is visible rather than assumed.
+    // ONE DEPTH+STENCIL IMAGE PER RB_DEPTH_INFO.depth_base, not one for the
+    // frame. The console addresses depth by an EDRAM base like it addresses
+    // colour, and this title uses two: the scene renders against 0x0 and the
+    // shadow atlas against 0x5a0. Sharing one image made the atlas passes
+    // scribble over the scene's STENCIL, and the shadow-mask pass that tests it
+    // was then rejected everywhere they had drawn -- three full-screen mask
+    // draws rasterising and invoking no fragment shader at all, with the mask
+    // surviving exactly where neither atlas tile had reached (catalog #91).
+    //
+    // The count of distinct bases was known and was read as harmless: about 1%
+    // of draws use a base other than 0x0, which sized this as a refactor for a
+    // rounding error in depth VALUES. What those 1% damage is not a value.
+    //
+    // `depth`, `depthView`, `depthSampledView` and `stencilSampledView` below
+    // are the handles of the CURRENTLY BOUND target -- swapped by
+    // RenderTargetCache::GetDepthTarget as the frame moves between bases -- so
+    // every existing user (the mid-frame clear, the depth resolve, the aliasing
+    // pass, the probes) keeps reading one place and gets the right image.
+    std::map<uint32_t, DepthTarget> depthTargets;   // depth_base -> target
+    uint32_t boundDepthBase = UINT32_MAX;
     VkImage depth = VK_NULL_HANDLE; VkDeviceMemory depthMem = VK_NULL_HANDLE;
     VkImageView depthView = VK_NULL_HANDLE;
 

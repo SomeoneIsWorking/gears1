@@ -387,7 +387,8 @@ void Renderer::ReleasePersistent()
     vkDestroySampler(device, P.stubSampler, nullptr);
     for (auto& [k, s] : P.surfaceTargets)
     {
-        vkDestroyFramebuffer(device, s.fb, nullptr);
+        for (auto& [db, fb] : s.fbs)
+            vkDestroyFramebuffer(device, fb, nullptr);
         vkDestroyImageView(device, s.storageView, nullptr);
         vkDestroyImageView(device, s.colorView, nullptr);
         vkDestroyImage(device, s.color, nullptr);
@@ -411,8 +412,9 @@ void Renderer::ReleasePersistent()
     vkDestroyPipelineLayout(device, P.resolveDepthLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, P.resolveDepthSetLayout, nullptr);
     vkDestroyShaderModule(device, P.resolveDepthModule, nullptr);
-    vkDestroyImageView(device, P.depthSampledView, nullptr);
-    vkDestroyImageView(device, P.stencilSampledView, nullptr);
+    // The bound views are ALIASES of one of the targets below, so they are not
+    // destroyed here -- doing so would destroy the same handle twice.
+
     vkDestroySampler(device, P.depthAliasSampler, nullptr);
     vkDestroyDescriptorPool(device, P.depthAliasDescPool, nullptr);
     vkDestroyPipeline(device, P.depthAliasPipeline, nullptr);
@@ -424,8 +426,18 @@ void Renderer::ReleasePersistent()
     vkDestroyDescriptorSetLayout(device, P.resolveSetLayout, nullptr);
     vkDestroyShaderModule(device, P.resolveModule, nullptr);
     vkDestroyDescriptorPool(device, P.resolveDescPool, nullptr);
-    vkDestroyImageView(device, P.depthView, nullptr);
-    vkDestroyImage(device, P.depth, nullptr); vkFreeMemory(device, P.depthMem, nullptr);
+    for (auto& [db, d] : P.depthTargets)
+    {
+        vkDestroyImageView(device, d.stencilSampledView, nullptr);
+        vkDestroyImageView(device, d.depthSampledView, nullptr);
+        vkDestroyImageView(device, d.attachView, nullptr);
+        vkDestroyImage(device, d.image, nullptr);
+        vkFreeMemory(device, d.mem, nullptr);
+    }
+    P.depthTargets.clear();
+    P.depth = VK_NULL_HANDLE; P.depthMem = VK_NULL_HANDLE;
+    P.depthView = VK_NULL_HANDLE; P.depthSampledView = VK_NULL_HANDLE;
+    P.stencilSampledView = VK_NULL_HANDLE; P.boundDepthBase = UINT32_MAX;
     for (uint32_t i = 0; i < 2; ++i)
     {
         vkDestroyImage(device, P.presentStage[i], nullptr);
@@ -730,9 +742,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     std::vector<VkBuffer>& stagingBufs = TX.stagingBufs;
     std::vector<VkDeviceMemory>& stagingMems = TX.stagingMems;
 
-    // --- shared depth ------------------------------------------------------
-    VkImage& depth = P.depth; VkDeviceMemory& depthMem = P.depthMem;
-    VkImageView& depthView = P.depthView;
+    // --- depth, one target per RB_DEPTH_INFO.depth_base ---------------------
     // D32_SFLOAT_S8_UINT, not D32_SFLOAT: the guest's depth buffer carries an
     // 8-bit STENCIL alongside the depth, and this title's shadow passes mark
     // stencil and then confine later passes to the marked pixels. Without a
@@ -746,58 +756,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // mismatch is a validation error rather than a wrong picture.
     constexpr VkImageAspectFlags kDepthAspects =
         VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    // The IMAGES are created on demand by RenderTargetCache::GetDepthTarget,
+    // ONE PER DEPTH BASE, because the guest uses more than one and sharing a
+    // single image let the shadow atlas overwrite the scene's stencil
+    // (catalog #91). Which bases a frame uses is not known until its draws are
+    // prepared, so nothing is allocated here.
     if (firstFrame)
     {
-        VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        ci.imageType = VK_IMAGE_TYPE_2D;
-        ci.format = depthFormat;
-        ci.extent = {SW, SH, 1};
-        ci.mipLevels = 1;
-        ci.arrayLayers = 1;
-        ci.samples = VK_SAMPLE_COUNT_1_BIT;
-        ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-        // SAMPLED as well: the depth resolve reads this image in a compute
-        // pass, and a depth image cannot be a storage image.
-        // TRANSFER_DST as well: the guest's own mid-frame depth clear is a
-        // vkCmdClearDepthStencilImage, which REQUIRES it -- without the flag
-        // the clear and its two layout barriers are undefined behaviour that
-        // this driver happens to execute (VUID-vkCmdClearDepthStencilImage-
-        // pRanges-02660/02659, VUID-VkImageMemoryBarrier-oldLayout-01213).
-        // That clear is load-bearing: it is what makes reverse-Z draws pass
-        // the depth test at all (catalog #31).
-        ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                   VK_IMAGE_USAGE_SAMPLED_BIT |
-                   VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-        VK_CHECK(vkCreateImage(device, &ci, nullptr, &depth));
-        VkMemoryRequirements req{};
-        vkGetImageMemoryRequirements(device, depth, &req);
-        uint32_t type = 0;
-        if (!FindMemory(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, type))
-            FindMemory(req.memoryTypeBits, 0, type);
-        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        ai.allocationSize = req.size;
-        ai.memoryTypeIndex = type;
-        VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &depthMem));
-        VK_CHECK(vkBindImageMemory(device, depth, depthMem, 0));
-        VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-        vi.image = depth;
-        vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        vi.format = depthFormat;
-        // The ATTACHMENT view names both aspects -- a depth/stencil attachment
-        // is written through one view and the render pass uses both.
-        vi.subresourceRange = {kDepthAspects, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &depthView));
-        // The SAMPLED view names DEPTH ALONE. A view used for sampling may
-        // carry only one aspect of a combined format, and what the depth
-        // resolve reads is the depth. This is why the two views exist
-        // separately rather than being one handle used twice.
-        vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &P.depthSampledView));
-        // And the STENCIL aspect, for the EDRAM aliasing pass. Same image, same
-        // format; only the aspect differs, and a view carries exactly one.
-        vi.subresourceRange = {VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
-        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &P.stencilSampledView));
-
         VkImageCreateInfo si{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         si.imageType = VK_IMAGE_TYPE_2D;
         si.format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -831,7 +796,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // needs, and the resolve compute pipeline -- is in gpu_draw_targets.{h,cpp}.
     // The cache's extents are the SAMPLE grid: its images are EDRAM, and
     // EDRAM is samples. Off the model SW,SH are W,H.
-    draw::RenderTargetCache RT(*this, P, in, SW, SH, depthFormat, depthView);
+    draw::RenderTargetCache RT(*this, P, in, SW, SH, depthFormat);
     RT.BuildResolvePipeline();
     // GEARS_DRAW_REINTERP=1: convert a surface's contents when the frame
     // re-declares its EDRAM base under a different colour format. Off by
@@ -1473,11 +1438,31 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pd.hasFragmentStage = pixelShaderUsed;
         pd.colorMask = om.colorMask;
         pd.depthBase = R[0x2002] & 0xFFF;
+        // WHICH HOST DEPTH IMAGE THIS DRAW RENDERS INTO -- a separate question
+        // from which base the guest named, and the two must not be conflated.
+        // `depthBase` is also what the EDRAM colour/depth ALIASING pass
+        // triggers on (`pd.depthBase == pd.surfaceBase`), so forcing it to zero
+        // to select a shared image silently switched that pass off and blew the
+        // shadow-mask pass out to 644,645 shadowed pixels against 120,984.
+        // Measured, not reasoned: that was this change's own first attempt.
+        //
+        // ONE IMAGE PER BASE IS OFF BY DEFAULT. It is the right model -- the
+        // console addresses depth by an EDRAM base, and sharing one image is
+        // catalog #91's named root cause -- but switching it on makes this
+        // frame's masks WORSE (the first goes to 364,499 against the console's
+        // 143,816, the second to none), so something else in the pass depends
+        // on the sharing. Shipping a mechanism that is right in principle while
+        // it makes the picture worse is how a renderer ends up with two bugs
+        // that cancel. GEARS_DRAW_SPLIT_DEPTH=1 turns it on.
+        static const bool splitDepth = lucent::config::flag("DRAW_SPLIT_DEPTH");
+        pd.depthTargetBase = splitDepth ? pd.depthBase : 0u;
+        pd.guestDepthBase = pd.depthBase;
         // The depth FORMAT at this draw, for the aliasing pass: the same bit
         // the resolve path reads, but a geometry draw needs its own copy --
         // resolveDepthIsFloat24 is only filled for kCopy draws.
         pd.resolveDepthIsFloat24 = ((R[0x2002] >> 16) & 1) == 1;
         pd.depthControl = om.depthControl;
+        pd.stencilRefMask = om.stencilRefMask;
         pd.blend0 = om.blend0;
         pd.colorFormat = (R[0x2001] >> 16) & 0xF;
         pd.colorExpBias = int32_t((R[0x2001] >> 20) & 0x3F);
@@ -1881,6 +1866,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     { s.begunThisFrame = false; s.drawsThisFrame = 0; s.storageFormat = UINT32_MAX; }
     for (auto& [k, r] : P.resolveTargets)
         r.copies = 0;
+    // Same rule for the depth targets: the frame's first use of each one
+    // clears it, as the frame's first pass on a surface clears the colour.
+    for (auto& [k, d] : P.depthTargets)
+        d.usedThisFrame = false;
 
     // WHERE A RESOLVE'S PIXELS GO, PER RESOLVE RATHER THAN PER DESTINATION.
     //
@@ -2010,6 +1999,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // count indexes the wrong thing because `prepared` also holds resolves.
     uint32_t lastIssuedPrep = UINT32_MAX;
     uint32_t openSurface = 0;
+    // The DEPTH base the open pass is rendering into. A pass is split on this
+    // as well as on the colour surface: they are two attachments of one
+    // framebuffer, and the guest changes them independently.
+    uint32_t openDepthBase = UINT32_MAX;
     SurfaceTarget* openTarget = nullptr;
     // The last surface a pass was opened on, which -- unlike openTarget -- SURVIVES
     // endPass(). A checkpoint asked for immediately after a resolve has no pass
@@ -2029,16 +2022,60 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
     // Opens a pass on `key`'s target, clearing it if this frame has not touched
     // it yet and loading it otherwise.
-    auto beginPassOn = [&](uint32_t base) -> bool {
+    auto beginPassOn = [&](uint32_t base, uint32_t depthBase) -> bool {
         SurfaceTarget* t = nullptr;
         if (!RT.GetSurfaceTarget(base, t))
             return false;
         std::pair<VkRenderPass, VkRenderPass>* rp = nullptr;
         if (!RT.GetPasses(t->hostFormat, rp))
             return false;
+        // Binds the depth target for this base as well as naming it, so the
+        // mid-frame clear, the resolves and the probes all work on the depth
+        // buffer this pass is actually rendering into (catalog #91).
+        VkFramebuffer fb = VK_NULL_HANDLE;
+        if (!RT.GetFramebuffer(*t, depthBase, fb))
+            return false;
+        // A DEPTH TARGET'S FIRST USE THIS FRAME, when the pass taken is the
+        // LOAD one. The CLEAR render pass clears both attachments and is chosen
+        // by the COLOUR surface's first use; with one depth image per base the
+        // two no longer coincide, and a load pass over a depth image that has
+        // never been written this frame would both read undefined contents and
+        // declare a layout it has never been in. Cleared explicitly here to the
+        // same values that pass would have used, which keeps the single-base
+        // case exactly as it was.
+        DepthTarget* dt = nullptr;
+        if (RT.GetDepthTarget(depthBase, dt) && dt && !dt->usedThisFrame &&
+            t->begunThisFrame)
+        {
+            VkImageSubresourceRange dr{kDepthAspects, 0, 1, 0, 1};
+            VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+            b.srcAccessMask = 0;
+            b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+            b.image = dt->image;
+            b.subresourceRange = dr;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+            vkCmdClearDepthStencilImage(cmd, dt->image,
+                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                &clears[1].depthStencil, 1, &dr);
+            VkImageMemoryBarrier r{b};
+            r.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            r.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+            r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            r.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0, 0, nullptr,
+                0, nullptr, 1, &r);
+        }
+        if (dt)
+            dt->usedThisFrame = true;
         VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         bi.renderPass = t->begunThisFrame ? rp->second : rp->first;
-        bi.framebuffer = t->fb;
+        bi.framebuffer = fb;
         bi.renderArea = {{0, 0}, {SW, SH}};
         bi.clearValueCount = t->begunThisFrame ? 0u : 2u;
         bi.pClearValues = t->begunThisFrame ? nullptr : clears;
@@ -2051,13 +2088,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (passLog)
             lucent::info("draw", "  pass begin at draw {}: surface {:#x} host"
                 " format {} framebuffer {} -- {} pass{}", drawn, base,
-                uint32_t(t->hostFormat), (void*)t->fb,
+                uint32_t(t->hostFormat), (void*)fb,
                 t->begunThisFrame ? "LOAD" : "CLEAR",
                 t->begunThisFrame ? "" : " (first use this frame)");
         vkCmdBeginRenderPass(cmd, &bi, VK_SUBPASS_CONTENTS_INLINE);
         t->begunThisFrame = true;
         inPass = true;
         openSurface = base;
+        openDepthBase = depthBase;
         openTarget = t;
         lastSurface = base;
         lastTarget = t;
@@ -2077,6 +2115,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             auto doDepthClear = [&]() {
                 if (!pd.clearsDepth)
                     return;
+                // WHICH depth buffer. There is one per RB_DEPTH_INFO base now,
+                // and a clear that lands on whichever was bound last would
+                // clear the wrong one -- the shadow atlas's clear wiping the
+                // scene's depth is the same class of bug as the stencil one
+                // this split exists to fix (catalog #91).
+                DepthTarget* cdt = nullptr;
+                if (!RT.GetDepthTarget(pd.depthTargetBase, cdt) || !cdt)
+                    return;
+                cdt->usedThisFrame = true;
                 VkImageSubresourceRange dr{kDepthAspects, 0, 1, 0, 1};
                 VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
                 b.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
@@ -2108,6 +2155,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (pd.resolveIsDepth)
             {
                 endPass();
+                // The copy reads the depth buffer of ITS OWN base, not of
+                // whichever pass ran last: this frame resolves the scene's
+                // depth (base 0x0) and the shadow atlas's (0x5a0), and reading
+                // the wrong one copies out a different pass's picture.
+                DepthTarget* rdt = nullptr;
+                RT.GetDepthTarget(pd.depthTargetBase, rdt);
                 auto dst = P.resolveTargets.find(pd.resolveDest);
                 if (dst != P.resolveTargets.end() &&
                     P.resolveDepthPipeline != VK_NULL_HANDLE &&
@@ -2404,12 +2457,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 }
             }
         }
-        // Open a pass if there is none, or re-open on a different surface.
-        if (!inPass || openSurface != pd.surfaceBase)
+        // Open a pass if there is none, or re-open on a different surface OR a
+        // different depth base -- both are attachments of the framebuffer.
+        if (!inPass || openSurface != pd.surfaceBase ||
+            openDepthBase != pd.depthTargetBase)
         {
             if (inPass)
             { endPass(); ++surfaceSwitches; }
-            if (!beginPassOn(pd.surfaceBase))
+            if (!beginPassOn(pd.surfaceBase, pd.depthTargetBase))
                 continue;
         }
         if (openTarget && openTarget->storageFormat == UINT32_MAX)
@@ -2453,6 +2508,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 at->begunThisFrame)
             {
                 endPass();
+                {
+                    // Same rule as the depth resolve: alias the depth buffer
+                    // this draw actually rendered against.
+                    DepthTarget* adt = nullptr;
+                    RT.GetDepthTarget(pd.depthTargetBase, adt);
+                }
                 RT.AliasDepthIntoSurface(cmd, *at, pd.resolveDepthIsFloat24);
             }
         }
