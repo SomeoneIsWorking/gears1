@@ -54,6 +54,12 @@ struct PreparedDraw
     float depthClearValue = 0.0f;
     bool copyIsServed = true;   // false: this entry only clears
     bool resolveIsDepth = false; // a depth resolve, not a colour copy
+    // RB_DEPTH_INFO.depth_format at THIS copy: true = kD24FS8 (float24 20e4),
+    // false = kD24S8 (unorm24). The encoding the resolve has to write, and it
+    // is NOT one value per frame -- measured on the Act 1 gameplay frame, the
+    // scene depth at EDRAM 0x000 is kD24FS8 while the shadow maps at 0x5a0 are
+    // kD24S8, which the console's own pass keys confirm (f23 against f22).
+    bool resolveDepthIsFloat24 = true;
     // The ColorRenderTargetFormat the copy READS the source EDRAM under, from
     // RB_COLOR_INFO[RB_COPY_CONTROL.copy_src_select] -- NOT RB_COLOR_INFO0.
     // `colorFormat` below is always RT0's, which for a resolve is whatever was

@@ -1,8 +1,9 @@
 ---
 id: I031
 kind: instrument
-status: trusted
+status: DISTRUSTED
 created: 2026-08-07
+distrusted_on: 2026-08-11
 ---
 
 ## Instrument
@@ -20,3 +21,9 @@ Blind spot it states itself: it compares resolve DESTINATIONS, so a pass consume
 ## Known failure modes
 
 (none recorded yet)
+
+## DISTRUSTED 2026-08-11
+
+It reported the frame's DEPTH copies as passes only the console executes, when our renderer had been executing them all along -- the per-resolve snapshot was taken only on the colour branch, so a depth copy that ran wrote no file, and a pass missing from the output is indistinguishable there from a pass the renderer skipped. It also keyed our depth passes srcDFFFFFFFF/f6 against the console's srcD000/f23, so they could not have paired even with the files present. Fixed and re-validated as I032; every depth conclusion drawn from I031 (catalog #90, claim C026) is withdrawn.
+
+> Every result this instrument produced is suspect until it is re-validated.

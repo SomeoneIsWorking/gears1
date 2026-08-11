@@ -1698,12 +1698,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Records a copy of `r`'s image into a fresh readback buffer. Returns false
     // when it could not, and the caller COUNTS those -- a resolve missing from
     // the output and a resolve that wrote nothing must not look the same.
-    uint32_t resolveSnapshotsFailed = 0;
+    uint32_t resolveSnapshotsFailed = 0, resolveSnapshotsUnwritten = 0;
     auto snapshotResolveTarget = [&](const draw::ResolveTarget& r, uint32_t ordinal,
                                      uint32_t drawIndex) -> bool
     {
         if (r.image == VK_NULL_HANDLE || r.width == 0 || r.imageHeight == 0)
             return false;
+        // A destination the dispatch declined to write (a degenerate rectangle,
+        // an offset past the image) is still in UNDEFINED layout, and the
+        // barrier below claims it is in SHADER_READ_ONLY. Counted, not read.
+        if (!r.everWritten)
+        {
+            ++resolveSnapshotsUnwritten;
+            return true; // not a failure of the instrument; nothing was written
+        }
         const uint32_t bpp = r.isDepth ? 4u : 8u;
         const VkDeviceSize bytes = VkDeviceSize(r.width) * r.imageHeight * bpp;
         VkBuffer b = VK_NULL_HANDLE; VkDeviceMemory m = VK_NULL_HANDLE;
@@ -1761,6 +1769,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     uint32_t drawn = 0, segments = 0, surfaceSwitches = 0, resolvesDone = 0;
     uint32_t depthClearsDone = 0;
     uint32_t depthResolvesDone = 0, depthResolvesSkipped = 0;
+    uint32_t depthResolvesFloat24 = 0;
     // The surface a render pass is currently open on, if any.
     bool inPass = false;
     const bool passLog = lucent::config::flag("DRAW_PASS_LOG");
@@ -1874,8 +1883,23 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     RT.resolveDepthSetsUsed < RT.resolveDepthSets.size())
                 {
                     RT.ResolveDepthTo(cmd, dst->second, pd.resolveSrcRect,
-                                   pd.resolveDstX, pd.resolveDstY);
+                                   pd.resolveDstX, pd.resolveDstY,
+                                   pd.resolveDepthIsFloat24);
+                    depthResolvesFloat24 += pd.resolveDepthIsFloat24 ? 1 : 0;
                     ++depthResolvesDone;
+                    // A DEPTH COPY IS A PASS LIKE ANY OTHER, and leaving it out
+                    // of the per-resolve snapshot is what made the pass-by-pass
+                    // comparison report the depth copies as never executed
+                    // (issue #90): they ran, nothing captured them, and a pass
+                    // absent from the output is indistinguishable there from a
+                    // pass the renderer skipped. ResolveDepthTo leaves the
+                    // destination in SHADER_READ_ONLY_OPTIMAL, the same layout
+                    // the colour path's snapshot expects.
+                    if (dumpEachResolve &&
+                        !snapshotResolveTarget(dst->second, resolveOrdinal,
+                                               pd.diagIndex))
+                        ++resolveSnapshotsFailed;
+                    ++resolveOrdinal;
                 }
                 else
                 {
@@ -2675,6 +2699,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             rl.add("; {} FAILED to allocate a readback buffer and are MISSING"
                    " from the output -- a gap is that, not a resolve that wrote"
                    " nothing", resolveSnapshotsFailed);
+        if (resolveSnapshotsUnwritten)
+            rl.add("; {} destination(s) were never written by their dispatch"
+                   " (degenerate rectangle or an offset past the image) and are"
+                   " MISSING from the output for that reason",
+                   resolveSnapshotsUnwritten);
         // THE ORDINAL IS OURS, NOT THE ORACLE'S, and saying otherwise would be
         // worse than saying nothing. This renderer skips copy draws the oracle
         // performs -- depth resolves go down another path, and the untile
@@ -3154,9 +3183,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 " rectangle (whole surface copied), {} with a destination format"
                 " of unknown size (cannot be placed in a texture)",
                 RT.resolveNoRect, RT.resolveNoFormat);
-        lucent::info("draw", "frame depth resolves: {} executed, {} skipped"
-            " (destinations sampled as k_24_8_FLOAT by the deferred passes)",
-            depthResolvesDone, depthResolvesSkipped);
+        lucent::info("draw", "frame depth resolves: {} executed ({} encoded as"
+            " float24/kD24FS8, {} as unorm24/kD24S8, from RB_DEPTH_INFO at each"
+            " copy), {} skipped", depthResolvesDone, depthResolvesFloat24,
+            depthResolvesDone - depthResolvesFloat24, depthResolvesSkipped);
         lucent::info("draw", "frame mid-stream depth clears: {} executed of {}"
             " carried by the frame's copy draws (the guest clears depth once per"
             " predicated tile)", depthClearsDone, RT.midFrameDepthClears);

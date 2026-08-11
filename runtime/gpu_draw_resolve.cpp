@@ -26,7 +26,8 @@ namespace gears::draw
 {
 
 void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
-                                       const VkRect2D& srcRect, int32_t dstX, int32_t dstY)
+                                       const VkRect2D& srcRect, int32_t dstX,
+                                       int32_t dstY, bool isFloat24)
 {
     const int32_t sx0 = std::clamp<int32_t>(srcRect.offset.x, 0, int32_t(W));
     const int32_t sy0 = std::clamp<int32_t>(srcRect.offset.y, 0, int32_t(H));
@@ -85,7 +86,18 @@ void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
     pc.dstOffset[0] = dstX; pc.dstOffset[1] = dstY;
     pc.extent[0] = sx1 - sx0; pc.extent[1] = sy1 - sy0;
     pc.scale = 1.0f;
-    pc.swapRB = 1; // reused: 1 = the depth format is float24 (kD24FS8)
+    // Reused field: 1 = float24 (kD24FS8), 0 = unorm24 (kD24S8). It was pinned
+    // at 1 for every depth copy, which is wrong for this frame -- the scene
+    // depth is kD24FS8 but the shadow maps at EDRAM 0x5a0 are kD24S8.
+    //
+    // CHANGES NOTHING TODAY, and saying otherwise would be a false fix: the
+    // shader computes both encodings and DISCARDS them (`(void)depth24` in
+    // BuildDepthResolveComputeShader), writing the decoded float depth,
+    // because the consumers fetch this destination as a depth texture and the
+    // texture unit would decode it again. Verified: the shadow map's dump is
+    // byte-identical before and after. What this fixes is a selector that was
+    // silently wrong, so it cannot be believed if the encode is ever used.
+    pc.swapRB = isFloat24 ? 1u : 0u;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, P.resolveDepthPipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
         P.resolveDepthLayout, 0, 1, &set, 0, nullptr);

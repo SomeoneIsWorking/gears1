@@ -24,10 +24,26 @@ renderer difference:
           draw<n>.ppm.
 
 THE JOIN KEY IS THE PASS'S STRUCTURAL IDENTITY: which EDRAM surface the copy
-reads (RB_COPY_CONTROL.copy_src_select -> RB_COLOR[n]_INFO or RB_DEPTH_INFO) and
-the destination's guest dimensions (RB_COPY_DEST_PITCH), plus the ordinal among
-the copies that share that key. Every one of those comes from the guest's own
-registers, so the two emulators necessarily agree on them.
+reads (RB_COPY_CONTROL.copy_src_select -> RB_COLOR[n]_INFO or RB_DEPTH_INFO),
+the destination's guest dimensions (RB_COPY_DEST_PITCH) and its FORMAT, plus the
+ordinal among the copies that share that key. Every one of those comes from the
+guest's own registers, so the two emulators necessarily agree on them.
+
+A DEPTH COPY'S FORMAT IS NOT RB_COPY_DEST_INFO.copy_dest_format. The hardware
+takes it from RB_DEPTH_INFO.depth_format, and Xenia does the same (draw_util.cc
+GetResolveInfo overwrites copy_dest_format with
+DepthRenderTargetToTextureFormat(depth_format) when the source is depth), so the
+console names this title's depth passes f23 (k_24_8_FLOAT) and f22 (k_24_8)
+while the raw register reads 6 on both sides. Our renderer applies the same rule.
+Getting this wrong does not misreport a value -- it makes the depth passes fail
+to pair at all, and a pass with no counterpart reads as one the other side never
+executed (catalog #90).
+
+DEPTH PASSES ARE PAIRED BUT NOT VALUE-COMPARED. Our destination holds the
+DECODED float depth (our resolves never go through guest memory); the console's
+holds the packed guest bytes, whose layout is the open question in catalog #35.
+The rows say so rather than printing a difference that would be this tool's
+defect reported as the renderer's.
 
 NOT the destination ADDRESS, which was the first key tried and pairs NOTHING:
 the title's physical allocations land in different places in the two emulators.
@@ -155,7 +171,41 @@ def selftest(work, np, Image):
         print(f"selftest: {note} case decodes {'equal' if same else 'different'}"
               f" (expected {'equal' if want else 'different'})")
         ok = ok and same == want
-    print("SELFTEST PASS: the untiler round-trips and the difference test fires"
+    # THIRD CASE: a DEPTH pass must be joined and must be reported as
+    # not-value-compared. Both halves matter -- a depth pair silently dropped
+    # from the join reads as "only the console resolves it", which is the exact
+    # false reading (issue #90) that the depth snapshots were added to end.
+    dw, dh = 32, 32
+    (theirs_dir / f"oracle_f1_copy9_srcD000_{dw}x{dh}_f6_00000000_{dw * dh * 4}.bin"
+     ).write_bytes(bytes(dw * dh * 4))
+    Image.fromarray(np.zeros((dh, dw, 3), dtype=np.uint8)).save(
+        ours_dir / f"resolve_09_srcD000_{dw}x{dh}_f6_00000000_draw9.ppm")
+    # Run the REAL comparison over these three pairs and read what it printed --
+    # checking the filename patterns alone would leave the depth branch itself
+    # unexercised, which is the branch being proven.
+    import io
+    import contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        main(["layer_compare", "--ours", str(ours_dir), "--theirs",
+              str(theirs_dir), "--out", str(work / "st_layers")])
+    out = buf.getvalue()
+    checks = [
+        ("the depth pass is JOINED, not listed as one-sided",
+         "srcD000" not in out.split("passes both sides resolve:")[1]
+         .split("\n\n")[0]),
+        ("the depth pass is reported as not value-compared",
+         "values NOT compared" in out),
+        ("the depth pass is counted in the summary",
+         "1 DEPTH pass(es) paired on both sides" in out),
+        ("the colour difference still fires alongside it",
+         "DIFFER" in out),
+    ]
+    for note, passed in checks:
+        print(f"selftest: {note}: {passed} (expected True)")
+        ok = ok and passed
+    print("SELFTEST PASS: the untiler round-trips, the difference test fires,"
+          " and a depth pass joins"
           if ok else "SELFTEST FAIL: do not trust this tool's output")
     return 0 if ok else 1
 
@@ -243,6 +293,7 @@ def main(argv):
     out_dir = Path(args.out) if args.out else theirs_dir.parent / "layers"
     out_dir.mkdir(parents=True, exist_ok=True)
     undecoded = 0
+    depth_pairs = 0
     print(f"\n{'pass':>26} {'dest ours':>10} {'dest theirs':>11} {'size':>10} "
           f"{'mean ours':>10} {'mean theirs':>11}  note")
     for k in shared:
@@ -252,6 +303,22 @@ def main(argv):
         h, w = oi.shape[:2]
         fmt = k[4]
         raw = their_path.read_bytes()
+        # A DEPTH destination is present on both sides but NOT comparable here,
+        # and saying "DIFFER" for one would be the tool's own defect reported as
+        # the renderer's. The two sides hold different things: ours is the host
+        # R32 depth written out as grey, theirs is the guest's packed depth
+        # bytes, whose layout across the destination's components is exactly the
+        # open question in catalog #35. Decoding it as k_8_8_8_8 (which its
+        # copy_dest_format nominally is) produces a plausible image of the wrong
+        # quantity. The row is printed so the pass's PRESENCE on both sides --
+        # the thing this join now establishes -- is visible.
+        if k[0] == "D":
+            depth_pairs += 1
+            print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
+                  f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  BOTH SIDES RESOLVE "
+                  f"THIS, values NOT compared: depth destinations are not in a "
+                  f"common space (catalog #35)")
+            continue
         if fmt not in DECODABLE_FORMATS:
             # REFUSED, not skipped and not guessed. Named with its format so the
             # gap in coverage is visible in the same table as the results.
@@ -284,7 +351,9 @@ def main(argv):
               f"{oi.mean():>10.4f} {t.mean():>11.4f}  {note}")
 
     print(f"\n{undecoded} pass(es) were REFUSED (format not decoded here) and are "
-          f"NOT counted as matching.\nSide-by-side images for differing passes: {out_dir}"
+          f"NOT counted as matching.\n{depth_pairs} DEPTH pass(es) paired on both "
+          f"sides and were not value-compared (see the rows above).\n"
+          f"Side-by-side images for differing passes: {out_dir}"
           f" (ours left, console right, gamma 0.45)")
     print("BLIND SPOT: this compares resolve DESTINATIONS. A pass whose output "
           "is consumed\nwithout a resolve does not appear here at all.")

@@ -203,6 +203,7 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
             if (isDepthResolve)
             {
                 pd.resolveIsDepth = true;
+                pd.resolveDepthIsFloat24 = ((R[0x2002] >> 16) & 1) == 1;
                 pd.resolveDest = droute->second.first;
                 int32_t x0 = 0, y0 = 0, x1 = int32_t(W), y1 = int32_t(H);
                 DeriveResolveRect(R, in, W, H, RT, x0, y0, x1, y1);

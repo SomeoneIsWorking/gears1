@@ -1,9 +1,10 @@
 ---
 id: C026
 kind: claim
-status: holds
+status: falsified
 created: 2026-08-07
 tags: 
+falsified_on: 2026-08-11
 ---
 
 ## Claim
@@ -17,3 +18,9 @@ tools/layer_capture.sh 700 scratch/layercap3 -- ours guest frame 3223, console 3
 ## What would falsify it
 
 a paired capture at the same offset whose presented-buffer channel means diverge by more than 0.005, or the not-served depth count moving off 5
+
+## FALSIFIED 2026-08-11
+
+The depth half is WRONG. The 5 'never served' depth copies were EXECUTED all along: ResolveDepthTo has dispatched them since 2026-07-28 ('Serve the resolved depth, and the light shafts appear'), and the execute-time counter in the SAME log said 'frame depth resolves: 2 executed, 0 skipped'. Two instrument defects made them invisible: (1) PlanResolves counted every depth copy as unserved and printed 'no host depth texture chain yet', text carried over from before the depth chain existed; (2) the per-resolve snapshot was taken only in the colour branch, so a depth copy that ran produced no file and read as a pass the renderer skipped. The presented-buffer half of the claim is unaffected and is restated in the replacement claim.
+
+> Anything that cited this claim as proof must be re-checked. Grep the repo for it.
