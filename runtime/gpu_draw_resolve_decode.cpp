@@ -119,6 +119,16 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
         depthClearHere = ((R[0x2002] >> 16) & 1) == 1 /*kD24FS8*/
             ? Depth20e4To32(d24) : DepthUnorm24To32(d24);
     }
+    // WHICH DEPTH IMAGE THIS COPY READS AND CLEARS. RB_DEPTH_INFO's base, the
+    // same register and the same GEARS_DRAW_SPLIT_DEPTH selector the geometry
+    // path uses -- a resolve entry left it at the default 0, which under the
+    // shared model is every draw's base anyway and so was invisible. Under the
+    // split model it made EVERY depth resolve read the SCENE's depth image:
+    // the shadow atlas's own copy of base 0x5a0 came out at 0.0209 against the
+    // console's 0.7079, tile for tile, and the mask pass that samples it then
+    // found nothing shadowed anywhere (mask #1 resolved to a flat 1.0).
+    static const bool splitDepthHere = lucent::config::flag("DRAW_SPLIT_DEPTH");
+    const uint32_t guestDepthBaseHere = R[0x2002] & 0xFFF;
     auto route = resolveRouting.find(destBase);
     if (RT.formatsPerBase.count(srcBase) && route != resolveRouting.end())
     {
@@ -139,6 +149,9 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
         pd.clearsDepth = clearsDepthHere;
         pd.depthClearValue = depthClearHere;
         pd.stencilClearValue = stencilClearHere;
+        pd.depthBase = guestDepthBaseHere;
+        pd.guestDepthBase = guestDepthBaseHere;
+        pd.depthTargetBase = splitDepthHere ? guestDepthBaseHere : 0u;
         pd.surfaceBase = srcBase;
         pd.resolveDestFormat = (R[0x231B] >> 7) & 0x3F;
         // What the copy reads the source under. Indexed by copy_src_select,
@@ -213,7 +226,10 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
             pd.copyIsServed = false;
             pd.clearsDepth = clearsDepthHere;
             pd.depthClearValue = depthClearHere;
-        pd.stencilClearValue = stencilClearHere;
+            pd.stencilClearValue = stencilClearHere;
+            pd.depthBase = guestDepthBaseHere;
+            pd.guestDepthBase = guestDepthBaseHere;
+            pd.depthTargetBase = splitDepthHere ? guestDepthBaseHere : 0u;
             if (isDepthResolve)
             {
                 pd.resolveIsDepth = true;
