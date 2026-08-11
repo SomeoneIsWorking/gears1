@@ -112,6 +112,22 @@ DEFINE_int32(oracle_frame_timeout, 240,
              "the run, not wedge it forever.",
              "Oracle");
 
+// THE TITLE CAN REACH CONTENT WITHOUT BEING DRIVEN. When the game's own
+// startup map has been pointed at a level (tools/startup_map.py set <map>), it
+// boots straight into that level and never shows its front end, so there is
+// nothing to press and an input schedule would be a schedule of presses into
+// gameplay. The guard below exists to stop a filmstrip of the TITLE SCREEN
+// indexed by frame, which is what an accidentally-empty --oracle_input
+// produces; this flag is the caller stating that this run is the other case.
+// It is a claim the caller makes, not something this program can see -- the
+// startup map lives in the game's config, which the emulator only reads through
+// the guest.
+DEFINE_bool(oracle_allow_no_input, false,
+            "With --oracle_by_frame: run with NO input schedule, because the "
+            "title reaches content on its own (its startup map names a level). "
+            "Without this, an empty --oracle_input is refused.",
+            "Oracle");
+
 DEFINE_string(oracle_input, "START@25+8,A@30+2",
               "Scripted controller presses, BUTTON@SECONDS[+REPEAT_SECONDS], "
               "comma separated. Empty disables input entirely.",
@@ -246,20 +262,33 @@ int oracle_main(const std::vector<std::string>& args) {
   // FRAME-DRIVEN: hand the input driver the guest's own frame counter, so the
   // schedule advances with the game rather than with the wall clock.
   if (cvars::oracle_by_frame) {
-    if (!scripted_driver) {
+    if (!scripted_driver && !cvars::oracle_allow_no_input) {
       XELOGE("oracle: --oracle_by_frame needs a scripted input schedule, and "
              "--oracle_input is empty. Nothing would drive the title, so this "
              "would produce a filmstrip of the title screen indexed by frame. "
+             "Pass --oracle_allow_no_input=true if the title boots straight "
+             "into a level (its startup map names one) and needs no driving. "
              "Refusing.");
       return 5;
     }
     gpu::GraphicsSystem* gs = emulator->graphics_system();
-    scripted_driver->SetFrameTickSource([gs]() -> uint64_t {
-      gpu::CommandProcessor* cp = gs ? gs->command_processor() : nullptr;
-      return cp ? cp->guest_swap_count() : 0;
-    });
-    XELOGI("oracle: input and captures are driven by the GUEST FRAME COUNTER; "
-           "--oracle_input numbers are frames, not seconds");
+    if (scripted_driver) {
+      scripted_driver->SetFrameTickSource([gs]() -> uint64_t {
+        gpu::CommandProcessor* cp = gs ? gs->command_processor() : nullptr;
+        return cp ? cp->guest_swap_count() : 0;
+      });
+      XELOGI("oracle: input and captures are driven by the GUEST FRAME COUNTER; "
+             "--oracle_input numbers are frames, not seconds");
+    } else {
+      // SAY WHICH RUN THIS IS. A capture that turns out to be of a title
+      // screen must be attributable to this line rather than looked at and
+      // guessed about: there is no input, and the run is only meaningful
+      // because the game's own startup map takes it into a level.
+      XELOGI("oracle: NO input schedule, by request (--oracle_allow_no_input). "
+             "Captures are driven by the GUEST FRAME COUNTER, and the title is "
+             "expected to reach content on its own -- if its startup map is "
+             "still the front end, everything captured here is the front end");
+    }
   }
 
   if (cvars::oracle_by_frame) {
