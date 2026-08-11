@@ -135,3 +135,14 @@ blend, so the not-read branch relabels to k_2_10_10_10_FLOAT without converting
 1,280x1,440 grid, which is HALF. The f7 copies are 1X and read only the covered
 half, so that does not explain them by itself, but the label is now provably
 coarser than the coverage and that is worth measuring before anything else.
+
+### Note (2026-08-11)
+THE FIRST NOCONVERT RUN IS VOID -- it was taken against a console frame that
+had ONE shadow-casting light where our side had two (catalog #98). Its numbers
+(ours 0.0307/0.0595 against the console's 0.1648/0.1649) are not a measurement
+of the conversion; they are a measurement of two different scenes, and the
+comparer now says so rather than printing the table straight.
+
+Being retaken with the frame window in place. The prediction under test is
+unchanged: of the frame's three conversion pairs only 3-2 moves these copies,
+and it moves them the whole way.
