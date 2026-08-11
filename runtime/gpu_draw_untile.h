@@ -44,6 +44,12 @@
 namespace gears::draw
 {
 
-void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued);
+// `scissorsAreSamples` is GEARS_DRAW_MSAA: with it, a draw's scissor is in its
+// surface's SAMPLES while the resolve destinations this pass measures against
+// are in destination PIXELS, so the widening below has to convert. Mixing the
+// two silently leaves a 2X tile's scissor at its band height and is exactly why
+// the sample model rendered 508 of 720 rows (catalog #91).
+void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
+                         bool scissorsAreSamples = false);
 
 } // namespace gears::draw

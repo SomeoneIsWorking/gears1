@@ -1,7 +1,7 @@
 ---
 id: 93
 title: The diag table's scissor columns do not match the scissor the renderer set
-status: investigating
+status: resolved
 symptom: GEARS_DRAW_DIAG reports sc_w x sc_h = 1280x720 for a draw whose pd.scissor.extent is 1280x512
 tags: instrument,diag,scissor,msaa
 created: 2026-08-11
@@ -52,3 +52,54 @@ Print `pd.scissor` from inside the table writer itself, for one named diag
 index, in the same run as the prepare-time probe. That separates "the value
 changed between prepare and report" from "the row is about a different entry"
 -- the only two possibilities left.
+
+### Note (2026-08-11)
+NOT AN INSTRUMENT DEFECT. The table was telling the truth; the scissor really
+does change between prepare and report, and the code that changes it is the
+predicated-tile collapse.
+
+The check this entry asked for -- print pd.scissor from inside the table writer,
+in the same run as the prepare-time probe -- says:
+
+    PROBE291-PREPARE  gv sc 1280x512 -> pd 1280x512
+    PROBE291-TABLE    row 291 diag 291 scissor 0,0 1280x720
+
+So the value changes after the prepare loop, and a grep for `.scissor` across
+the whole runtime (rather than one file, which is what missed it) finds the
+writer: gpu_draw_untile.cpp, CollapseEdramTiling.
+
+    prepared[i].scissor.extent.height =
+        std::max(prepared[i].scissor.extent.height,
+                 uint32_t(dstBottom) - prepared[i].scissor.offset.y);
+
+The guest replays the same geometry once per predicated tile with a window
+offset; that pass collapses the replays into the base tile and WIDENS the base
+tile's scissor to the union of the tiles' resolve destinations. 512 is the
+guest's band, 720 is the union. The table prints the final value, which is the
+one that was used.
+
+AND IT WAS THE BLOCKER ON THE SAMPLE MODEL, which is why this was worth
+chasing. dstBottom is a row of the resolve DESTINATION, in PIXELS; under
+GEARS_DRAW_MSAA the scissor is in the surface's SAMPLES. Comparing them
+unconverted is a no-op for every 2X tile -- max(1024 samples, 720 pixels) leaves
+the band at 1024 -- so the collapsed tile never widened and the frame rendered
+508 of its 720 rows. Multiplying dstBottom by the draw's own vertical sample
+scale fixes it:
+
+    frame non-black       70.4%  ->  99.1%   (off arm 97.9%)
+    depth resolve         71.1%  ->  100.0%  (off arm 100.0%)
+    colour resolves       70.4%  ->  99.2%   (off arm 99.0-99.5%)
+
+The lesson worth keeping is the grep, not the arithmetic: `grep "pd.scissor"`
+in the file that sets it found two sites and looked conclusive. The field is
+written through a different expression in a different translation unit, and it
+took a probe inside the reader to show that the reader was not the liar.
+
+STILL OPEN under the model: resolve destination 0xcb91000 (the f25 pass) is 0%
+non-zero with it on and 49.9% off.
+
+### Note (2026-08-11)
+retitle: the scissor legitimately changes between prepare and report
+
+### Resolution (2026-08-11)
+The table was not lying: CollapseEdramTiling widens a collapsed tile's scissor to the union of its resolve destinations, so 512 (the guest's band) becomes 720 (the union) between prepare and report. Found by probing pd.scissor from inside the table WRITER in the same run as the prepare-time probe, then grepping .scissor across the whole runtime rather than the one file that sets it. The same mixed unit was the blocker on the sample model, and converting dstBottom into samples took the MSAA arm from 70.4% to 99.1% of the frame non-black.

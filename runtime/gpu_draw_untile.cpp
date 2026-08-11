@@ -9,10 +9,13 @@
 
 #include <lucent/log.h>
 
+#include "gpu_draw_formats.h"
+
 namespace gears::draw
 {
 
-void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued)
+void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
+                         bool scissorsAreSamples)
 {
     // A tile group is a maximal run of consecutive draws on one surface
     // sharing a window offset. Resolves delimit them.
@@ -146,9 +149,16 @@ void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued)
         {
             if (prepared[i].isResolve)
                 continue;
+            // dstBottom is a row of the resolve DESTINATION, in pixels; the
+            // scissor is in this draw's own space. Under the sample model
+            // those differ by the surface's vertical sample scale, and
+            // comparing them unconverted is a no-op for every 2X tile --
+            // max(1024 samples, 720 pixels) leaves the band at 1024.
+            const uint32_t sy = scissorsAreSamples
+                ? MsaaScaleY((prepared[i].surfaceInfo >> 16) & 3) : 1u;
             prepared[i].scissor.extent.height =
                 std::max(prepared[i].scissor.extent.height,
-                         uint32_t(dstBottom) - prepared[i].scissor.offset.y);
+                         uint32_t(dstBottom) * sy - prepared[i].scissor.offset.y);
         }
         // Widen the base tile's colour and depth resolves to the union, and
         // drop the replays' draws and resolves.
