@@ -704,11 +704,20 @@ def main(argv):
                        f" 8-bit PPM]")
             t = np.clip(t, 0.0, 1.0)
         note = ""
-        d = float(np.abs(t - oi).mean())
+        diff = np.abs(t - oi)
+        d = float(diff.mean())
+        # A MEAN HIDES THE INTERESTING CASE. The presented buffer differs by a
+        # mean of 0.025 and reads as a small difference -- and half its pixels
+        # agree to 0.008 while 4.6% of them are off by more than 0.1, which is a
+        # localised defect, not a global one. Both numbers, on every row: the
+        # share of BADLY differing pixels is what says whether a difference is
+        # a wash over the frame or a shape in one part of it.
+        bad = float((diff.max(axis=-1) > 0.1).mean())
+        spread = f"; {100 * bad:.2f}% of pixels differ by more than 0.1"
         if d < 0.02:
-            note = "match" + clamped + short
+            note = "match" + spread + clamped + short
         else:
-            note = f"DIFFER, mean |d| {d:.3f}{clamped}{short}"
+            note = f"DIFFER, mean |d| {d:.3f}{spread}{clamped}{short}"
             side = np.concatenate([oi, t], axis=1)
             Image.fromarray((np.clip(side, 0, 1) ** 0.45 * 255).astype(np.uint8)
                             ).save(out_dir / ("pass_%s%03X_%dx%d_f%d_%d.png" % k))
