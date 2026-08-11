@@ -1,7 +1,7 @@
 ---
 id: 94
 title: We write a k_16_16 pass the console leaves empty, and render almost nothing in two k_2_10_10_10 passes
-status: open
+status: resolved
 symptom: layer_compare: srcC2D0 f25 ours 0.2502 vs console 0.0000; srcC2D0 f7 ours 0.0146 vs console 0.1760
 tags: oracle,layer-compare,resolve,msaa
 created: 2026-08-11
@@ -43,3 +43,6 @@ The f7 rows are NOT explained by anything so far.
 
 ### Note (2026-08-11)
 The draw table now carries resolve_dest_fmt, so the layer rows join to draws: the two f7 passes are diag draws 639 and 657 -- the copies of surface 0x2d0 that BRACKET the shadow-mask pass (the fill at 640 sits between them, and 658 is the second loop's fill). That makes them a likely symptom of catalog #91 rather than a defect of their own, and it means the sample-model run should be read for these rows too, not only the f25 one.
+
+### Resolution (2026-08-11)
+PREDICTION CONFIRMED for the f25 row: with the EDRAM sample model on, that pass goes from ours 0.2502 against the console's 0.0000 to both sides at exactly 0.0000 -- a match. It was a symptom of catalog #91, as predicted, and the reason was the one stated: the copy reads a surface written only by the aliasing pass, and the fill that pass reads covers a quadrant at pixel scale and the whole surface in samples. The two f7 rows (diag draws 639 and 657) are NOT explained: 0.0151 against 0.1760 in both arms. They stay open as their own question -- see the reopened entry.

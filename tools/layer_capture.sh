@@ -181,12 +181,25 @@ ours_frame=$(sed -n 's/.*guest-draw: frame \([0-9]*\) is the capture.*/\1/p' \
              "$OUT/ours.log" | tail -1)
 theirs_frame=$(sed -n 's/.*dumping every resolve of frame \([0-9]*\).*/\1/p' \
                "$OUT/theirs.log" | tail -1)
-echo "frame selected: ours ${ours_frame:-NONE}, theirs ${theirs_frame:-NONE}"
-if [ -n "$ours_frame" ] && [ -n "$theirs_frame" ] && \
-   [ "$ours_frame" != "$theirs_frame" ]; then
-    echo "REFUSING to compare: the two sides captured DIFFERENT guest frames" >&2
-    echo "($ours_frame and $theirs_frame). That is two game moments, and every" >&2
-    echo "row would report the difference between them as the renderer's." >&2
+# A SMALL GAP IS EXPECTED AND IS REPORTED ANYWAY. Both sides compute "the
+# first frame with >= 400 draws, plus 300", and they cross that threshold a
+# frame or two apart -- measured at 573 vs 574 on one run and 573 vs 573 on
+# another. The tolerance is what separates that from the failure this guards
+# against, which was 91 frames. It is printed on EVERY run, matching or not,
+# because a two-frame gap is still two frames of animation and any row's
+# difference has to be weighed against it.
+: "${GEARS_LAYER_FRAME_TOLERANCE:=4}"
+gap=""
+if [ -n "$ours_frame" ] && [ -n "$theirs_frame" ]; then
+    gap=$((ours_frame - theirs_frame))
+    [ "$gap" -lt 0 ] && gap=$((-gap))
+fi
+echo "frame selected: ours ${ours_frame:-NONE}, theirs ${theirs_frame:-NONE}${gap:+ (gap $gap frame(s), tolerance $GEARS_LAYER_FRAME_TOLERANCE)}"
+if [ -n "$gap" ] && [ "$gap" -gt "$GEARS_LAYER_FRAME_TOLERANCE" ]; then
+    echo "REFUSING to compare: the two sides captured guest frames $ours_frame" >&2
+    echo "and $theirs_frame, $gap apart. That is two game moments, and every row" >&2
+    echo "would report the difference between them as the renderer's. Raise" >&2
+    echo "GEARS_LAYER_FRAME_TOLERANCE only if you know the scene is static." >&2
     exit 3
 fi
 echo
