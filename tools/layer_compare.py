@@ -550,8 +550,18 @@ def main(argv):
                       f"{their_len} bytes is not a whole number of {w}-wide "
                       f"rows at 4 B/px")
                 continue
+            dshort = ""
             if rows > h:
-                ti = ti[:h]
+                ti = ti[:h]           # padding to the tile alignment
+            elif rows < h:
+                # SHORT, exactly as a colour destination can be: the shadow-map
+                # copies hold 672 of their 864 rows. Compare the rows that
+                # exist and say how many -- a partial pass must never read as a
+                # whole one.
+                dshort = (f" [only {rows} of {h} rows are in the console's"
+                          f" buffer; compared over those]")
+                oi = oi[:rows]
+                h = rows
             # 8in32: the dword's bytes are reversed on the way out.
             word = (ti[..., 3].astype(np.uint32)
                     | (ti[..., 2].astype(np.uint32) << 8)
@@ -566,10 +576,11 @@ def main(argv):
             od = oi[..., 0]           # our depth target is written out as grey
             # OUR SIDE IS 8-BIT, so this is a coarse comparison and says so: it
             # answers "is this the same depth buffer", not "is it exact".
-            d = float(np.abs(np.clip(td, 0.0, 1.0) - od[:td.shape[0]]).mean())
+            od = oi[..., 0]
+            d = float(np.abs(np.clip(td, 0.0, 1.0) - od).mean())
             note = ("match" if d < 0.02 else f"DIFFER, mean |d| {d:.3f}")
             note += (" [depth: theirs decoded from the guest's 24:8;"
-                     " ours is an 8-bit grey dump, so this is coarse]")
+                     " ours is an 8-bit grey dump, so this is coarse]" + dshort)
             depth_compared += 1
             if d >= 0.02:
                 side = np.concatenate([np.repeat(od[..., None], 3, axis=-1),
