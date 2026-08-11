@@ -406,6 +406,13 @@ void Renderer::ReleasePersistent()
     vkDestroyDescriptorSetLayout(device, P.resolveDepthSetLayout, nullptr);
     vkDestroyShaderModule(device, P.resolveDepthModule, nullptr);
     vkDestroyImageView(device, P.depthSampledView, nullptr);
+    vkDestroyImageView(device, P.stencilSampledView, nullptr);
+    vkDestroySampler(device, P.depthAliasSampler, nullptr);
+    vkDestroyDescriptorPool(device, P.depthAliasDescPool, nullptr);
+    vkDestroyPipeline(device, P.depthAliasPipeline, nullptr);
+    vkDestroyPipelineLayout(device, P.depthAliasLayout, nullptr);
+    vkDestroyDescriptorSetLayout(device, P.depthAliasSetLayout, nullptr);
+    vkDestroyShaderModule(device, P.depthAliasModule, nullptr);
     vkDestroyPipeline(device, P.resolvePipeline, nullptr);
     vkDestroyPipelineLayout(device, P.resolveLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, P.resolveSetLayout, nullptr);
@@ -704,6 +711,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // separately rather than being one handle used twice.
         vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(device, &vi, nullptr, &P.depthSampledView));
+        // And the STENCIL aspect, for the EDRAM aliasing pass. Same image, same
+        // format; only the aspect differs, and a view carries exactly one.
+        vi.subresourceRange = {VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
+        VK_CHECK(vkCreateImageView(device, &vi, nullptr, &P.stencilSampledView));
 
         VkImageCreateInfo si{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         si.imageType = VK_IMAGE_TYPE_2D;
@@ -749,6 +760,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     const bool reinterpretEnabled = !lucent::config::flag("DRAW_NOREINTERP");
     if (reinterpretEnabled)
         RT.BuildReinterpretPipeline();
+    // The EDRAM colour/depth aliasing pass shares the reinterpretation's knob:
+    // both exist because EDRAM is one memory addressed by a base and this
+    // renderer holds images. GEARS_DRAW_NOREINTERP=1 turns off both.
+    if (reinterpretEnabled)
+        RT.BuildDepthAliasPipeline();
     // GEARS_DRAW_REINTERP_SELFTEST=1 proves the conversion on this GPU rather
     // than on paper, once, before the frame it would otherwise silently alter.
     if (lucent::config::flag("DRAW_REINTERP_SELFTEST") && !P.reinterpretSelfTested)
@@ -954,6 +970,36 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             ai.pSetLayouts = layouts.data();
             if (vkAllocateDescriptorSets(device, &ai, RT.reinterpretSets.data()) != VK_SUCCESS)
                 RT.reinterpretSets.clear();
+        }
+    }
+    // The aliasing pass's own sets: three bindings each, and a frame performs
+    // one per aliasing draw (three in the Act 1 capture). Sized from the same
+    // pool budget as the reinterpretation, which is the same order of magnitude.
+    if (P.depthAliasPipeline != VK_NULL_HANDLE)
+    {
+        const uint32_t want = 16;
+        if (P.depthAliasDescPool == VK_NULL_HANDLE)
+        {
+            const VkDescriptorPoolSize ps[2] = {
+                {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, want * 2},
+                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, want}};
+            VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            pi.maxSets = want;
+            pi.poolSizeCount = 2;
+            pi.pPoolSizes = ps;
+            vkCreateDescriptorPool(device, &pi, nullptr, &P.depthAliasDescPool);
+        }
+        if (P.depthAliasDescPool != VK_NULL_HANDLE)
+        {
+            vkResetDescriptorPool(device, P.depthAliasDescPool, 0);
+            std::vector<VkDescriptorSetLayout> layouts(want, P.depthAliasSetLayout);
+            RT.depthAliasSets.resize(want);
+            VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+            ai.descriptorPool = P.depthAliasDescPool;
+            ai.descriptorSetCount = want;
+            ai.pSetLayouts = layouts.data();
+            if (vkAllocateDescriptorSets(device, &ai, RT.depthAliasSets.data()) != VK_SUCCESS)
+                RT.depthAliasSets.clear();
         }
     }
 
@@ -1338,6 +1384,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pd.hasFragmentStage = pixelShaderUsed;
         pd.colorMask = om.colorMask;
         pd.depthBase = R[0x2002] & 0xFFF;
+        // The depth FORMAT at this draw, for the aliasing pass: the same bit
+        // the resolve path reads, but a geometry draw needs its own copy --
+        // resolveDepthIsFloat24 is only filled for kCopy draws.
+        pd.resolveDepthIsFloat24 = ((R[0x2002] >> 16) & 1) == 1;
         pd.depthControl = om.depthControl;
         pd.blend0 = om.blend0;
         pd.colorFormat = (R[0x2001] >> 16) & 0xF;
@@ -1809,8 +1859,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     uint32_t onlyDrawMatched = 0;
     uint32_t drawn = 0, segments = 0, surfaceSwitches = 0, resolvesDone = 0;
     uint32_t depthClearsDone = 0;
-    static const bool aliasFill = lucent::config::flag("DRAW_ALIAS_FILL");
-    uint32_t aliasFills = 0;
+    static const bool noAlias = lucent::config::flag("DRAW_NOALIAS");
     uint32_t depthResolvesDone = 0, depthResolvesSkipped = 0;
     uint32_t depthResolvesFloat24 = 0;
     // The surface a render pass is currently open on, if any.
@@ -2176,55 +2225,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 }
             }
         }
-        // GEARS_DRAW_ALIAS_FILL=1 -- a DIAGNOSTIC CONTROL ARM, never a fix.
-        //
-        // When a draw aims its depth buffer at the colour surface's own EDRAM
-        // base, the console's depth and stencil writes land in that surface's
-        // colour bits. This renderer cannot represent that: it keeps one colour
-        // image per base and one shared depth image, so the colour bits keep
-        // the scene. The frame's shadow-mask pass then blends (src x dst)
-        // against the scene where the console blends against a depth buffer
-        // that has just been cleared to far -- 0xFFFFFFFF read as k_8_8_8_8.
-        //
-        // This arm fills the surface with 1.0 at such a draw, which is what a
-        // cleared depth buffer READS AS and nothing more. It is a test of the
-        // aliasing explanation, not an implementation of it: the real thing
-        // must write the depth and stencil VALUES the guest produced, per
-        // pixel, encoded in the surface's current format.
-        if (aliasFill && pd.depthBase == pd.surfaceBase && !pd.isResolve)
-        {
-            draw::SurfaceTarget* at = nullptr;
-            if (RT.GetSurfaceTarget(pd.surfaceBase, at) && at &&
-                at->begunThisFrame)
-            {
-                endPass();
-                VkImageMemoryBarrier fb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-                fb.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-                fb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                fb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                fb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                fb.srcQueueFamilyIndex = fb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                fb.image = at->color;
-                fb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &fb);
-                VkClearColorValue cv{};
-                cv.float32[0] = cv.float32[1] = cv.float32[2] = cv.float32[3] = 1.0f;
-                VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                vkCmdClearColorImage(cmd, at->color,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &rg);
-                VkImageMemoryBarrier rb{fb};
-                rb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                rb.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-                rb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                rb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr,
-                    0, nullptr, 1, &rb);
-                ++aliasFills;
-            }
-        }
         // Open a pass if there is none, or re-open on a different surface.
         if (!inPass || openSurface != pd.surfaceBase)
         {
@@ -2253,6 +2253,30 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         DS.End(cmd, drawn);
         if (openTarget)
             ++openTarget->drawsThisFrame;
+        // EDRAM COLOUR/DEPTH ALIASING, after the draw that causes it.
+        //
+        // The guest has pointed RB_DEPTH_INFO at the same EDRAM base this
+        // draw's colour surface occupies, so on the console the depth and
+        // stencil this draw just wrote landed IN that surface's colour bits,
+        // and the next draw that blends against the surface reads them. Three
+        // draws of the Act 1 frame do this, and the shadow-mask pass depends on
+        // it: it blends src x dst where dst is the depth buffer this draw
+        // filled (catalog #91).
+        //
+        // AFTER, not before. Running it before the draw copies the depth as it
+        // stood BEFORE this draw wrote it, which is the scene's depth rather
+        // than the value the mask pass reads -- measured, that moved the mask
+        // copy by 0.02 where the aliasing is worth 0.25.
+        if (reinterpretEnabled && !noAlias && pd.depthBase == pd.surfaceBase)
+        {
+            draw::SurfaceTarget* at = nullptr;
+            if (RT.GetSurfaceTarget(pd.surfaceBase, at) && at &&
+                at->begunThisFrame)
+            {
+                endPass();
+                RT.AliasDepthIntoSurface(cmd, *at, pd.resolveDepthIsFloat24);
+            }
+        }
         lastIssuedPrep = uint32_t(&pd - prepared.data());
         ++drawn;
     }
@@ -3322,11 +3346,25 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             " float24/kD24FS8, {} as unorm24/kD24S8, from RB_DEPTH_INFO at each"
             " copy), {} skipped", depthResolvesDone, depthResolvesFloat24,
             depthResolvesDone - depthResolvesFloat24, depthResolvesSkipped);
-        if (aliasFill)
-            lucent::warn("draw", "GEARS_DRAW_ALIAS_FILL: {} surface(s) filled"
-                " with 1.0 at a draw whose depth base equals its colour base."
-                " A CONTROL ARM -- this frame is NOT what the guest asked for",
-                aliasFills);
+        {
+            lucent::Line al;
+            al.add("frame EDRAM colour/depth aliasing: {} draw(s) served",
+                   RT.depthAliasesDone);
+            if (RT.depthAliasOutOfSets)
+                al.add(", {} left unserved for want of a descriptor set",
+                       RT.depthAliasOutOfSets);
+            if (RT.depthAliasRefused)
+            {
+                al.add(", {} REFUSED because the surface's storage format is one"
+                       " this pass does not unpack:", RT.depthAliasRefused);
+                for (uint32_t f : RT.depthAliasRefusedFormats)
+                    al.add(" {}", draw::ColorFormatName(f));
+            }
+            if (noAlias)
+                al.add(" -- GEARS_DRAW_NOALIAS=1, so the two memories were kept"
+                       " separate and no draw was served");
+            al.flush(lucent::Level::Info, "draw");
+        }
         lucent::info("draw", "frame stencil: {} of {} pipelines built this frame"
             " have RB_DEPTHCONTROL.stencil_enable set", PC.pipelinesWithStencil,
             PC.pipelinesBuilt);
