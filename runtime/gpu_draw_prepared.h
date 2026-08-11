@@ -121,6 +121,11 @@ struct PreparedDraw
     // 640x360 into a 2x2-multisampled surface covers a 1280x720 image, and
     // nothing else in this row would say so.
     uint32_t surfaceInfo = 0;
+    // RB_COPY_CONTROL.copy_sample_select (bits 4..6), on a resolve. With a
+    // multisampled source the copy either PICKS one sample per pixel (k0..k3)
+    // or AVERAGES a pair or all four (k01/k23/k0123), and that is the whole
+    // difference between a resolve that antialiases and one that does not.
+    uint32_t resolveSampleSelect = 0;
     float vportXScale = 0, vportXOffset = 0, vportYScale = 0, vportYOffset = 0;
     float vportZScale = 0, vportZOffset = 0;
 };
