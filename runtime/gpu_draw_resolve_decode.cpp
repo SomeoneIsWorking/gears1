@@ -124,6 +124,13 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
     {
         PreparedDraw pd{};
         pd.isResolve = true;
+        // RB_SURFACE_INFO at the COPY. A resolve's source is an EDRAM surface
+        // and its sample count is what says how the copy's pixel rectangle maps
+        // onto that surface's samples -- the one piece of state that decides
+        // whether a 640x360 4X fill covers the whole 1280x720 destination or a
+        // quarter of it (catalog #91). It was absent from every resolve row.
+        pd.surfaceInfo = R[0x2000];
+        pd.resolveSampleSelect = (R[0x2318] >> 4) & 0x7;
         // The submission index, so the per-draw table can put this
         // resolve back between the draws it separates. Without it every
         // resolve row reads "draw 0" and the frame's pass boundaries are
@@ -200,6 +207,8 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
         {
             PreparedDraw pd{};
             pd.isResolve = true;
+            pd.surfaceInfo = R[0x2000];
+            pd.resolveSampleSelect = (R[0x2318] >> 4) & 0x7;
             pd.diagIndex = uint32_t(&d - in.draws.data());
             pd.copyIsServed = false;
             pd.clearsDepth = clearsDepthHere;
