@@ -584,6 +584,15 @@ void RenderTargetCache::ReportReinterpretation(bool enabled) const
             line.add(" {}->{}", ColorFormatName(uint32_t(p >> 32)),
                      ColorFormatName(uint32_t(p)));
     }
+    // A format change met by a draw that writes no colour at all. It is neither
+    // a conversion nor a declined one: the surface keeps its contents AND its
+    // format, and the next draw that does read the destination converts then.
+    if (reinterpretsNoWrite != 0)
+        line.add(", {} left alone because the draw meeting the format change"
+                 " writes NO COLOUR (mask 0 or no fragment stage), so it neither"
+                 " reads the old bits nor replaces them -- the surface keeps its"
+                 " previous format until a draw that does write arrives",
+                 reinterpretsNoWrite);
     if (reinterpretsDone == 0 && reinterpretsRefused == 0 &&
         reinterpretsOutOfSets == 0)
         line.add(" -- no surface changed storage format this frame, so this"

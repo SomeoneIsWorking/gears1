@@ -1699,8 +1699,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // when it could not, and the caller COUNTS those -- a resolve missing from
     // the output and a resolve that wrote nothing must not look the same.
     uint32_t resolveSnapshotsFailed = 0, resolveSnapshotsUnwritten = 0;
+    // `sourceBase` and `guestFormat` are THIS COPY'S, from the draw's own
+    // registers -- never the destination ResolveTarget's, which holds whatever
+    // the FIRST copy to that address declared. Destination 0xbdf0000 of the Act
+    // 1 frame is written by five copies: one reads EDRAM 0x400 as
+    // k_16_16_16_16_FLOAT and four read 0x2d0 as k_2_10_10_10 or
+    // k_16_16_16_16_FLOAT. Keyed from the target, all five were named
+    // `srcC400 f32`, so four of them paired with nothing on the console's side
+    // and were read as passes the console executes and we do not (catalog #90).
     auto snapshotResolveTarget = [&](const draw::ResolveTarget& r, uint32_t ordinal,
-                                     uint32_t drawIndex) -> bool
+                                     uint32_t drawIndex, uint32_t sourceBase,
+                                     uint32_t guestFormat) -> bool
     {
         if (r.image == VK_NULL_HANDLE || r.width == 0 || r.imageHeight == 0)
             return false;
@@ -1741,8 +1750,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         rb2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb2);
-        resolveDumps.push_back({r.base, r.width, r.imageHeight, r.sourceBase,
-                                r.pitch, r.height, r.guestFormat, r.isDepth,
+        resolveDumps.push_back({r.base, r.width, r.imageHeight, sourceBase,
+                                r.pitch, r.height, guestFormat, r.isDepth,
                                 b, m, ordinal, drawIndex});
         return true;
     };
@@ -1897,7 +1906,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     // the colour path's snapshot expects.
                     if (dumpEachResolve &&
                         !snapshotResolveTarget(dst->second, resolveOrdinal,
-                                               pd.diagIndex))
+                                               pd.diagIndex, pd.surfaceBase,
+                                               pd.resolveDestFormat))
                         ++resolveSnapshotsFailed;
                     ++resolveOrdinal;
                 }
@@ -1954,7 +1964,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // ordinal advances whether or not the snapshot succeeds, so the
             // numbering keeps matching the oracle's even when one copy fails.
             if (dumpEachResolve &&
-                !snapshotResolveTarget(dst->second, resolveOrdinal, pd.diagIndex))
+                !snapshotResolveTarget(dst->second, resolveOrdinal, pd.diagIndex,
+                                       pd.surfaceBase, pd.resolveDestFormat))
                 ++resolveSnapshotsFailed;
             ++resolveOrdinal;
             doDepthClear();
@@ -2071,6 +2082,39 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (RT.GetSurfaceTarget(pd.surfaceBase, t) && t && t->begunThisFrame &&
                 t->storageFormat != UINT32_MAX && t->storageFormat != want)
             {
+                // A DRAW THAT WRITES NO COLOUR DECIDES NOTHING. It neither
+                // reads the old bits nor replaces them, so it must not convert
+                // AND must not relabel -- the surface still holds exactly what
+                // it held, under the format it held it in. Relabelling on such
+                // a draw is what broke the frame's shadow-mask pass (catalog
+                // #91): draws 643/644/646 are depth/stencil-only (colour mask
+                // 0) and carry RB_COLOR_INFO format k_8_8_8_8, so the 7e3 scene
+                // in EDRAM 0x2d0 was silently relabelled k_8_8_8_8 without
+                // being converted; draw 647, which DOES blend, then read a
+                // destination our renderer believed was already 8888. The
+                // console has no label to get wrong -- EDRAM holds bits, and
+                // 647's blend there reads the 7e3 scene reinterpreted as 8888,
+                // which is why its mask copy is a near-binary bright buffer
+                // where ours carried the scene.
+                // NOT `continue` -- a depth-only draw still has to be issued,
+                // and skipping the rest of the loop body would drop its depth
+                // and stencil writes. Only the reinterpretation is skipped.
+                // Per-transition, on a debug channel: the frame line aggregates
+                // by format PAIR, which cannot say WHICH draw met a change or
+                // in what order -- the two questions needed to follow a
+                // surface's interpretation through a pass (catalog #91).
+                lucent::debug("draw", "diag draw {} (ps {:#x}) meets format"
+                    " change {} -> {} on surface {:#x}: mask {:#x} frag {}"
+                    " blend {:#x}", pd.diagIndex, pd.psHash,
+                    draw::ColorFormatName(t->storageFormat),
+                    draw::ColorFormatName(want), pd.surfaceBase,
+                    pd.colorMask & 0xF, pd.hasFragmentStage ? 1 : 0, pd.blend0);
+                if ((pd.colorMask & 0xF) == 0 || !pd.hasFragmentStage)
+                {
+                    ++RT.reinterpretsNoWrite;
+                }
+                else
+                {
                 // A resolve reads the surface by definition. A geometry draw
                 // reads it only when the blend equation is not the identity
                 // (src ONE, dst ZERO) -- the same predicate the pipeline uses
@@ -2094,6 +2138,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // writes in `want`. A refusal is counted and reported, not
                 // repeated once per draw.
                 t->storageFormat = want;
+                }
             }
         }
         // Open a pass if there is none, or re-open on a different surface.
@@ -3049,11 +3094,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // frame's predicated tiles are assembled -- or, while the resolve
             // blit ignores the rectangle, are not (catalog #32).
             for (const ResolveEvent& re : resolves)
+                // WHICH copy carries a clear, not just how many the frame
+                // programs. A mid-frame clear is a pass boundary: the aggregate
+                // count says the frame has two, and cannot say that the colour
+                // one lands right before the mask pass (catalog #91).
                 lucent::info("draw", "  resolve draw {}: {}@{:#x} -> {:#x}"
-                    " rect [{} {}] [{} {}] [{} {}] window ({},{}){}",
+                    " rect [{} {}] [{} {}] [{} {}] window ({},{}) clears:{}{}{}",
                     re.drawIndex, re.srcIsDepth ? "depth" : "color", re.srcBase,
                     re.destBase, re.rect[0], re.rect[1], re.rect[2], re.rect[3],
                     re.rect[4], re.rect[5], re.windowX, re.windowY,
+                    re.colorClear ? " COLOUR" : "", re.depthClear ? " DEPTH" : "",
+                    (re.colorClear || re.depthClear) ? "" : " none",
                     re.haveRect ? "" : " (NO RECT: vf0 is not 3x2 floats)");
             for (const ResolveEvent& re : resolves)
                 lucent::info("draw", "  resolve draw {} destination: {:#x}"
