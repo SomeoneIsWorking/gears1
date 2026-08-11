@@ -1,8 +1,9 @@
 ---
 id: I032
 kind: instrument
-status: trusted
+status: DISTRUSTED
 created: 2026-08-11
+distrusted_on: 2026-08-11
 ---
 
 ## Instrument
@@ -16,3 +17,9 @@ Three ways. (1) NEGATIVE CONTROL, run: --selftest now drives the real comparison
 ## Known failure modes
 
 (none recorded yet)
+
+## DISTRUSTED 2026-08-11
+
+It decoded the CONSOLE's four-byte colour destinations with the dword's bytes in the wrong order: copy_dest_endian was applied to the eight-byte format and to depth and to nothing else, and every k_2_10_10_10 dump in this title is k8in32. That scrambles the bit fields rather than shifting a value -- the 2-bit alpha lands in the low bits and reads as RED, 96.9% of it zero -- and it produced catalog #95, a session of hypotheses about a renderer difference that did not exist. With the endian applied both copies MATCH. Superseded by I033, which is the same tool with the endian applied to every format, with a self-test that runs BOTH classes of the endian tag, plus console-frame selection by pass structure and the EDRAM band rejoin. Every number this instrument produced for a k_2_10_10_10 or k_8_8_8_8 pass before 2026-08-11 has to be re-read from a re-run.
+
+> Every result this instrument produced is suspect until it is re-validated.
