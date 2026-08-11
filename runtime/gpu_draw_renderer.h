@@ -327,6 +327,16 @@ struct Renderer
     bool hasGeometryShader = false;
     bool hasStorageImageWithoutFormat = false;
     VkDeviceSize uniformOffsetAlignment = 256;
+    // THE HOST VIEWPORT IS NOT BOUNDED BY THE RENDER TARGET. With clipping
+    // disabled (PA_CL_CLIP_CNTL.clip_disable) the guest expects no near/far or
+    // side clipping at all, and the way that is emulated is a viewport LARGER
+    // than the target -- up to 8192 -- with the vertex shader rescaling into it
+    // through ndc_scale. Clamping it to the target's size while the shader
+    // rescales for the large one shrinks every such draw by the ratio of the
+    // two, which is how a full-quadrant depth+stencil write came out as a
+    // 100x32 corner (catalog #91). Only the DEVICE's limit may clamp it, and
+    // that clamp is reported rather than applied quietly.
+    uint32_t maxViewportDim[2] = {16384, 16384};
 
     // Built on the first frame, reused by every frame after it; released only on
     // a target-size change. A raw pointer rather than a unique_ptr so the type can stay
