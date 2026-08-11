@@ -57,7 +57,17 @@ if [ "$DIRECT_BOOT" = "1" ]; then
     echo "into that level from the game's own config."
     OURS_SCRIPT=""
     THEIRS_INPUT=""
+    # The oracle REFUSES a frame-driven run with no input schedule, because
+    # that is normally a filmstrip of the title screen. Here it is not: the
+    # title boots into a level from its own config and there is nothing to
+    # press. This flag is that claim, made explicitly, so the guard still
+    # catches an accidentally-empty schedule on the walk path. It cost a whole
+    # paired capture to learn -- the oracle exited with code 5 before rendering
+    # a frame, and the run looked exactly like an emulator too slow to reach
+    # gameplay.
+    ORACLE_NO_INPUT=true
 else
+    ORACLE_NO_INPUT=false
     OURS_SCRIPT=$(gears_walk_ours)
     THEIRS_INPUT=$(gears_walk_theirs)
     if [ -z "$OURS_SCRIPT" ] || [ -z "$THEIRS_INPUT" ]; then
@@ -131,6 +141,7 @@ GEARS_ORACLE_DUMP_AFTER_GAMEPLAY="$GEARS_LAYER_AFTER" \
     --oracle_by_frame=true \
     --oracle_frames=$((SECONDS_TO_RUN * 30)) \
     --oracle_frame_interval=1200 \
+    --oracle_allow_no_input=$ORACLE_NO_INPUT \
     --oracle_input="$THEIRS_INPUT" > "$OUT/theirs.log" 2>&1 &
 theirs_pid=$!
 trap 'kill -9 "$theirs_pid" 2>/dev/null || true' EXIT INT TERM
@@ -151,6 +162,15 @@ echo
 echo "== what each side selected =="
 grep -h "is the capture\|frames scanned, none\|NOTHING has been" "$OUT/ours.log" | tail -3
 grep -h "so it is gameplay\|none with >=" "$OUT/theirs.log" | tail -3
+# WHY THE ORACLE PRODUCED NOTHING, when it produced nothing. Its own refusals
+# are the first thing to read and they are 900 lines into a boot log, so a run
+# that dumps zero passes reads as "the emulator was too slow" -- which is what a
+# refusal at startup (exit code 5, no frame rendered) looked like for a whole
+# capture. Printed only in the failing case, so a good run stays quiet.
+if [ -z "$(find "$OUT/theirs" -name 'oracle_f*.bin' 2>/dev/null | head -1)" ]; then
+    echo "the oracle dumped NOTHING. Its own errors, if any:"
+    grep -h "oracle:" "$OUT/theirs.log" | grep -i "refus\|STOPPED\|failed" | tail -5
+fi
 echo
 exec python3 "$REPO/tools/layer_compare.py" --ours "$OUT/ours" --theirs "$OUT/theirs" \
      --out "$OUT/layers"
