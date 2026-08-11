@@ -127,13 +127,18 @@ struct OutputMergerState
     uint32_t stencilRefMask = 0;
     uint32_t stencilRefMaskBf = 0;
     bool polygonal = false;
+    // PA_CL_CLIP_CNTL.clip_disable, as depthClampEnable on the rasterizer: the
+    // guest wants no near/far clipping, and clamping is the host's way to say
+    // that. Part of the pipeline key because it is baked into the pipeline.
+    bool depthClamp = false;
 
     bool operator<(const OutputMergerState& o) const
     {
         return std::tie(colorMask, blend0, depthControl, suScModeCntl,
-                        stencilRefMask, stencilRefMaskBf, polygonal) <
+                        stencilRefMask, stencilRefMaskBf, polygonal, depthClamp) <
                std::tie(o.colorMask, o.blend0, o.depthControl, o.suScModeCntl,
-                        o.stencilRefMask, o.stencilRefMaskBf, o.polygonal);
+                        o.stencilRefMask, o.stencilRefMaskBf, o.polygonal,
+                        o.depthClamp);
     }
 };
 

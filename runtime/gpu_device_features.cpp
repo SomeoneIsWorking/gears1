@@ -25,6 +25,9 @@ void SelectDeviceFeatures(VkPhysicalDevice physical,
     enable.geometryShader = available.geometryShader;
     caps.geometryShader = available.geometryShader != VK_FALSE;
 
+    enable.depthClamp = available.depthClamp;
+    caps.depthClamp = available.depthClamp != VK_FALSE;
+
     enable.shaderStorageImageReadWithoutFormat =
         available.shaderStorageImageReadWithoutFormat;
     enable.shaderStorageImageWriteWithoutFormat =
