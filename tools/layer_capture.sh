@@ -109,6 +109,13 @@ stop() {
     wait "$1" 2>/dev/null || true
 }
 
+# ...AND THE CONSOLE'S PER-FRAME DRAW STREAM, for the same reason. It counts
+# draws per (vertex shader, pixel shader) pair with the SAME FNV hash of the
+# guest microcode our diag table carries, so "does the console issue the same
+# draws for this pass" is answerable from a paired capture instead of by eye.
+# That is the open half of catalog #91: everything the shadow-mask pass READS
+# now matches the console, so the question is what it DRAWS.
+
 # THE PER-DRAW TABLE IS TAKEN IN THE SAME RUN AS THE DUMPS. Without it a pass
 # that differs can only be chased in a SEPARATE run, and this frame's passes
 # vary run to run -- one shadow-atlas tile is empty in one run and takes 68,622
@@ -173,6 +180,7 @@ GEARS_ORACLE_RESOLVE_DUMP="$OUT/theirs" \
 GEARS_ORACLE_DUMP_MIN_DRAWS="$GEARS_LAYER_MIN_DRAWS" \
 GEARS_ORACLE_DUMP_AFTER_GAMEPLAY="$GEARS_LAYER_AFTER" \
 GEARS_ORACLE_DUMP_FRAMES="$GEARS_LAYER_ORACLE_FRAMES" \
+GEARS_ORACLE_DRAW_STREAM="$OUT/theirs_draws.tsv" \
     "$ORACLE" \
     --store_shaders=false \
     --target="$ORACLE_TARGET" \
