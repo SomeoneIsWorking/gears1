@@ -72,13 +72,65 @@ THEIRS_RE = re.compile(
     r"oracle_f(\d+)_copy(\d+)_src([CD])([0-9A-F]{3})_(\d+)x(\d+)_f(\d+)_"
     r"([0-9A-F]{8})_(\d+)\.bin$", re.I)
 
-# RB_COPY_DEST_INFO.copy_dest_format values this tool can DECODE. Only one, on
-# purpose: k_8_8_8_8 (6). Everything else -- 32 is k_16_16_16_16_FLOAT, and this
-# frame carries several -- is REFUSED per pass rather than read as 8888, because
-# an eight-byte buffer read as four-byte bytes produces a recognisable image of
-# the wrong thing. That mistake was made here first: three rows of the first
-# paired run reported a difference for buffers this tool had mis-decoded.
-DECODABLE_FORMATS = {6: "k_8_8_8_8"}
+# RB_COPY_DEST_INFO.copy_dest_format values this tool can DECODE, as
+# (name, bytes per pixel). Anything not here is REFUSED per pass rather than
+# read as 8888, because an eight-byte buffer read as four-byte bytes produces a
+# recognisable image of the wrong thing. That mistake was made here first:
+# three rows of the first paired run reported a difference for buffers this
+# tool had mis-decoded, and the refusal is why it stopped happening.
+#
+# It began with k_8_8_8_8 alone, which left 9 of a gameplay frame's 16 shared
+# passes unjudged -- the whole HDR half of the chain, since UE3 resolves its
+# scene colour to k_16_16_16_16_FLOAT. The values are xenos.h's TextureFormat.
+DECODABLE_FORMATS = {
+    6: ("k_8_8_8_8", 4),
+    7: ("k_2_10_10_10", 4),
+    25: ("k_16_16", 4),
+}
+
+# 32 (k_16_16_16_16_FLOAT) IS NOT HERE, and that is a measurement rather than an
+# omission. The unpack and the 8-byte tiler both round-trip synthetic data in
+# --selftest, including a value above 1.0 -- and on the console's actual buffers
+# they produce NaN for the three 352x182 passes and a maximum of 34432.0 for the
+# 1280x720 ones, while a fourth (srcC400 1280x720) is 5,242,880 bytes where
+# 1280x720x8 is 7,372,800. So the destinations are not laid out the way this
+# decode assumes; the length alone proves it for one of them. A decoder that
+# passes its self-test and fails on real data is precisely the instrument this
+# file exists to refuse, so it is refused until the layout is read out. The
+# tiler and its self-test stay: they are correct, and they are what the next
+# attempt starts from.
+
+
+def unpack_dest(px, fmt, np):
+    """Decoded bytes -> HxWx3 float32, in the same space as our PPM (0..1+).
+
+    px is HxWxN uint8 straight out of the untiler, N being the format's bytes
+    per pixel. Each branch is the guest's own packing, and a format with no
+    branch cannot reach here -- DECODABLE_FORMATS gates it.
+    """
+    if fmt == 6:                                   # k_8_8_8_8, 8-bit unorm x4
+        return px[..., :3].astype(np.float32) / 255.0
+    w32 = (px[..., 0].astype(np.uint32) | (px[..., 1].astype(np.uint32) << 8)
+           | (px[..., 2].astype(np.uint32) << 16)
+           | (px[..., 3].astype(np.uint32) << 24))
+    if fmt == 7:                                   # k_2_10_10_10
+        r = (w32 & 0x3FF).astype(np.float32) / 1023.0
+        g = ((w32 >> 10) & 0x3FF).astype(np.float32) / 1023.0
+        b = ((w32 >> 20) & 0x3FF).astype(np.float32) / 1023.0
+        return np.stack([r, g, b], axis=-1)
+    if fmt == 25:                                  # k_16_16, two channels only
+        r = (w32 & 0xFFFF).astype(np.float32) / 65535.0
+        g = ((w32 >> 16) & 0xFFFF).astype(np.float32) / 65535.0
+        return np.stack([r, g, np.zeros_like(r)], axis=-1)
+    if fmt == 32:                                  # k_16_16_16_16_FLOAT
+        # Reached only by --selftest: 32 is not in DECODABLE_FORMATS, for the
+        # reason recorded there. Kept because it is verified against synthetic
+        # data and is where the next attempt at that layout starts.
+        h = px.view(np.uint8).reshape(px.shape[0], px.shape[1], 8)
+        halves = (h[..., 0::2].astype(np.uint16)
+                  | (h[..., 1::2].astype(np.uint16) << 8))
+        return halves[..., :3].view(np.float16).astype(np.float32)
+    raise AssertionError(f"format {fmt} is in DECODABLE_FORMATS with no unpack")
 
 
 def key_str(k):
@@ -104,9 +156,14 @@ def tiled_offset_2d(x, y, width, log2_bpp):
             + ((y & 16) << 7) + (((((y & 8) >> 2) + (x >> 3)) & 3) << 6))
 
 
-def untile_8888(raw, width, height, np):
-    """Tiled k_8_8_8_8 -> HxWx4 uint8. None when the buffer is too short."""
-    need = width * height * 4
+def untile(raw, width, height, np, bpp=4):
+    """Tiled guest surface -> HxWxbpp uint8. None when the buffer is short.
+
+    `bpp` is the destination format's bytes per pixel: the Xenos tile address
+    is parameterised by log2 of it, and an 8-byte format tiles on a different
+    stride rather than merely reading twice as much.
+    """
+    need = width * height * bpp
     if len(raw) < need:
         return None
     src = np.frombuffer(raw, dtype=np.uint8)
@@ -114,7 +171,7 @@ def untile_8888(raw, width, height, np):
     # Vectorised form of tiled_offset_2d; kept beside the scalar version above
     # so the two can be checked against each other.
     y, x = ys.astype(np.int64), xs.astype(np.int64)
-    lb = 2  # log2 of 4 bytes per pixel
+    lb = {4: 2, 8: 3}[bpp]
     macro_y = ((y // 32) * (width // 32)) << (lb + 7)
     micro_y = ((y & 6) << 2) << lb
     base = (macro_y + ((micro_y & ~15) << 1) + (micro_y & 15)
@@ -124,9 +181,9 @@ def untile_8888(raw, width, height, np):
     off = base + macro_x + ((micro_x & ~15) << 1) + (micro_x & 15)
     off = ((((off & ~511) << 3) + ((off & 448) << 2) + (off & 63)
             + ((y & 16) << 7) + (((((y & 8) >> 2) + (x >> 3)) & 3) << 6)))
-    if off.max() + 4 > len(src):
+    if off.max() + bpp > len(src):
         return None
-    idx = off[..., None] + np.arange(4)
+    idx = off[..., None] + np.arange(bpp)
     return src[idx]
 
 
@@ -161,7 +218,7 @@ def selftest(work, np, Image):
         Image.fromarray(img[..., :3]).save(
             ours_dir /
             f"resolve_{nth:02}_srcC000_{w}x{h}_f6_00000000_draw{nth}.ppm")
-        back = untile_8888(bytes(raw), w, h, np)
+        back = untile(bytes(raw), w, h, np)
         if back is None:
             print(f"SELFTEST FAIL: the {note} case did not decode at all")
             ok = False
@@ -171,6 +228,56 @@ def selftest(work, np, Image):
         print(f"selftest: {note} case decodes {'equal' if same else 'different'}"
               f" (expected {'equal' if want else 'different'})")
         ok = ok and same == want
+    # THE WIDE FORMAT, tiled at ITS bytes per pixel. This is the case the file
+    # header warns about: an eight-byte destination tiles on a different stride,
+    # and an "almost right" swizzle produces a recognisable image of the wrong
+    # thing. Round-tripped through the SCALAR tiler at log2_bpp 3, so the
+    # vectorised untiler is checked against the ported address rather than
+    # against itself.
+    fw, fh = 32, 32
+    half = np.stack([
+        (np.arange(fh)[:, None] + np.zeros(fw)) / 32.0,
+        (np.zeros(fh)[:, None] + np.arange(fw)) / 32.0,
+        np.full((fh, fw), 2.5),          # ABOVE 1.0: an HDR value must survive
+        np.ones((fh, fw)),
+    ], axis=-1).astype(np.float16)
+    raw8 = bytearray(fw * fh * 8)
+    hb = half.view(np.uint8).reshape(fh, fw, 8)
+    for y in range(fh):
+        for x in range(fw):
+            off = tiled_offset_2d(x, y, fw, 3)
+            raw8[off:off + 8] = bytes(hb[y, x])
+    back8 = untile(bytes(raw8), fw, fh, np, 8)
+    if back8 is None:
+        print("SELFTEST FAIL: the wide-format case did not decode at all")
+        ok = False
+    else:
+        got = unpack_dest(back8, 32, np)
+        want = half[..., :3].astype(np.float32)
+        good = bool(np.allclose(got, want))
+        print(f"selftest: k_16_16_16_16_FLOAT round-trips through the 8-byte"
+              f" tiler: {good} (expected True)")
+        # ... and the HDR value is not clamped on the way through.
+        hdr = float(got[..., 2].max())
+        print(f"selftest: its above-1.0 channel survives decoding: {hdr:.2f}"
+              f" (expected 2.50)")
+        ok = ok and good and abs(hdr - 2.5) < 1e-3
+    # THE 32-BIT UNPACKS, each against an arithmetic answer. A format in
+    # DECODABLE_FORMATS with a wrong unpack produces a plausible image, which is
+    # the failure this whole file is written against.
+    packed = np.zeros((1, 1, 4), dtype=np.uint8)
+    packed[0, 0] = [0xFF, 0x03, 0x00, 0x00]     # 0x000003FF
+    got7 = unpack_dest(packed, 7, np)[0, 0]
+    ok7 = abs(got7[0] - 1.0) < 1e-6 and abs(got7[1]) < 1e-6
+    print(f"selftest: k_2_10_10_10 puts 0x3FF in RED and 0 in green:"
+          f" {tuple(round(float(v), 3) for v in got7)} -> {ok7} (expected True)")
+    packed[0, 0] = [0x00, 0x80, 0xFF, 0xFF]     # r = 0x8000, g = 0xFFFF
+    got25 = unpack_dest(packed, 25, np)[0, 0]
+    ok25 = abs(got25[0] - 0.5000076) < 1e-4 and abs(got25[1] - 1.0) < 1e-6
+    print(f"selftest: k_16_16 puts 0x8000 in RED and 0xFFFF in green:"
+          f" {tuple(round(float(v), 4) for v in got25)} -> {ok25} (expected True)")
+    ok = ok and ok7 and ok25
+
     # THIRD CASE: a DEPTH pass must be joined and must be reported as
     # not-value-compared. Both halves matter -- a depth pair silently dropped
     # from the join reads as "only the console resolves it", which is the exact
@@ -326,24 +433,36 @@ def main(argv):
             print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
                   f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  REFUSED: dest format "
                   f"{fmt} is not decoded here (only "
-                  f"{'/'.join(DECODABLE_FORMATS.values())})")
+                  f"{'/'.join(n for n, _ in DECODABLE_FORMATS.values())})")
             continue
-        ti = untile_8888(raw, w, h, np)
+        fmt_name, bpp = DECODABLE_FORMATS[fmt]
+        ti = untile(raw, w, h, np, bpp)
         if ti is None:
             # REFUSE THIS ROW, loudly, rather than skip it: a pass that could not
             # be decoded is not a pass that matched.
             undecoded += 1
             print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
                   f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
-                  f"{their_len} bytes is not {w}x{h}x4 tiled k_8_8_8_8")
+                  f"{their_len} bytes is not {w}x{h}x{bpp} tiled {fmt_name}")
             continue
-        t = ti[..., :3].astype(np.float32) / 255.0
+        t = unpack_dest(ti, fmt, np)
+        # OUR SIDE IS AN 8-BIT PPM, so it is already clamped to 0..1. A float
+        # destination on the console is not, and this frame's scene colour
+        # reaches 3.66 -- comparing them raw reports the PPM's clamp as the
+        # renderer's difference. Both sides are clamped and the row SAYS so,
+        # rather than the tool quietly measuring its own output format.
+        clamped = ""
+        if float(t.max()) > 1.0:
+            clamped = (f" [both clamped to 0..1 for the comparison; theirs"
+                       f" reaches {float(t.max()):.2f} and our side is an"
+                       f" 8-bit PPM]")
+            t = np.clip(t, 0.0, 1.0)
         note = ""
         d = float(np.abs(t - oi).mean())
         if d < 0.02:
-            note = "match"
+            note = "match" + clamped
         else:
-            note = f"DIFFER, mean |d| {d:.3f}"
+            note = f"DIFFER, mean |d| {d:.3f}{clamped}"
             side = np.concatenate([oi, t], axis=1)
             Image.fromarray((np.clip(side, 0, 1) ** 0.45 * 255).astype(np.uint8)
                             ).save(out_dir / ("pass_%s%03X_%dx%d_f%d_%d.png" % k))
