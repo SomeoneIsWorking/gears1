@@ -40,3 +40,6 @@ paired capture with the model on is what settles it -- do not investigate the
 f25 pass before reading that run.
 
 The f7 rows are NOT explained by anything so far.
+
+### Note (2026-08-11)
+The draw table now carries resolve_dest_fmt, so the layer rows join to draws: the two f7 passes are diag draws 639 and 657 -- the copies of surface 0x2d0 that BRACKET the shadow-mask pass (the fill at 640 sits between them, and 658 is the second loop's fill). That makes them a likely symptom of catalog #91 rather than a defect of their own, and it means the sample-model run should be read for these rows too, not only the f25 one.
