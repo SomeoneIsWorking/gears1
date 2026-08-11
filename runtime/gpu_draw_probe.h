@@ -128,10 +128,11 @@ struct FrameProbe
     // resolve or post touches it, and writes it as float. Keyed on the DIAG
     // index and it PRINTS the index it matched together with the draw's pixel
     // shader hash, so a row cannot be silently about a different draw.
-    bool Dumping() const { return !dumpWanted.empty(); }
+    bool Dumping() const { return !dumpWanted.empty() || dumpPsHash != 0; }
     void DumpSurface(VkCommandBuffer cmd, uint32_t drawsSoFar, uint32_t prepIndex,
                      uint32_t diagIndex, const SurfaceTarget* t,
-                     uint32_t surfaceBase);
+                     uint32_t surfaceBase, uint64_t psHash = 0,
+                     uint32_t colorMask = 0);
 
     // ---- the DEPTH buffer, depth and stencil, after a NAMED draw ----------
     //
@@ -210,6 +211,16 @@ private:
     // indistinguishable from one whose surface was empty, and this project has
     // spent whole sessions on readings that were of a different draw.
     std::vector<uint32_t> dumpWanted;
+    // GEARS_DRAW_SURFACE_DUMP_PS, the twin of the depth dump's shader selector
+    // and for the same reason: a diag index is not stable between runs of this
+    // title, so a surface dump aimed at one cannot be repeated or paired.
+    // dumpPsShadingOnly picks the draws that WRITE COLOUR (mask non-zero),
+    // which is the half of a marking/shading pair whose coverage is the
+    // question.
+    uint64_t dumpPsHash = 0;
+    bool dumpPsShadingOnly = false;
+    uint32_t dumpPsMatches = 0;
+    uint32_t dumpPsHashSeen = 0;
     struct SurfaceDump
     {
         uint32_t draws, prepIndex, diagIndex, surface;

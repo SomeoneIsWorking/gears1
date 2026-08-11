@@ -2318,7 +2318,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             }
             endPass();
             PB.DumpSurface(cmd, drawn, lastIssuedPrep,
-                           prepared[lastIssuedPrep].diagIndex, t, base);
+                           prepared[lastIssuedPrep].diagIndex, t, base,
+                           prepared[lastIssuedPrep].psHash,
+                           prepared[lastIssuedPrep].colorMask);
         }
         // The DEPTH buffer after a NAMED draw. There is one depth image, so no
         // surface is chosen and GEARS_DRAW_SURFACE does not apply -- what makes
@@ -2539,7 +2541,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
         endPass();
         PB.DumpSurface(cmd, drawn, lastIssuedPrep,
-                       prepared[lastIssuedPrep].diagIndex, t, base);
+                       prepared[lastIssuedPrep].diagIndex, t, base,
+                       prepared[lastIssuedPrep].psHash,
+                       prepared[lastIssuedPrep].colorMask);
     }
     // The last draw's depth, for the same reason: aimed at the final draw, the
     // in-loop site never comes round again.
