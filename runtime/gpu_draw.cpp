@@ -644,7 +644,19 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // --- shared depth ------------------------------------------------------
     VkImage& depth = P.depth; VkDeviceMemory& depthMem = P.depthMem;
     VkImageView& depthView = P.depthView;
-    const VkFormat depthFormat = VK_FORMAT_D32_SFLOAT;
+    // D32_SFLOAT_S8_UINT, not D32_SFLOAT: the guest's depth buffer carries an
+    // 8-bit STENCIL alongside the depth, and this title's shadow passes mark
+    // stencil and then confine later passes to the marked pixels. Without a
+    // stencil aspect the stencil state a pipeline declares is ignored and every
+    // one of those passes runs over the whole screen (catalog #91). The depth
+    // half stays 32-bit float, which holds both guest depth formats (kD24S8's
+    // unorm24 and kD24FS8's float24) without banding.
+    const VkFormat depthFormat = VK_FORMAT_D32_SFLOAT_S8_UINT;
+    // The aspects the depth image is addressed with, in one place: every
+    // barrier, view and clear below must agree with the format above, and a
+    // mismatch is a validation error rather than a wrong picture.
+    constexpr VkImageAspectFlags kDepthAspects =
+        VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
     if (firstFrame)
     {
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -682,11 +694,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vi.image = depth;
         vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
         vi.format = depthFormat;
-        vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+        // The ATTACHMENT view names both aspects -- a depth/stencil attachment
+        // is written through one view and the render pass uses both.
+        vi.subresourceRange = {kDepthAspects, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(device, &vi, nullptr, &depthView));
-        // A second view of the same image for the depth resolve to SAMPLE
-        // through. Identical here, but kept separate so the attachment view and
-        // the shader-read view can never be confused.
+        // The SAMPLED view names DEPTH ALONE. A view used for sampling may
+        // carry only one aspect of a combined format, and what the depth
+        // resolve reads is the depth. This is why the two views exist
+        // separately rather than being one handle used twice.
+        vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
         VK_CHECK(vkCreateImageView(device, &vi, nullptr, &P.depthSampledView));
 
         VkImageCreateInfo si{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -1084,6 +1100,19 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // surface's draws span more than one depth base, or two surfaces share
         // one -- this says which, instead of assuming.
         CN.NoteDepth(R[0x2001] & 0xFFF, R[0x2002] & 0xFFF);
+        // A draw whose DEPTH buffer sits at the same EDRAM base as its COLOUR
+        // surface. On the console that is one memory: the depth and stencil it
+        // writes LAND IN the colour surface's bits, and a later colour draw
+        // blending against that destination reads them. This renderer keeps a
+        // colour image per base and one shared depth image, so it cannot
+        // represent the aliasing at all -- named per draw because "the frame
+        // has three such draws" cannot say which pass they belong to
+        // (catalog #91).
+        if ((R[0x2001] & 0xFFF) == (R[0x2002] & 0xFFF))
+            lucent::debug("draw", "diag draw {} renders colour AND depth at the"
+                " SAME EDRAM base {:#x}: on the console its depth/stencil writes"
+                " overwrite that surface's colour bits",
+                uint32_t(&d - in.draws.data()), R[0x2001] & 0xFFF);
 
         // A resolve is not geometry. It copies an EDRAM surface out to main
         // memory, and the primitive only selects the region; issuing it as a
@@ -1177,6 +1206,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         om.colorMask = R[0x2104];
         om.blend0 = R[0x2201];
         om.depthControl = R[0x2200];
+        om.stencilRefMask = R[0x210D];
+        om.stencilRefMaskBf = R[0x210C];
         om.suScModeCntl = R[0x2205];
         om.polygonal = draw::IsPrimitivePolygonal(R);
         // Rectangle lists go through the geometry shader that builds the fourth
@@ -1306,6 +1337,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pd.psHash = d.psHash;
         pd.hasFragmentStage = pixelShaderUsed;
         pd.colorMask = om.colorMask;
+        pd.depthBase = R[0x2002] & 0xFFF;
         pd.depthControl = om.depthControl;
         pd.blend0 = om.blend0;
         pd.colorFormat = (R[0x2001] >> 16) & 0xF;
@@ -1777,6 +1809,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     uint32_t onlyDrawMatched = 0;
     uint32_t drawn = 0, segments = 0, surfaceSwitches = 0, resolvesDone = 0;
     uint32_t depthClearsDone = 0;
+    static const bool aliasFill = lucent::config::flag("DRAW_ALIAS_FILL");
+    uint32_t aliasFills = 0;
     uint32_t depthResolvesDone = 0, depthResolvesSkipped = 0;
     uint32_t depthResolvesFloat24 = 0;
     // The surface a render pass is currently open on, if any.
@@ -1855,7 +1889,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             auto doDepthClear = [&]() {
                 if (!pd.clearsDepth)
                     return;
-                VkImageSubresourceRange dr{VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+                VkImageSubresourceRange dr{kDepthAspects, 0, 1, 0, 1};
                 VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
                 b.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
                 b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -1866,7 +1900,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 b.subresourceRange = dr;
                 vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-                VkClearDepthStencilValue cv{pd.depthClearValue, 0};
+                VkClearDepthStencilValue cv{pd.depthClearValue,
+                                            pd.stencilClearValue};
                 vkCmdClearDepthStencilImage(cmd, P.depth,
                     VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &dr);
                 VkImageMemoryBarrier r{b};
@@ -2139,6 +2174,55 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // repeated once per draw.
                 t->storageFormat = want;
                 }
+            }
+        }
+        // GEARS_DRAW_ALIAS_FILL=1 -- a DIAGNOSTIC CONTROL ARM, never a fix.
+        //
+        // When a draw aims its depth buffer at the colour surface's own EDRAM
+        // base, the console's depth and stencil writes land in that surface's
+        // colour bits. This renderer cannot represent that: it keeps one colour
+        // image per base and one shared depth image, so the colour bits keep
+        // the scene. The frame's shadow-mask pass then blends (src x dst)
+        // against the scene where the console blends against a depth buffer
+        // that has just been cleared to far -- 0xFFFFFFFF read as k_8_8_8_8.
+        //
+        // This arm fills the surface with 1.0 at such a draw, which is what a
+        // cleared depth buffer READS AS and nothing more. It is a test of the
+        // aliasing explanation, not an implementation of it: the real thing
+        // must write the depth and stencil VALUES the guest produced, per
+        // pixel, encoded in the surface's current format.
+        if (aliasFill && pd.depthBase == pd.surfaceBase && !pd.isResolve)
+        {
+            draw::SurfaceTarget* at = nullptr;
+            if (RT.GetSurfaceTarget(pd.surfaceBase, at) && at &&
+                at->begunThisFrame)
+            {
+                endPass();
+                VkImageMemoryBarrier fb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+                fb.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                fb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                fb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                fb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                fb.srcQueueFamilyIndex = fb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                fb.image = at->color;
+                fb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &fb);
+                VkClearColorValue cv{};
+                cv.float32[0] = cv.float32[1] = cv.float32[2] = cv.float32[3] = 1.0f;
+                VkImageSubresourceRange rg{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdClearColorImage(cmd, at->color,
+                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &rg);
+                VkImageMemoryBarrier rb{fb};
+                rb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                rb.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
+                                   VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                rb.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                rb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr,
+                    0, nullptr, 1, &rb);
+                ++aliasFills;
             }
         }
         // Open a pass if there is none, or re-open on a different surface.
@@ -3238,6 +3322,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             " float24/kD24FS8, {} as unorm24/kD24S8, from RB_DEPTH_INFO at each"
             " copy), {} skipped", depthResolvesDone, depthResolvesFloat24,
             depthResolvesDone - depthResolvesFloat24, depthResolvesSkipped);
+        if (aliasFill)
+            lucent::warn("draw", "GEARS_DRAW_ALIAS_FILL: {} surface(s) filled"
+                " with 1.0 at a draw whose depth base equals its colour base."
+                " A CONTROL ARM -- this frame is NOT what the guest asked for",
+                aliasFills);
+        lucent::info("draw", "frame stencil: {} of {} pipelines built this frame"
+            " have RB_DEPTHCONTROL.stencil_enable set", PC.pipelinesWithStencil,
+            PC.pipelinesBuilt);
         lucent::info("draw", "frame mid-stream depth clears: {} executed of {}"
             " carried by the frame's copy draws (the guest clears depth once per"
             " predicated tile)", depthClearsDone, RT.midFrameDepthClears);

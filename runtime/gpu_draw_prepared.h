@@ -29,6 +29,12 @@ struct PreparedDraw
     // walks these in submission order and re-binds the render pass whenever
     // the surface changes.
     uint32_t surfaceBase = 0;
+    // RB_DEPTH_INFO's base for this draw. When it EQUALS surfaceBase the guest
+    // has aimed the depth buffer at the colour surface's own EDRAM, and on the
+    // console the depth and stencil it writes land in that surface's colour
+    // bits -- which a later blending draw then reads as its destination
+    // (catalog #91).
+    uint32_t depthBase = 0;
     // A resolve (RB_MODECONTROL.edram_mode == kCopy) is not geometry: it
     // copies `surface`'s host target out to `resolveDest`'s host image, and
     // issues no draw at all.
@@ -52,6 +58,11 @@ struct PreparedDraw
     // tile's depth buffer.
     bool clearsDepth = false;
     float depthClearValue = 0.0f;
+    // RB_DEPTH_CLEAR's low byte. The depth clear rides on a copy draw and so
+    // does the stencil clear -- they are one register, and clearing depth while
+    // leaving stencil at zero is what made every stencil-marked pass behave as
+    // though nothing was marked.
+    uint32_t stencilClearValue = 0;
     bool copyIsServed = true;   // false: this entry only clears
     bool resolveIsDepth = false; // a depth resolve, not a colour copy
     // RB_DEPTH_INFO.depth_format at THIS copy: true = kD24FS8 (float24 20e4),

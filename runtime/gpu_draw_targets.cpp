@@ -33,8 +33,13 @@ bool RenderTargetCache::MakeRenderPass(VkFormat colorFormat, bool load, VkRender
     att[1].samples = VK_SAMPLE_COUNT_1_BIT;
     att[1].loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     att[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    att[1].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    att[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    // STENCIL IS CARRIED, not discarded. DONT_CARE here throws away the marks a
+    // shadow pass just made, which is the same as having no stencil at all: the
+    // pass that reads them runs a segment later, after the render pass has been
+    // ended and re-begun for a resolve or a surface change (catalog #91).
+    att[1].stencilLoadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD
+                                : VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
     att[1].initialLayout = load ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
                                 : VK_IMAGE_LAYOUT_UNDEFINED;
     att[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;

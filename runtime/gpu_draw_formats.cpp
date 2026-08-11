@@ -193,6 +193,24 @@ uint32_t ColorFormatBytesPerPixel(uint32_t colorFormat)
     }
 }
 
+// xenos::StencilOp -> Vulkan. The two enumerations happen to differ in the last
+// four entries, so this is a table rather than a cast: getting it wrong silently
+// inverts a shadow-volume count instead of failing.
+VkStencilOp StencilOpOf(uint32_t op)
+{
+    switch (op & 7)
+    {
+    case 0:  return VK_STENCIL_OP_KEEP;
+    case 1:  return VK_STENCIL_OP_ZERO;
+    case 2:  return VK_STENCIL_OP_REPLACE;
+    case 3:  return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+    case 4:  return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+    case 5:  return VK_STENCIL_OP_INVERT;
+    case 6:  return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+    default: return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+    }
+}
+
 // RB_DEPTH_INFO.depth_format is one bit at +16: 0 = kD24S8, 1 = kD24FS8. The
 // texture formats they resolve to are k_24_8 (22) and k_24_8_FLOAT (23).
 uint32_t DepthDestFormat(uint32_t rbDepthInfo)

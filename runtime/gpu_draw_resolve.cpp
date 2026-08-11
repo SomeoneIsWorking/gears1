@@ -51,7 +51,10 @@ void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
     pre[0].newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
     pre[0].srcQueueFamilyIndex = pre[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     pre[0].image = P.depth;
-    pre[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    // BOTH aspects: the image is D32_SFLOAT_S8_UINT, and a layout transition
+    // must name every aspect the image has.
+    pre[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT |
+                               VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
     pre[1] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     pre[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     pre[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
