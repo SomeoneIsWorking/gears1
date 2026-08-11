@@ -1570,7 +1570,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             pd.scissor.extent = {std::min(gv.scissorW * sx, SW - std::min(scx, SW)),
                                  std::min(gv.scissorH * sy, SH - std::min(scy, SH))};
         }
-        draw::DumpVertices(R, in, *vsX, issued, pd.diagIndex);
+        draw::DumpVertices(R, in, *vsX, issued, pd.diagIndex, pd.vsHash,
+                           d.indexCount);
         draw::DumpVsConstants(*vsX, UC, d.vsHash, issued, pd.diagIndex);
         // What this draw fetches, and whether the mirror covers it, is in
         // gpu_draw_vertexfetch.{h,cpp}.
