@@ -404,7 +404,7 @@ struct SelfTestCase
     // measuring the constant rather than the shader.
     bool chain;
 };
-constexpr uint32_t kSelfTestCases = 5;
+constexpr uint32_t kSelfTestCases = 6;
 const SelfTestCase kCases[kSelfTestCases] = {
     // 1.0 stored under k_2_10_10_10 is the bits 0x3FF per channel, which
     // k_2_10_10_10_FLOAT reads back as the largest 7e3 value, 31.875. This is
@@ -436,6 +436,20 @@ const SelfTestCase kCases[kSelfTestCases] = {
      {64.0f / 255.0f, 2.0f / 255.0f, 0.0f, 0.0f}, false},
     {"k_8_8_8_8 -> k_2_10_10_10_FLOAT (the other half: back to 3.0)",
      {0, 0, 0, 0}, {0, 0, 0, 0}, 0, 3, {3.0f, 0.0f, 0.0f, 0.0f}, true},
+    // THE PAIR THIS TEST WAS MISSING, and it is the one that mattered: a 7e3
+    // surface read back as FIXED-POINT 2:10:10:10. It is what fires before the
+    // frame's two k_2_10_10_10_AS copies (diag 639 and 657), and suppressing
+    // just this pair accounts for the ENTIRE difference between those copies
+    // and the console -- 0.0869 with it, 0.1804 without, the console at 0.1760
+    // (catalog #95). Four conversions were covered here and this was not one of
+    // them, which is the shape of every instrument failure in this project.
+    //
+    // 3.0 is a 7e3 normal whose bits are 0x240 (exponent field 4, mantissa 64:
+    // 1.5 * 2^1). Read as a 10-bit UNORM field that is 576/1023. Alpha is two
+    // bits in both formats and 1.0 is 3, which reads back as 1.0.
+    {"k_2_10_10_10_FLOAT -> k_2_10_10_10 (HDR 3.0 as fixed point)",
+     {0x4200, 0x4200, 0x4200, 0x3C00}, {3.0f, 3.0f, 3.0f, 1.0f}, 3, 2,
+     {576.0f / 1023.0f, 576.0f / 1023.0f, 576.0f / 1023.0f, 1.0f}, false},
 };
 } // namespace
 
