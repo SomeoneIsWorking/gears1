@@ -210,6 +210,42 @@ def unpack_dest(px, fmt, np, endian=0):
     raise AssertionError(f"format {fmt} is in DECODABLE_FORMATS with no unpack")
 
 
+def atlas_tiles(ours_dir, source_base):
+    """The scissor rectangles the frame's own draws rendered into a depth base.
+
+    Read from the per-draw table (GEARS_DRAW_DIAG) written by the SAME capture
+    run, which is why layer_capture.sh takes one. A depth atlas holds several
+    lights' shadow maps side by side, and a mean over the whole 864x864 hides
+    which of them is wrong: measured, seven tiles agreed (one to 0.0003) while
+    the eighth was UNWRITTEN at exactly the cleared value, and the whole-atlas
+    number for that pass was a bland 0.246 (catalog #91).
+
+    Returns [] when there is no table, which is reported rather than passed off
+    as "no tiles" -- an atlas with no breakdown and an atlas with one tile are
+    not the same statement.
+    """
+    tsv = Path(ours_dir) / "draws.tsv"
+    if not tsv.is_file():
+        return None
+    rects, cols = {}, None
+    for line in tsv.read_text(errors="replace").splitlines():
+        f = line.split("\t")
+        if cols is None:
+            cols = {n: i for i, n in enumerate(f)}
+            if "depth_base" not in cols or "sc_w" not in cols:
+                return None            # a table from before those columns
+            continue
+        try:
+            if int(f[cols["depth_base"]], 16) != source_base:
+                continue
+            r = (int(f[cols["sc_x"]]), int(f[cols["sc_y"]]),
+                 int(f[cols["sc_w"]]), int(f[cols["sc_h"]]))
+        except (ValueError, IndexError):
+            continue
+        rects[r] = rects.get(r, 0) + 1
+    return sorted(rects.items())
+
+
 def merge_bands(dumps, np):
     """Join a console pass that was resolved in horizontal BANDS into one pass.
 
@@ -852,6 +888,36 @@ def main(argv):
             note += (" [depth: theirs decoded from the guest's 24:8;"
                      " ours is an 8-bit grey dump, so this is coarse]" + dshort)
             depth_compared += 1
+            # PER TILE, when the capture carries its own draw table. A depth
+            # atlas holds several lights' shadow maps, and one of them being
+            # UNWRITTEN reads as a mild whole-atlas difference.
+            tiles = atlas_tiles(ours_dir, k[1])
+            tile_lines = []
+            if tiles is None:
+                tile_lines.append(
+                    f"       (no per-draw table in {ours_dir}, so this pass is"
+                    f" not broken down by tile -- re-capture with the current"
+                    f" layer_capture.sh)")
+            for (tx, ty, tw, th), n in tiles or []:
+                if tw >= w and th >= h:
+                    continue              # the full-surface rect, not a tile
+                if ty + th > h or tx + tw > w:
+                    tile_lines.append(
+                        f"       tile x{tx} y{ty} {tw}x{th}: past the {w}x{h}"
+                        f" the console's buffer holds, NOT compared")
+                    continue
+                ta = od[ty:ty + th, tx:tx + tw]
+                tb = np.clip(td, 0.0, 1.0)[ty:ty + th, tx:tx + tw]
+                tw_wrote = tb >= 0.01
+                td_ = (float(np.abs(tb - ta)[tw_wrote].mean())
+                       if tw_wrote.any() else float("nan"))
+                empty = " -- UNWRITTEN ON OURS at the cleared value" if (
+                    float(ta.min()) > 0.999) else ""
+                tile_lines.append(
+                    f"       tile x{tx:>4} y{ty:>4} {tw}x{th} ({n} draw(s)):"
+                    f" console wrote {100 * tw_wrote.mean():5.1f}%,"
+                    f" ours {ta.mean():.4f} theirs {tb.mean():.4f},"
+                    f" |d| {td_:.4f}{empty}")
             if d >= 0.02:
                 side = np.concatenate([np.repeat(od[..., None], 3, axis=-1),
                                        np.repeat(np.clip(td, 0, 1)[..., None],
@@ -861,6 +927,8 @@ def main(argv):
                                 ).save(out_dir / ("pass_%s%03X_%dx%d_f%d_%d.png" % k))
             print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} {w}x{h} "
                   f"{od.mean():>10.4f} {td.mean():>11.4f}  {note}")
+            for line in tile_lines:
+                print(line)
             continue
         if fmt not in DECODABLE_FORMATS:
             # REFUSED, not skipped and not guessed. Named with its format so the
