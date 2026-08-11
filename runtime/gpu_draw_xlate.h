@@ -169,11 +169,29 @@ bool BuildRectangleGeometryShader(const RectangleGeometryShaderKey& key,
 // one pipeline serves every resolve in a frame.
 struct ResolvePushConstants
 {
-    int32_t srcOffset[2];
-    int32_t dstOffset[2];
-    int32_t extent[2];
-    float scale;      // 2^copy_dest_exp_bias
-    uint32_t swapRB;  // copy_dest_swap
+    int32_t srcOffset[2];   // @0,  in SOURCE units: samples
+    int32_t dstOffset[2];   // @8,  in destination pixels
+    int32_t extent[2];      // @16, the DESTINATION extent, in pixels
+    float scale;            // @24, 2^copy_dest_exp_bias
+    uint32_t swapRB;        // @28, copy_dest_swap
+    // --- EDRAM is addressed in SAMPLES, the copy's rectangle in PIXELS ------
+    // The destination steps one pixel per invocation; the source steps this
+    // many samples, which is the surface's own msaa scale (1X 1,1; 2X 1,2;
+    // 4X 2,2). Both 1 leaves the copy exactly as it was.
+    int32_t srcScale[2];    // @32
+    // Which sample within that pixel the copy starts at
+    // (RB_COPY_CONTROL.copy_sample_select).
+    int32_t sampleOffset[2];// @40
+    // The span the copy averages over, as an offset from the first sample:
+    // (0,0) for a single-sample pick, (0,1) for the vertical pair a 2X k01
+    // resolve averages, (1,1) for a 4X k0123. The shader always reads FOUR taps
+    // -- c, c+dx, c+dy, c+dx+dy -- and multiplies the sum by tapWeight, which
+    // is therefore always 0.25: with a zero delta all four are the same texel
+    // and 4x * 0.25 is exactly x, with one axis set the pair appears twice and
+    // 2(a+b) * 0.25 is exactly (a+b)/2. So one code path serves every selector
+    // and a single-sample copy is bit-for-bit what it was.
+    int32_t tapDelta[2];    // @48
+    float tapWeight;        // @56, always 0.25 -- see tapDelta
 };
 bool BuildResolveComputeShader(std::vector<uint32_t>& spirv);
 

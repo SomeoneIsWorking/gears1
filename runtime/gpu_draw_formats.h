@@ -100,6 +100,50 @@ const char* PrimName(uint32_t primType);
 // otherwise.
 VkFormat HostFormatFor(const std::set<uint32_t>& formats, bool& mixedOut);
 
+// EDRAM IS ADDRESSED IN SAMPLES, NOT PIXELS.
+//
+// An EDRAM tile is 80x16 SAMPLES (xenos.h), and RB_SURFACE_INFO.msaa_samples
+// says how many samples a pixel of the surface occupies: 1X is 1x1, 2X adds a
+// sample along Y, 4X along X and Y. So a 4X 640x360 surface and a 1X 1280x720
+// one are the SAME 720 tiles, sample for sample -- which is how this title's
+// shadow-mask fill covers the whole scene surface while submitting a quarter of
+// the geometry, and why a renderer that maps guest pixels 1:1 to host pixels
+// puts that fill in a corner (catalog #91).
+//
+// These two are the conversion. A draw's viewport and scissor are in PIXELS of
+// its own surface; multiply by these and they are in samples, which is the one
+// space every draw and every copy on a given EDRAM base agree in.
+inline uint32_t MsaaScaleX(uint32_t msaaSamples)
+{ return msaaSamples >= 2 /*k4X*/ ? 2u : 1u; }
+inline uint32_t MsaaScaleY(uint32_t msaaSamples)
+{ return msaaSamples >= 1 /*k2X*/ ? 2u : 1u; }
+
+// HOW A COPY'S PIXEL RECTANGLE LANDS ON ITS SOURCE'S SAMPLES.
+//
+// Ported from Xenia's own EDRAM addressing (src/xenia/gpu/shaders/edram.xesli,
+// XeEdramOffsetBytes), which is the same source the tile geometry above comes
+// from -- so this is read out rather than guessed:
+//
+//     rt_sample_index  = pixel_index << (msaa >= 4X, msaa >= 2X)
+//     rt_sample_index += (sample_index >> (1, 0)) & 1
+//
+// The first line is MsaaScaleX/MsaaScaleY. The second is the sample's position
+// inside the pixel: sample 0 -> (0,0), 1 -> (0,1), 2 -> (1,0), 3 -> (1,1).
+// Which sample a copy starts at is RB_COPY_CONTROL.copy_sample_select, run
+// through Xenia's SanitizeCopySampleSelect first (draw_util.cc): DEPTH CANNOT
+// BE AVERAGED, a 2X source has no samples 2 or 3, and a 1X source has only
+// sample 0.
+struct ResolveSampling
+{
+    uint32_t scaleX = 1, scaleY = 1;    // pixel -> sample step
+    int32_t offsetX = 0, offsetY = 0;   // the first sample, inside the pixel
+    // The averaged span, as an offset from that first sample. (0,0) is a
+    // single-sample pick; (0,1) a vertical pair; (1,1) all four.
+    int32_t spanX = 0, spanY = 0;
+};
+ResolveSampling DeriveResolveSampling(uint32_t rbSurfaceInfo,
+                                      uint32_t copySampleSelect, bool isDepth);
+
 // Xenia's ui::FloatToD3D11Fixed16p8, for the resolve rectangle's vertices.
 //
 // The tie-breaking differs from the D3D11 spec's round-to-nearest-even, and

@@ -27,14 +27,21 @@ namespace gears::draw
 
 void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
                                        const VkRect2D& srcRect, int32_t dstX,
-                                       int32_t dstY, bool isFloat24)
+                                       int32_t dstY, bool isFloat24,
+                                       const ResolveSampling& smp)
 {
-    const int32_t sx0 = std::clamp<int32_t>(srcRect.offset.x, 0, int32_t(W));
-    const int32_t sy0 = std::clamp<int32_t>(srcRect.offset.y, 0, int32_t(H));
+    // THE RECTANGLE IS IN PIXELS, THE IMAGE IN SAMPLES. W and H are the sample
+    // grid, so the rectangle is clamped to the PIXEL extent this source has
+    // under its own sample scale -- clamping a pixel rectangle to a sample
+    // extent would let a 2X copy ask for twice the rows the surface holds.
+    const int32_t pw = int32_t(W / std::max(1u, smp.scaleX));
+    const int32_t ph = int32_t(H / std::max(1u, smp.scaleY));
+    const int32_t sx0 = std::clamp<int32_t>(srcRect.offset.x, 0, pw);
+    const int32_t sy0 = std::clamp<int32_t>(srcRect.offset.y, 0, ph);
     int32_t sx1 = std::clamp<int32_t>(srcRect.offset.x + int32_t(srcRect.extent.width),
-                                      sx0, int32_t(W));
+                                      sx0, pw);
     int32_t sy1 = std::clamp<int32_t>(srcRect.offset.y + int32_t(srcRect.extent.height),
-                                      sy0, int32_t(H));
+                                      sy0, ph);
     const int32_t dw = int32_t(dst.width), dh = int32_t(dst.imageHeight);
     if (dstX >= dw || dstY >= dh)
         return;
@@ -85,9 +92,18 @@ void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
     vkUpdateDescriptorSets(R.device, 2, w, 0, nullptr);
 
     draw::ResolvePushConstants pc{};
-    pc.srcOffset[0] = sx0; pc.srcOffset[1] = sy0;
+    // srcOffset is in SAMPLES, extent in destination PIXELS.
+    pc.srcOffset[0] = sx0 * int32_t(smp.scaleX);
+    pc.srcOffset[1] = sy0 * int32_t(smp.scaleY);
     pc.dstOffset[0] = dstX; pc.dstOffset[1] = dstY;
     pc.extent[0] = sx1 - sx0; pc.extent[1] = sy1 - sy0;
+    pc.srcScale[0] = int32_t(smp.scaleX); pc.srcScale[1] = int32_t(smp.scaleY);
+    pc.sampleOffset[0] = smp.offsetX; pc.sampleOffset[1] = smp.offsetY;
+    // Depth is never averaged (DeriveResolveSampling collapses an averaging
+    // selector on depth to its first sample), so these are always the identity
+    // here -- set anyway so the block that is pushed is fully initialised.
+    pc.tapDelta[0] = 0; pc.tapDelta[1] = 0;
+    pc.tapWeight = 0.25f;
     pc.scale = 1.0f;
     // Reused field: 1 = float24 (kD24FS8), 0 = unorm24 (kD24S8). It was pinned
     // at 1 for every depth copy, which is wrong for this frame -- the scene
@@ -129,16 +145,20 @@ void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
 
 void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarget& srcTarget,
                                          ResolveTarget& dst, const VkRect2D& srcRect,
-                                         int32_t dstX, int32_t dstY, float scale, bool swapRB)
+                                         int32_t dstX, int32_t dstY, float scale,
+                                         bool swapRB, const ResolveSampling& smp)
 {
     // Clamp the rectangle to both images. A rectangle larger than either
-    // cannot make the dispatch write out of bounds.
-    const int32_t sx0 = std::clamp<int32_t>(srcRect.offset.x, 0, int32_t(W));
-    const int32_t sy0 = std::clamp<int32_t>(srcRect.offset.y, 0, int32_t(H));
+    // cannot make the dispatch write out of bounds. In PIXELS -- see the note
+    // in ResolveDepthTo: W and H are the sample grid.
+    const int32_t pw = int32_t(W / std::max(1u, smp.scaleX));
+    const int32_t ph = int32_t(H / std::max(1u, smp.scaleY));
+    const int32_t sx0 = std::clamp<int32_t>(srcRect.offset.x, 0, pw);
+    const int32_t sy0 = std::clamp<int32_t>(srcRect.offset.y, 0, ph);
     int32_t sx1 = std::clamp<int32_t>(srcRect.offset.x + int32_t(srcRect.extent.width),
-                                      sx0, int32_t(W));
+                                      sx0, pw);
     int32_t sy1 = std::clamp<int32_t>(srcRect.offset.y + int32_t(srcRect.extent.height),
-                                      sy0, int32_t(H));
+                                      sy0, ph);
     const int32_t dw = int32_t(dst.width), dh = int32_t(dst.imageHeight);
     if (dstX >= dw || dstY >= dh)
         return;
@@ -255,9 +275,16 @@ void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarge
     vkUpdateDescriptorSets(R.device, 2, w, 0, nullptr);
 
     draw::ResolvePushConstants pc{};
-    pc.srcOffset[0] = sx0; pc.srcOffset[1] = sy0;
+    // srcOffset is in SAMPLES, extent in destination PIXELS -- the dispatch is
+    // one invocation per destination pixel and the source steps srcScale.
+    pc.srcOffset[0] = sx0 * int32_t(smp.scaleX);
+    pc.srcOffset[1] = sy0 * int32_t(smp.scaleY);
     pc.dstOffset[0] = dstX; pc.dstOffset[1] = dstY;
     pc.extent[0] = sx1 - sx0; pc.extent[1] = sy1 - sy0;
+    pc.srcScale[0] = int32_t(smp.scaleX); pc.srcScale[1] = int32_t(smp.scaleY);
+    pc.sampleOffset[0] = smp.offsetX; pc.sampleOffset[1] = smp.offsetY;
+    pc.tapDelta[0] = smp.spanX; pc.tapDelta[1] = smp.spanY;
+    pc.tapWeight = 0.25f;
     pc.scale = scale;
     pc.swapRB = swapRB ? 1u : 0u;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, P.resolvePipeline);

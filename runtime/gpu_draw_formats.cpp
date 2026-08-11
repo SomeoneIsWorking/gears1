@@ -293,4 +293,57 @@ const char* PrimName(uint32_t primType)
     }
 }
 
+ResolveSampling DeriveResolveSampling(uint32_t rbSurfaceInfo,
+                                      uint32_t copySampleSelect, bool isDepth)
+{
+    const uint32_t msaa = (rbSurfaceInfo >> 16) & 3;
+    ResolveSampling out;
+    out.scaleX = MsaaScaleX(msaa);
+    out.scaleY = MsaaScaleY(msaa);
+
+    // Xenia's SanitizeCopySampleSelect (draw_util.cc), which exists because the
+    // register can name samples the surface does not have and averages the
+    // hardware does not do.
+    uint32_t sel = copySampleSelect;   // 0..3 = k0..k3, 4 = k01, 5 = k23, 6 = k0123
+    if (msaa >= 2 /*k4X*/)
+    {
+        if (sel > 6) sel = 6;
+        if (isDepth)
+        {
+            // Depth cannot be averaged: an averaged selector collapses to the
+            // first sample of its pair.
+            if (sel == 4 || sel == 6) sel = 0;
+            else if (sel == 5) sel = 2;
+        }
+    }
+    else if (msaa >= 1 /*k2X*/)
+    {
+        if (sel == 2) sel = 0;
+        else if (sel == 3) sel = 1;
+        else if (sel > 4) sel = 4;
+        if (isDepth && sel == 4) sel = 0;
+    }
+    else
+    {
+        sel = 0;   // 1X has one sample, whatever the register says
+    }
+
+    // XeResolveFirstSampleIndex (resolve.xesli): a pair starts at its lower
+    // sample, and anything else at sample 0.
+    const uint32_t first = sel <= 3 ? sel : (sel == 5 /*k23*/ ? 2u : 0u);
+    out.offsetX = int32_t((first >> 1) & 1);
+    out.offsetY = int32_t(first & 1);
+
+    // The span averaged: a pair differs in Y only (0/1 and 2/3 are vertical
+    // neighbours under the mapping above), all four differ in both.
+    if (sel == 4 /*k01*/ || sel == 5 /*k23*/) { out.spanX = 0; out.spanY = 1; }
+    else if (sel == 6 /*k0123*/)              { out.spanX = 1; out.spanY = 1; }
+
+    // A span cannot reach outside the pixel: a 1X or 2X source has no second
+    // sample in X, so an all-four selector on it averages what it has.
+    if (out.scaleX == 1) out.spanX = 0;
+    if (out.scaleY == 1) out.spanY = 0;
+    return out;
+}
+
 } // namespace gears::draw

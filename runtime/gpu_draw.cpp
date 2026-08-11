@@ -530,16 +530,77 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
     };
 
+    // --- the EDRAM SAMPLE GRID ---------------------------------------------
+    //
+    // EDRAM is addressed in SAMPLES. A draw's viewport and scissor are in
+    // PIXELS of its own surface, and RB_SURFACE_INFO.msaa_samples says how many
+    // samples each of those pixels covers -- so a 4X 640x360 surface and a 1X
+    // 1280x720 one are the same tiles, sample for sample. Rendering both at
+    // their pixel sizes into one image puts the 4X draw in a corner of the 1X
+    // one, which is what makes this title's shadow-mask fill cover a quadrant
+    // where the console's covers the frame (catalog #91).
+    //
+    // So the host image is the SAMPLE grid, and every draw is scaled into it by
+    // its own sample scale. The grid is as wide as the widest sample pitch the
+    // frame programs and as tall as the frame's tallest sample scale needs:
+    // measured on walk_gameplay.gfr, 1280 x 1440 (a 2X 1280x720 scene, a 1X
+    // 1280x720 post chain and a 4X 640x360 fill, all at sample pitch 1280).
+    //
+    // GEARS_DRAW_MSAA=1 turns it on. Off, every draw renders at its pixel size
+    // into a W x H image, which is what this renderer has always done and is
+    // self-consistent for every frame that does not change sample count on one
+    // EDRAM base.
+    static const bool msaaModel = lucent::config::flag("DRAW_MSAA");
+    uint32_t SW = W, SH = H;
+    {
+        uint32_t maxScaleY = 1, maxSamplePitch = W;
+        std::set<uint32_t> seen;
+        for (const FrameDrawItem& d : in.draws)
+        {
+            const uint32_t* R = d.registers();
+            if (!R)
+                continue;
+            const uint32_t si = R[0x2000];
+            const uint32_t msaa = (si >> 16) & 3;
+            seen.insert(msaa);
+            maxScaleY = std::max(maxScaleY, draw::MsaaScaleY(msaa));
+            maxSamplePitch = std::max(maxSamplePitch,
+                                      (si & 0x3FFF) * draw::MsaaScaleX(msaa));
+        }
+        if (msaaModel)
+        {
+            SW = std::max(W, maxSamplePitch);
+            SH = H * maxScaleY;
+        }
+        // ALWAYS SAID, in both arms. A frame with one sample count everywhere
+        // needs none of this and a frame with several is wrong without it, and
+        // silence cannot tell those apart.
+        if (in.report)
+        {
+            lucent::Line l;
+            l.add("EDRAM sample grid: {}x{} ({}), sample counts programmed:",
+                  SW, SH, msaaModel ? "GEARS_DRAW_MSAA on"
+                                    : "OFF -- set GEARS_DRAW_MSAA=1");
+            for (uint32_t m : seen)
+                l.add(" {}X", 1u << m);
+            if (seen.size() > 1 && !msaaModel)
+                l.add("; MORE THAN ONE, so draws on a shared EDRAM base are"
+                      " being rendered at different scales into one image");
+            l.flush(lucent::Level::Info, "draw");
+        }
+    }
+
     // Everything below that outlives a frame lives in P. It is built on the
     // first frame and reused after that; a change of target size rebuilds it,
-    // since the render target and framebuffer are sized to the frame.
-    if (persistent && (persistent->width != W || persistent->height != H))
+    // since the render target and framebuffer are sized to the frame. The
+    // SAMPLE grid is part of that size: turning the model on changes it.
+    if (persistent && (persistent->width != SW || persistent->height != SH))
         ReleasePersistent();
     if (!persistent)
     {
         persistent = new RendererPersistent();
-        persistent->width = W;
-        persistent->height = H;
+        persistent->width = SW;
+        persistent->height = SH;
     }
     RendererPersistent& P = *persistent;
     const bool firstFrame = !P.built;
@@ -675,7 +736,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ci.imageType = VK_IMAGE_TYPE_2D;
         ci.format = depthFormat;
-        ci.extent = {W, H, 1};
+        ci.extent = {SW, SH, 1};
         ci.mipLevels = 1;
         ci.arrayLayers = 1;
         ci.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -753,7 +814,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // The render-target cache -- one host colour target per EDRAM surface, one
     // host image per resolve destination, the render passes each host format
     // needs, and the resolve compute pipeline -- is in gpu_draw_targets.{h,cpp}.
-    draw::RenderTargetCache RT(*this, P, in, W, H, depthFormat, depthView);
+    // The cache's extents are the SAMPLE grid: its images are EDRAM, and
+    // EDRAM is samples. Off the model SW,SH are W,H.
+    draw::RenderTargetCache RT(*this, P, in, SW, SH, depthFormat, depthView);
     RT.BuildResolvePipeline();
     // GEARS_DRAW_REINTERP=1: convert a surface's contents when the frame
     // re-declares its EDRAM base under a different colour format. Off by
@@ -1483,16 +1546,29 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     " smaller than the console's by that ratio",
                     pd.diagIndex, gv.w, gv.h, vpMaxW, vpMaxH);
             }
-            pd.viewport.x = float(gv.x);
-            pd.viewport.y = float(gv.y);
-            pd.viewport.width = float(std::min(gv.w, vpMaxW));
-            pd.viewport.height = float(std::min(gv.h, vpMaxH));
+            // INTO THE SAMPLE GRID. The viewport and scissor the guest
+            // programmed are in PIXELS of ITS surface; the target is EDRAM,
+            // which is samples. Multiplying by this draw's own sample scale is
+            // the whole of the conversion, and it is what makes a 4X 640x360
+            // fill and a 1X 1280x720 composite cover the same 1280x720 samples
+            // -- the same bytes the console gives them. Both scales are 1 with
+            // the model off, so this line is the identity there.
+            const uint32_t sx = msaaModel
+                ? draw::MsaaScaleX((pd.surfaceInfo >> 16) & 3) : 1u;
+            const uint32_t sy = msaaModel
+                ? draw::MsaaScaleY((pd.surfaceInfo >> 16) & 3) : 1u;
+            pd.viewport.x = float(gv.x * sx);
+            pd.viewport.y = float(gv.y * sy);
+            pd.viewport.width = float(std::min(gv.w * sx, vpMaxW));
+            pd.viewport.height = float(std::min(gv.h * sy, vpMaxH));
             pd.viewport.minDepth = gv.zMin;
             pd.viewport.maxDepth = gv.zMax;
-            pd.scissor.offset = {int32_t(std::min(gv.scissorX, W)),
-                                 int32_t(std::min(gv.scissorY, H))};
-            pd.scissor.extent = {std::min(gv.scissorW, W - std::min(gv.scissorX, W)),
-                                 std::min(gv.scissorH, H - std::min(gv.scissorY, H))};
+            const uint32_t scx = gv.scissorX * sx, scy = gv.scissorY * sy;
+
+            pd.scissor.offset = {int32_t(std::min(scx, SW)),
+                                 int32_t(std::min(scy, SH))};
+            pd.scissor.extent = {std::min(gv.scissorW * sx, SW - std::min(scx, SW)),
+                                 std::min(gv.scissorH * sy, SH - std::min(scy, SH))};
         }
         draw::DumpVertices(R, in, *vsX, issued, pd.diagIndex);
         draw::DumpVsConstants(*vsX, UC, d.vsHash, issued, pd.diagIndex);
@@ -1565,7 +1641,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     }
 
     // --- readback buffer -------------------------------------------------
-    const VkDeviceSize rbBytes = VkDeviceSize(W) * H * 4;
+    const VkDeviceSize rbBytes = VkDeviceSize(SW) * SH * 4;
     if (P.readback == VK_NULL_HANDLE)
     {
         if (!MakeBuffer(rbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, P.readback,
@@ -1756,7 +1832,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // The mid-render probes -- GEARS_DRAW_FRAME_STEP's checkpoint images and
     // GEARS_DRAW_PIXEL_TRACE's per-draw texel -- live in gpu_draw_probe.{h,cpp},
     // where each one's recording half sits next to the half that reports it.
-    draw::FrameProbe PB(*this, W, H);
+    // The probes read the render targets, which are the sample grid.
+    draw::FrameProbe PB(*this, SW, SH);
     PB.Build(prepared.size(), rbBytes);
 
     // A surface's colour image leaves a render pass in TRANSFER_SRC_OPTIMAL, so
@@ -1947,7 +2024,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         bi.renderPass = t->begunThisFrame ? rp->second : rp->first;
         bi.framebuffer = t->fb;
-        bi.renderArea = {{0, 0}, {W, H}};
+        bi.renderArea = {{0, 0}, {SW, SH}};
         bi.clearValueCount = t->begunThisFrame ? 0u : 2u;
         bi.pClearValues = t->begunThisFrame ? nullptr : clears;
         // GEARS_DRAW_PASS_LOG=1: every pass begin, with what it was begun ON.
@@ -2024,7 +2101,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 {
                     RT.ResolveDepthTo(cmd, dst->second, pd.resolveSrcRect,
                                    pd.resolveDstX, pd.resolveDstY,
-                                   pd.resolveDepthIsFloat24);
+                                   pd.resolveDepthIsFloat24,
+                                   msaaModel
+                                       ? draw::DeriveResolveSampling(
+                                             pd.surfaceInfo,
+                                             pd.resolveSampleSelect, true)
+                                       : draw::ResolveSampling{});
                     depthResolvesFloat24 += pd.resolveDepthIsFloat24 ? 1 : 0;
                     ++depthResolvesDone;
                     // A DEPTH COPY IS A PASS LIKE ANY OTHER, and leaving it out
@@ -2090,7 +2172,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             }
             RT.ResolveSurfaceTo(cmd, src->second, dst->second, pd.resolveSrcRect,
                              pd.resolveDstX, pd.resolveDstY, pd.resolveScale,
-                             pd.resolveSwapRB);
+                             pd.resolveSwapRB,
+                             msaaModel
+                                 ? draw::DeriveResolveSampling(
+                                       pd.surfaceInfo,
+                                       pd.resolveSampleSelect, false)
+                                 : draw::ResolveSampling{});
             // Snapshot BEFORE the next resolve can touch this destination. The
             // ordinal advances whether or not the snapshot succeeds, so the
             // numbering keeps matching the oracle's even when one copy fails.
