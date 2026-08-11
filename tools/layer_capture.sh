@@ -129,6 +129,13 @@ while [ "$waited" -lt "$SECONDS_TO_RUN" ]; do
 done
 stop "$ours_pid"; trap - EXIT INT TERM
 
+# THE ORACLE IS GIVEN THE SCRIPT'S OWN PATIENCE, not its built-in default.
+# Its per-target wait defaults to 240 s while this script waits 420, so a boot
+# that is merely SLOW was ending the oracle at guest frame 546 with three
+# minutes of budget left -- and the run then reported "the title stopped
+# presenting", which is a stall, when nothing had stalled. One number, passed
+# in, so the two cannot disagree again.
+
 # THE ORACLE'S BOOT IS FLAKY, and a paired capture costs seven minutes. Twice
 # in four runs it stopped presenting at guest frame 1 -- the title never got
 # going -- and the run then produced nothing and had to be noticed and started
@@ -153,6 +160,7 @@ GEARS_ORACLE_DUMP_AFTER_GAMEPLAY="$GEARS_LAYER_AFTER" \
     --oracle_by_frame=true \
     --oracle_frames=$((SECONDS_TO_RUN * 30)) \
     --oracle_frame_interval=1200 \
+    --oracle_frame_timeout="$SECONDS_TO_RUN" \
     --oracle_allow_no_input=$ORACLE_NO_INPUT \
     --oracle_input="$THEIRS_INPUT" > "$OUT/theirs.log" 2>&1 &
 theirs_pid=$!
