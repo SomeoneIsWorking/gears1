@@ -86,7 +86,29 @@ DECODABLE_FORMATS = {
     6: ("k_8_8_8_8", 4),
     7: ("k_2_10_10_10", 4),
     25: ("k_16_16", 4),
+    32: ("k_16_16_16_16_FLOAT", 8),
 }
+
+
+def stored_rows(nbytes, width, bpp):
+    """How many rows the guest's buffer actually holds, or None.
+
+    A resolve destination is NOT w*h*bpp. Read out of the dumps' own lengths,
+    which is data the tool used to discard with its refusal:
+
+        1280x720 f32   7,536,640 B / 8 = 942,080 px = 1280 x 736
+         352x182 f32     540,672 B / 8 =  67,584 px =  352 x 192
+        1280x720 f32   5,242,880 B / 8 = 655,360 px = 1280 x 512
+
+    The first two are the height rounded UP to a multiple of 32, which is the
+    tile alignment; the third is SHORT of its 720 rows, because that copy is one
+    predicated 512-row band. Both cases are decodable and the difference matters
+    -- padding is cropped away, a short buffer means the pass only ever held
+    that many rows and saying otherwise would compare our rows against nothing.
+    """
+    if not width or not bpp or nbytes % (width * bpp):
+        return None
+    return nbytes // (width * bpp)
 
 # 32 (k_16_16_16_16_FLOAT) IS NOT HERE, and that is a measurement rather than an
 # omission. The unpack and the 8-byte tiler both round-trip synthetic data in
@@ -430,13 +452,50 @@ def main(argv):
             # REFUSED, not skipped and not guessed. Named with its format so the
             # gap in coverage is visible in the same table as the results.
             undecoded += 1
+            # THE LENGTH IS DATA, so say what it implies rather than discarding
+            # it with the refusal. A refused pass whose buffer is exactly
+            # w*h*8 is a decode waiting to be written; one that is not is a
+            # destination whose layout is not what its dimensions suggest, and
+            # that distinction is the whole of the next step (catalog #95).
+            implied = ""
+            if w and h:
+                per = their_len / float(w * h)
+                implied = (f"; its {their_len} bytes over {w}x{h} is"
+                           f" {per:.3f} B/px"
+                           + (" (a whole number, so the layout is plain)"
+                              if abs(per - round(per)) < 1e-6 else
+                              " (NOT a whole number, so this destination is not"
+                              " w*h*bpp -- padded, tiled to a larger extent, or"
+                              " a different height)"))
             print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
                   f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  REFUSED: dest format "
                   f"{fmt} is not decoded here (only "
-                  f"{'/'.join(n for n, _ in DECODABLE_FORMATS.values())})")
+                  f"{'/'.join(n for n, _ in DECODABLE_FORMATS.values())})"
+                  f"{implied}")
             continue
         fmt_name, bpp = DECODABLE_FORMATS[fmt]
-        ti = untile(raw, w, h, np, bpp)
+        # DECODE AT THE HEIGHT THE BUFFER ACTUALLY HAS, then crop or refuse.
+        rows = stored_rows(len(raw), w, bpp)
+        short = ""
+        if rows is None:
+            undecoded += 1
+            print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
+                  f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
+                  f"{their_len} bytes over {w} px at {bpp} B/px is not a whole"
+                  f" number of rows, so the layout is not what this assumes")
+            continue
+        ti = untile(raw, w, rows, np, bpp)
+        if ti is not None and rows != h:
+            if rows > h:
+                ti = ti[:h]           # padding to the tile alignment
+            else:
+                # SHORT: the guest's buffer holds fewer rows than the copy's
+                # rectangle. Compare the rows that exist and say how many, so a
+                # partial pass is never read as a whole one.
+                short = (f" [only {rows} of {h} rows are in the console's"
+                         f" buffer; compared over those]")
+                oi = oi[:rows]
+                h = rows
         if ti is None:
             # REFUSE THIS ROW, loudly, rather than skip it: a pass that could not
             # be decoded is not a pass that matched.
@@ -451,7 +510,25 @@ def main(argv):
         # reaches 3.66 -- comparing them raw reports the PPM's clamp as the
         # renderer's difference. Both sides are clamped and the row SAYS so,
         # rather than the tool quietly measuring its own output format.
-        clamped = ""
+        # NON-FINITE VALUES ARE NOT A DIFFERENCE, they are a decode that did not
+        # work. A half-float buffer read at the wrong stride is full of NaN bit
+        # patterns, and np.abs(nan - x).mean() is nan -- which printed as
+        # "DIFFER, mean |d| nan" and read as a finding. Counted, reported, and
+        # if they dominate, the row is REFUSED rather than averaged around.
+        finite = np.isfinite(t).all(axis=-1)
+        bad = int((~finite).sum())
+        if bad:
+            frac = bad / float(finite.size)
+            if frac > 0.01:
+                undecoded += 1
+                print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
+                      f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
+                      f"{bad} of {finite.size} decoded pixels are NOT FINITE"
+                      f" [{100 * frac:.1f}%], so this is a decode that failed,"
+                      f" not a difference")
+                continue
+            t = np.where(finite[..., None], t, 0.0)
+        clamped = f" [{bad} non-finite pixel(s) zeroed]" if bad else ""
         if float(t.max()) > 1.0:
             clamped = (f" [both clamped to 0..1 for the comparison; theirs"
                        f" reaches {float(t.max()):.2f} and our side is an"
@@ -460,9 +537,9 @@ def main(argv):
         note = ""
         d = float(np.abs(t - oi).mean())
         if d < 0.02:
-            note = "match" + clamped
+            note = "match" + clamped + short
         else:
-            note = f"DIFFER, mean |d| {d:.3f}{clamped}"
+            note = f"DIFFER, mean |d| {d:.3f}{clamped}{short}"
             side = np.concatenate([oi, t], axis=1)
             Image.fromarray((np.clip(side, 0, 1) ** 0.45 * 255).astype(np.uint8)
                             ).save(out_dir / ("pass_%s%03X_%dx%d_f%d_%d.png" % k))
