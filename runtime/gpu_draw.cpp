@@ -1596,7 +1596,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // The EDRAM-tiling collapse lives in gpu_draw_untile.{h,cpp}; the reasoning
     // for it, and for what it refuses to do, is on that header.
     if (untileThisFrame)
-        draw::CollapseEdramTiling(prepared, issued);
+        draw::CollapseEdramTiling(prepared, issued, msaaModel);
 
     // --- deferred range upload into the shared SSBO ----------------------
     // Only the memory this frame's draws fetch is copied. The mirror SPANS the
