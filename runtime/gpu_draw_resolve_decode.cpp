@@ -130,6 +130,7 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
         pd.clearsDepth = clearsDepthHere;
         pd.depthClearValue = depthClearHere;
         pd.surfaceBase = srcBase;
+        pd.resolveDestFormat = (R[0x231B] >> 7) & 0x3F;
         // What the copy reads the source under. Indexed by copy_src_select,
         // like srcBase just above it -- reading RT0's format here instead is
         // what hid every resolve's real format behind a uniform 0.
@@ -204,6 +205,11 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
             {
                 pd.resolveIsDepth = true;
                 pd.resolveDepthIsFloat24 = ((R[0x2002] >> 16) & 1) == 1;
+                // A depth copy's own identity: the depth surface it reads, and
+                // the format RB_DEPTH_INFO implies rather than the one
+                // RB_COPY_DEST_INFO carries.
+                pd.surfaceBase = R[0x2002] & 0xFFF;
+                pd.resolveDestFormat = DepthDestFormat(R[0x2002]);
                 pd.resolveDest = droute->second.first;
                 int32_t x0 = 0, y0 = 0, x1 = int32_t(W), y1 = int32_t(H);
                 DeriveResolveRect(R, in, W, H, RT, x0, y0, x1, y1);

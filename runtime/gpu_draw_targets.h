@@ -69,6 +69,12 @@ struct RenderTargetCache
     // "we converted 3 and declined 5" describe very different frames, and the
     // second is the one this pass now produces.
     uint32_t reinterpretsNotRead = 0;
+    // Format changes met by a draw that writes NO COLOUR (colour mask 0, or no
+    // fragment stage). Neither converted nor relabelled: such a draw neither
+    // reads the old bits nor replaces them. Counted separately because it used
+    // to fall in with the not-read case and silently relabel the surface
+    // (catalog #91).
+    uint32_t reinterpretsNoWrite = 0;
     std::set<uint64_t> reinterpretPairs;        // (from << 32) | to
     std::set<uint64_t> reinterpretRefusedPairs;
     std::set<uint64_t> reinterpretNotReadPairs;

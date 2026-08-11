@@ -60,6 +60,13 @@ struct PreparedDraw
     // scene depth at EDRAM 0x000 is kD24FS8 while the shadow maps at 0x5a0 are
     // kD24S8, which the console's own pass keys confirm (f23 against f22).
     bool resolveDepthIsFloat24 = true;
+    // RB_COPY_DEST_INFO.copy_dest_format at THIS copy -- for a depth copy, the
+    // format RB_DEPTH_INFO implies instead (see DepthDestFormat). Together with
+    // `surfaceBase` this is the copy's own identity, and it is NOT the same as
+    // the destination texture's: a destination is written by several copies of
+    // one frame from different sources under different formats, so a key taken
+    // from the destination reports every one of them as the first.
+    uint32_t resolveDestFormat = 0;
     // The ColorRenderTargetFormat the copy READS the source EDRAM under, from
     // RB_COLOR_INFO[RB_COPY_CONTROL.copy_src_select] -- NOT RB_COLOR_INFO0.
     // `colorFormat` below is always RT0's, which for a resolve is whatever was
