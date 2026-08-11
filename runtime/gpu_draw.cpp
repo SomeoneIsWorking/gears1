@@ -546,11 +546,25 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // measured on walk_gameplay.gfr, 1280 x 1440 (a 2X 1280x720 scene, a 1X
     // 1280x720 post chain and a 4X 640x360 fill, all at sample pitch 1280).
     //
-    // GEARS_DRAW_MSAA=1 turns it on. Off, every draw renders at its pixel size
-    // into a W x H image, which is what this renderer has always done and is
-    // self-consistent for every frame that does not change sample count on one
-    // EDRAM base.
-    static const bool msaaModel = lucent::config::flag("DRAW_MSAA");
+    // ON BY DEFAULT, because it is measurably closer to the console. Paired
+    // captures of the same SP_Prison_P moment, mean |difference| per pass:
+    //
+    //     pass                pixels   samples   console mean
+    //     srcC2D0 f6 #0        0.551     0.217         0.8981
+    //     srcC2D0 f6 #1        0.479     0.076         0.9238
+    //     srcC2D0 f25 #0       0.250     MATCH         0.0000
+    //
+    // The last one was PREDICTED before the run (catalog #94): that copy reads
+    // a surface written only by the aliasing pass, whose fill covers a quadrant
+    // at pixel scale and the whole surface in samples, so at pixel scale three
+    // quarters of it keep the scene depth and alias into colour as garbage.
+    // The console resolves it at exactly 0.0000, and so do we now.
+    //
+    // GEARS_DRAW_NOMSAA=1 is the control arm: every draw at its pixel size into
+    // a W x H image, which is what this renderer did for its whole life and is
+    // self-consistent for any frame that does not change sample count on one
+    // EDRAM base. This one changes it three times on surface 0x2d0.
+    static const bool msaaModel = !lucent::config::flag("DRAW_NOMSAA");
     uint32_t SW = W, SH = H;
     {
         uint32_t maxScaleY = 1, maxSamplePitch = W;
@@ -579,13 +593,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         {
             lucent::Line l;
             l.add("EDRAM sample grid: {}x{} ({}), sample counts programmed:",
-                  SW, SH, msaaModel ? "GEARS_DRAW_MSAA on"
-                                    : "OFF -- set GEARS_DRAW_MSAA=1");
+                  SW, SH, msaaModel ? "sample model on"
+                                    : "OFF -- GEARS_DRAW_NOMSAA is set");
             for (uint32_t m : seen)
                 l.add(" {}X", 1u << m);
             if (seen.size() > 1 && !msaaModel)
                 l.add("; MORE THAN ONE, so draws on a shared EDRAM base are"
-                      " being rendered at different scales into one image");
+                      " being rendered at the same scale into one image when"
+                      " the console gives them different ones");
             l.flush(lucent::Level::Info, "draw");
         }
     }
