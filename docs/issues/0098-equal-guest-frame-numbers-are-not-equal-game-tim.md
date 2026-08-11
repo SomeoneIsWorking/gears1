@@ -54,3 +54,21 @@ Any earlier paired number whose run did not have matching pass structure. The
 reference run (f875) did have it, so the EDRAM sample model's results stand;
 the `GEARS_DRAW_NOCONVERT=3-2` control arm for catalog #95 does NOT -- it was
 measured on run B and has to be taken again.
+
+### Note (2026-08-11)
+THIS IS THE CROSS-EMULATOR FACE OF CATALOG #84, which measured the same thing
+about OUR OWN renderer: two runs of one build on one input script reach 98.9%
+identical pixels at guest frame 300, 25.9% at 600 and 17.7% at 1200, because
+the guest clock is real time and the simulation is a function of it.
+
+So the frame window and the structure-based frame choice here are a workaround
+for a defect #84 already names, and #84 already carries the attempted fix --
+`GEARS_GUEST_CLOCK_STEP_NS`, a fixed step per presented frame -- along with why
+it is off: stepping at VdSwap deadlocks the title at boot, and the freerun
+control arm freezes the picture while passing the determinism check perfectly
+(instrument I027).
+
+A fixed guest clock would fix OUR side's run-to-run variance outright, which is
+half of what makes this issue's numbers noisy (the shadow-mask pass varies
+105k..157k shadowed pixels between runs of one build). It would NOT align us
+with the oracle, which has no such knob -- that still needs the window.

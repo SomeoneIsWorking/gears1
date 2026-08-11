@@ -5,7 +5,7 @@ status: open
 symptom: our own renderer, same input script indexed by guest frame, two runs: 98.9% identical pixels at frame 300, 25.9% at 600, 17.7% at 1200
 tags: harness,oracle,determinism,lockstep,method
 created: 2026-08-06
-updated: 2026-08-07
+updated: 2026-08-11
 ---
 
 ## Why this was measured
@@ -405,3 +405,15 @@ So the audio pump is roughly three quarters of the MAGNITUDE and none of the
 CAUSE. With it disabled the count still matches at exactly one present out of
 eighteen thousand. The structural conclusion stands: it is the scheduling of the
 guest's threads, not any one host-paced thread.
+
+### Note (2026-08-11)
+THE SAME DEFECT SHOWS UP ACROSS EMULATORS, filed as catalog #98: two runs of
+the Xenia oracle dumped their frame 875 and their frame 873 with a DIFFERENT
+NUMBER OF SHADOW-CASTING LIGHTS, and the port was scored against whichever one
+it got -- mean |d| 0.695 on a shadow mask that measures 0.110 against an
+aligned frame.
+
+#98's workaround (the console dumps a WINDOW of frames and the comparison picks
+the one whose PASS STRUCTURE matches ours) is in place and works, but it is a
+workaround for exactly this. Anything that makes the guest clock a function of
+the input schedule would remove our half of it.
