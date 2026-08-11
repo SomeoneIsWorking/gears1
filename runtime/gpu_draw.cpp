@@ -1409,6 +1409,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pd.suScModeCntl = R[0x2205];
         pd.vteCntl = R[0x2206];
         pd.windowOffset = R[0x2080];
+        pd.surfaceInfo = R[0x2000];
         std::memcpy(&pd.vportXScale, &R[0x210F], 4);
         std::memcpy(&pd.vportXOffset, &R[0x2110], 4);
         std::memcpy(&pd.vportYScale, &R[0x2111], 4);
