@@ -127,6 +127,37 @@ def stored_rows(nbytes, width, bpp):
 # attempt starts from.
 
 
+def depth24_to_float(d24, is_float24, np):
+    """The guest's 24-bit depth field -> float, both encodings.
+
+    unorm24 (k_24_8) is d/16777215. float24 (k_24_8_FLOAT) is Xenos 20e4, and
+    this is a VECTORISED PORT of Depth20e4To32 in runtime/gpu_draw_pixels.cpp --
+    the same function the depth resolve uses -- rather than an approximation,
+    because a wrong exponent bias makes a depth buffer that LOOKS like a depth
+    buffer. Checked below against the three values that pin it: 0 -> 0,
+    0xFFFFFF -> the largest representable, and a mid exponent.
+    """
+    if not is_float24:
+        return d24.astype(np.float32) / 16777215.0
+    f24 = d24.astype(np.uint32)
+    exponent = (f24 >> 20) & 0xF
+    mantissa = f24 & 0xFFFFF
+    # The denormal branch: msb = 31 - clz(mantissa), which numpy expresses as
+    # the floor of log2 for the non-zero lanes.
+    safe = np.maximum(mantissa, 1)
+    msb = (np.floor(np.log2(safe.astype(np.float64)))).astype(np.int64)
+    denorm_exp = (msb - 19).astype(np.int64)
+    denorm_man = (mantissa.astype(np.uint32) << (20 - msb).astype(np.uint32)) & 0xFFFFF
+    unbiased = np.where(exponent != 0, exponent.astype(np.int64),
+                        np.where(mantissa != 0, denorm_exp, -112))
+    f32man = np.where(exponent != 0, mantissa,
+                      np.where(mantissa != 0, denorm_man, 0)).astype(np.uint32)
+    biased = ((unbiased + 112) & 0xFF).astype(np.uint32)
+    bits = ((f32man & 0xFFFFF) | (biased << 20)) << 3
+    return bits.astype(np.uint32).view(np.float32) if bits.dtype == np.uint32 \
+        else bits.astype(np.uint32).view(np.float32)
+
+
 def unpack_dest(px, fmt, np, endian=0):
     """Decoded bytes -> HxWx3 float32, in the same space as our PPM (0..1+).
 
@@ -327,6 +358,32 @@ def selftest(work, np, Image):
      ).write_bytes(bytes(dw * dh * 4))
     Image.fromarray(np.zeros((dh, dw, 3), dtype=np.uint8)).save(
         ours_dir / f"resolve_09_srcD000_{dw}x{dh}_f6_00000000_draw9.ppm")
+    # A DEPTH PASS THAT IS NOW COMPARED, which the format-6 one above is not:
+    # it takes the "not a depth format this decodes" path and so leaves the
+    # decode-and-compare branch untested. k_24_8 (22), endian 8in32, a ramp
+    # whose float value is known by construction, and OUR side written as the
+    # same ramp in grey -- so it must MATCH. A tool that decoded depth wrongly
+    # would differ here, and one that skipped depth entirely would not print a
+    # comparison at all.
+    kw, kh = 32, 32
+    ramp = (np.arange(kh)[:, None] * np.ones(kw)) / float(kh)   # 0 .. 1
+    d24 = np.clip((ramp * 16777215.0).round(), 0, 16777215).astype(np.uint32)
+    word = (d24 << 8)                       # depth in the high 24 bits
+    raw24 = bytearray(kw * kh * 4)
+    for y in range(kh):
+        for x in range(kw):
+            v = int(word[y, x])
+            # 8in32: the dword's bytes come out reversed.
+            b = bytes([(v >> 24) & 0xFF, (v >> 16) & 0xFF,
+                       (v >> 8) & 0xFF, v & 0xFF])
+            off = tiled_offset_2d(x, y, kw, 2)
+            raw24[off:off + 4] = b
+    (theirs_dir / f"oracle_f1_copy8_srcD001_{kw}x{kh}_f22_e2_00000000_"
+                  f"{kw * kh * 4}.bin").write_bytes(bytes(raw24))
+    Image.fromarray((np.repeat(ramp[..., None], 3, axis=-1) * 255)
+                    .astype(np.uint8)).save(
+        ours_dir / f"resolve_08_srcD001_{kw}x{kh}_f22_00000000_draw8.ppm")
+
     # Run the REAL comparison over these three pairs and read what it printed --
     # checking the filename patterns alone would leave the depth branch itself
     # unexercised, which is the branch being proven.
@@ -343,8 +400,13 @@ def selftest(work, np, Image):
          .split("\n\n")[0]),
         ("the depth pass is reported as not value-compared",
          "values NOT compared" in out),
-        ("the depth pass is counted in the summary",
-         "1 DEPTH pass(es) paired on both sides" in out),
+        ("both depth passes are counted, and the summary separates the one it"
+         " compared from the one it could not",
+         "2 DEPTH pass(es) paired on both sides, 1 of them value-compared"
+         " and 1 not" in out),
+        ("a k_24_8 DEPTH pass is decoded and COMPARED, and matches",
+         "srcD001" in out and "match" in
+         [ln for ln in out.splitlines() if "srcD001" in ln][0]),
         ("the colour difference still fires alongside it",
          "DIFFER" in out),
     ]
@@ -443,6 +505,7 @@ def main(argv):
     out_dir.mkdir(parents=True, exist_ok=True)
     undecoded = 0
     depth_pairs = 0
+    depth_compared = 0
     print(f"\n{'pass':>26} {'dest ours':>10} {'dest theirs':>11} {'size':>10} "
           f"{'mean ours':>10} {'mean theirs':>11}  note")
     for k in shared:
@@ -463,10 +526,60 @@ def main(argv):
         # the thing this join now establishes -- is visible.
         if k[0] == "D":
             depth_pairs += 1
-            print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
-                  f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  BOTH SIDES RESOLVE "
-                  f"THIS, values NOT compared: depth destinations are not in a "
-                  f"common space (catalog #35)")
+            # DEPTH IS COMPARABLE NOW, for the two formats the guest uses. It
+            # was not while the tool could not decode the console's bytes: ours
+            # is the host depth written out as grey and theirs is the guest's
+            # packed 24:8 dword, and the layout across those bytes was the open
+            # part of catalog #35. It is k_24_8 (22, unorm24) or k_24_8_FLOAT
+            # (23, Xenos 20e4) with the depth in the HIGH 24 bits, 4 bytes per
+            # pixel, endian 8in32 -- the same layout the aliasing shader packs.
+            # A format outside those two is still refused rather than guessed.
+            if fmt not in (22, 23) or their_endian is None:
+                print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
+                      f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  BOTH SIDES "
+                      f"RESOLVE THIS, values NOT compared: "
+                      + (f"dest format {fmt} is not a depth format this decodes"
+                         if fmt not in (22, 23)
+                         else "this capture does not record copy_dest_endian"))
+                continue
+            rows = stored_rows(len(raw), w, 4)
+            ti = untile(raw, w, rows, np, 4) if rows else None
+            if ti is None:
+                print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
+                      f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
+                      f"{their_len} bytes is not a whole number of {w}-wide "
+                      f"rows at 4 B/px")
+                continue
+            if rows > h:
+                ti = ti[:h]
+            # 8in32: the dword's bytes are reversed on the way out.
+            word = (ti[..., 3].astype(np.uint32)
+                    | (ti[..., 2].astype(np.uint32) << 8)
+                    | (ti[..., 1].astype(np.uint32) << 16)
+                    | (ti[..., 0].astype(np.uint32) << 24))
+            if their_endian != 2:
+                word = (ti[..., 0].astype(np.uint32)
+                        | (ti[..., 1].astype(np.uint32) << 8)
+                        | (ti[..., 2].astype(np.uint32) << 16)
+                        | (ti[..., 3].astype(np.uint32) << 24))
+            td = depth24_to_float(word >> 8, fmt == 23, np)
+            od = oi[..., 0]           # our depth target is written out as grey
+            # OUR SIDE IS 8-BIT, so this is a coarse comparison and says so: it
+            # answers "is this the same depth buffer", not "is it exact".
+            d = float(np.abs(np.clip(td, 0.0, 1.0) - od[:td.shape[0]]).mean())
+            note = ("match" if d < 0.02 else f"DIFFER, mean |d| {d:.3f}")
+            note += (" [depth: theirs decoded from the guest's 24:8;"
+                     " ours is an 8-bit grey dump, so this is coarse]")
+            depth_compared += 1
+            if d >= 0.02:
+                side = np.concatenate([np.repeat(od[..., None], 3, axis=-1),
+                                       np.repeat(np.clip(td, 0, 1)[..., None],
+                                                 3, axis=-1)], axis=1)
+                Image.fromarray((np.clip(side, 0, 1) ** 0.45 * 255)
+                                .astype(np.uint8)
+                                ).save(out_dir / ("pass_%s%03X_%dx%d_f%d_%d.png" % k))
+            print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} {w}x{h} "
+                  f"{od.mean():>10.4f} {td.mean():>11.4f}  {note}")
             continue
         if fmt not in DECODABLE_FORMATS:
             # REFUSED, not skipped and not guessed. Named with its format so the
@@ -579,7 +692,8 @@ def main(argv):
 
     print(f"\n{undecoded} pass(es) were REFUSED (format not decoded here) and are "
           f"NOT counted as matching.\n{depth_pairs} DEPTH pass(es) paired on both "
-          f"sides and were not value-compared (see the rows above).\n"
+          f"sides, {depth_compared} of them value-compared and "
+          f"{depth_pairs - depth_compared} not (see the rows above).\n"
           f"Side-by-side images for differing passes: {out_dir}"
           f" (ours left, console right, gamma 0.45)")
     print("BLIND SPOT: this compares resolve DESTINATIONS. A pass whose output "
