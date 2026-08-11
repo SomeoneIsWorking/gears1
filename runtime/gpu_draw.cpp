@@ -2180,9 +2180,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     draw::StorageColorFormat(pd.resolveSrcFormat);
                 if (src->second.storageFormat != want)
                 {
-                    RT.ReinterpretSurface(cmd, src->second,
-                                          src->second.storageFormat, want);
-                    src->second.storageFormat = want;
+                    // A REFUSED CONVERSION MUST NOT RELABEL -- see the same
+                    // rule at the geometry-draw site below. The bits were not
+                    // touched, and a surface that claims a format its contents
+                    // are not in makes the NEXT conversion convert from a
+                    // format the data was never in.
+                    if (RT.ReinterpretSurface(cmd, src->second,
+                                              src->second.storageFormat, want))
+                        src->second.storageFormat = want;
                 }
             }
             RT.ResolveSurfaceTo(cmd, src->second, dst->second, pd.resolveSrcRect,
@@ -2363,10 +2368,26 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // to decide whether to enable blending at all.
                 const bool readsDestination =
                     pd.isResolve || !draw::BlendIsIdentity(pd.blend0);
+                bool relabel = true;
                 if (readsDestination)
                 {
                     endPass();
-                    RT.ReinterpretSurface(cmd, *t, t->storageFormat, want);
+                    // A REFUSED CONVERSION MUST NOT RELABEL. The bits were not
+                    // touched, so a surface that now claims the new format is
+                    // claiming a format its contents are not in -- and the next
+                    // conversion then converts FROM a format the data was never
+                    // in, which is not a missed improvement but active damage.
+                    //
+                    // Measured on walk_gameplay.gfr: draw 613 meets
+                    // k_8_8_8_8 -> k_16_16, this pass refuses that pair, and the
+                    // surface used to be relabelled k_16_16 anyway; draw 615
+                    // then converted "k_16_16 -> k_2_10_10_10_FLOAT" on data
+                    // that was still 8888. The two copies downstream of it
+                    // (diag 639 and 657) came out at mean 0.0869 where the
+                    // console has 0.1760, and at 0.1804 with the whole pass
+                    // switched off -- so the conversion chain, not the idea of
+                    // converting, was what moved them (catalog #95).
+                    relabel = RT.ReinterpretSurface(cmd, *t, t->storageFormat, want);
                 }
                 else
                 {
@@ -2374,12 +2395,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     RT.reinterpretNotReadPairs.insert(
                         (uint64_t(t->storageFormat) << 32) | want);
                 }
-                // Either way the contents are read as `want` from here on: a
-                // converted surface holds the new interpretation, and an
-                // unconverted one is about to be overwritten by a draw that
-                // writes in `want`. A refusal is counted and reported, not
-                // repeated once per draw.
-                t->storageFormat = want;
+                // A converted surface holds the new interpretation, and an
+                // unconverted one that is about to be overwritten by a draw
+                // writing in `want` will hold it shortly. A REFUSED one holds
+                // neither, and keeps the format its bits are in.
+                if (relabel)
+                    t->storageFormat = want;
                 }
             }
         }
