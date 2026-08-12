@@ -16,13 +16,20 @@
 #     pixelwise comparison, however honestly it is applied.
 #
 # So: the oracle runs FIRST and dumps its resolves, its frame window and the
-# vertex constants of a named draw ordinal. That constants file is FROZEN into
+# vertex constants of a named SHADER. That constants file is FROZEN into
 # the output (provenance.py --camera copies it in, rather than referencing a
 # path a later run can overwrite). Our side then runs gated on the frozen copy,
 # holding frames until the guest's own view-projection matches. Both halves are
 # stamped with ONE pair id before either runs.
 #
-#   tools/camera_pair.sh [seconds-per-side] [out-dir] [draw-ordinal]
+#   tools/camera_pair.sh [seconds-per-side] [out-dir] [vs-hash]
+#
+# THE CAMERA IS NAMED BY SHADER HASH, NOT BY DRAW ORDINAL. An ordinal is not
+# stable across runs -- ordinal 294 was the camera shader in one run and a
+# 12-vertex draw in the next, because the per-frame draw count varies with the
+# number of shadow-casting lights. A run keyed on the ordinal silently dumps the
+# constants of whatever draw happens to land there, and the gate then refuses
+# with "0 of the 4 view-projection rows c230..c233".
 #
 # THE RESULT IS SCORED, NOT ASSUMED: it finishes by running the same-picture
 # gate over every console candidate and printing each score against the positive
@@ -36,7 +43,7 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 
 SECONDS_TO_RUN="${1:-300}"
 OUT="${2:-$REPO/scratch/camerapair}"
-ORDINAL="${3:-294}"
+VS_HASH="${3:-f3e9368c1bb68ecc}"
 GAME_DIR="${GEARS_GAME_DIR:-$REPO/scratch/game}"
 ORACLE="$REPO/scratch/oracle/oracle-build/xenia_oracle"
 RUNTIME="${GEARS_BUILD_DIR:-$REPO/scratch/build}/runtime/gears1"
@@ -50,12 +57,12 @@ RUNTIME="${GEARS_BUILD_DIR:-$REPO/scratch/build}/runtime/gears1"
 
 rm -rf "$OUT"; mkdir -p "$OUT/ours" "$OUT/theirs"
 PAIR="camerapair-$(date -u +%Y%m%dT%H%M%SZ)-$$"
-CONSTS="$REPO/scratch/oracle/vs_consts_ordinal.txt"
+CONSTS="$REPO/scratch/oracle/vs_consts.txt"
 rm -f "$CONSTS"
 
 # ---------------------------------------------------------------- the console
 echo "== the console, $SECONDS_TO_RUN s: resolves, a frame window, and the"
-echo "   vertex constants of draw ordinal $ORDINAL =="
+echo "   vertex constants of shader $VS_HASH =="
 cd "$REPO"
 SDL_AUDIODRIVER=dummy \
 GEARS_ORACLE_RESOLVE_DUMP="$OUT/theirs" \
@@ -63,7 +70,7 @@ GEARS_ORACLE_DUMP_MIN_DRAWS="$GEARS_LAYER_MIN_DRAWS" \
 GEARS_ORACLE_DUMP_AFTER_GAMEPLAY="$GEARS_LAYER_AFTER" \
 GEARS_ORACLE_DUMP_FRAMES="${GEARS_ORACLE_DUMP_FRAMES:-5}" \
 GEARS_ORACLE_DRAW_ORDER="$OUT/theirs_order.tsv" \
-GEARS_ORACLE_VS_CONSTS_ORDINAL="$ORDINAL" \
+GEARS_ORACLE_VS_CONSTS="$VS_HASH" \
     "$ORACLE" \
     --store_shaders=false \
     --target="$GAME_DIR/default.xex" \
@@ -107,27 +114,42 @@ if grep -qi "DEVICE_LOST\|Graphics device lost\|context is lost" "$OUT/theirs.lo
     exit 3
 fi
 [ -s "$CONSTS" ] || {
-    echo "REFUSING: the console never dumped constants for draw ordinal" >&2
-    echo "$ORDINAL in $SECONDS_TO_RUN s. It did NOT reach the gated frame, so" >&2
-    echo "this run measured NOTHING -- it is not an empty result. Give it more" >&2
-    echo "time, or check that ordinal $ORDINAL exists in the dumped frame" >&2
-    echo "(\$OUT/theirs_order.tsv lists them)." >&2
+    echo "REFUSING: the console never dumped constants for shader $VS_HASH" >&2
+    echo "in $SECONDS_TO_RUN s. Either it did not reach the dump window, or" >&2
+    echo "that shader never bound inside it. This run measured NOTHING -- it" >&2
+    echo "is not an empty result. \$OUT/theirs_order.tsv lists the shaders the" >&2
+    echo "dumped frame actually drew." >&2
     exit 4; }
+
+# THE CAMERA MUST COME FROM A FRAME THE CONSOLE DUMPED. Otherwise it names a
+# viewpoint there are no console resolves for, and the pair cannot be scored --
+# which is the failure that cost two runs here.
+CFRAME=$(sed -n 's/.*at guest frame \([0-9]*\).*/\1/p' "$CONSTS" | head -1)
+if [ -n "$CFRAME" ] && ! ls "$OUT/theirs" | grep -q "_f${CFRAME}_"; then
+    echo "REFUSING: the camera constants are from guest frame $CFRAME, and the" >&2
+    echo "console dumped no resolves for that frame. The gate would hold our" >&2
+    echo "side at a viewpoint there is nothing to compare against. Dumped" >&2
+    echo "frames: $(ls "$OUT/theirs" | sed -n 's/.*_f\([0-9]*\)_copy.*/\1/p' | sort -un | tr '\n' ' ')" >&2
+    exit 8
+fi
+grep -q "^c\[23[0-3]\]" "$CONSTS" || {
+    echo "REFUSING: $CONSTS carries no c230..c233, so it is not a camera. The" >&2
+    echo "gate would run with no viewpoint at all. First line: $(head -1 "$CONSTS")" >&2
+    exit 9; }
+echo "   camera: shader $VS_HASH at guest frame $CFRAME, inside the dumped window"
 echo "   console dumped $(ls "$OUT/theirs" | wc -l) file(s); constants captured"
 
 # The camera is FROZEN into both directories here, before our side runs, so a
 # later oracle run cannot substitute it underneath the comparison.
 python3 "$REPO/tools/provenance.py" stamp "$OUT/theirs" --role theirs --pair "$PAIR" \
-    --camera "$CONSTS" --note "ordinal=$ORDINAL" --note "script=camera_pair.sh"
+    --camera "$CONSTS" --note "vs=$VS_HASH" --note "script=camera_pair.sh"
 python3 "$REPO/tools/provenance.py" stamp "$OUT/ours" --role ours --pair "$PAIR" \
-    --camera "$CONSTS" --note "ordinal=$ORDINAL" --note "script=camera_pair.sh" \
+    --camera "$CONSTS" --note "vs=$VS_HASH" --note "script=camera_pair.sh" \
     --note "camera_near=$CAMERA_NEAR"
 FROZEN="$OUT/ours/camera.txt"
 
 # -------------------------------------------------------------------- our side
 echo "== our renderer, $SECONDS_TO_RUN s, gated on the console's own viewpoint =="
-VS_HASH=$(sed -n 's/.*vs \([0-9A-Fa-f]*\),.*/\1/p' "$FROZEN" | head -1)
-[ -n "$VS_HASH" ] || { echo "REFUSING: no vs hash in $FROZEN" >&2; exit 5; }
 GEARS_NO_WINDOW=1 \
 GEARS_DRAW_FRAME_MIN_DRAWS="$GEARS_LAYER_MIN_DRAWS" \
 GEARS_DRAW_FRAME_AFTER_GAMEPLAY=0 \
