@@ -33,7 +33,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ours")
     ap.add_argument("--theirs")
-    ap.add_argument("--gate", type=float, default=0.60)
+    ap.add_argument("--gate", type=float, default=0.60,
+                    help="only used by --depth, which has no drift "
+                         "curve of its own yet")
+    ap.add_argument("--max-drift", type=float, default=3.0,
+                    help="how many frames of console-measured drift "
+                         "a pair may carry and still be compared "
+                         "pixelwise")
     ap.add_argument("--depth", action="store_true",
                     help="score the DEPTH pass instead of the front buffer")
     ap.add_argument("--selftest", action="store_true")
@@ -91,17 +97,117 @@ def main():
         print(f"  f{fr:>6}  as-given {base:+.4f}   best {best:+.4f}  ({lbl})")
 
     top = max(rows)
-    print(f"\nBEST f{top[1]} at {top[0]:+.4f}; gate {a.gate}"
-          + (f"; control {ctrl:+.4f}" if ctrl is not None else ""))
-    if top[0] >= a.gate:
-        print("PASSES: this pair may be compared pixelwise. Quote the CANDIDATE "
-              "THAT PASSED, not the directory.")
+    # THE ABSOLUTE GATE IS UNREACHABLE BY CONSTRUCTION AND ITS VERDICTS WERE
+    # WRONG. 0.60 was calibrated against the positive control below -- our
+    # frame.ppm against our own resolve of THE SAME INSTANT, which scores ~0.94
+    # because it has zero temporal gap. Two emulators can never share an
+    # instant: each advances the guest by wall-clock delta, and our side
+    # captures the frame AFTER the camera matches. So no cross-emulator pair can
+    # ever reach that control, and captures were being failed for existing.
+    #
+    # The honest denominator is the CONSOLE AGAINST ITSELF. Correlate the
+    # winning console frame with its own successors and read our score off that
+    # curve: the answer is "this pair is equivalent to N frames of drift", in
+    # units the console itself defines. Self-calibrating, no magic number.
+    drift = console_drift_curve(a.theirs, top[1], ours, np, load_oracle,
+                                same_picture)
+    print(f"\nBEST f{top[1]} at {top[0]:+.4f}"
+          + (f"; zero-drift control {ctrl:+.4f} (OUR frame against OUR OWN "
+             f"resolve of it -- unreachable by any cross-emulator pair, and "
+             f"quoted only to show what a perfect score looks like)"
+             if ctrl is not None else ""))
+    if not drift:
+        print("NO DRIFT CURVE: the console dump has no successor frames, so "
+              "this score cannot be priced in frames of drift and NOTHING is "
+              "concluded about the pairing. Dump a window, not one frame.",
+              file=sys.stderr)
+        return 2
+    print("\nTHE CONSOLE AGAINST ITSELF, from the winning frame -- what one "
+          "frame of drift costs THIS pass:")
+    # Mark the BRACKETING pair, not one row: the score falls BETWEEN two
+    # frame distances and saying it "sits here" on the lower one overstates
+    # the drift by up to a whole frame.
+    lo = hi = None
+    for i, (k, r) in enumerate(drift):
+        if r <= top[0]:
+            hi = i
+            lo = i - 1 if i > 0 else None
+            break
+    for i, (k, r) in enumerate(drift):
+        tag = ""
+        if i == lo or (lo is None and i == hi):
+            tag = "   <- our score is just below this"
+        elif i == hi:
+            tag = "   <- and above this"
+        print(f"   +{k} frame(s): {r:+.4f}{tag}")
+    equiv = equivalent_drift(top[0], drift)
+    if equiv is None:
+        print(f"\nOUR PAIR SCORES {top[0]:+.4f}, BETTER THAN THE CONSOLE'S OWN "
+              f"ONE-FRAME SELF-CORRELATION ({drift[0][1]:+.4f}). That is as "
+              f"close as this instrument can resolve: the two renderers agree "
+              f"more than the console agrees with itself a frame later. PASSES.")
         return 0
-    print("NO CANDIDATE PASSES THE GATE. This capture cannot support a "
-          "pixelwise comparison, and a mean-based 'match' verdict over it "
-          "would be measuring the pairing rather than the renderers.",
-          file=sys.stderr)
+    print(f"\nOUR PAIR SCORES {top[0]:+.4f}, equivalent to about {equiv:.1f} "
+          f"frame(s) of drift on the console's own scale.")
+    if equiv <= a.max_drift:
+        print(f"PASSES ({equiv:.1f} <= {a.max_drift} frames). Quote the "
+              f"CANDIDATE THAT PASSED, not the directory -- and remember the "
+              f"residual is real: anything viewpoint-sensitive still carries "
+              f"{equiv:.1f} frames of camera movement.")
+        return 0
+    print(f"FAILS: {equiv:.1f} frames of drift exceeds {a.max_drift}. The two "
+          f"sides are far enough apart in TIME that a pixelwise comparison "
+          f"would be measuring the gap.", file=sys.stderr)
     return 1
+
+
+def console_drift_curve(theirs, frame, ours, np, load_oracle, same_picture,
+                        maxk=6):
+    """The winning console frame against its own successors.
+
+    This is the only denominator that is reachable in principle: it is measured
+    on the SAME pass, the SAME content and the SAME decode as the cross score,
+    and it differs from it by time alone.
+    """
+    try:
+        f0 = int(frame)
+    except (TypeError, ValueError):
+        return []
+    td = pathlib.Path(theirs)
+
+    def fb(n):
+        c = sorted(td.glob(f"*_f{n}_copy*_f6_e0_*.bin"))
+        return load_oracle(c[0], 1280, 720, 6, 0) if c else None
+
+    base = fb(f0)
+    if base is None:
+        return []
+    out = []
+    for k in range(1, maxk + 1):
+        nxt = fb(f0 + k)
+        if nxt is None:
+            break
+        r, _ = same_picture(base, nxt, np)
+        out.append((k, float(r)))
+    return out
+
+
+def equivalent_drift(score, curve):
+    """How many frames of console drift does `score` correspond to?
+
+    None when the score BEATS one frame of drift, which is the good case and
+    must not be reported as "0 frames" -- it is off the top of the scale.
+    """
+    if not curve or score > curve[0][1]:
+        return None
+    prev_k, prev_r = curve[0]
+    for k, r in curve[1:]:
+        if score >= r:
+            span = prev_r - r
+            frac = (prev_r - score) / span if span > 1e-9 else 0.0
+            return prev_k + frac * (k - prev_k)
+        prev_k, prev_r = k, r
+    return float(curve[-1][0])
 
 
 def scene(np, rng, n_blobs, h=180, w=320):
