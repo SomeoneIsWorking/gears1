@@ -94,6 +94,16 @@ int main(int argc, char* argv[])
     // previous disposition, so the core and the exit status are unchanged.
     gears::InstallFaultReporter();
 
+    // NAME THE MAIN THREAD. It runs guest code like any other, but it is the
+    // one thread nothing ever named, so it reported as "host" -- the default
+    // for a thread that has never run guest code, which is the opposite of what
+    // it is. Catalog #44 spent its analysis on a mysterious non-guest thread
+    // entering the guest's render-ring producer; the producer's entrant is this
+    // thread, and the entry's own next question ("which host thread, and is it
+    // a guest callback running on one of ours") had a misleading premise handed
+    // to it by a missing label.
+    gears::SetGuestThreadName("main");
+
     // Before the guest runs, because the first mftb may be in static init of
     // the title's own runtime and a clock that changes mode mid-run would go
     // backwards. Reports which mode it chose either way.
