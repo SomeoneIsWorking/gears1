@@ -136,8 +136,16 @@ trap 'kill -9 "$ours_pid" 2>/dev/null || true' EXIT INT TERM
 waited=0
 while [ "$waited" -lt "$SECONDS_TO_RUN" ]; do
     kill -0 "$ours_pid" 2>/dev/null || break
-    # Stop as soon as the capture exists -- the run has nothing left to do.
-    [ -n "$(find "$OUT/ours" -name 'resolve_*.ppm' 2>/dev/null | head -1)" ] && break
+    # Stop when the captured frame is FINISHED, not when its first resolve
+    # file appears. Those are not the same moment: the resolves are written as
+    # the frame executes, so the first file exists while most passes are still
+    # to come, and killing there truncates the capture. It did exactly that
+    # under GEARS_DRAW_SPLIT_DEPTH=1, where the frame takes longer -- our side
+    # produced 4 passes against the console's 16 and the comparison reported
+    # twelve "only theirs" passes as a RENDERER DIFFERENCE, which is what a
+    # truncated capture looks like from the outside. The end-of-frame marker is
+    # the screenshot line, which the frame report writes last.
+    grep -q "frame screenshot written" "$OUT/ours.log" 2>/dev/null && break
     sleep 5; waited=$((waited + 5))
 done
 stop "$ours_pid"; trap - EXIT INT TERM
