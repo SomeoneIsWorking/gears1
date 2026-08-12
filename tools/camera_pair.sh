@@ -23,6 +23,13 @@
 # stamped with ONE pair id before either runs.
 #
 #   tools/camera_pair.sh [seconds-per-side] [out-dir] [vs-hash]
+#   PRIM_STATS=<vs hash>   also measure the CONSOLE's per-draw pipeline
+#                          statistics for that shader, on the SAME run that
+#                          produces the camera -- so the counts belong to the
+#                          frame our capture is gated to. Measuring them in a
+#                          separate oracle run gives a different game moment,
+#                          which supports a comparison of DISTRIBUTIONS and not
+#                          a draw-to-draw attribution (catalog #91).
 #
 # THE CAMERA IS NAMED BY SHADER HASH, NOT BY DRAW ORDINAL. An ordinal is not
 # stable across runs -- ordinal 294 was the camera shader in one run and a
@@ -71,6 +78,7 @@ GEARS_ORACLE_DUMP_AFTER_GAMEPLAY="$GEARS_LAYER_AFTER" \
 GEARS_ORACLE_DUMP_FRAMES="${GEARS_ORACLE_DUMP_FRAMES:-5}" \
 GEARS_ORACLE_DRAW_ORDER="$OUT/theirs_order.tsv" \
 GEARS_ORACLE_VS_CONSTS="$VS_HASH" \
+GEARS_ORACLE_PRIM_STATS="${PRIM_STATS:-}" \
     "$ORACLE" \
     --store_shaders=false \
     --target="$GAME_DIR/default.xex" \
