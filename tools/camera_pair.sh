@@ -76,12 +76,23 @@ GEARS_ORACLE_VS_CONSTS_ORDINAL="$ORDINAL" \
     --oracle_input="" > "$OUT/theirs.log" 2>&1 &
 opid=$!
 trap 'kill -9 "$opid" 2>/dev/null || true' EXIT INT TERM
-w=0
+# WAIT FOR THE WHOLE WINDOW, NOT FOR THE CONSTANTS. The constants land on the
+# FIRST dumped frame, so breaking on them kills the console at the very start of
+# its window: asking for 45 frames and getting 4 or 5 every time. That defect
+# made a wider window impossible and looked like the window parameter being
+# ignored (catalog #87). The wait now counts the front-buffer dumps -- one per
+# dumped frame -- and reports progress, so a run that stalls says how far it got.
+WANT="${GEARS_ORACLE_DUMP_FRAMES:-5}"
+w=0; got=0
 while [ "$w" -lt "$SECONDS_TO_RUN" ]; do
     kill -0 "$opid" 2>/dev/null || break
-    [ -s "$CONSTS" ] && { sleep 5; break; }
+    got=$(ls "$OUT/theirs" 2>/dev/null | grep -c "_f6_e0_" || true)
+    [ "$got" -ge "$WANT" ] && { echo "   console dumped $got/$WANT frames"; break; }
+    [ $((w % 60)) -eq 0 ] && [ "$w" -gt 0 ] && \
+        echo "   ... ${w}s: $got/$WANT console frames dumped"
     sleep 5; w=$((w + 5))
 done
+[ "$got" -ge "$WANT" ] || echo "   console reached only $got of $WANT frames in ${w}s; scoring will use what there is, and a BOUNDARY peak in the scores means the window still did not span our moment"
 kill -TERM "$opid" 2>/dev/null || true
 g=0; while [ "$g" -lt 20 ] && kill -0 "$opid" 2>/dev/null; do sleep 1; g=$((g + 1)); done
 kill -9 "$opid" 2>/dev/null || true
