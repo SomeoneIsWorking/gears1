@@ -5,7 +5,7 @@ status: open
 symptom: surface 0x5a0 has 0 non-black pixels after every one of its draws, and its resolve target is 0 of 192192 components non-zero
 tags: gpu,draw,bloom,post,tonemap,colour,act1
 created: 2026-08-06
-updated: 2026-08-06
+updated: 2026-08-12
 ---
 
 Found while chasing #62's narrow output range, on `scratch/frames/act1.gfr`
@@ -221,3 +221,6 @@ should bloom -- and running it is what settles it.
 Status: not a defect on the evidence available. Left open only because it is
 unknown whether act1's moment SHOULD have bloom; the oracle could answer that
 and has not been asked.
+
+### Note (2026-08-12)
+REPRODUCES LIVE AT A MATCHED CAMERA, so the 'stale act1.gfr v1 capture' explanation that parked this issue does not cover it. In scratch/camgate/match -- a live headless capture gated to the console's own view-projection -- all three bloom resolve destinations (srcC5A0 352x182 f32 to 0x0c3a0000, draws 1121, 1123, 1125) are IDENTICALLY ZERO: 0 of 192,192 components non-zero on each. The console at the SAME camera (oracle frame 571, copies 8/9/10 to 0x1389C000, same 352x182 f32 pass) carries 1.44%, 1.66% and 1.81% non-zero BYTES with a maximum byte of 255. The console-side check is at the BYTE level and needs no decoder, so it stands even though layer_compare refuses the 8-byte f32 decode on those three passes (909 of 64,064 decoded pixels non-finite -- a decode that failed, reported as such rather than as a difference). AND IT NOW HAS A QUANTIFIED COST: catalog #62's remaining deficit, measured on the same capture, is 2.0x at the median and 3.5x at p90 with p99.9 and max intact -- the exact shape of a missing broad low-level additive term and not of a missing highlight. This makes #81 a contributor to #62 rather than a cosmetic issue, and gives it an acceptance gate: fix it and re-run tools/front_buffer_percentiles.py on this same pair.
