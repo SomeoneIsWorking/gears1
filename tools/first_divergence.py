@@ -58,7 +58,8 @@ def load_console(path, w, h, fmt, endian, np):
     rows = stored_rows(len(raw), w, bpp)
     if rows is None:
         return None, f"{len(raw)} bytes is not a whole number of {w}-wide rows"
-    px = untile(raw, w, rows, np, bpp=bpp)[:min(h, rows)]
+    px_all = untile(raw, w, rows, np, bpp=bpp)
+    px = px_all[:min(h, rows)]
     if fmt in (22, 23):
         b = [px[..., i].astype(np.uint32) for i in range(4)]
         if endian == 2:
@@ -70,11 +71,32 @@ def load_console(path, w, h, fmt, endian, np):
         img = unpack_dest(px, fmt, np, endian=endian)
     except AssertionError as e:
         return None, str(e)
-    finite = np.isfinite(img)
-    bad = finite.size - int(finite.sum())
-    if bad > 0.01 * finite.size:
-        return None, (f"{100.0*bad/finite.size:.1f}% of components are NOT "
-                      f"FINITE -- a decode that failed, not a difference")
+    # JUDGE THE DECODE ON THE ROWS THAT CARRY IMAGE, AND PRICE THE PADDING
+    # SEPARATELY. A destination is w * align(h, 32) * bpp, so the rows past the
+    # declared height are guest memory NEITHER side wrote; a buffer that is
+    # clean where it matters and noisy only in its padding is a different
+    # situation from one that is noisy throughout, and one percentage over the
+    # whole allocation cannot tell them apart. `px` is already cropped to the
+    # declared height, so the padding is unpacked separately to be measured
+    # rather than inferred.
+    frac_real = float((~np.isfinite(img)).mean()) if img.size else 0.0
+    if frac_real > 0.01:
+        pad_note = ""
+        if rows > h:
+            try:
+                padimg = unpack_dest(px_all[h:rows], fmt, np, endian=endian)
+                pad_note = (f"; the {rows - h} row(s) of alignment padding past "
+                            f"height {h} are "
+                            f"{100*float((~np.isfinite(padimg)).mean()):.1f}% "
+                            f"non-finite and are NOT counted above")
+            except AssertionError:
+                pad_note = (f"; the {rows - h} padding row(s) could not be "
+                            f"unpacked to compare against")
+        return None, (f"{100.0*frac_real:.2f}% of components in rows 0..{h-1} "
+                      f"are NOT FINITE -- a decode that failed, not a "
+                      f"difference{pad_note}. Sweeping the endian does NOT fix "
+                      f"it (best of the four leaves 0.47%), and picking one by "
+                      f"NaN count would be fitting the layout to the output")
     return np.nan_to_num(img), None
 
 

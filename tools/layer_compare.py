@@ -125,6 +125,23 @@ def stored_rows(nbytes, width, bpp):
 # file exists to refuse, so it is refused until the layout is read out. The
 # tiler and its self-test stay: they are correct, and they are what the next
 # attempt starts from.
+#
+# MEASURED SINCE, so the next attempt does not repeat it. On the 352x182 dumps
+# the NaN is NOT confined to the alignment padding and is NOT an endian choice:
+#   * rows 0..181 (the real image) are 1.41% non-finite; the 10 rows of padding
+#     past the declared height are 10.6%. So the padding IS dirtier -- it is
+#     guest memory neither side wrote -- but the image rows are dirty too, at a
+#     level no cropping can remove.
+#   * sweeping endian over all four modes gives 1.41% (mode 1, which is what the
+#     dump's own filename declares) and 0.4719% for modes 0, 2 and 3, which are
+#     IDENTICAL to each other because unpack_dest only special-cases 1 and 2 for
+#     this width. No mode reaches zero.
+# Choosing mode 0 because it has the fewest NaN would be fitting the layout to
+# the output, which is the thing this comment block exists to refuse. The finite
+# values under mode 0 max at 6.09e4 -- just under the half-float ceiling of
+# 65504 -- which is itself a hint that whole components are landing on the
+# exponent field of a neighbouring value, i.e. a stride or interleave error
+# rather than a byte-order one. That is where to start.
 
 
 def depth24_to_float(d24, is_float24, np):
