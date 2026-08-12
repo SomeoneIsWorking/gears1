@@ -116,6 +116,11 @@ struct PreparedDraw
     // near and far. A shadow volume that is depth-fail extruded needs exactly
     // that, and "this draw clipped away" cannot be read without it.
     bool clipDisable = false;
+    // THE COPY RECTANGLE, on resolve entries. The decoder computes it and used
+    // it locally; nothing recorded it, so the region a resolve actually copied
+    // out of the sample grid was invisible. Catalog #86 narrowed an inset
+    // presented frame to exactly this number and could go no further without it.
+    int32_t copyX0 = 0, copyY0 = 0, copyX1 = 0, copyY1 = 0;
     uint32_t colorFormat = 0;    // RB_COLOR_INFO color_format
     // RB_COLOR_INFO color_exp_bias, a SIGNED 6-bit exponent the shader's colour
     // output is multiplied by (2^bias) on the way into EDRAM. It scales what a
