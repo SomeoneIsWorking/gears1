@@ -23,6 +23,8 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include <set>
 #include <unordered_map>
 #include <string>
@@ -660,7 +662,15 @@ std::string g_producerThreadName;
 void NoteRingThread(const char* which, std::string& slot, std::atomic<uint32_t>& count)
 {
     const char* name = gears::GuestThreadName();
-    const std::string current = name ? name : "?";
+    // THE TID IS PART OF THE IDENTITY, not decoration. 'host' is the DEFAULT
+    // name for every thread that has never run guest code (guest_thread.cpp),
+    // so two different host threads entering the producer compared EQUAL and
+    // the detector stayed silent about them -- which is exactly catalog #44's
+    // open question, WHICH host thread is entering the guest's render ring.
+    // Appending the tid makes the comparison distinguish them as well as
+    // naming them.
+    const std::string current = std::string(name ? name : "?") + " (tid " +
+        std::to_string(long(syscall(SYS_gettid))) + ")";
     std::lock_guard<std::mutex> guard(g_ringMutex);
     if (slot.empty())
     {
@@ -673,10 +683,20 @@ void NoteRingThread(const char* which, std::string& slot, std::atomic<uint32_t>&
         // THE SINGLE-PRODUCER/SINGLE-CONSUMER ASSUMPTION IS BROKEN. FRingBuffer
         // has no protection against this, and this is exactly the corruption it
         // produces.
-        lucent::error("ring", "{} entered by a SECOND guest thread: '{}' after"
-            " '{}' (producer entries so far: {}, overlaps caught by the wait: {})."
-            " FRingBuffer assumes one producer and one consumer", which, current,
-            slot, gears::RingProducerEntries(), gears::RingProducerOverlaps());
+        // THE OS THREAD ID, because 'host' is not an identity. It is the
+        // DEFAULT name for any thread that never entered guest code
+        // (guest_thread.cpp), so every host thread reports the same string and
+        // catalog #44's own next question -- WHICH host thread enters the
+        // producer, and whether it is a guest callback running on one of ours
+        // -- cannot be answered from the name alone. The tid can be joined
+        // against the thread that created it.
+        lucent::error("ring", "{} entered by a SECOND thread: '{}' after '{}'"
+            " (producer entries so far: {}, overlaps caught by the wait: {})."
+            " FRingBuffer assumes one producer and one consumer. Each name"
+            " carries its tid because 'host' is the DEFAULT for every thread"
+            " that has never run guest code, so two host threads would"
+            " otherwise be indistinguishable", which, current, slot,
+            gears::RingProducerEntries(), gears::RingProducerOverlaps());
         count.fetch_add(1);
         slot = current;
     }
