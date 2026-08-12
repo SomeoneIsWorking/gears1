@@ -48,19 +48,25 @@ def blocks(path, draw=None):
             hits = CONST.findall(line)
             if not hits:
                 continue
-            # A header (not a "continued from" line) starts a new dump.
-            if "continued from" not in line or cur is None:
-                if cur:
-                    out.append(cur)
-                cur = {}
             for idx, floats, hexes in hits:
                 if hexes:
                     v = tuple(struct.unpack(">f", bytes.fromhex(w))[0]
                               for w in hexes.split())
                 else:
                     v = tuple(float(p) for p in floats.split(","))
-                if len(v) == 4:
-                    cur[int(idx)] = v
+                if len(v) != 4:
+                    continue
+                idx = int(idx)
+                # A REPEATED INDEX is what ends a dump, not a header line. The
+                # two sides format differently -- ours packs 24 constants per
+                # log line under a header, the oracle writes one per line with
+                # no header at all -- and keying on the header made every one
+                # of the oracle's 256 lines look like a separate dump.
+                if cur is None or idx in cur:
+                    if cur:
+                        out.append(cur)
+                    cur = {}
+                cur[idx] = v
     if cur:
         out.append(cur)
     return out
