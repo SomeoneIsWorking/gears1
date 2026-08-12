@@ -127,8 +127,7 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
     // the shadow atlas's own copy of base 0x5a0 came out at 0.0209 against the
     // console's 0.7079, tile for tile, and the mask pass that samples it then
     // found nothing shadowed anywhere (mask #1 resolved to a flat 1.0).
-    static const bool splitDepthHere = lucent::config::flag("DRAW_SPLIT_DEPTH");
-    const uint32_t guestDepthBaseHere = R[0x2002] & 0xFFF;
+        const uint32_t guestDepthBaseHere = R[0x2002] & 0xFFF;
     auto route = resolveRouting.find(destBase);
     if (RT.formatsPerBase.count(srcBase) && route != resolveRouting.end())
     {
@@ -151,7 +150,7 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
         pd.stencilClearValue = stencilClearHere;
         pd.depthBase = guestDepthBaseHere;
         pd.guestDepthBase = guestDepthBaseHere;
-        pd.depthTargetBase = splitDepthHere ? guestDepthBaseHere : 0u;
+        pd.depthTargetBase = SplitDepthEnabled() ? guestDepthBaseHere : 0u;
         pd.surfaceBase = srcBase;
         pd.resolveDestFormat = (R[0x231B] >> 7) & 0x3F;
         // What the copy reads the source under. Indexed by copy_src_select,
@@ -230,7 +229,7 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
             pd.stencilClearValue = stencilClearHere;
             pd.depthBase = guestDepthBaseHere;
             pd.guestDepthBase = guestDepthBaseHere;
-            pd.depthTargetBase = splitDepthHere ? guestDepthBaseHere : 0u;
+            pd.depthTargetBase = SplitDepthEnabled() ? guestDepthBaseHere : 0u;
             if (isDepthResolve)
             {
                 pd.resolveIsDepth = true;
