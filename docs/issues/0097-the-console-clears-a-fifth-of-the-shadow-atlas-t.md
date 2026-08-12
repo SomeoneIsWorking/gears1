@@ -5,7 +5,7 @@ status: open
 symptom: srcD5A0 864x864 f22 depth resolve: mean |d| 0.196 overall, but 0.0084 over the 78.9% the console does not clear
 tags: oracle,layer-compare,depth,shadow,clear
 created: 2026-08-11
-updated: 2026-08-11
+updated: 2026-08-12
 ---
 
 ## What was measured
@@ -74,3 +74,6 @@ not.
 Retitled in effect: what remains is "one shadow-map copy differs by 0.044 over
 its written region", which is a much smaller and much better-posed question
 than the one this entry opened with.
+
+### Note (2026-08-12)
+REPLICATED AT A MATCHED CAMERA, AND THE AGREEMENT IS TIGHTER THAN MEASURED HERE. A capture gated on the console's own view-projection (GEARS_DRAW_FRAME_CAMERA, matched at 3.77) resolves the same 16 passes as the console with none only-ours and none only-theirs. For the shadow atlas copy #0 it gives whole-buffer means 0.8983 ours against 0.7095 theirs -- the same numbers this issue records -- and over the 78.9% the console does not clear, mean |d| 0.0031 against the 0.0084 measured here. Per tile: (5,5) 0.9692/0.9690, (437,5) 0.9668/0.9673, (5,437) 0.5481/0.5479, (226,437) 0.3813/0.3821. Four tiles agreeing to three decimal places. The better alignment improved the agreement, which is what should happen if the residual was frame drift and not a rendering difference -- so this issue's conclusion that the map CONTENT matches is confirmed independently, and the missing clear is the whole of it. Our own atlas draws carry the tile rects as scissors (5,5 422x422; 437,5 422x422; 5,437 211x211; 226,437 211x211) and our only atlas-wide draws are the clear quads at scissor 0,0 880x1440, six before the first resolve and four between the two. Since the console clears MORE than we do, not less, the question is what it clears the outside fifth WITH -- the fork now logs PA_SC_WINDOW_SCISSOR with every draw of the dumped frame (fork a54abbc) so the console's own clear rects can be read off directly.
