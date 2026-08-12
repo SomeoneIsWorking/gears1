@@ -1462,6 +1462,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // resolveDepthIsFloat24 is only filled for kCopy draws.
         pd.resolveDepthIsFloat24 = ((R[0x2002] >> 16) & 1) == 1;
         pd.depthControl = om.depthControl;
+        pd.clipDisable = om.depthClamp;
         pd.stencilRefMask = om.stencilRefMask;
         pd.blend0 = om.blend0;
         pd.colorFormat = (R[0x2001] >> 16) & 0xF;
