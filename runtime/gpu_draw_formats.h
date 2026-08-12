@@ -205,9 +205,13 @@ struct OutputMergerState
 // differ by 0.0002-0.0059 per pass, and ten passes clear that. Nine favour the
 // split -- the shadow atlas depth resolve 0.3380 -> 0.9994, both HDR resolves,
 // the scene colour, and the FRONT BUFFER 0.5274 -> 0.6348 against a temporal
-// ceiling of 0.7478. One favours the shared image and is unexplained: the
-// first shadow mask, 0.9474 -> 0.8087. That regression is open (#91); it is one
-// pass against nine and it does not justify shipping the wrong memory model.
+// ceiling of 0.7478. One appeared to favour the shared image -- the first
+// shadow mask, 0.9474 -> 0.8087 -- and that is now EXPLAINED and gone: it was
+// the half-scale depth buffer (kSysFlag_DepthFloat24 set against a full-range
+// viewport, see gpu_draw_xlate.cpp) becoming visible once the split removed the
+// atlas corruption that had been compensating for it. Two defects were
+// cancelling. With the scale fixed, that mask scores 0.9899 on the SPLIT arm
+// and shadows 11.35% against the console's 11.39%.
 //
 // GEARS_DRAW_SPLIT_DEPTH=0 restores the shared image as a control arm. Absent
 // means ON, so the correct model is what runs unless someone asks otherwise.
