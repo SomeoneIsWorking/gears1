@@ -98,7 +98,7 @@ def main():
         tranked.append(t + (torder[k].index(t[7]),))
 
     arms = {}
-    for arm in ("shared", "split"):
+    for arm in ("shared", "split", "control", "default"):
         d = pathlib.Path(a.ab) / arm
         if not d.is_dir():
             raise SystemExit(f"REFUSING: arm directory {d} is missing, so only "
@@ -110,11 +110,40 @@ def main():
                              f"capture that resolved nothing is not a depth "
                              f"model result. NOTHING was compared.")
 
+    # THE CAMERA RESIDUAL IS PART OF EVERY SCORE, AND IT IS NOT CONSTANT ACROSS
+    # ARMS. Each arm holds frames until the guest's view-projection matches the
+    # frozen camera, then captures the NEXT frame -- so each lands at its own
+    # small distance from the reference viewpoint, and that distance moves
+    # viewpoint-sensitive passes more than the depth model does. A run was read
+    # as "nine passes favour the split" when the control arm had simply matched
+    # the camera at 0.00 thresholds while the others matched at 0.59 and 0.72.
+    # A difference is only about the depth model if it SURVIVES the residual
+    # spread, so the residuals are printed beside the scores and never folded
+    # into a single noise number.
+    resid = {}
+    for arm in arms:
+        log = pathlib.Path(a.ab) / f"{arm}.log"
+        if log.exists():
+            m = re.search(r"i\.e\. ([0-9.]+) thresholds", log.read_text())
+            if m:
+                resid[arm] = float(m.group(1))
     print(f"console frame {frame}; arms scored against the SAME reference.")
-    print(f"{'pass':>24} {'shared':>18} {'split':>18}   note")
+    if resid:
+        print("camera residual per arm (thresholds; lower is a closer "
+              "viewpoint): "
+              + ", ".join(f"{k} {v:.2f}" for k, v in sorted(resid.items())))
+        spread = max(resid.values()) - min(resid.values())
+        print(f"  spread {spread:.2f}. A pass whose arms differ by less than "
+              f"what this spread moves it is NOT a depth-model result, however "
+              f"small the run-to-run floor looks.")
+    else:
+        print("  NO camera residual could be read from the arm logs, so the "
+              "single largest confound in this comparison is unmeasured here.")
+    print(f"{'pass':>24} {'shared':>18} {'split':>18} {'control':>18} "
+          f"{'default':>18}   note")
 
     seen = collections.Counter()
-    diffs = []
+    diffs, defaults = [], []
     for draw, src, w, h, fmt, dest, f, rk in arms["shared"]:
         key = (src, w, h, fmt, rk)
         n = seen[key]
@@ -122,7 +151,11 @@ def main():
         # the same slot in the other arm
         other = [r for r in arms["split"]
                  if (r[1], r[2], r[3], r[4], r[7]) == key]
-        if n >= len(other):
+        ctrl = [r for r in arms["control"]
+                if (r[1], r[2], r[3], r[4], r[7]) == key]
+        dflt = [r for r in arms["default"]
+                if (r[1], r[2], r[3], r[4], r[7]) == key]
+        if n >= len(other) or n >= len(ctrl) or n >= len(dflt):
             continue
         osp = other[n]
         pick = [t for t in tranked if (t[1], t[2], t[3], t[4], t[8]) == key]
@@ -135,7 +168,8 @@ def main():
             print(f"{label:>24} {'--':>18} {'--':>18}   UNDECODED: {err}")
             continue
         cells, vals = [], {}
-        for arm, path in (("shared", f), ("split", osp[6])):
+        for arm, path in (("shared", f), ("split", osp[6]),
+                          ("control", ctrl[n][6]), ("default", dflt[n][6])):
             img = load_ppm(str(path))
             flat, val = degenerate(img, np)
             if flat:
@@ -155,9 +189,30 @@ def main():
             note = "only the SPLIT arm is degenerate"
         else:
             d_ = vals["split"] - vals["shared"]
-            diffs.append((abs(d_), label, d_))
-            note = f"split {d_:+.4f} vs shared"
-        print(f"{label:>24} {cells[0]:>18} {cells[1]:>18}   {note}")
+            noise = (abs(vals["control"] - vals["shared"])
+                     if vals.get("control") is not None else None)
+            diffs.append((abs(d_), label, d_, noise))
+            if noise is None:
+                note = f"split {d_:+.4f} vs shared; NO noise floor on this pass"
+            elif abs(d_) <= noise:
+                note = (f"split {d_:+.4f}, WITHIN the {noise:.4f} two identical "
+                        f"runs differ by -- not a depth-model result")
+            else:
+                note = (f"split {d_:+.4f}, against a {noise:.4f} noise floor "
+                        f"-> {abs(d_)/max(noise,1e-9):.1f}x")
+        print(f"{label:>24} {cells[0]:>18} {cells[1]:>18} {cells[2]:>18} "
+              f"{cells[3]:>18}   {note}")
+        # WHICH MODEL DOES THE SHIPPED BUILD SELECT? The 'default' arm runs with
+        # the variable unset. If the default is the split, it must track the
+        # split arm within the noise floor -- and a default that tracks the
+        # SHARED arm while the documentation claims otherwise is a silent lie
+        # that no other arm here can catch.
+        if (vals.get("default") is not None and vals.get("split") is not None
+                and vals.get("shared") is not None):
+            defaults.append((label, vals["default"], vals["split"],
+                             vals["shared"],
+                             abs(vals["control"] - vals["shared"])
+                             if vals.get("control") is not None else None))
 
     print()
     if not diffs:
@@ -166,14 +221,44 @@ def main():
               "repeated rather than read.", file=sys.stderr)
         return 2
     diffs.sort(reverse=True)
-    big, label, signed = diffs[0]
-    print(f"LARGEST DIFFERENCE: {label}, split {signed:+.4f} against shared, "
-          f"over {len(diffs)} pass(es) scored on both arms.")
-    print("Compare that against the pass's own temporal yardstick "
-          "(tools/pass_volatility.py) before calling either arm better: a "
-          "difference smaller than what one guest frame costs that pass is not "
-          "a result about the depth model. And ONE MOMENT CANNOT ESTABLISH A "
-          "MODEL -- at most it removes a piece of evidence against one.")
+    real = [d for d in diffs if d[3] is not None and d[0] > d[3]]
+    print(f"{len(diffs)} pass(es) scored on all three arms. {len(real)} exceed "
+          f"their own noise floor (the same arm run twice):")
+    for mag, label, signed, noise in real:
+        print(f"  {label:>24}  split {signed:+.4f}  vs noise {noise:.4f}  "
+              f"({mag/max(noise,1e-9):.1f}x)")
+    if not real:
+        print("  NONE. On this moment the two depth models are "
+              "INDISTINGUISHABLE -- which is not a verdict that either is "
+              "right, only that this experiment cannot separate them.")
+    # THE DEFAULT IS PART OF THE RESULT, NOT AN ASSUMPTION.
+    if defaults:
+        near_split = sum(1 for _, d, sp, sh, nz in defaults
+                         if abs(d - sp) <= max(nz or 0.0, 1e-4) * 4)
+        near_shared = sum(1 for _, d, sp, sh, nz in defaults
+                          if abs(d - sh) <= max(nz or 0.0, 1e-4) * 4)
+        print(f"\nTHE SHIPPED DEFAULT (variable unset), over {len(defaults)} "
+              f"pass(es): tracks the SPLIT arm on {near_split}, the SHARED arm "
+              f"on {near_shared}.")
+        if near_split > near_shared:
+            print("  -> the default selects ONE IMAGE PER DEPTH BASE. That is "
+                  "what ships.")
+        elif near_shared > near_split:
+            print("  -> the default selects the SHARED image, whatever the "
+                  "documentation says. If the intent was the split, the build "
+                  "does not do it.", file=sys.stderr)
+        else:
+            print("  -> INCONCLUSIVE: the default matches neither arm more "
+                  "closely, so this run does not establish what ships.",
+                  file=sys.stderr)
+        for label, d, sp, sh, nz in defaults:
+            if abs(d - sp) > abs(d - sh):
+                print(f"     {label}: default {d:+.4f} sits nearer shared "
+                      f"{sh:+.4f} than split {sp:+.4f}")
+    print("\nA difference that clears the noise floor still has to clear the "
+          "pass's own TEMPORAL volatility (tools/pass_volatility.py) before it "
+          "means the depth model. And ONE MOMENT CANNOT ESTABLISH A MODEL -- at "
+          "most it removes a piece of evidence against one.")
     return 0
 
 

@@ -1446,16 +1446,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // shadow-mask pass out to 644,645 shadowed pixels against 120,984.
         // Measured, not reasoned: that was this change's own first attempt.
         //
-        // ONE IMAGE PER BASE IS OFF BY DEFAULT. It is the right model -- the
-        // console addresses depth by an EDRAM base, and sharing one image is
-        // catalog #91's named root cause -- but switching it on makes this
-        // frame's masks WORSE (the first goes to 364,499 against the console's
-        // 143,816, the second to none), so something else in the pass depends
-        // on the sharing. Shipping a mechanism that is right in principle while
-        // it makes the picture worse is how a renderer ends up with two bugs
-        // that cancel. GEARS_DRAW_SPLIT_DEPTH=1 turns it on.
-        static const bool splitDepth = lucent::config::flag("DRAW_SPLIT_DEPTH");
-        pd.depthTargetBase = splitDepth ? pd.depthBase : 0u;
+        // ONE IMAGE PER BASE IS ON BY DEFAULT -- see SplitDepthEnabled() in
+        // gpu_draw_formats.h for the measurement and the one open regression.
+        // It was off because "switching it on makes this frame's masks worse",
+        // and that comparison was across DIFFERENT game moments of a pass whose
+        // content varies between them; held to ONE moment with a repeat-run
+        // noise floor, the split wins nine passes of ten including the front
+        // buffer.
+        pd.depthTargetBase = SplitDepthEnabled() ? pd.depthBase : 0u;
         pd.guestDepthBase = pd.depthBase;
         // The depth FORMAT at this draw, for the aliasing pass: the same bit
         // the resolve path reads, but a geometry draw needs its own copy --

@@ -30,7 +30,17 @@ PAIR="${1:?usage: depth_arm_ab.sh <existing-pair-dir> [seconds] [vs-hash]}"
 SECONDS_TO_RUN="${2:-600}"
 VS_HASH="${3:-f3e9368c1bb68ecc}"
 HERE=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-. "$HERE/env.sh"
+REPO=$(CDPATH= cd -- "$HERE/.." && pwd)
+. "$REPO/tools/env.sh"
+# env.sh only exports what .env provides; the runtime and game paths are
+# derived the same way tools/camera_pair.sh derives them, and BOTH are
+# checked here rather than letting env run "" and report a missing file.
+GAME_DIR="${GEARS_GAME_DIR:-$REPO/scratch/game}"
+RUNTIME="${GEARS_BUILD_DIR:-$REPO/scratch/build}/runtime/gears1"
+[ -x "$RUNTIME" ] || { echo "REFUSING: $RUNTIME is not an executable \
+runtime. NOTHING was run." >&2; exit 2; }
+[ -f "$GAME_DIR/default.xex" ] || { echo "REFUSING: no default.xex under \
+$GAME_DIR. NOTHING was run." >&2; exit 2; }
 
 # provenance.py freezes the camera in under a FIXED name and records its
 # original name in PROVENANCE.json; the frozen copy is what a replay must use,
@@ -53,17 +63,28 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 run_arm() {
     arm="$1"; split="$2"
     d="$OUT/$arm"; mkdir -p "$d"
-    echo "== arm '$arm' (GEARS_DRAW_SPLIT_DEPTH=$split), gated on $PAIR's camera =="
-    env GEARS_NO_WINDOW=1 \
-        GEARS_DRAW_SPLIT_DEPTH="$split" \
-        GEARS_DRAW_FRAME_MIN_DRAWS="${GEARS_LAYER_MIN_DRAWS:-600}" \
-        GEARS_DRAW_FRAME_AFTER_GAMEPLAY=0 \
-        GEARS_DRAW_FRAME_COUNT=1 \
-        GEARS_DRAW_FRAME_NEEDS="$VS_HASH" \
-        GEARS_DRAW_FRAME_CAMERA="$FROZEN:$CAMERA_NEAR" \
-        GEARS_DRAW_RESOLVE_DUMP_EACH=1 \
-        GEARS_DRAW_DIAG="$d/draws.tsv" \
-        GEARS_DRAW_DIR="$d" \
+    # "default" means the variable is UNSET, which is the only way to test what
+    # the SHIPPED build does. Setting it to anything -- even to the value the
+    # default is supposed to have -- tests the knob and not the default, and a
+    # default that silently disagrees with its documentation is exactly what
+    # this arm exists to catch.
+    if [ "$split" = "default" ]; then
+        echo "== arm 'default' (GEARS_DRAW_SPLIT_DEPTH UNSET -- what ships) =="
+        unset GEARS_DRAW_SPLIT_DEPTH
+    else
+        echo "== arm '$arm' (GEARS_DRAW_SPLIT_DEPTH=$split) =="
+        GEARS_DRAW_SPLIT_DEPTH="$split"
+        export GEARS_DRAW_SPLIT_DEPTH
+    fi
+    GEARS_NO_WINDOW=1 \
+    GEARS_DRAW_FRAME_MIN_DRAWS="${GEARS_LAYER_MIN_DRAWS:-600}" \
+    GEARS_DRAW_FRAME_AFTER_GAMEPLAY=0 \
+    GEARS_DRAW_FRAME_COUNT=1 \
+    GEARS_DRAW_FRAME_NEEDS="$VS_HASH" \
+    GEARS_DRAW_FRAME_CAMERA="$FROZEN:$CAMERA_NEAR" \
+    GEARS_DRAW_RESOLVE_DUMP_EACH=1 \
+    GEARS_DRAW_DIAG="$d/draws.tsv" \
+    GEARS_DRAW_DIR="$d" \
         "$RUNTIME" "$GAME_DIR/default.xex" "$GAME_DIR" > "$OUT/$arm.log" 2>&1 &
     rpid=$!
     trap 'kill -9 "$rpid" 2>/dev/null || true' EXIT INT TERM
@@ -81,9 +102,9 @@ run_arm() {
     wait "$rpid" 2>/dev/null || true
     trap - EXIT INT TERM
 
-    # A DEVICE LOSS ENDS EVERYTHING, including the arm that has not run yet.
+    # A DEVICE LOSS ENDS EVERYTHING, including the arms that have not run yet.
     if grep -qi "DEVICE_LOST\|Graphics device lost" "$OUT/$arm.log"; then
-        echo "ARM '$arm' LOST THE VULKAN DEVICE. Neither arm is retried and the \
+        echo "ARM '$arm' LOST THE VULKAN DEVICE. No arm is retried and the \
 comparison is abandoned -- a second GPU run into a card the kernel is resetting \
 is how a session loses the desktop." >&2
         exit 3
@@ -91,7 +112,7 @@ is how a session loses the desktop." >&2
     grep -E "CAMERA MATCHED|held for the CAMERA" "$OUT/$arm.log" | tail -1
     grep -q "CAMERA MATCHED" "$OUT/$arm.log" || {
         echo "ARM '$arm' NEVER MATCHED THE CAMERA in ${SECONDS_TO_RUN}s, so it \
-captured a DIFFERENT moment from the other arm and the two are not comparable. \
+captured a DIFFERENT moment from the other arms and is not comparable to them. \
 This is not a result about the depth model." >&2
         exit 4
     }
@@ -99,6 +120,16 @@ This is not a result about the depth model." >&2
 
 run_arm shared 0
 run_arm split 1
+# THE NOISE FLOOR. The two arms are separate RUNS, so every difference
+# between them carries run-to-run variation as well as the depth model,
+# and without this control a small difference cannot be told from either.
+# This is the SHARED arm a second time: whatever it differs from the first
+# shared run by is what two identical configurations cost, and no
+# arm-vs-arm difference smaller than that means anything.
+run_arm control 0
+# WHAT ACTUALLY SHIPS. Every other arm sets the variable, so none of them can
+# tell whether the DEFAULT selects the model its documentation claims.
+run_arm default default
 
 echo
 echo "== the two arms, same camera, same console reference =="

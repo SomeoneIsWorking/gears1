@@ -14,6 +14,8 @@
 
 #include <vulkan/vulkan.h>
 
+#include <lucent/config.h>
+
 namespace gears::draw
 {
 
@@ -185,5 +187,35 @@ struct OutputMergerState
                         o.depthClamp);
     }
 };
+
+// ONE HOST DEPTH+STENCIL IMAGE PER RB_DEPTH_INFO.depth_base, which is how the
+// console addresses depth: by an EDRAM base, exactly as it addresses colour.
+// Sharing a single image lets the shadow atlas (base 0x5a0) scribble over the
+// scene's depth AND stencil (base 0x0), which is catalog #91's named root cause.
+//
+// THIS IS ONE FUNCTION BECAUSE IT WAS TWO CONSTANTS AND THEY DIVERGED. The
+// geometry path read the knob and the resolve decoder did not, so under the
+// split every depth resolve read, and every resolve-borne depth clear landed
+// on, the SCENE's image whatever base the copy named -- the shadow atlas
+// resolved at 0.0209 against the console's 0.7079. Any new site that needs the
+// depth model calls this rather than reading the environment again.
+//
+// DEFAULT ON, measured. tools/depth_arm_ab.sh replays one frozen camera through
+// both models and a repeat of the first as a noise floor: two identical runs
+// differ by 0.0002-0.0059 per pass, and ten passes clear that. Nine favour the
+// split -- the shadow atlas depth resolve 0.3380 -> 0.9994, both HDR resolves,
+// the scene colour, and the FRONT BUFFER 0.5274 -> 0.6348 against a temporal
+// ceiling of 0.7478. One favours the shared image and is unexplained: the
+// first shadow mask, 0.9474 -> 0.8087. That regression is open (#91); it is one
+// pass against nine and it does not justify shipping the wrong memory model.
+//
+// GEARS_DRAW_SPLIT_DEPTH=0 restores the shared image as a control arm. Absent
+// means ON, so the correct model is what runs unless someone asks otherwise.
+inline bool SplitDepthEnabled()
+{
+    static const bool on = !lucent::config::present("DRAW_SPLIT_DEPTH")
+                           || lucent::config::flag("DRAW_SPLIT_DEPTH");
+    return on;
+}
 
 } // namespace gears::draw

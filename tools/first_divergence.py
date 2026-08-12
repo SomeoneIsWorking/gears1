@@ -90,6 +90,18 @@ def degenerate(img, np):
     A shadow mask that shadows nothing resolves to a flat 1.0 -- 921,600 pixels
     of the same value -- and that is the single most informative buffer in the
     frame. Reported, never scored.
+
+    SAY WHAT "CONSTANT" MEANS HERE. Our resolve dumps are 8-bit PPMs, so this
+    reads constant when every pixel lands in the same 1/255 bucket, NOT when the
+    float surface is literally uniform. On the case this was written for, our
+    mask's shading draw did touch 1.57% of pixels -- it wrote values within
+    1/255 of full, which is invisible at this depth. That is still the finding
+    and not an artefact: the console's counterpart carries 33 distinct values AT
+    THE SAME QUANTIZATION and puts 4.88% of the screen below 254/255, so the
+    comparison is like for like and it is our side that is featureless. Quote it
+    as "no shadow survives 8-bit", never as "the surface is uniform" -- the
+    float surface has not been looked at, and GEARS_DRAW_SURFACE_DUMP is what
+    would look.
     """
     v = img.max(axis=-1)
     return float(v.var()) <= 0.0, float(v.reshape(-1)[0])
@@ -322,11 +334,13 @@ def main():
             val = val_o if flat_o else val_c
             print(f"{draw:>6} {label:>26} {'FLAT':>8} {'--':>8}   "
                   f"DEGENERATE: {who} is CONSTANT at {val:.4f} over all "
-                  f"{mc.shape[0] * mc.shape[1]} pixels while the other side has "
-                  f"real structure. Correlation is UNDEFINED here -- numpy "
-                  f"returns nan -- so this pass CANNOT be scored, and that is "
-                  f"the STRONGEST disagreement in the frame, not a gap in the "
-                  f"measurement. A mask flat at 1.0 shadowed nothing at all.")
+                  f"{mc.shape[0] * mc.shape[1]} pixels AT 8-BIT while the other "
+                  f"side has real structure. Correlation is UNDEFINED here -- "
+                  f"numpy returns nan -- so this pass CANNOT be scored, and "
+                  f"that is the STRONGEST disagreement in the frame, not a gap "
+                  f"in the measurement. A mask flat at 1.0 shadows nothing "
+                  f"that survives 8 bits; the float surface is NOT examined "
+                  f"here, so do not quote this as a uniform surface.")
             compared += 1
             if first_drop is None:
                 first_drop = (draw, label, prev if prev is not None else 1.0,
