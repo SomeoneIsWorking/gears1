@@ -2773,6 +2773,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             VkImageBlit bl{};
             bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            // THE SOURCE IS W x H AND THAT IS CORRECT -- TESTED, NOT ASSUMED.
+            // The surface image is allocated SW x SH (1280x1440 on a frame with
+            // 2X vertical MSAA), so reading {W, H} looks like it takes half the
+            // sample rows, and catalog #86 predicted exactly that. IT IS WRONG.
+            // Changing this to {SW, SH} and measuring the presented frame put
+            // the lit content in rows 0..358 of 720 instead of 0..718: the
+            // scene's pixels occupy the TOP 720 ROWS of the 1440-row
+            // allocation, not all of it, so scaling the full grid down halves
+            // the image. The allocation is sized to hold the samples; the
+            // resolved content is not spread across them.
             bl.srcOffsets[1] = {int32_t(W), int32_t(H), 1};
             bl.dstOffsets[1] = {int32_t(W), int32_t(H), 1};
             vkCmdBlitImage(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,

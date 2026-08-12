@@ -168,6 +168,7 @@ void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
         // the scissor.
         int32_t x0 = 0, y0 = 0, x1 = int32_t(W), y1 = int32_t(H);
         DeriveResolveRect(R, in, W, H, RT, x0, y0, x1, y1);
+        pd.copyX0 = x0; pd.copyY0 = y0; pd.copyX1 = x1; pd.copyY1 = y1;
         pd.resolveSrcRect.offset = {x0, y0};
         pd.resolveSrcRect.extent = {uint32_t(std::max(0, x1 - x0)),
                                     uint32_t(std::max(0, y1 - y0))};
