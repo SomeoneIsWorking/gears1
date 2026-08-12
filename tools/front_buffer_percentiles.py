@@ -188,6 +188,8 @@ def main():
     ap.add_argument("--control", type=float,
                     help="the gate's score for a pair known to agree, printed "
                          "beside the result so the number is never read alone")
+    ap.add_argument("--skip-provenance", action="store_true",
+                    help="do not check PROVENANCE.json beside the inputs")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
@@ -214,6 +216,23 @@ def main():
         raise SystemExit("REFUSING: the console dump's name does not carry its "
                          "geometry and not all of --width/--height/--fmt/"
                          "--endian were given. NOTHING was decoded.")
+
+    # PROVENANCE FIRST. Two oracle runs reach different moments, so a pair
+    # joined across runs measures the pairing and not the renderer (C042).
+    if not a.skip_provenance:
+        import provenance
+        sys.path.insert(0, str(pathlib.Path(__file__).parent))
+        rc = provenance.do_check(argparse.Namespace(
+            a=str(pathlib.Path(a.ours).parent),
+            b=str(pathlib.Path(a.theirs).parent)))
+        if rc == 2:
+            print("REFUSING: the two directories are stamped as different runs.",
+                  file=sys.stderr)
+            return 2
+        if rc == 3:
+            print("Continuing with provenance UNKNOWN -- the same-picture gate "
+                  "below is now the only thing standing between you and a "
+                  "cross-run pair. Stamp future captures.", file=sys.stderr)
 
     import numpy as np
     ours = load_ppm(a.ours)

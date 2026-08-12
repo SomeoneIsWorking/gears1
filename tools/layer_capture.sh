@@ -95,6 +95,20 @@ else
 fi
 
 rm -rf "$OUT"; mkdir -p "$OUT/ours" "$OUT/theirs"
+# PROVENANCE, stamped BEFORE the runs so even a failed capture carries it.
+# Two oracle runs reach different game moments, so a pair joined across runs
+# measures the pairing rather than the renderer -- that cost a session on
+# 2026-08-12 (claim C042). This script drives both sides in one invocation, so
+# the pair id is shared by construction; the SPLIT path (an oracle run that
+# produces a camera file, then a separate camera-gated capture of ours) has to
+# carry this id forward by hand.
+PAIR="layercap-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+python3 "$REPO/tools/provenance.py" stamp "$OUT/ours" --role ours --pair "$PAIR" \
+    --note "selector=after${GEARS_LAYER_AFTER}_mindraws${GEARS_LAYER_MIN_DRAWS}" \
+    --note "script=layer_capture.sh"
+python3 "$REPO/tools/provenance.py" stamp "$OUT/theirs" --role theirs --pair "$PAIR" \
+    --note "selector=after${GEARS_LAYER_AFTER}_mindraws${GEARS_LAYER_MIN_DRAWS}" \
+    --note "script=layer_capture.sh"
 echo "selector: $GEARS_LAYER_AFTER frame(s) after the first with"
 echo "          >= $GEARS_LAYER_MIN_DRAWS draws,"
 echo "          applied identically to both sides; $SECONDS_TO_RUN s per side"
