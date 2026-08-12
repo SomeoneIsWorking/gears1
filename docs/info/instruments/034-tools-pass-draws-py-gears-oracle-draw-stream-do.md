@@ -1,8 +1,9 @@
 ---
 id: I034
 kind: instrument
-status: trusted
+status: DISTRUSTED
 created: 2026-08-11
+distrusted_on: 2026-08-12
 ---
 
 ## Instrument
@@ -22,3 +23,9 @@ WHAT IT CANNOT SEE, said in its own output: it counts draws and their state, NOT
 ## Known failure modes
 
 (none recorded yet)
+
+## DISTRUSTED 2026-08-12
+
+Reported 'ours 3, theirs 2' for the shadow-volume shader's two states in an aligned paired capture. The oracle's new submission-order log (GEARS_ORACLE_DRAW_ORDER) shows the console issuing THREE per state in that frame, including the 19,776-vertex draw pass_draws said it never made. Two conclusions were built on the wrong count and had to be retracted. Its console reader parses the aggregated per-frame stream and has not been checked against the ordered log.
+
+> Every result this instrument produced is suspect until it is re-validated.
