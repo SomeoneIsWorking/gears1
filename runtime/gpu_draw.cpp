@@ -1572,7 +1572,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
         draw::DumpVertices(R, in, *vsX, issued, pd.diagIndex, pd.vsHash,
                            d.indexCount);
-        draw::DumpVsConstants(*vsX, UC, d.vsHash, issued, pd.diagIndex);
+        draw::DumpVsConstants(*vsX, UC, d.vsHash, issued, pd.diagIndex, R);
         // What this draw fetches, and whether the mirror covers it, is in
         // gpu_draw_vertexfetch.{h,cpp}.
         draw::CollectFetchRanges(R, in, *vsX, *psX, CN, fetchRanges);
