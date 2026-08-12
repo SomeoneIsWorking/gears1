@@ -174,14 +174,36 @@ def main():
                      f" which is a real structural difference worth its own look"
                      if max(covO, covC) > 8 * max(min(covO, covC), 1e-9) else ""))
             continue
-        _, (_, r) = same_picture(mine[:n], con[:n], np)
+        # CROP THE ALIGNMENT PADDING BEFORE SCORING. A destination is
+        # w * align(h,32) * bpp, so a 432-row copy is STORED as 448 rows with
+        # the last 16 left at whatever guest memory held -- zeros. Our host
+        # image holds something else there and NEITHER side wrote it, so
+        # scoring it reports a difference where there is no rendering at all.
+        # This tool named the shadow atlas its frontier on exactly that band:
+        # 13,824 px = 864 x 16, rows 432..447 of a 448-row buffer, console 0.0
+        # and ours 1.0 throughout. catalog #97 retracted the same reading in
+        # 2026-08-11 and it was re-derived here because the crop was missing.
+        # The rule is layer_compare's: compare over what the CONSOLE wrote.
+        mc, cc = mine[:n], con[:n]
+        wrote = cc.max(axis=-1) > 1e-6
+        frac = float(wrote.mean())
+        r_all = same_picture(mc, cc, np)[1][1]
+        if frac < 0.999:
+            rows_kept = np.where(wrote.any(axis=1))[0]
+            if len(rows_kept):
+                lo, hi = int(rows_kept.min()), int(rows_kept.max()) + 1
+                mc, cc = mc[lo:hi], cc[lo:hi]
+        _, (_, r) = same_picture(mc, cc, np)
+        cov_note = ("" if frac >= 0.999 else
+                    f"[console wrote {100*frac:.1f}%; scored over those rows; "
+                    f"whole-buffer {r_all:+.4f}] ")
         compared += 1
         delta = "" if prev is None else f"{r - prev:+.4f}"
         note = ""
         if prev is not None and (r - prev) <= -a.drop and first_drop is None:
             first_drop = (draw, label, prev, r)
             note = "<-- FIRST LOSS OF AGREEMENT"
-        print(f"{draw:>6} {label:>26} {r:>8.4f} {delta:>8}   {note}")
+        print(f"{draw:>6} {label:>26} {r:>8.4f} {delta:>8}   {cov_note}{note}")
         prev = r
 
     print()
