@@ -168,6 +168,21 @@ def console_drift_curve(theirs, frame, ours, np, load_oracle, same_picture,
     This is the only denominator that is reachable in principle: it is measured
     on the SAME pass, the SAME content and the SAME decode as the cross score,
     and it differs from it by time alone.
+
+    A FRAME IS NOT A FIXED AMOUNT OF GAME TIME, so this curve MUST be computed
+    from the same run as the capture and never cached or hard-coded. Both
+    emulators advance the guest by wall-clock delta, so under load one guest
+    frame covers more game time and the curve drops: the console's own gap-1
+    colour self-correlation was 0.297 in one capture (claim C046) and 0.7478 in
+    another. Neither is wrong; they are different frame durations. "2.1 frames
+    of drift" is therefore in units of THIS run's frames, and comparing a drift
+    figure across runs is comparing two different rulers.
+
+    AND THE CURVE IS A SCALE, NOT A CEILING. Claim C046 was falsified for
+    exactly that overreach: a capture CAN land temporally closer to a console
+    frame than the neighbouring console frame does, and one did. That is why a
+    score above the +1 point is reported as off the top of the scale rather
+    than clamped -- equivalent_drift() returns None there deliberately.
     """
     try:
         f0 = int(frame)
