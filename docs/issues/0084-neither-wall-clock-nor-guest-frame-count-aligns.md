@@ -5,7 +5,7 @@ status: open
 symptom: our own renderer, same input script indexed by guest frame, two runs: 98.9% identical pixels at frame 300, 25.9% at 600, 17.7% at 1200
 tags: harness,oracle,determinism,lockstep,method
 created: 2026-08-06
-updated: 2026-08-11
+updated: 2026-08-12
 ---
 
 ## Why this was measured
@@ -417,3 +417,6 @@ aligned frame.
 the one whose PASS STRUCTURE matches ours) is in place and works, but it is a
 workaround for exactly this. Anything that makes the guest clock a function of
 the input schedule would remove our half of it.
+
+### Note (2026-08-12)
+SUPERSEDED FOR COMPARISON PURPOSES, THOUGH THE FINDING ITSELF STANDS. This entry's measurement is still true and still matters: the title is not reproducible against itself, and no amount of harness work indexed on wall clock or guest frame count will make two runs the same moment. What has changed is that COMPARISON NO LONGER NEEDS REPRODUCIBILITY. The view-projection is guest data both emulators carry unchanged, so two frames with the same view-projection ARE the same moment whatever index either side gave them. GEARS_DRAW_FRAME_CAMERA gates our capture on the console's own view-projection and tools/camera_match.py finds the frame after the fact; both are validated in each direction (matched at 3.77 after 99 held frames; held 900 frames and captured nothing against an impossible camera). The practical consequence is measured, not argued: catalog #91's shadow-volume draws read as a catastrophic divergence -- 235 primitives kept of 54,352 against the console's 21,296 -- under content-predicate alignment, and agree to within 1% at matched cameras, replicated across three independent runs at 21,111, 21,224 and 21,188. DO NOT spend further sessions pursuing determinism in order to enable comparison. That was the reason this entry mattered and it is no longer the only route. Determinism remains worth having for other reasons -- a repeatable crash repro above all -- and this entry should be judged on those.
