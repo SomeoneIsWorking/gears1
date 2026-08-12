@@ -5,7 +5,7 @@ status: open
 symptom: oracle_lockstep.sh fed our runtime f150:START + A at ten fixed frames, and the oracle START@150+270,A@300+120 -- repeats that never stop -- so frame N was never the same game moment on the two sides
 tags: oracle,tooling,workflow,gameplay-scene
 created: 2026-08-07
-updated: 2026-08-07
+updated: 2026-08-12
 ---
 
 tools/oracle_lockstep.sh is built on the right idea and its header states it
@@ -47,3 +47,6 @@ generated strings, and PROVES that check fires on a deliberately mismatched pair
 before trusting it to pass -- the first version of the check compared token
 counts and flagged the correct walk as a mismatch, which is exactly the failure
 mode a guard that is never exercised has.
+
+### Note (2026-08-12)
+THE WALKS NO LONGER HAVE TO MATCH. This entry is a real tooling defect and its diagnosis is correct -- the two sides were fed different input schedules, so frame N was never the same game moment. But the requirement it exists to enforce, that both sides be driven identically so their frames correspond, is no longer the only way to make a comparison. Matching on the VIEW-PROJECTION does it directly: it is guest data both emulators carry, so two frames carrying the same one are the same moment regardless of how either side got there, and the two runs may be driven completely differently or not driven at all. GEARS_DRAW_FRAME_CAMERA and tools/camera_match.py implement it and are validated in both directions. THE PROOF THAT THIS IS ENOUGH is that a camera-gated capture and an oracle run with no shared schedule resolved THE SAME 16 PASSES with none only-ours and none only-theirs -- the first paired capture to achieve that -- where every content-predicate capture before it reported structural mismatches that were really two different moments. Fixing the walk mismatch is still worth doing for any purpose that needs the two sides to follow the same route, but it is no longer a prerequisite for comparing them.
