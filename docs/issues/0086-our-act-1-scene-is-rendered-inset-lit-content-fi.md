@@ -5,7 +5,7 @@ status: open
 symptom: same scene, live oracle: our lit content spans x 155..962 of 1280 and y 43..708; the oracle's spans 0..1279 and 0..719; coverage above 0.02 luminance 44.5% against 89.1%
 tags: render,viewport,oracle,gameplay-scene
 created: 2026-08-07
-updated: 2026-08-07
+updated: 2026-08-12
 ---
 
 Found by the first LIVE same-scene oracle comparison (catalog #77, 2026-08-07),
@@ -70,3 +70,6 @@ is catalog #62.
 
 ### Dead end (2026-08-07)
 There is no inset: the border is rendered-but-dark geometry (a doorway's surround) and the oracle frame is at a different camera position entirely. Falsified by a gamma boost of both frames
+
+### Note (2026-08-12)
+STILL REPRODUCES AT A MATCHED CAMERA, HORIZONTALLY ONLY, AND THE BORDERS ARE ASYMMETRIC. Measured on the camera-gated capture (scratch/camgate/match/frame.ppm, our frame taken at the console's own view-projection): lit content above 0.02 luminance spans x 176..1014 of 1280 and y 0..718 of 720. Compare what this entry records -- x 155..962, y 43..708. THE HORIZONTAL INSET IS INTACT: 838 of 1280 columns, 65.5%, against the 63% in the title, and it is the same defect. THE VERTICAL INSET IS GONE: the frame is lit from row 0 to row 718 where this entry had 43..708. Something between then and now fixed the vertical axis and left the horizontal one, which is itself a clue -- whatever is wrong is not a uniform centred scale. AND THE BORDERS ARE NOT EQUAL: 176 columns dark on the left, 266 on the right (1280 - 1014). A centred scale would leave equal borders; unequal ones mean an OFFSET as well as an extent, so the viewport's x offset and x scale are both suspect rather than a single scale factor. DO NOT compare the coverage figure across these two measurements: this capture reads 4.9% against the 44.5% recorded here, because it is a dark shadow-heavy gameplay moment rather than the lit Act 1 shot this entry used. The bounding box is comparable between scenes and the coverage fraction is not. The camera gate makes this the first measurement of this defect taken at the console's own viewpoint, so the geometry it reports is not confounded by the two sides looking at different moments.
