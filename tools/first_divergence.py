@@ -100,6 +100,56 @@ def load_console(path, w, h, fmt, endian, np):
     return np.nan_to_num(img), None
 
 
+# Ratios a CONVENTION error produces. An exposure or tonemap difference gives an
+# arbitrary ratio; a wrong depth range, a missed halving, a 10-bit read as 8-bit
+# give a SIMPLE FRACTION. That is what makes this worth flagging separately from
+# "the two sides differ in brightness", which they legitimately do.
+SUSPECT_SCALES = (0.125, 0.25, 0.5, 2.0, 4.0, 8.0)
+
+
+def scale_ratio(mine, con, np):
+    """The median console/ours ratio, and whether it is a suspect fraction.
+
+    WHY THIS EXISTS, AND IT IS THE MOST EXPENSIVE LESSON IN THIS FILE.
+    CORRELATION IS SCALE-INVARIANT. Every pass comparison in this project scored
+    by correlation, so a depth buffer holding exactly HALF the guest value
+    scored 0.9847 against the console and was repeatedly cited as proof that
+    depth was correct -- including in the brief that ruled depth content out for
+    a five-agent investigation. It was found only when someone compared the two
+    buffers' VALUES.
+
+    A scale error is not cosmetic. Correlation does not care, but the DEPTH TEST
+    does: under reverse-Z GEQUAL a halved buffer lets more fragments pass and
+    fewer fail, which over-fires every zpass stencil mark and under-fires every
+    depth-fail shadow volume at the same time. One constant, two opposite
+    symptoms, and no correlation anywhere in the frame moves.
+
+    THIS CHECK WOULD NOT HAVE CAUGHT THAT PARTICULAR BUG AND MUST NOT BE SOLD AS
+    IF IT WOULD. Measured: the scene depth RESOLVE scores 1.0019x against the
+    console both before and after the fix -- it was never wrong. The buffer went
+    half-scale at a depth-restore draw LATER in the frame than the resolve, so
+    the resolved artefact this tool compares had already been written correctly.
+    That is this walk's documented blind spot (a resource consumed without an
+    intervening resolve is invisible here), not a gap this column closes. What
+    catches that class is tools/depth_scale_check.py, which compares the FLOAT
+    depth dump taken after a named draw against the console's decoded depth.
+    This column catches a scale error that SURVIVES to a resolve, which is a
+    real and different class.
+
+    Returns (ratio, suspect_fraction_or_None). Ratio is None when the two sides
+    share too few non-zero pixels to compare.
+    """
+    a, b = mine.max(axis=-1), con.max(axis=-1)
+    both = (a > 1e-6) & (b > 1e-6)
+    if both.sum() < 1000:
+        return None, None
+    r = float(np.median(b[both] / a[both]))
+    for s in SUSPECT_SCALES:
+        if abs(r - s) <= 0.02 * s:
+            return r, s
+    return r, None
+
+
 def degenerate(img, np):
     """Is this buffer CONSTANT? -- the failure correlation cannot report.
 
@@ -129,9 +179,52 @@ def degenerate(img, np):
     return float(v.var()) <= 0.0, float(v.reshape(-1)[0])
 
 
+def selftest():
+    """Drive both classes of every judgement this file makes.
+
+    A checker that only ever sees the passing case is indistinguishable from one
+    that always passes, and this file has shipped two such: a correlation that
+    could not report a constant buffer, and no scale check at all.
+    """
+    import numpy as np
+    rng = np.random.default_rng(3)
+    base = np.abs(rng.standard_normal((200, 200, 3)).astype(np.float32)) + 0.1
+
+    ok = True
+    # SCALE: a convention error must be caught, an arbitrary brightness
+    # difference must NOT be (or the flag fires on every colour pass and stops
+    # being read).
+    for factor, want in ((2.0, 2.0), (0.5, 0.5), (4.0, 4.0),
+                         (1.37, None), (1.0, None), (0.93, None)):
+        r, suspect = scale_ratio(base, base * factor, np)
+        hit = suspect is not None
+        good = (suspect == want) if want else not hit
+        ok = ok and good
+        print(f"  console = {factor:>5}x ours -> ratio {r:.4f}, "
+              f"flagged={hit} (want {'a flag at ' + str(want) if want else 'NO flag'})"
+              f"  {'PASS' if good else 'FAIL'}")
+    # Too few shared non-zero pixels must REFUSE rather than return a number off
+    # a handful of samples.
+    sparse = np.zeros_like(base); sparse[0, 0] = 1.0
+    r, _ = scale_ratio(sparse, base, np)
+    ok = ok and r is None
+    print(f"  near-empty buffer -> ratio {r} (want None)  "
+          f"{'PASS' if r is None else 'FAIL'}")
+    # DEGENERATE: a constant buffer must be reported, a structured one must not.
+    flat, val = degenerate(np.ones_like(base), np)
+    struct, _ = degenerate(base, np)
+    ok = ok and flat and val == 1.0 and not struct
+    print(f"  constant buffer flagged={flat} at {val:.3f}, structured "
+          f"flagged={struct}  {'PASS' if flat and not struct else 'FAIL'}")
+    print(f"selftest: {'PASS' if ok else 'FAIL'} (both classes driven for "
+          f"scale, sparsity and degeneracy)")
+    return 0 if ok else 1
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pair", required=True, help="a camera_pair.sh output dir")
+    ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--pair", help="a camera_pair.sh output dir")
     ap.add_argument("--frame", type=int,
                     help="the console frame that WON the pairing; required "
                          "because scoring against a frame that did not win "
@@ -147,6 +240,10 @@ def main():
                          "non-zero pixels; a correlation over a near-empty "
                          "buffer is noise")
     a = ap.parse_args()
+    if a.selftest:
+        return selftest()
+    if not a.pair:
+        raise SystemExit("REFUSING: --pair is required. NOTHING was walked.")
 
     import numpy as np
     from front_buffer_percentiles import load_ppm, same_picture
@@ -380,6 +477,7 @@ def main():
                 lo, hi = int(rows_kept.min()), int(rows_kept.max()) + 1
                 mc, cc = mc[lo:hi], cc[lo:hi]
         _, (_, r) = same_picture(mc, cc, np)
+        ratio, suspect = scale_ratio(mc, cc, np)
         cov_note = ("" if frac >= 0.999 else
                     f"[console wrote {100*frac:.1f}%; scored over those rows; "
                     f"whole-buffer {r_all:+.4f}] ")
@@ -409,8 +507,18 @@ def main():
         if flagged and first_drop is None:
             first_drop = (draw, label, prev, r, yard, None)
             note = "<-- FIRST OBSERVABLE LOSS OF AGREEMENT"
+        scale_note = ""
+        if suspect is not None:
+            scale_note = (f"** SCALE {ratio:.4f}x: the console is {suspect:g}x "
+                          f"our values here, to within 2%. A simple fraction is "
+                          f"a CONVENTION error (a depth range, a missed halving, "
+                          f"a bit depth), NOT an exposure difference -- and "
+                          f"correlation cannot see it, which is why this column "
+                          f"exists. ** ")
+        elif ratio is not None and (ratio > 1.25 or ratio < 0.8):
+            scale_note = f"[scale {ratio:.3f}x, not a simple fraction] "
         print(f"{draw:>6} {label:>26} {r:>8.4f} {delta:>8}   "
-              f"{cov_note}{ystr}{note}")
+              f"{cov_note}{ystr}{scale_note}{note}")
         prev = r
 
     print()
