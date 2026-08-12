@@ -2706,6 +2706,24 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         auto it = P.surfaceTargets.find(presentBase);
         if (it != P.surfaceTargets.end() && it->second.begunThisFrame)
             presentTarget = &it->second;
+        // THE FAILURE WAS SILENT, AND IT IS THE ONE THAT MATTERS. When this
+        // lookup misses, presentableImage stays null, no blit runs, and g_frame
+        // KEEPS THE PREVIOUS FRAME'S PIXELS -- so the window and the screenshot
+        // show a stale frame while every log line still describes the frame
+        // that was just rendered. Catalog #86 spent six rounds of measurement
+        // narrowing an inset image to this path and could not get inside it,
+        // because the one branch that would explain it printed nothing. Which
+        // of the two conditions failed is named, since 'no target for that
+        // base' and 'a target that never began this frame' have different
+        // causes.
+        if (!presentTarget)
+            lucent::warn("draw", "PRESENTING NOTHING NEW: surface {:#x} {} --"
+                " the published image and the screenshot therefore still hold"
+                " the PREVIOUS frame's pixels, and every other line about this"
+                " frame describes pixels nobody saw", presentBase,
+                it == P.surfaceTargets.end()
+                    ? "has no render target at all"
+                    : "has a render target that was never begun this frame");
     }
 
     // WHY THE SOURCE SURFACE AND NOT THE FRONT BUFFER -- TESTED, NOT ASSUMED.
