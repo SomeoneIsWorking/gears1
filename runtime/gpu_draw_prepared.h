@@ -111,6 +111,11 @@ struct PreparedDraw
     uint64_t vsHash = 0, psHash = 0;
     bool hasFragmentStage = false;
     uint32_t colorMask = 0, depthControl = 0, blend0 = 0;
+    // PA_CL_CLIP_CNTL.clip_disable as the guest programmed it, carried onto the
+    // row so the table can say whether a draw asked NOT to be clipped against
+    // near and far. A shadow volume that is depth-fail extruded needs exactly
+    // that, and "this draw clipped away" cannot be read without it.
+    bool clipDisable = false;
     uint32_t colorFormat = 0;    // RB_COLOR_INFO color_format
     // RB_COLOR_INFO color_exp_bias, a SIGNED 6-bit exponent the shader's colour
     // output is multiplied by (2^bias) on the way into EDRAM. It scales what a
