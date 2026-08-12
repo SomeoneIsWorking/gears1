@@ -34,6 +34,8 @@ def main():
     ap.add_argument("--ours")
     ap.add_argument("--theirs")
     ap.add_argument("--gate", type=float, default=0.60)
+    ap.add_argument("--depth", action="store_true",
+                    help="score the DEPTH pass instead of the front buffer")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
@@ -46,6 +48,9 @@ def main():
     from front_buffer_percentiles import load_ppm, load_oracle, same_picture
 
     od = pathlib.Path(a.ours)
+    if a.depth:
+        return score_depth(od, pathlib.Path(a.theirs), a.gate, np,
+                           load_ppm, load_oracle, same_picture)
     # The front buffer is the pass both sides always produce, so it is the one
     # candidate guaranteed comparable. endian 0 is this title's only e0
     # destination and marks it on the console side.
@@ -116,6 +121,82 @@ def scene(np, rng, n_blobs, h=180, w=320):
         img += rng.uniform(0.2, 1.4) * np.exp(-(((yy - cy) ** 2) / sy
                                                 + ((xx - cx) ** 2) / sx))
     return np.stack([img.astype(np.float32)] * 3, axis=-1)
+
+
+def score_depth(od, td, gate, np, load_ppm, load_oracle, same_picture):
+    """Score the DEPTH pass, which separates two failures a colour score cannot.
+
+    Depth is a function of GEOMETRY and VIEWPOINT alone -- no lighting, no
+    tonemap, no bloom, none of the things catalogue #62 is about. So:
+
+      depth agrees, colour does not  -> the pairing is GOOD and the difference
+                                        is in shading. That is a finding about
+                                        the renderer, and the colour comparison
+                                        can be trusted.
+      neither agrees                 -> the pairing is bad: different viewpoint
+                                        or different world state. Nothing about
+                                        shading can be concluded.
+      depth disagrees, colour agrees -> the instrument is suspect; say so rather
+                                        than picking whichever suits.
+
+    Ours is an 8-bit grey dump and the console's is packed 24:8 decoded to
+    float, so the two are NOT on the same scale and only their CORRELATION is
+    meaningful here -- never their difference. The scorer is scale-invariant by
+    construction, which is why this works at all.
+    """
+    ours_d = sorted(od.glob("resolve_*_srcD000_*_f23_*.ppm"))
+    if not ours_d:
+        print(f"REFUSING: no srcD000 f23 depth resolve in {od}; it holds "
+              f"{len(list(od.glob('*.ppm')))} ppm(s). NOTHING was scored.",
+              file=sys.stderr)
+        return 2
+    cands = sorted(td.glob("*_srcD000_1280x720_f23_*.bin"))
+    if not cands:
+        print(f"REFUSING: no console srcD000 1280x720 f23 dumps in {td}. "
+              f"NOTHING was scored.", file=sys.stderr)
+        return 2
+    ours = load_ppm(str(ours_d[-1]))
+    print(f"ours   {ours_d[-1].name}  (8-bit grey; only CORRELATION is "
+          f"meaningful against the console's 24:8, never a difference)")
+    # DEPTH HAS ITS OWN DECODE. unpack_dest covers 6/7/25/32 and NOT 23; the
+    # guest's 24:8 goes through layer_compare's vectorised port of the runtime's
+    # own Depth20e4To32, which is the same function the depth resolve uses. A
+    # wrong exponent bias produces something that still LOOKS like a depth
+    # buffer, so this reuses that code rather than approximating it.
+    from layer_compare import untile, stored_rows, depth24_to_float
+
+    def load_depth(path):
+        raw = pathlib.Path(path).read_bytes()
+        rows_ = stored_rows(len(raw), 1280, 4)
+        if rows_ is None:
+            raise SystemExit(f"REFUSING: {path} is not a whole number of rows.")
+        px = untile(raw, 1280, rows_, np, bpp=4)[:min(720, rows_)]
+        b0, b1, b2, b3 = (px[..., i].astype(np.uint32) for i in range(4))
+        b0, b1, b2, b3 = b3, b2, b1, b0          # endian 2 (k8in32)
+        w32 = b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+        d = depth24_to_float(w32 >> 8, True, np)  # f23 = k_24_8_FLOAT
+        return np.stack([d.astype(np.float32)] * 3, axis=-1)
+
+    rows = []
+    for f in cands:
+        th = load_depth(str(f))
+        base, (lbl, best) = same_picture(ours, th, np)
+        m = re.search(r"_f(\d+)_copy", f.name)
+        rows.append((best, m.group(1) if m else f.name, base, lbl))
+    print(f"\n{len(rows)} console depth candidate(s) scored:")
+    for best, fr, base, lbl in rows:
+        print(f"  f{fr:>6}  as-given {base:+.4f}   best {best:+.4f}  ({lbl})")
+    top = max(rows)
+    print(f"\nBEST DEPTH f{top[1]} at {top[0]:+.4f}; gate {gate}")
+    if top[0] >= gate:
+        print("DEPTH AGREES: the viewpoint and the geometry are paired. A "
+              "colour score that fails while this passes is a RENDERING "
+              "difference, not a pairing failure.")
+        return 0
+    print("DEPTH DOES NOT AGREE EITHER: the two sides are not looking at the "
+          "same geometry, so nothing about shading can be concluded from this "
+          "pair. Fix the pairing first.", file=sys.stderr)
+    return 1
 
 
 def selftest():
