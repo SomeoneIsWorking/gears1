@@ -1,10 +1,11 @@
 ---
 id: C039
 kind: claim
-status: holds
+status: falsified
 created: 2026-08-12
 tags: render,colour,bloom,oracle
 depends: tools/front_buffer_percentiles.py, runtime/gpu_draw_resolve.cpp
+falsified_on: 2026-08-12
 ---
 
 ## Claim
@@ -18,3 +19,9 @@ tools/front_buffer_percentiles.py on scratch/camgate/match/resolve_15 (our front
 ## What would falsify it
 
 a second camera-matched pair in which our median and p90 land on the console's, or one in which our p99.9/max fall well short -- either would mean this shape is moment-specific rather than the renderer's
+
+## FALSIFIED 2026-08-12
+
+The camera-gated pair this claim rests on is NOT the same picture, so no per-pixel or per-percentile number taken from it means anything. Measured with a POSITIVE CONTROL, which is what was missing: log-space Pearson correlation of luminance between our front buffer and the console's is 0.073 (linear 0.127), and no vertical flip, horizontal flip or shift up to +/-64 px lifts it above 0.157. The SAME metric on a pair that must agree -- our frame.ppm against our own front-buffer resolve -- scores 0.934 (linear 0.986). So 0.93 is what 'the same picture' looks like through this metric at this quantization, and the cross-side pair scores 0.07. Confirmed independently by banding: our brightest 210 pixels (0.20..0.45, far above the 8-bit floor) sit where the console reads mean 0.0099, and the console's 33 pixels above 1.0 sit where we read 0.0039. Uncorrelated at the BRIGHT end, where quantization cannot explain it. The camera gate matched the view-projection constants to a distance of 3.77 and that evidently does not imply the same rendered scene.
+
+> Anything that cited this claim as proof must be re-checked. Grep the repo for it.
