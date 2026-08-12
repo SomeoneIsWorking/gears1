@@ -38,6 +38,7 @@ worse than none:
     now skipped and SAID to be skipped, with both coverages printed.
 """
 import argparse
+import collections
 import pathlib
 import re
 import sys
@@ -77,6 +78,23 @@ def load_console(path, w, h, fmt, endian, np):
     return np.nan_to_num(img), None
 
 
+def degenerate(img, np):
+    """Is this buffer CONSTANT? -- the failure correlation cannot report.
+
+    A correlation coefficient is undefined when either side has zero variance,
+    and numpy returns nan. That is not a low score, it is NO score, and a walk
+    that prints it in the score column reports the frame's most broken pass as
+    a blank and then flags an innocent pass downstream instead.
+
+    It is not a rare edge either: it is precisely what THIS defect looks like.
+    A shadow mask that shadows nothing resolves to a flat 1.0 -- 921,600 pixels
+    of the same value -- and that is the single most informative buffer in the
+    frame. Reported, never scored.
+    """
+    v = img.max(axis=-1)
+    return float(v.var()) <= 0.0, float(v.reshape(-1)[0])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pair", required=True, help="a camera_pair.sh output dir")
@@ -85,6 +103,11 @@ def main():
                          "because scoring against a frame that did not win "
                          "measures the pairing, not the chain")
     ap.add_argument("--drop", type=float, default=DROP)
+    ap.add_argument("--yardstick", action="store_true",
+                    help="also measure each pass against ITSELF one console "
+                         "frame apart, and judge its cross score against that "
+                         "rather than against a single global threshold. "
+                         "Slower; use it before believing any frontier.")
     ap.add_argument("--min-coverage", type=float, default=0.05,
                     help="skip a pass unless BOTH sides have this fraction of "
                          "non-zero pixels; a correlation over a near-empty "
@@ -113,7 +136,8 @@ def main():
         if m:
             ours.append((int(m.group(8)), int(m.group(1)),
                          f"{m.group(2)}{m.group(3).upper()}", int(m.group(4)),
-                         int(m.group(5)), int(m.group(6)), f))
+                         int(m.group(5)), int(m.group(6)), f,
+                         m.group(7).upper()))
     ours.sort()
     theirs = []
     for f in td.glob(f"oracle_f{a.frame}_copy*.bin"):
@@ -122,8 +146,79 @@ def main():
         if m:
             theirs.append((int(m.group(1)),
                            f"{m.group(2)}{m.group(3).upper()}", int(m.group(4)),
-                           int(m.group(5)), int(m.group(6)), int(m.group(7)), f))
+                           int(m.group(5)), int(m.group(6)), int(m.group(7)), f,
+                           m.group(8).upper()))
     theirs.sort()
+
+    # THE DESTINATION IS PART OF THE PASS IDENTITY. This title resolves the
+    # shadow mask AND the front buffer to the same surface at the same size and
+    # format -- srcC2D0 1280x720 f6 -- and they are told apart only by endian
+    # and destination address. Keying on (src, w, h, fmt) alone puts all four
+    # copies of frame 793 in ONE bucket and joins them by ordinal, so the
+    # instant either side's mask count changes (catalogue C048: the console's
+    # varies 4/5 between frames) the front buffer is silently scored against a
+    # shadow mask and the result is reported as a pass.
+    #
+    # The two sides use different guest addresses for the same pass, so the
+    # address cannot be compared directly. What CAN be compared is its RANK:
+    # the Nth distinct destination seen for that key, in first-appearance order.
+    # Masks come before the front buffer on both sides, so mask joins to mask.
+    def rank_dests(rows, key_of, dest_of):
+        order, ranks = {}, []
+        for r in rows:
+            k = key_of(r)
+            order.setdefault(k, [])
+            if dest_of(r) not in order[k]:
+                order[k].append(dest_of(r))
+            ranks.append(order[k].index(dest_of(r)))
+        return ranks
+
+    o_rank = rank_dests(ours, lambda r: (r[2], r[3], r[4], r[5]),
+                        lambda r: r[7])
+    t_rank = rank_dests(theirs, lambda r: (r[1], r[2], r[3], r[4]),
+                        lambda r: r[7])
+    ours = [r + (k,) for r, k in zip(ours, o_rank)]
+    theirs = [r + (k,) for r, k in zip(theirs, t_rank)]
+
+    # THE PER-PASS TEMPORAL YARDSTICK. A cross-emulator score means nothing
+    # until you know how much that pass changes BY ITSELF between frames. The
+    # shadow atlas self-correlates at 0.97 one frame apart and a shadow mask at
+    # 0.13, so judging both against one threshold reports the clock as a defect
+    # on the volatile one. This loads the SAME pass from the next console frame
+    # and correlates the console against itself -- same emulator, same code, so
+    # what is lost is lost to time alone.
+    def index_by_slot(rows):
+        seen, out = collections.Counter(), {}
+        for t in rows:
+            slot = (t[1], t[2], t[3], t[4], t[8])
+            out[(slot, seen[slot])] = t
+            seen[slot] += 1
+        return out
+
+    here = index_by_slot(theirs)
+    nxt = {}
+    if a.yardstick:
+        nrows = []
+        for f in td.glob(f"oracle_f{a.frame + 1}_copy*.bin"):
+            m = re.match(r"oracle_f\d+_copy(\d+)_src([CD])([0-9A-Fa-f]+)_"
+                         r"(\d+)x(\d+)_f(\d+)_e(\d+)_([0-9A-Fa-f]+)_(\d+)\.bin",
+                         f.name)
+            if m:
+                nrows.append((int(m.group(1)),
+                              f"{m.group(2)}{m.group(3).upper()}",
+                              int(m.group(4)), int(m.group(5)), int(m.group(6)),
+                              int(m.group(7)), f, m.group(8).upper()))
+        nrows.sort()
+        if not nrows:
+            print(f"  YARDSTICK UNAVAILABLE: no console dumps for frame "
+                  f"{a.frame + 1}, so no pass can be judged against its own "
+                  f"volatility. Rows below fall back to the global "
+                  f"threshold, which is exactly the reading this flag exists "
+                  f"to replace.")
+        else:
+            nr = rank_dests(nrows, lambda r: (r[1], r[2], r[3], r[4]),
+                            lambda r: r[7])
+            nxt = index_by_slot([r + (k,) for r, k in zip(nrows, nr)])
     if not ours or not theirs:
         raise SystemExit(f"REFUSING: {len(ours)} of our passes and "
                          f"{len(theirs)} console passes for frame {a.frame}. "
@@ -134,17 +229,33 @@ def main():
           f"OUR draw order.\n")
     print(f"{'draw':>6} {'pass':>26} {'r':>8} {'change':>8}   note")
 
+    # STRUCTURAL DIFFERENCES ARE FINDINGS, NOT NOISE TO BE JOINED AWAY. If one
+    # side runs a pass a different number of times, an ordinal join pairs the
+    # wrong things from that point on. Say so up front rather than reporting
+    # scores computed across it.
+    o_counts = collections.Counter((r[2], r[3], r[4], r[5], r[8]) for r in ours)
+    t_counts = collections.Counter((r[1], r[2], r[3], r[4], r[8]) for r in theirs)
+    for k in sorted(set(o_counts) | set(t_counts)):
+        if o_counts[k] != t_counts[k]:
+            print(f"  STRUCTURAL: src{k[0]} {k[1]}x{k[2]} f{k[3]} dest#{k[4]} "
+                  f"runs {o_counts[k]}x for us and {t_counts[k]}x on the "
+                  f"console. Rows for this key beyond the shorter count are "
+                  f"joined by ordinal against a DIFFERENT pass; treat their "
+                  f"scores as unreliable.")
+
     used, prev, first_drop, compared = set(), None, None, 0
-    for draw, ordn, src, w, h, fmt, f in ours:
-        key = (src, w, h, fmt)
-        pick = None
+    slot_seen = collections.Counter()
+    for draw, ordn, src, w, h, fmt, f, odest, orank in ours:
+        key = (src, w, h, fmt, orank)
+        pick, slot_ord = None, slot_seen[key]
         for t in theirs:
             if t[0] in used:
                 continue
-            if (t[1], t[2], t[3], t[4]) == key:
+            if (t[1], t[2], t[3], t[4], t[8]) == key:
                 pick = t
+                slot_seen[key] += 1
                 break
-        label = f"src{src} {w}x{h} f{fmt}"
+        label = f"src{src} {w}x{h} f{fmt}#{orank}"
         if pick is None:
             print(f"{draw:>6} {label:>26} {'--':>8} {'--':>8}   "
                   f"NO console counterpart (structural key absent)")
@@ -185,6 +296,45 @@ def main():
         # 2026-08-11 and it was re-derived here because the crop was missing.
         # The rule is layer_compare's: compare over what the CONSOLE wrote.
         mc, cc = mine[:n], con[:n]
+        # A CONSTANT BUFFER IS THE LOUDEST RESULT THERE IS, AND CORRELATION
+        # CANNOT SAY IT. Check before scoring, on both sides, and report which
+        # side is flat and at what value -- a mask stuck at 1.0 means nothing
+        # was shadowed and a mask stuck at 0.0 means everything was.
+        flat_o, val_o = degenerate(mc, np)
+        flat_c, val_c = degenerate(cc, np)
+        if flat_o and flat_c:
+            agree = abs(val_o - val_c) < 1e-6
+            print(f"{draw:>6} {label:>26} {'FLAT':>8} {'--':>8}   "
+                  f"BOTH sides constant, ours at {val_o:.4f} and the console at "
+                  f"{val_c:.4f} -- "
+                  + ("identical, so this pass AGREES; correlation is undefined "
+                     "on it and always will be."
+                     if agree else
+                     "DIFFERENT constants, which is total disagreement."))
+            compared += 1
+            if not agree and first_drop is None:
+                first_drop = (draw, label, prev if prev is not None else 1.0,
+                              None, None, "two different constants")
+            prev = 1.0 if agree else 0.0
+            continue
+        if flat_o or flat_c:
+            who = "OURS" if flat_o else "THE CONSOLE"
+            val = val_o if flat_o else val_c
+            print(f"{draw:>6} {label:>26} {'FLAT':>8} {'--':>8}   "
+                  f"DEGENERATE: {who} is CONSTANT at {val:.4f} over all "
+                  f"{mc.shape[0] * mc.shape[1]} pixels while the other side has "
+                  f"real structure. Correlation is UNDEFINED here -- numpy "
+                  f"returns nan -- so this pass CANNOT be scored, and that is "
+                  f"the STRONGEST disagreement in the frame, not a gap in the "
+                  f"measurement. A mask flat at 1.0 shadowed nothing at all.")
+            compared += 1
+            if first_drop is None:
+                first_drop = (draw, label, prev if prev is not None else 1.0,
+                              None, None,
+                              f"{'our' if flat_o else 'the console'} side is a "
+                              f"CONSTANT {val:.4f} and cannot be correlated")
+            prev = 0.0
+            continue
         wrote = cc.max(axis=-1) > 1e-6
         frac = float(wrote.mean())
         r_all = same_picture(mc, cc, np)[1][1]
@@ -198,12 +348,33 @@ def main():
                     f"[console wrote {100*frac:.1f}%; scored over those rows; "
                     f"whole-buffer {r_all:+.4f}] ")
         compared += 1
+        # JUDGE THE SCORE AGAINST THIS PASS'S OWN VOLATILITY. Console against
+        # console, one frame apart, same slot -- whatever that loses is lost to
+        # time, and a cross score at or above it is not evidence of a defect.
+        yard = None
+        nb = nxt.get((key, slot_ord))
+        if nb is not None:
+            ni, _ = load_console(str(nb[6]), w, h, fmt, nb[5], np)
+            if ni is not None:
+                m2 = min(cc.shape[0], ni.shape[0])
+                yard, _ = same_picture(cc[:m2], ni[:m2], np)
         delta = "" if prev is None else f"{r - prev:+.4f}"
-        note = ""
-        if prev is not None and (r - prev) <= -a.drop and first_drop is None:
-            first_drop = (draw, label, prev, r)
-            note = "<-- FIRST LOSS OF AGREEMENT"
-        print(f"{draw:>6} {label:>26} {r:>8.4f} {delta:>8}   {cov_note}{note}")
+        note, ystr = "", ""
+        if yard is not None:
+            ystr = f"[self {yard:+.4f}] "
+            if r >= yard:
+                note = "at or above its own temporal yardstick"
+        flagged = prev is not None and (r - prev) <= -a.drop
+        if flagged and yard is not None and r >= yard:
+            note = ("DROP EXPLAINED BY VOLATILITY: this pass loses "
+                    f"{1 - yard:.2f} of correlation to ONE FRAME on the console "
+                    f"alone, so {r:.4f} is not evidence of a defect")
+            flagged = False
+        if flagged and first_drop is None:
+            first_drop = (draw, label, prev, r, yard, None)
+            note = "<-- FIRST OBSERVABLE LOSS OF AGREEMENT"
+        print(f"{draw:>6} {label:>26} {r:>8.4f} {delta:>8}   "
+              f"{cov_note}{ystr}{note}")
         prev = r
 
     print()
@@ -218,12 +389,27 @@ def main():
               f"boundary, or it is in a pass with no resolve -- this tool "
               f"cannot see the last two.")
         return 0
-    draw, label, before, after = first_drop
-    print(f"FRONTIER: draw {draw}, {label}. Agreement falls from {before:.4f} "
-          f"to {after:.4f} across it.")
-    print(f"That is the earliest place a fix can do any good. Every pass after "
-          f"it consumes its output, so their disagreement is unattributable "
-          f"until this one is fixed -- do NOT start on a later pass.")
+    draw, label, before, after, yard, kind = first_drop
+    if kind is not None:
+        print(f"FIRST OBSERVABLE LOSS: draw {draw}, {label} -- DEGENERATE: "
+              f"{kind}. This outranks any low score in the table: a pass that "
+              f"cannot be correlated at all has failed harder than one that "
+              f"correlates badly.")
+    else:
+        print(f"FIRST OBSERVABLE LOSS: draw {draw}, {label}. Agreement falls "
+              f"from {before:.4f} to {after:.4f} across it"
+              + (f", against a temporal yardstick of {yard:.4f} for this pass."
+                 if yard is not None else
+                 ", with NO yardstick measured -- re-run with --yardstick "
+                 "before believing this, because a volatile pass loses "
+                 "correlation to the clock alone."))
+    print("READ THIS AS A NEIGHBOURHOOD, NOT A CULPRIT. This tool sees only "
+          "RESOLVED surfaces, so depth and stencil carried between resolves are "
+          "invisible edges in the write graph: a pass can be scored as the "
+          "first loser while the actual defect is an unresolved resource it "
+          "inherited, or an overwrite of a shared destination by a pass that "
+          "scored well. It says WHERE TO CHANGE INSTRUMENTS -- to a per-draw "
+          "ledger of what marks and what consumes -- not what to fix.")
     return 0
 
 
