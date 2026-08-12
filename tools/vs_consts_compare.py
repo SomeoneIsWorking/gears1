@@ -28,31 +28,57 @@ CONST = re.compile(
     r"c\[(\d+)\]=\(([^)]*)\)(?:\[([0-9a-fA-F ]+)\])?")
 
 
-def parse(path, draw=None):
-    """Return {index: (x, y, z, w)} and a line count, from either dump."""
-    vals, lines_used = {}, 0
+def blocks(path, draw=None):
+    """Every dump of `draw` in the log, in order, as [{index: (x,y,z,w)}].
+
+    ONE PER FRAME, not one per file. Our runtime dumps the same draw ordinal on
+    every frame it renders, so a log from a run of any length holds several,
+    with DIFFERENT constants -- a 20-frame run of the clip watch held six dumps
+    of draw 294 whose local transform and even the bone-stride constant c[4]
+    disagree (3 in one, 4 in the rest), because they are different moments of
+    the game. Merging them into one dict silently keeps the LAST, which is a
+    frame nobody chose. Splitting on the dump's own header keeps them apart.
+    """
+    out, cur = [], None
     with open(path, "r", errors="replace") as f:
         for line in f:
-            if draw is not None and "c[" in line and "draw" in line:
-                # Ours interleaves every draw's dump in one log; take only the
-                # requested one. Without this the last draw silently wins.
-                m = re.search(r"draw (\d+) ", line)
-                if m and int(m.group(1)) != draw:
-                    continue
+            m = re.search(r"draw (\d+) ", line)
+            if draw is not None and m and int(m.group(1)) != draw:
+                continue
             hits = CONST.findall(line)
             if not hits:
                 continue
-            lines_used += 1
+            # A header (not a "continued from" line) starts a new dump.
+            if "continued from" not in line or cur is None:
+                if cur:
+                    out.append(cur)
+                cur = {}
             for idx, floats, hexes in hits:
                 if hexes:
-                    words = hexes.split()
                     v = tuple(struct.unpack(">f", bytes.fromhex(w))[0]
-                              for w in words)
+                              for w in hexes.split())
                 else:
                     v = tuple(float(p) for p in floats.split(","))
                 if len(v) == 4:
-                    vals[int(idx)] = v
-    return vals, lines_used
+                    cur[int(idx)] = v
+    if cur:
+        out.append(cur)
+    return out
+
+
+def parse(path, draw=None, occurrence=None):
+    """One dump, named explicitly when the log holds more than one."""
+    bs = blocks(path, draw)
+    if not bs:
+        return {}, 0
+    if len(bs) > 1 and occurrence is None:
+        raise SystemExit(
+            f"REFUSING TO GUESS: {path} holds {len(bs)} separate dumps of this "
+            f"draw -- one per frame, with different constants. Name one with "
+            f"--ours-occurrence/--theirs-occurrence (1-based). Picking one "
+            f"silently is how a comparison ends up joining two different "
+            f"moments of the game and calling the result a renderer difference.")
+    return bs[(occurrence or 1) - 1], len(bs)
 
 
 def main():
@@ -61,14 +87,27 @@ def main():
     ap.add_argument("theirs")
     ap.add_argument("--draw", type=int, default=None,
                     help="our draw ordinal, when the log holds several")
+    ap.add_argument("--ours-occurrence", type=int, default=None,
+                    help="which frame's dump of that draw, 1-based")
+    ap.add_argument("--theirs-occurrence", type=int, default=None)
+    ap.add_argument("--theirs-draw", type=int, default=None,
+                    help="draw filter for the second file; the oracle's dump "
+                         "holds one draw and needs none, but a self-test that "
+                         "feeds our own log to both sides does")
     ap.add_argument("--tol", type=float, default=1e-4)
     a = ap.parse_args()
 
-    ours, ol = parse(a.ours, a.draw)
-    theirs, tl = parse(a.theirs)
-    print(f"ours:   {len(ours)} constants from {ol} line(s) of {a.ours}"
+    ours, ol = parse(a.ours, a.draw, a.ours_occurrence)
+    theirs, tl = parse(a.theirs, a.theirs_draw, a.theirs_occurrence)
+    print(f"ours:   {len(ours)} constants, dump "
+          f"{a.ours_occurrence or 1} of {ol} in {a.ours}"
           + (f" (draw {a.draw})" if a.draw is not None else ""))
-    print(f"theirs: {len(theirs)} constants from {tl} line(s) of {a.theirs}")
+    print(f"theirs: {len(theirs)} constants, dump "
+          f"{a.theirs_occurrence or 1} of {tl} in {a.theirs}")
+    print("THESE ARE ONLY COMPARABLE IF THEY ARE THE SAME GAME MOMENT. Both "
+          "emulators advance the guest by wall-clock delta, so equal frame "
+          "indices are not equal game time (catalog #98); the two sides must "
+          "have been selected by the SAME content predicate.")
     if not ours or not theirs:
         print("REFUSING TO REPORT AGREEMENT: one side parsed to NOTHING, which "
               "is a broken dump or a wrong path, not two matching inputs.",
