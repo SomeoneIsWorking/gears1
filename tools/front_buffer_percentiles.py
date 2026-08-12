@@ -78,6 +78,50 @@ def load_oracle(path, width, height, fmt, endian):
     return np.nan_to_num(img)
 
 
+def same_picture(ours, theirs, np):
+    """Are these two artefacts even showing the same moment?
+
+    THIS GATE EXISTS BECAUSE ITS ABSENCE PRODUCED TWO WRONG COMMITS. The camera
+    gate matches the guest's view-projection constants, and matching them to a
+    distance of 3.77 turned out NOT to imply the same rendered scene -- but the
+    distributions were reported anyway, as "we are 3.4x short", when the two
+    frames were unrelated pictures.
+
+    The metric is a log-space luminance correlation (linear correlation is
+    useless here: our dumps are 8-bit and 93% of a dark frame's pixels land in
+    the bottom three codes). The number is meaningless on its own, so it is
+    always reported against a POSITIVE CONTROL -- a pair that must agree scores
+    ~0.93 through this same metric at this same quantization. Flips and shifts
+    are searched too, because a misalignment and a different moment look
+    identical without that.
+    """
+    n = min(ours.shape[0], theirs.shape[0])
+    o = np.log1p(ours[:n].max(axis=-1) * 32.0)
+    t = np.log1p(theirs[:n].max(axis=-1) * 32.0)
+
+    def r(a, b):
+        sa, sb = a.std(), b.std()
+        if sa == 0 or sb == 0:
+            return float("nan")
+        return float(np.corrcoef(a.ravel(), b.ravel())[0, 1])
+
+    base = r(o, t)
+    best = ("as given", base)
+    for lbl, arr in (("vertical flip", o[::-1]), ("horizontal flip", o[:, ::-1]),
+                     ("both flips", o[::-1, ::-1])):
+        c = r(arr, t)
+        if c > best[1]:
+            best = (lbl, c)
+    for dy in range(-64, 65, 8):
+        for dx in range(-64, 65, 8):
+            if dy == 0 and dx == 0:
+                continue
+            c = r(np.roll(np.roll(o, dy, 0), dx, 1), t)
+            if c > best[1]:
+                best = (f"shifted dy={dy} dx={dx}", c)
+    return base, best
+
+
 def stats(name, img, np):
     print(f"  {name}")
     for ci, cn in enumerate("RGB"):
@@ -87,15 +131,70 @@ def stats(name, img, np):
               f"p99.9 {q[3]:.4f}  max {c.max():.4f}  mean {c.mean():.4f}")
 
 
+def selftest():
+    """The gate must PASS a pair that agrees and FAIL one that does not, and it
+    is driven against both classes rather than reasoned about.
+
+    The positive case is a real frame against an 8-bit-quantized, dimmed and
+    noised copy of itself -- the transformations this comparison legitimately
+    has to survive. The negative is the same frame against a shuffled version,
+    which has an identical histogram and no spatial relationship: a gate that
+    looked only at distributions would pass it.
+    """
+    import numpy as np
+    rng = np.random.default_rng(12345)
+    h, w = 180, 320
+    yy, xx = np.mgrid[0:h, 0:w]
+    base = (np.exp(-(((yy - 60) ** 2) / 400.0 + ((xx - 90) ** 2) / 900.0)) * 1.4
+            + np.exp(-(((yy - 130) ** 2) / 300.0 + ((xx - 240) ** 2) / 600.0)) * 0.6
+            + 0.004).astype(np.float32)
+    ref = np.stack([base] * 3, axis=-1)
+    dim = np.round(np.clip(base * 0.3, 0, 1) * 255) / 255.0
+    dim = np.stack([dim] * 3, axis=-1).astype(np.float32)
+    flat = base.ravel().copy()
+    rng.shuffle(flat)
+    shuf = np.stack([flat.reshape(h, w)] * 3, axis=-1).astype(np.float32)
+
+    pb, (_, bb) = same_picture(dim, ref, np)
+    nb, (_, nbb) = same_picture(shuf, ref, np)
+    gate = 0.60
+    print(f"POSITIVE: same picture, dimmed 0.3x and quantized to 8 bits -> "
+          f"{pb:+.4f} as given, {bb:+.4f} best. Must be >= {gate} -> "
+          f"{'PASS' if bb >= gate else 'FAIL'}")
+    print(f"NEGATIVE: an IDENTICAL HISTOGRAM, shuffled spatially -> "
+          f"{nb:+.4f} as given, {nbb:+.4f} best. Must be < {gate} -> "
+          f"{'PASS' if nbb < gate else 'FAIL'}")
+    print("  the negative shares the positive's exact distribution, so a gate "
+          "built on histograms alone would pass it and this one must not")
+    ok = bb >= gate and nbb < gate
+    print(f"selftest: {'PASS' if ok else 'FAIL'} (both classes driven, not "
+          f"reasoned about)")
+    return 0 if ok else 1
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ours", required=True, help="our resolve dump (.ppm)")
-    ap.add_argument("--theirs", required=True, help="the console's raw copy (.bin)")
+    ap.add_argument("--ours", help="our resolve dump (.ppm)")
+    ap.add_argument("--theirs", help="the console's raw copy (.bin)")
     ap.add_argument("--width", type=int)
     ap.add_argument("--height", type=int)
     ap.add_argument("--fmt", type=int)
     ap.add_argument("--endian", type=int)
+    ap.add_argument("--min-corr", type=float, default=0.60,
+                    help="same-picture gate; below this the pair is refused. "
+                         "0.60 sits well under the ~0.93 a genuinely matching "
+                         "pair scores and well above the ~0.07 an unrelated one "
+                         "does, both measured (see --selftest)")
+    ap.add_argument("--control", type=float,
+                    help="the gate's score for a pair known to agree, printed "
+                         "beside the result so the number is never read alone")
+    ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
+    if a.selftest:
+        return selftest()
+    if not a.ours or not a.theirs:
+        raise SystemExit("REFUSING: --ours and --theirs are both required "
+                         "(or use --selftest). NOTHING was measured.")
     for p in (a.ours, a.theirs):
         if not pathlib.Path(p).exists():
             raise SystemExit(f"REFUSING: {p} does not exist. NOTHING was "
@@ -126,6 +225,24 @@ def main():
         n = min(ours.shape[0], theirs.shape[0])
         print(f"NOTE: heights differ; comparing the first {n} rows of each.")
         ours, theirs = ours[:n], theirs[:n]
+    base, (blbl, bbest) = same_picture(ours, theirs, np)
+    ctrl = a.control
+    print(f"SAME-PICTURE GATE: log-luminance correlation {base:+.4f} as given; "
+          f"best over flips and shifts +/-64px is {bbest:+.4f} ({blbl}).")
+    if ctrl is not None:
+        print(f"  POSITIVE CONTROL (a pair that must agree, same metric, same "
+              f"quantization): {ctrl:+.4f}")
+    if bbest < a.min_corr:
+        print(f"REFUSING to report distributions: {bbest:.4f} is below the "
+              f"--min-corr gate of {a.min_corr}. THESE TWO ARTEFACTS ARE NOT "
+              f"SHOWING THE SAME PICTURE, so any per-pixel or per-percentile "
+              f"difference between them measures the pairing, not the renderer. "
+              f"Fix the pairing (a tighter camera gate, or the right console "
+              f"frame) before quoting any number from this pair.\n"
+              f"NOTE what a failed gate does NOT invalidate: a presence check "
+              f"-- 'ours is identically zero and theirs is not' -- does not "
+              f"need the two to be the same moment.", file=sys.stderr)
+        return 3
     print("DISTRIBUTIONS (percentiles, because #62 has been misled twice by max "
           "and once by mean):")
     stats("ours  ", ours, np)
