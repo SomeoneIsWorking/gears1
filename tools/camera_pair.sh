@@ -1,0 +1,158 @@
+#!/bin/sh
+# ONE oracle run, then OUR side camera-gated to THAT run -- the only pairing
+# that has ever been shown to work, produced in a single command so the two
+# halves cannot drift apart.
+#
+# WHY THIS EXISTS. Two separate scripts produced the two halves before, and
+# nothing tied them together:
+#
+#   * claim C042 -- a capture from 11:34 was scored against oracle dumps from an
+#     11:54 run, and that later run had OVERWRITTEN the very camera file the
+#     capture was gated to. Two wrong conclusions were published before the file
+#     timestamps gave it away.
+#   * claim C043 -- the CONTENT selector that tools/layer_capture.sh applies to
+#     both sides pairs them to a log-luminance correlation of only 0.49, against
+#     0.94 for a genuine match. Content selection is not close enough for a
+#     pixelwise comparison, however honestly it is applied.
+#
+# So: the oracle runs FIRST and dumps its resolves, its frame window and the
+# vertex constants of a named draw ordinal. That constants file is FROZEN into
+# the output (provenance.py --camera copies it in, rather than referencing a
+# path a later run can overwrite). Our side then runs gated on the frozen copy,
+# holding frames until the guest's own view-projection matches. Both halves are
+# stamped with ONE pair id before either runs.
+#
+#   tools/camera_pair.sh [seconds-per-side] [out-dir] [draw-ordinal]
+#
+# THE RESULT IS SCORED, NOT ASSUMED: it finishes by running the same-picture
+# gate over every console candidate and printing each score against the positive
+# control. A run whose best candidate is below the gate has produced a capture
+# that CANNOT support a pixelwise comparison, and it says so and exits non-zero
+# rather than leaving a directory that looks usable.
+set -eu
+
+REPO=$(cd "$(dirname "$0")/.." && pwd)
+. "$REPO/tools/env.sh"
+
+SECONDS_TO_RUN="${1:-300}"
+OUT="${2:-$REPO/scratch/camerapair}"
+ORDINAL="${3:-294}"
+GAME_DIR="${GEARS_GAME_DIR:-$REPO/scratch/game}"
+ORACLE="$REPO/scratch/oracle/oracle-build/xenia_oracle"
+RUNTIME="${GEARS_BUILD_DIR:-$REPO/scratch/build}/runtime/gears1"
+: "${GEARS_LAYER_MIN_DRAWS:=400}"
+: "${GEARS_LAYER_AFTER:=300}"
+: "${CAMERA_NEAR:=10}"
+
+[ -x "$ORACLE" ]  || { echo "REFUSING: $ORACLE not built" >&2; exit 2; }
+[ -x "$RUNTIME" ] || { echo "REFUSING: $RUNTIME not built" >&2; exit 2; }
+[ -f "$GAME_DIR/default.xex" ] || { echo "REFUSING: no default.xex" >&2; exit 2; }
+
+rm -rf "$OUT"; mkdir -p "$OUT/ours" "$OUT/theirs"
+PAIR="camerapair-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+CONSTS="$REPO/scratch/oracle/vs_consts_ordinal.txt"
+rm -f "$CONSTS"
+
+# ---------------------------------------------------------------- the console
+echo "== the console, $SECONDS_TO_RUN s: resolves, a frame window, and the"
+echo "   vertex constants of draw ordinal $ORDINAL =="
+cd "$REPO"
+SDL_AUDIODRIVER=dummy \
+GEARS_ORACLE_RESOLVE_DUMP="$OUT/theirs" \
+GEARS_ORACLE_DUMP_MIN_DRAWS="$GEARS_LAYER_MIN_DRAWS" \
+GEARS_ORACLE_DUMP_AFTER_GAMEPLAY="$GEARS_LAYER_AFTER" \
+GEARS_ORACLE_DUMP_FRAMES="${GEARS_ORACLE_DUMP_FRAMES:-5}" \
+GEARS_ORACLE_DRAW_ORDER="$OUT/theirs_order.tsv" \
+GEARS_ORACLE_VS_CONSTS_ORDINAL="$ORDINAL" \
+    "$ORACLE" \
+    --store_shaders=false \
+    --target="$GAME_DIR/default.xex" \
+    --oracle_out="$OUT/theirs_frames" \
+    --oracle_by_frame=true \
+    --oracle_frames=$((SECONDS_TO_RUN * 30)) \
+    --oracle_frame_interval=1200 \
+    --oracle_frame_timeout="$SECONDS_TO_RUN" \
+    --oracle_allow_no_input=true \
+    --oracle_input="" > "$OUT/theirs.log" 2>&1 &
+opid=$!
+trap 'kill -9 "$opid" 2>/dev/null || true' EXIT INT TERM
+w=0
+while [ "$w" -lt "$SECONDS_TO_RUN" ]; do
+    kill -0 "$opid" 2>/dev/null || break
+    [ -s "$CONSTS" ] && { sleep 5; break; }
+    sleep 5; w=$((w + 5))
+done
+kill -TERM "$opid" 2>/dev/null || true
+g=0; while [ "$g" -lt 20 ] && kill -0 "$opid" 2>/dev/null; do sleep 1; g=$((g + 1)); done
+kill -9 "$opid" 2>/dev/null || true
+wait "$opid" 2>/dev/null || true
+trap - EXIT INT TERM
+
+# A GPU fault ends the run. It is never retried here, and it is never treated
+# as an environmental hiccup: the FIRST device loss stops the session's GPU work.
+if grep -qi "DEVICE_LOST\|Graphics device lost\|context is lost" "$OUT/theirs.log"; then
+    echo "THE ORACLE LOST THE VULKAN DEVICE. Nothing is retried." >&2
+    grep -i "DEVICE_LOST\|Graphics device lost\|context is lost" "$OUT/theirs.log" | head -5 >&2
+    exit 3
+fi
+[ -s "$CONSTS" ] || {
+    echo "REFUSING: the console never dumped constants for draw ordinal" >&2
+    echo "$ORDINAL in $SECONDS_TO_RUN s. It did NOT reach the gated frame, so" >&2
+    echo "this run measured NOTHING -- it is not an empty result. Give it more" >&2
+    echo "time, or check that ordinal $ORDINAL exists in the dumped frame" >&2
+    echo "(\$OUT/theirs_order.tsv lists them)." >&2
+    exit 4; }
+echo "   console dumped $(ls "$OUT/theirs" | wc -l) file(s); constants captured"
+
+# The camera is FROZEN into both directories here, before our side runs, so a
+# later oracle run cannot substitute it underneath the comparison.
+python3 "$REPO/tools/provenance.py" stamp "$OUT/theirs" --role theirs --pair "$PAIR" \
+    --camera "$CONSTS" --note "ordinal=$ORDINAL" --note "script=camera_pair.sh"
+python3 "$REPO/tools/provenance.py" stamp "$OUT/ours" --role ours --pair "$PAIR" \
+    --camera "$CONSTS" --note "ordinal=$ORDINAL" --note "script=camera_pair.sh" \
+    --note "camera_near=$CAMERA_NEAR"
+FROZEN="$OUT/ours/camera.txt"
+
+# -------------------------------------------------------------------- our side
+echo "== our renderer, $SECONDS_TO_RUN s, gated on the console's own viewpoint =="
+VS_HASH=$(sed -n 's/.*vs \([0-9A-Fa-f]*\),.*/\1/p' "$FROZEN" | head -1)
+[ -n "$VS_HASH" ] || { echo "REFUSING: no vs hash in $FROZEN" >&2; exit 5; }
+GEARS_NO_WINDOW=1 \
+GEARS_DRAW_FRAME_MIN_DRAWS="$GEARS_LAYER_MIN_DRAWS" \
+GEARS_DRAW_FRAME_AFTER_GAMEPLAY=0 \
+GEARS_DRAW_FRAME_COUNT=1 \
+GEARS_DRAW_FRAME_NEEDS="$VS_HASH" \
+GEARS_DRAW_FRAME_CAMERA="$FROZEN:$CAMERA_NEAR" \
+GEARS_DRAW_RESOLVE_DUMP_EACH=1 \
+GEARS_DRAW_DIAG="$OUT/ours/draws.tsv" \
+GEARS_DRAW_DIR="$OUT/ours" \
+    "$RUNTIME" "$GAME_DIR/default.xex" "$GAME_DIR" > "$OUT/ours.log" 2>&1 &
+rpid=$!
+trap 'kill -9 "$rpid" 2>/dev/null || true' EXIT INT TERM
+w=0
+while [ "$w" -lt "$SECONDS_TO_RUN" ]; do
+    kill -0 "$rpid" 2>/dev/null || break
+    grep -q "frame screenshot written" "$OUT/ours.log" 2>/dev/null && break
+    sleep 5; w=$((w + 5))
+done
+kill -TERM "$rpid" 2>/dev/null || true
+g=0; while [ "$g" -lt 20 ] && kill -0 "$rpid" 2>/dev/null; do sleep 1; g=$((g + 1)); done
+kill -9 "$rpid" 2>/dev/null || true
+wait "$rpid" 2>/dev/null || true
+trap - EXIT INT TERM
+
+if grep -qi "DEVICE_LOST\|Graphics device lost" "$OUT/ours.log"; then
+    echo "OUR RENDERER LOST THE VULKAN DEVICE. Nothing is retried." >&2
+    exit 3
+fi
+grep -E "CAMERA MATCHED|held for the CAMERA|NO camera gate" "$OUT/ours.log" | tail -3
+grep -q "CAMERA MATCHED" "$OUT/ours.log" || {
+    echo "THE CAMERA GATE NEVER MATCHED in $SECONDS_TO_RUN s. Nothing was" >&2
+    echo "captured; the lines above say how close it came and to what. This" >&2
+    echo "run measured NOTHING." >&2
+    exit 6; }
+
+# ------------------------------------------------------------------ the score
+echo "== scoring the pair (it is measured, not assumed) =="
+python3 "$REPO/tools/provenance.py" check "$OUT/ours" "$OUT/theirs" || exit 7
+exec python3 "$REPO/tools/pair_score.py" --ours "$OUT/ours" --theirs "$OUT/theirs"

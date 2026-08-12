@@ -1,0 +1,146 @@
+#!/usr/bin/env python3
+"""Did this capture actually pair the two renderers? -- scored against every
+console candidate, with the positive control beside it.
+
+A paired capture is worth exactly as much as the pairing, and until now nothing
+measured that. Two methods have been scored with this and both were found
+wanting: joining across separate runs (C042) scored 0.07, and the content-based
+frame selector (C043) peaked at 0.49 -- where our own frame against our own
+resolve of it, the same metric at the same quantization, scores 0.94.
+
+    tools/pair_score.py --ours <dir> --theirs <dir> [--gate 0.60]
+    tools/pair_score.py --selftest
+
+EVERY CANDIDATE IS SCORED AND PRINTED, with the count, so "none passed" is
+distinguishable from "none were tried" -- and the SHAPE of the scores across the
+window is itself the evidence that the metric works: temporal neighbours score
+higher than distant frames, and the best-fitting shift grows with distance
+because the camera moves. A flat or random profile means the metric is measuring
+nothing and the verdict should not be believed.
+
+Exit 0 if a candidate passes the gate, 1 if none does, 2 on a refusal.
+"""
+import argparse
+import glob
+import pathlib
+import re
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--ours")
+    ap.add_argument("--theirs")
+    ap.add_argument("--gate", type=float, default=0.60)
+    ap.add_argument("--selftest", action="store_true")
+    a = ap.parse_args()
+    if a.selftest:
+        return selftest()
+    if not a.ours or not a.theirs:
+        raise SystemExit("REFUSING: --ours and --theirs are required. NOTHING "
+                         "was scored.")
+
+    import numpy as np
+    from front_buffer_percentiles import load_ppm, load_oracle, same_picture
+
+    od = pathlib.Path(a.ours)
+    # The front buffer is the pass both sides always produce, so it is the one
+    # candidate guaranteed comparable. endian 0 is this title's only e0
+    # destination and marks it on the console side.
+    ours_fb = sorted(od.glob("resolve_*_f6_00311000_draw*.ppm"))
+    if not ours_fb:
+        print(f"REFUSING: no front-buffer resolve (resolve_*_f6_00311000_*.ppm) "
+              f"in {od}. It holds {len(list(od.glob('*.ppm')))} ppm(s), so this "
+              f"is a capture that did not reach the front-buffer resolve, not "
+              f"an empty directory.", file=sys.stderr)
+        return 2
+    ours = load_ppm(str(ours_fb[-1]))
+    print(f"ours   {ours_fb[-1].name}")
+
+    cands = sorted(glob.glob(str(pathlib.Path(a.theirs) / "*_f6_e0_*.bin")))
+    if not cands:
+        print(f"REFUSING: no console front-buffer candidates (*_f6_e0_*.bin) in "
+              f"{a.theirs}, which holds {len(list(pathlib.Path(a.theirs).glob('*.bin')))} "
+              f"bin(s). NOTHING was scored.", file=sys.stderr)
+        return 2
+
+    ctrl = None
+    fp = od / "frame.ppm"
+    if fp.exists():
+        _, (_, ctrl) = same_picture(load_ppm(str(fp)), ours, np)
+    print(f"POSITIVE CONTROL (our frame.ppm against our own front-buffer "
+          f"resolve): {ctrl:+.4f}" if ctrl is not None else
+          "POSITIVE CONTROL unavailable (no frame.ppm) -- read the scores below "
+          "with that missing")
+
+    rows = []
+    for f in cands:
+        th = load_oracle(f, 1280, 720, 6, 0)
+        base, (lbl, best) = same_picture(ours, th, np)
+        m = re.search(r"_f(\d+)_copy", pathlib.Path(f).name)
+        rows.append((best, m.group(1) if m else pathlib.Path(f).name, base, lbl))
+    print(f"\n{len(rows)} console candidate(s) scored:")
+    for best, fr, base, lbl in rows:
+        print(f"  f{fr:>6}  as-given {base:+.4f}   best {best:+.4f}  ({lbl})")
+
+    top = max(rows)
+    print(f"\nBEST f{top[1]} at {top[0]:+.4f}; gate {a.gate}"
+          + (f"; control {ctrl:+.4f}" if ctrl is not None else ""))
+    if top[0] >= a.gate:
+        print("PASSES: this pair may be compared pixelwise. Quote the CANDIDATE "
+              "THAT PASSED, not the directory.")
+        return 0
+    print("NO CANDIDATE PASSES THE GATE. This capture cannot support a "
+          "pixelwise comparison, and a mean-based 'match' verdict over it "
+          "would be measuring the pairing rather than the renderers.",
+          file=sys.stderr)
+    return 1
+
+
+def scene(np, rng, n_blobs, h=180, w=320):
+    """A synthetic frame with structure at several scales.
+
+    A SINGLE SMOOTH BLOB IS THE WRONG NEGATIVE and this file learned that the
+    hard way: rolling one 90 px still scored 0.81, because a low-frequency image
+    correlates with a shifted copy of itself. A different game moment is not a
+    shifted frame, it is a DIFFERENT ARRANGEMENT OF CONTENT, so the negative
+    below is a different scene rather than the same one moved.
+    """
+    yy, xx = np.mgrid[0:h, 0:w]
+    img = np.full((h, w), 0.004, dtype=np.float64)
+    for _ in range(n_blobs):
+        cy, cx = rng.uniform(0, h), rng.uniform(0, w)
+        sy, sx = rng.uniform(20, 300), rng.uniform(20, 300)
+        img += rng.uniform(0.2, 1.4) * np.exp(-(((yy - cy) ** 2) / sy
+                                                + ((xx - cx) ** 2) / sx))
+    return np.stack([img.astype(np.float32)] * 3, axis=-1)
+
+
+def selftest():
+    """Both classes, driven: a pair that must pass and a pair that must fail."""
+    import numpy as np
+    from front_buffer_percentiles import same_picture
+    gate = 0.60
+    ref = scene(np, np.random.default_rng(1), 12)
+    # The positive survives what the real comparison does to one side: a large
+    # exposure difference and an 8-bit quantization.
+    dim = np.round(np.clip(ref * 0.3, 0, 1) * 255) / 255.0
+    other = scene(np, np.random.default_rng(2), 12)
+    _, (_, p) = same_picture(dim.astype(np.float32), ref, np)
+    _, (_, n) = same_picture(other, ref, np)
+    print(f"POSITIVE (same scene, dimmed 0.3x and 8-bit quantized): {p:+.4f} "
+          f">= {gate} -> {'PASS' if p >= gate else 'FAIL'}")
+    print(f"NEGATIVE (a DIFFERENT scene, same generator and statistics): "
+          f"{n:+.4f} < {gate} -> {'PASS' if n < gate else 'FAIL'}")
+    print("  the negative is a different arrangement of content, not the same "
+          "frame shifted -- a shifted low-frequency image scores 0.81 and would "
+          "make this gate look broken when it is the test case that is wrong")
+    ok = p >= gate and n < gate
+    print(f"selftest: {'PASS' if ok else 'FAIL'} (both classes driven)")
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
