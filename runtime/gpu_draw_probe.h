@@ -280,6 +280,16 @@ struct DrawStats
     uint64_t clipWatchHash = 0;
     uint32_t clipWatchDraws = 0;
     uint32_t clipWatchKilled = 0;
+    // "Assembled primitives and lost every one" is NOT a defect on its own:
+    // catalog #91 measured the console losing every primitive of two draws of
+    // this very shader, so the old predicate fired on a frame that MATCHED the
+    // reference and the hunt that followed found nothing because there was
+    // nothing there. The failure worth catching is a BIG draw that keeps
+    // almost none of its primitives, so the predicate now takes a floor on
+    // what was assembled and a ceiling on the fraction kept.
+    uint32_t clipWatchMinPrims = 10000;
+    uint32_t clipWatchMaxKeptPct = 5;
+    std::string clipWatchDetail;
     // Once it fires the table STOPS being rewritten -- see g_clipWatchHeld in
     // the .cpp, which is process-wide because this struct is rebuilt per frame.
 
