@@ -240,6 +240,12 @@ if(Python3_Interpreter_FOUND)
                 "${CMAKE_CURRENT_BINARY_DIR}/no-such.gfr" "${CMAKE_CURRENT_BINARY_DIR}/o.xtr")
     set_tests_properties(instrument_gfr_to_xtr_refuses_missing
         PROPERTIES WILL_FAIL TRUE)
+    # The interval ledger must distinguish three cases before it is allowed to
+    # interpret a real capture: exact alignment, the same draw touching a
+    # different EDRAM owner, and a draw present on only one side.
+    add_test(NAME instrument_draw_interval_ledger
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tools/draw_interval_ledger.py" --selftest)
 endif()
 
 # RtlTimeToTimeFields / RtlTimeFieldsToTime. Verified until now only by "the
