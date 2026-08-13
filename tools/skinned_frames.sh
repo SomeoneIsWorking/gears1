@@ -41,6 +41,22 @@ verdict() { # <capture> -> FOUND | NONE | UNAVAILABLE
     esac
 }
 
+listing() { # <capture> -> the detector's explicit positive/negative lines
+    local output rc=0 lines
+    output=$(GEARS_SKINNED_CHECK=1 GEARS_SKINNED_CHECK_LIST=1 \
+        "$replay" "$1" 2>&1) || rc=$?
+    case $rc in
+        0|3) ;;
+        *) echo "REFUSING: frame_replay returned $rc while listing $1" >&2; return "$rc" ;;
+    esac
+    lines=$(printf '%s\n' "$output" | grep -E "skinned draw|no skinned draw" || :)
+    [[ -n $lines ]] || {
+        echo "REFUSING: detector produced no positive or negative line for $1" >&2
+        return 1
+    }
+    printf '%s\n' "$lines"
+}
+
 if [[ $mode == --selftest ]]; then
     # The positive case: bright.gfr's draw 460 is the skinned character draw the
     # whole of catalog #77 is about. The negative: courtyard.gfr is a 744-draw
@@ -52,10 +68,21 @@ if [[ $mode == --selftest ]]; then
         [[ -f $f ]] || { echo "REFUSING: $f is missing, so this self-test checked NOTHING" >&2; exit 1; }
     done
     vp=$(verdict "$pos"); vn=$(verdict "$neg")
+    lp=$(listing "$pos"); ln=$(listing "$neg")
     echo "positive case $(basename "$pos"): expected FOUND, got $vp"
     echo "negative case $(basename "$neg"): expected NONE,  got $vn"
-    if [[ $vp == FOUND && $vn == NONE ]]; then
-        echo "PASS -- the skinned-character detector answers both ways"
+    # Exercise the same mixed-result loop as normal corpus mode. With `set -e`,
+    # the former `[[ $v == FOUND ]] && (( ++found ))` exited on the first NONE,
+    # so a nominal whole-corpus scan silently examined only act1.gfr. A unit
+    # check of verdict() alone could never detect that control-flow failure.
+    scanned=0; found=0
+    for v in "$vp" "$vn"; do
+        (( scanned += 1 ))
+        if [[ $v == FOUND ]]; then (( found += 1 )); fi
+    done
+    if [[ $vp == FOUND && $vn == NONE && $scanned == 2 && $found == 1 &&
+          $lp == *"skinned draw"* && $ln == *"no skinned draw"* ]]; then
+        echo "PASS -- detector answers both ways and the corpus loop scans 2/2 (found 1)"
         exit 0
     fi
     echo "FAIL -- the detector is not discriminating; every verdict it has" >&2
@@ -69,11 +96,10 @@ captures=(scratch/frames/*.gfr)
 found=0
 for c in "${captures[@]}"; do
     v=$(verdict "$c")
-    [[ $v == FOUND ]] && (( ++found ))
+    if [[ $v == FOUND ]]; then (( found += 1 )); fi
     if [[ $mode == --list ]]; then
         printf '%-22s %s\n' "$(basename "$c")" "$v"
-        GEARS_SKINNED_CHECK=1 GEARS_SKINNED_CHECK_LIST=1 "$replay" "$c" 2>&1 |
-            grep -E "skinned draw|no skinned draw" | sed 's/^/    /'
+        listing "$c" | sed 's/^/    /'
     else
         printf '%-22s %s\n' "$(basename "$c")" "$v"
     fi
