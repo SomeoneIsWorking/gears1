@@ -5,7 +5,7 @@ status: open
 symptom: surface 0x5a0 has 0 non-black pixels after every one of its draws, and its resolve target is 0 of 192192 components non-zero
 tags: gpu,draw,bloom,post,tonemap,colour,act1
 created: 2026-08-06
-updated: 2026-08-12
+updated: 2026-08-13
 ---
 
 Found while chasing #62's narrow output range, on `scratch/frames/act1.gfr`
@@ -241,3 +241,6 @@ THE FIRST HDR RETRY WAS ALSO NOT A MEASUREMENT: `camera_pair.sh` supplied no nat
 ### Note (2026-08-13, raw native files are not a pair)
 
 `scratch/hdr_current_20260813` contains real raw RGBA16F output from a nearby native run: the scene resolve peaks at 0.4055, the C2D0 f32 resolve immediately before bloom peaks at 0.8623, and all three C5A0 bloom resolves are exactly zero. Thus that native run had no sample above the bright shader's 1.0 threshold. It is NOT oracle comparison evidence: the directory has no `PROVENANCE.json`, and its frame differs from `camerapair_current/ours` (only 66.0% of sampled pixels identical, although mean absolute error is 0.37/255). The console's f32 resolve layout is also still refused by `layer_compare.py` on real dumps: its own synthetic decoder passes but real C5A0 rows contain non-finite values, so a made-up decode cannot supply the missing console HDR values. Do not derive an exposure multiplier from this. A newly provenance-stamped HDR pair remains the acceptance gate.
+
+### Note (2026-08-13)
+THE 2026-08-13 FRESH-PAIR BLOOM CONCLUSION IS RETRACTED: scratch/camerapair_current is provenance-matched and camera-close, but it is not UI-state matched. The native log says `[input] no input source (headless, no GEARS_INPUT_SCRIPT); the pad reports disconnected`, and its final resolve visibly contains the NO STORAGE DEVICE modal. Native draws 1193-1200 are eight blended dialog draws (VS 5363d0746b3ef666 / PS 501ac5d8692bf7b6) after motion blur; oracle frame 873 has the same bright-pass, two blur, composite, and motion-blur shader suffix but no equivalent dialog draws before its final resolve. Therefore the drop at native draw 1201 and the zero-versus-nonzero bloom observation come from a pair with different guest/UI state and are not renderer evidence. This capture predates commit 698050b, which first supplied GEARS_INPUT_SCRIPT to the native leg. The nearby raw-HDR run remains native-only and unpaired. The acceptance gate is unchanged: a new provenance-stamped HDR pair made with the maintained walk, and its images must be inspected for matching overlays before pixel/pass conclusions are accepted. No new GPU run was made because the required interlock is unavailable.
