@@ -177,7 +177,10 @@ def main():
                 vals[arm] = None
                 continue
             m2 = min(img.shape[0], con.shape[0])
-            r, _ = same_picture(img[:m2], con[:m2], np)
+            # Arms are camera-gated to the frozen reference.  Score their
+            # unshifted agreement; allowing a geometric search here would
+            # conceal a camera residual rather than measure it.
+            r, _ = same_picture(img[:m2], con[:m2], np, search=False)
             cells.append(f"{r:+.4f}")
             vals[arm] = r
         note = ""

@@ -105,7 +105,7 @@ def main():
         raise SystemExit("REFUSING: --theirs is required. NOTHING was measured.")
 
     import numpy as np
-    from first_divergence import load_console
+    from first_divergence import degenerate, load_console
 
     frames = scan(a.theirs)
     if len(frames) < 2:
@@ -147,7 +147,7 @@ def main():
         ordn = key[1]
         label = f"src{src} {w}x{h} f{fmt} e{endian} @{dest}"
         seen = sum(1 for fr in fr_list if key in ords[fr])
-        vals, undecoded = [], 0
+        vals, undecoded, constant = [], 0, 0
         for x, y in adjacent:
             if len(vals) >= a.max_pairs:
                 break
@@ -159,8 +159,20 @@ def main():
             if ia is None or ib is None:
                 undecoded += 1
                 continue
+            # Correlation of a constant pass is undefined.  Do not append NaN
+            # and subsequently rank it as though it were a temporal score:
+            # the honest answer is that this pair cannot price volatility.
+            flat_a, _ = degenerate(ia, np)
+            flat_b, _ = degenerate(ib, np)
+            if flat_a or flat_b:
+                constant += 1
+                continue
             from front_buffer_percentiles import same_picture
-            base, _ = same_picture(ia, ib, np)
+            # This is the temporal yardstick's unshifted correlation.  A
+            # flip/shift search would hide temporal motion and is discarded by
+            # this tool anyway; it also made a 720p row allocate hundreds of
+            # full-frame temporaries before it could report its denominator.
+            base, _ = same_picture(ia, ib, np, search=False)
             vals.append(base)
         note = ""
         if seen < len(fr_list):
@@ -168,6 +180,8 @@ def main():
                     f"comes and goes, which is itself volatility")
         if undecoded:
             note += f" [{undecoded} pair(s) UNDECODABLE, excluded]"
+        if constant:
+            note += f" [{constant} pair(s) CONSTANT, correlation undefined]"
         if not vals:
             print(f"{label:>34} {ordn:>4} {'--':>8} {0:>3} {seen:>6}   "
                   f"NO ADJACENT PAIR CARRIED THIS KEY -- not measured, not "
