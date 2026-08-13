@@ -47,11 +47,14 @@ set -eu
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 . "$REPO/tools/env.sh"
-# The console can reach its capture window from its autonomous boot path, but
-# the native runtime remains at the title screen when headless has no pad
-# source.  A paired capture must therefore supply the same maintained walk the
-# other gameplay capture tools use; depending on a caller's exported shell
-# state made this script silently produce an oracle-only directory.
+# The full gameplay walk ends at f6150 and is unusably slow under oracle
+# diagnostics. This pair-specific route is the measured minimum that reconciles
+# the two boot states: START opens/pauses their current screen and A closes both
+# paths. Native's automatic storage selector can close its title-owned modal
+# because xam_notify.cpp now supplies the console's system-UI notifications.
+: "${GEARS_CAMERA_PAIR_WALK_TABLE:=450:START 600:A}"
+: "${GEARS_WALK_TABLE:=$GEARS_CAMERA_PAIR_WALK_TABLE}"
+export GEARS_WALK_TABLE
 . "$REPO/tools/menu_walk.sh"
 # A paired run must drive both guests from ONE semantic input table.  The two
 # runtimes use different syntax, so menu_walk.sh generates both strings.  A
