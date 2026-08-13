@@ -1,10 +1,11 @@
 ---
 id: C052
 kind: claim
-status: holds
+status: falsified
 created: 2026-08-13
 tags: oracle,comparison,pairing,input,ui
 depends: runtime/xam_notify.cpp, runtime/xam_user.cpp, tools/camera_pair.sh, tools/pair_score.py
+falsified_on: 2026-08-13
 ---
 
 ## Claim
@@ -18,3 +19,9 @@ scratch/camerapair_short_ui_20260813: one camera_pair.sh invocation with f450 ST
 ## What would falsify it
 
 A repeat shipping camera_pair.sh run with the default route in which either side retains an overlay, an input arm does not fire, provenance/camera validation fails, or the cross score cannot be priced within three frames on that run's measured console self-curve.
+
+## FALSIFIED 2026-08-13
+
+A fresh shipping camera_pair.sh repeat stopped at oracle guest frame 123 with 1 draw/frame and 0/8 qualified captures: its first START at f450 was unreachable because frame-driven input cannot advance after presentation stalls. Replacing the route with f110 START/f260 A reached f900 with 1156 draws and produced a provenance/camera/drift-passing pair.
+
+> Anything that cited this claim as proof must be re-checked. Grep the repo for it.

@@ -52,7 +52,18 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 # the two boot states: START opens/pauses their current screen and A closes both
 # paths. Native's automatic storage selector can close its title-owned modal
 # because xam_notify.cpp now supplies the console's system-UI notifications.
-: "${GEARS_CAMERA_PAIR_WALK_TABLE:=450:START 600:A}"
+#
+# START MUST PRECEDE THE ORACLE'S STATIC TITLE FRAME. A fresh oracle boot stops
+# presenting at guest frame 123 while waiting for input; a first event at f450
+# is therefore unreachable because frame-driven input and the frame counter
+# wait on each other forever. The old 450/600 route failed with 123 frames,
+# 1 draw/frame and 0/8 qualified captures. The 110/260 route fired both arms
+# and reached a 1156-draw gameplay frame at f900. A at f260 was too early for
+# native's storage dialog and left it over the capture; f600 reaches the dialog,
+# invokes the automatic selector and produces a clean frame. Camera-pair
+# evidence is in C055 / issues #102-103. Do not move the first event later
+# without repeating that negative/positive discriminator on the shipping oracle.
+: "${GEARS_CAMERA_PAIR_WALK_TABLE:=90:START~120 600:A}"
 : "${GEARS_WALK_TABLE:=$GEARS_CAMERA_PAIR_WALK_TABLE}"
 export GEARS_WALK_TABLE
 . "$REPO/tools/menu_walk.sh"
@@ -74,7 +85,8 @@ ORACLE="$REPO/scratch/oracle/oracle-build/xenia_oracle"
 RUNTIME="${GEARS_BUILD_DIR:-$REPO/scratch/build}/runtime/gears1"
 : "${GEARS_LAYER_MIN_DRAWS:=400}"
 : "${GEARS_LAYER_AFTER:=300}"
-: "${CAMERA_NEAR:=10}"
+: "${CAMERA_NEAR:=0.013}"
+: "${CAMERA_ROT_NEAR:=0.005}"
 WALK_LAST_FRAME=$(gears_walk_last_frame)
 
 [ -x "$ORACLE" ]  || { echo "REFUSING: $ORACLE not built" >&2; exit 2; }
@@ -189,7 +201,7 @@ python3 "$REPO/tools/provenance.py" stamp "$OUT/theirs" --role theirs --pair "$P
     --camera "$CONSTS" --note "vs=$VS_HASH" --note "script=camera_pair.sh"
 python3 "$REPO/tools/provenance.py" stamp "$OUT/ours" --role ours --pair "$PAIR" \
     --camera "$CONSTS" --note "vs=$VS_HASH" --note "script=camera_pair.sh" \
-    --note "camera_near=$CAMERA_NEAR"
+    --note "camera_near=$CAMERA_NEAR" --note "camera_rot_near=$CAMERA_ROT_NEAR"
 FROZEN="$OUT/ours/camera.txt"
 
 # -------------------------------------------------------------------- our side
@@ -200,7 +212,7 @@ GEARS_DRAW_FRAME_MIN_GUEST_FRAME="$WALK_LAST_FRAME" \
 GEARS_DRAW_FRAME_AFTER_GAMEPLAY=0 \
 GEARS_DRAW_FRAME_COUNT=1 \
 GEARS_DRAW_FRAME_NEEDS="$VS_HASH" \
-GEARS_DRAW_FRAME_CAMERA="$FROZEN:$CAMERA_NEAR" \
+GEARS_DRAW_FRAME_CAMERA="$FROZEN:$CAMERA_NEAR:$CAMERA_ROT_NEAR" \
 GEARS_DRAW_RESOLVE_DUMP_EACH=1 \
 GEARS_DRAW_DIAG="$OUT/ours/draws.tsv" \
 GEARS_DRAW_DIR="$OUT/ours" \
@@ -237,6 +249,21 @@ if [ "$scripted_sources" -ne 1 ] || [ "$scripted_steps" -lt 1 ]; then
     exit 10
 fi
 echo "   native input validated: scanned $input_lines input log line(s), one scripted source, $scripted_steps fired step(s)"
+
+selector_calls=$(grep -c '^\[xam\] storage device selected automatically:' \
+    "$OUT/ours.log" 2>/dev/null || true)
+if [ "$selector_calls" -ne 1 ]; then
+    echo "REFUSING: native logged $selector_calls automatic storage selections;" >&2
+    echo "exactly one is required before the title-owned storage modal can be absent." >&2
+    exit 11
+fi
+
+# Input delivery is not UI-state proof. An A press at f260 fired on both arms
+# but arrived before native's storage dialog existed; the captured frame later
+# retained NO STORAGE DEVICE while the oracle did not. The modal is eight extra
+# draws of a measured UI shader pair. Refuse before a moving-scene drift curve
+# can price the overlay as ordinary temporal change (issue #103).
+python3 "$REPO/tools/ui_state_check.py" "$OUT/ours/draws.tsv" || exit 11
 
 if grep -qi "DEVICE_LOST\|Graphics device lost" "$OUT/ours.log"; then
     echo "OUR RENDERER LOST THE VULKAN DEVICE. Nothing is retried." >&2
