@@ -47,6 +47,14 @@ set -eu
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 . "$REPO/tools/env.sh"
+# The console can reach its capture window from its autonomous boot path, but
+# the native runtime remains at the title screen when headless has no pad
+# source.  A paired capture must therefore supply the same maintained walk the
+# other gameplay capture tools use; depending on a caller's exported shell
+# state made this script silently produce an oracle-only directory.
+. "$REPO/tools/menu_walk.sh"
+: "${GEARS_INPUT_SCRIPT:=$GEARS_MENU_WALK}"
+export GEARS_INPUT_SCRIPT
 
 SECONDS_TO_RUN="${1:-300}"
 OUT="${2:-$REPO/scratch/camerapair}"
@@ -167,6 +175,7 @@ GEARS_DRAW_FRAME_CAMERA="$FROZEN:$CAMERA_NEAR" \
 GEARS_DRAW_RESOLVE_DUMP_EACH=1 \
 GEARS_DRAW_DIAG="$OUT/ours/draws.tsv" \
 GEARS_DRAW_DIR="$OUT/ours" \
+GEARS_INPUT_SCRIPT="$GEARS_INPUT_SCRIPT" \
     "$RUNTIME" "$GAME_DIR/default.xex" "$GAME_DIR" > "$OUT/ours.log" 2>&1 &
 rpid=$!
 trap 'kill -9 "$rpid" 2>/dev/null || true' EXIT INT TERM
