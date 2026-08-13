@@ -1904,6 +1904,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
     std::vector<ResolveDump> resolveDumps;
     const bool dumpEachResolve = lucent::config::flag("DRAW_RESOLVE_DUMP_EACH");
+    // The PPM snapshots below intentionally clamp HDR to [0,1]. That makes a
+    // useful visual artefact, but it cannot answer whether the input to the
+    // bloom threshold actually crossed 1.0. Keep the exact host half-floats
+    // alongside it when explicitly requested; the file is an instrument
+    // payload, not an image to be guessed at.
+    const bool dumpResolveFloat = lucent::config::flag("DRAW_RESOLVE_DUMP_FLOAT");
     uint32_t resolveOrdinal = 0;
     // Records a copy of `r`'s image into a fresh readback buffer. Returns false
     // when it could not, and the caller COUNTS those -- a resolve missing from
@@ -2987,6 +2993,34 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         const VkDeviceSize bytes = VkDeviceSize(rd.w) * rd.h * (rd.isDepth ? 4 : 8);
         if (vkMapMemory(device, rd.mem, 0, bytes, 0, &mapped) == VK_SUCCESS)
         {
+            const std::string& dirStr = lucent::config::text("DRAW_DIR");
+            const std::filesystem::path dumpDir = dirStr.empty()
+                ? std::filesystem::path("scratch/screenshots")
+                : std::filesystem::path(dirStr);
+            const auto dumpStem = [&]() {
+                return rd.ordinal == UINT32_MAX
+                    ? std::format("resolve_{:08x}", rd.base)
+                    : std::format("resolve_{:02}_src{}{:03X}_{}x{}_f{}_{:08x}_draw{}",
+                                  rd.ordinal, rd.isDepth ? 'D' : 'C',
+                                  rd.sourceBase, rd.destPitch, rd.destHeight,
+                                  rd.guestFormat, rd.base, rd.drawIndex);
+            };
+            // This raw file is exactly the mapped VkImage copy: little-endian
+            // RGBA16F for colour, or R32F for depth. Its geometry, source
+            // format and draw index are in the stem, so a reader can refuse a
+            // mismatched interpretation rather than treating bytes as a PPM.
+            if (dumpResolveFloat && !rd.isDepth)
+            {
+                const std::filesystem::path raw = dumpDir / (dumpStem() + ".rgba16f");
+                std::ofstream out(raw, std::ios::binary | std::ios::trunc);
+                if (!out || !out.write(static_cast<const char*>(mapped), bytes))
+                    lucent::warn("draw", "resolve target {:#x}: FAILED to write"
+                        " raw RGBA16F dump {}; the PPM remains available, but"
+                        " HDR values were NOT captured", rd.base, raw.string());
+                else
+                    lucent::info("draw", "resolve target {:#x}: raw RGBA16F"
+                        " dump {} ({} bytes, unclamped)", rd.base, raw.string(), bytes);
+            }
             // R16G16B16A16_SFLOAT -> 8-bit, clamped. An HDR target holds values
             // well above 1, so the clamp is honest saturation, not a tonemap.
             std::vector<uint8_t> rgba(size_t(rd.w) * rd.h * 4);
@@ -3054,11 +3088,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                         rgba[i * 4 + c] = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
                     }
             }
-        const std::string& dirStr = lucent::config::text("DRAW_DIR");
-        const char* dir = dirStr.empty() ? nullptr : dirStr.c_str();
             const std::filesystem::path out =
-                (dir ? std::filesystem::path(dir)
-                     : std::filesystem::path("scratch/screenshots")) /
+                dumpDir /
                 // A per-resolve snapshot is named by its ORDINAL FIRST, so the
                 // files sort in the order the oracle's IssueCopy log lists them
                 // and resolve N pairs with resolve N by filename alone.
@@ -3067,13 +3098,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // and finally this run's own destination address and draw index,
                 // which are ours alone and are for reading the log, not for
                 // pairing.
-                (rd.ordinal == UINT32_MAX
-                     ? std::format("resolve_{:08x}.ppm", rd.base)
-                     : std::format("resolve_{:02}_src{}{:03X}_{}x{}_f{}_{:08x}"
-                                   "_draw{}.ppm",
-                                   rd.ordinal, rd.isDepth ? 'D' : 'C',
-                                   rd.sourceBase, rd.destPitch, rd.destHeight,
-                                   rd.guestFormat, rd.base, rd.drawIndex));
+                (dumpStem() + ".ppm");
             if (WritePpm(out, rgba.data(), rd.w, rd.h))
             {
                 const double lo = samples ? minSeen : 0.0;
