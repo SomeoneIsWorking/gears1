@@ -246,6 +246,37 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME instrument_draw_interval_ledger
         COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_SOURCE_DIR}/tools/draw_interval_ledger.py" --selftest)
+    # first_divergence uses NumPy on real captures. CMake's preferred Python may
+    # be a user interpreter without it even when the system interpreter has it,
+    # so select by CAPABILITY rather than assuming all `python3`s are equal.
+    set(GEARS_NUMPY_PYTHON "${Python3_EXECUTABLE}")
+    execute_process(
+        COMMAND "${GEARS_NUMPY_PYTHON}" -c "import numpy"
+        RESULT_VARIABLE GEARS_NUMPY_IMPORT_RESULT
+        OUTPUT_QUIET ERROR_QUIET)
+    if(NOT GEARS_NUMPY_IMPORT_RESULT EQUAL 0)
+        find_program(GEARS_NUMPY_PYTHON_FALLBACK NAMES python python3)
+        if(GEARS_NUMPY_PYTHON_FALLBACK)
+            execute_process(
+                COMMAND "${GEARS_NUMPY_PYTHON_FALLBACK}" -c "import numpy"
+                RESULT_VARIABLE GEARS_NUMPY_FALLBACK_RESULT
+                OUTPUT_QUIET ERROR_QUIET)
+            if(GEARS_NUMPY_FALLBACK_RESULT EQUAL 0)
+                set(GEARS_NUMPY_PYTHON "${GEARS_NUMPY_PYTHON_FALLBACK}")
+            endif()
+        endif()
+    endif()
+    execute_process(
+        COMMAND "${GEARS_NUMPY_PYTHON}" -c "import numpy"
+        RESULT_VARIABLE GEARS_NUMPY_IMPORT_RESULT
+        OUTPUT_QUIET ERROR_QUIET)
+    if(GEARS_NUMPY_IMPORT_RESULT EQUAL 0)
+        add_test(NAME instrument_first_divergence
+            COMMAND "${GEARS_NUMPY_PYTHON}"
+                    "${CMAKE_SOURCE_DIR}/tools/first_divergence.py" --selftest)
+    else()
+        message(WARNING "NumPy unavailable: first_divergence selftest is not registered")
+    endif()
 endif()
 
 # RtlTimeToTimeFields / RtlTimeFieldsToTime. Verified until now only by "the

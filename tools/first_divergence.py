@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
-"""Walk the frame in EXECUTION ORDER and name the FIRST pass that loses
-agreement with the console. Fix that one. Re-run. Repeat.
+"""Walk resolved passes and name the first output with excess disagreement.
 
-WHY THIS SHAPE. A frame is a chain: each pass consumes the last one's output. A
-pass that is CORRECT inherits whatever agreement its input had; a pass that is
-WRONG drops it. So the interesting quantity is not "which pass disagrees most"
--- every pass after a broken one disagrees, and the worst is usually the last --
-but "where does the chain first lose ground". That is the earliest place a fix
-can do any good, and everything downstream of it is unattributable until it is
-fixed.
+WHY THIS SHAPE. Raw correlations of different passes are not comparable:
+velocity, masks, depth and colour contain different data and change at different
+rates. Each pass is therefore judged against the SAME console pass's temporal
+self-correlation, interpolated at the whole pair's measured drift. The first
+pass whose cross-emulator score falls materially below that expectation is the
+earliest resolved neighbourhood worth instrumenting further.
 
-    tools/first_divergence.py --pair <dir> [--frame 790]
+    tools/first_divergence.py --pair <dir> --frame 790 \
+        --yardstick --drift-frames 1.13
 
 The pair must be one produced by tools/camera_pair.sh and it must have PASSED
 tools/pair_score.py, because a pair that is not the same moment produces a
 divergence profile that is measuring the pairing. This refuses without that
 check rather than reporting a frontier from an unpaired capture.
 
-WHAT IT PRINTS: every pass, in our draw order, with its correlation against the
-console's counterpart and the CHANGE from the previous pass. A run where nothing
-diverges says so with the count of passes compared, so "the chain is clean" is
-distinguishable from "nothing was compared".
+WHAT IT PRINTS: every pass in our draw order, its cross score, its own
+drift-matched self score and the deficit. The raw change from the previous row
+is display-only. A run where nothing exceeds the deficit threshold says so with
+the count, distinct from "nothing was compared".
 
 WHAT IT CANNOT SEE, stated because a frontier tool that hides its blind spots is
 worse than none:
@@ -28,10 +27,9 @@ worse than none:
   * A pass whose output is consumed WITHOUT a resolve does not appear at all,
     and neither does anything inside a pass. This localises to a pass BOUNDARY,
     which is where the next investigation starts, not ends.
-  * THE CHAIN IS NOT STRICTLY LINEAR. Passes write to different destinations, so
-    the previous row in draw order is not always the current row's input. A drop
-    between adjacent rows is a strong hint and not a proof of causation -- check
-    what the flagged pass actually samples before believing it.
+  * THE CHAIN IS NOT STRICTLY LINEAR. A flagged resolved output is a
+    neighbourhood, not proof that its final draw caused the deficit; inspect
+    its producer/consumer graph before changing code.
   * A correlation over a nearly-empty buffer is noise. The velocity buffer of a
     slow camera is ~99% zero on both sides and scored 0.34, which this reported
     as a confident frontier until --min-coverage was added. Sparse passes are
@@ -39,6 +37,7 @@ worse than none:
 """
 import argparse
 import collections
+import math
 import pathlib
 import re
 import sys
@@ -49,6 +48,18 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 # more than DROP from its predecessor is the frontier. Both are reported
 # alongside every number so a reader can apply their own.
 DROP = 0.15
+
+
+def interpolate_yardstick(points, distance):
+    """Interpolate the console-self score at a fractional frame distance."""
+    lo = int(math.floor(distance))
+    hi = int(math.ceil(distance))
+    if lo not in points or hi not in points:
+        return None
+    if lo == hi:
+        return points[lo]
+    fraction = distance - lo
+    return points[lo] + fraction * (points[hi] - points[lo])
 
 
 def load_console(path, w, h, fmt, endian, np):
@@ -216,8 +227,15 @@ def selftest():
     ok = ok and flat and val == 1.0 and not struct
     print(f"  constant buffer flagged={flat} at {val:.3f}, structured "
           f"flagged={struct}  {'PASS' if flat and not struct else 'FAIL'}")
+    yard = interpolate_yardstick({1: 0.80, 2: 0.60}, 1.25)
+    explained = yard is not None and (yard - 0.74) < DROP
+    defect = yard is not None and (yard - 0.40) >= DROP
+    good = abs(yard - 0.75) < 1e-9 and explained and defect
+    ok = ok and good
+    print(f"  drift interpolation -> {yard:.3f}; 0.74 explained={explained}, "
+          f"0.40 defect={defect}  {'PASS' if good else 'FAIL'}")
     print(f"selftest: {'PASS' if ok else 'FAIL'} (both classes driven for "
-          f"scale, sparsity and degeneracy)")
+          f"scale, sparsity, degeneracy and temporal deficit)")
     return 0 if ok else 1
 
 
@@ -231,10 +249,14 @@ def main():
                          "measures the pairing, not the chain")
     ap.add_argument("--drop", type=float, default=DROP)
     ap.add_argument("--yardstick", action="store_true",
-                    help="also measure each pass against ITSELF one console "
-                         "frame apart, and judge its cross score against that "
+                    help="also measure each pass against ITSELF at the "
+                         "pair's temporal distance, and judge its cross score "
+                         "against that "
                          "rather than against a single global threshold. "
                          "Slower; use it before believing any frontier.")
+    ap.add_argument("--drift-frames", type=float, default=1.0,
+                    help="temporal distance priced by pair_score.py; per-pass "
+                         "self scores are interpolated at this distance")
     ap.add_argument("--min-coverage", type=float, default=0.05,
                     help="skip a pass unless BOTH sides have this fraction of "
                          "non-zero pixels; a correlation over a near-empty "
@@ -244,6 +266,13 @@ def main():
         return selftest()
     if not a.pair:
         raise SystemExit("REFUSING: --pair is required. NOTHING was walked.")
+    if not a.yardstick:
+        raise SystemExit("REFUSING: --yardstick is required. Raw correlations "
+                         "of different passes cannot define a renderer loss.")
+    if a.drift_frames < 1.0:
+        raise SystemExit("REFUSING: --drift-frames must be >= 1.0; "
+                         "pair_score reports closer pairs as above its "
+                         "one-frame scale, not as a fractional distance.")
 
     import numpy as np
     from front_buffer_percentiles import load_ppm, same_picture
@@ -315,9 +344,8 @@ def main():
     # until you know how much that pass changes BY ITSELF between frames. The
     # shadow atlas self-correlates at 0.97 one frame apart and a shadow mask at
     # 0.13, so judging both against one threshold reports the clock as a defect
-    # on the volatile one. This loads the SAME pass from the next console frame
-    # and correlates the console against itself -- same emulator, same code, so
-    # what is lost is lost to time alone.
+    # on the volatile one. Load the SAME pass at the floor and ceiling of the
+    # pair's measured distance and interpolate exactly as pair_score does.
     def index_by_slot(rows):
         seen, out = collections.Counter(), {}
         for t in rows:
@@ -326,30 +354,34 @@ def main():
             seen[slot] += 1
         return out
 
-    here = index_by_slot(theirs)
-    nxt = {}
+    next_by_distance = {}
     if a.yardstick:
-        nrows = []
-        for f in td.glob(f"oracle_f{a.frame + 1}_copy*.bin"):
-            m = re.match(r"oracle_f\d+_copy(\d+)_src([CD])([0-9A-Fa-f]+)_"
-                         r"(\d+)x(\d+)_f(\d+)_e(\d+)_([0-9A-Fa-f]+)_(\d+)\.bin",
-                         f.name)
-            if m:
-                nrows.append((int(m.group(1)),
-                              f"{m.group(2)}{m.group(3).upper()}",
-                              int(m.group(4)), int(m.group(5)), int(m.group(6)),
-                              int(m.group(7)), f, m.group(8).upper()))
-        nrows.sort()
-        if not nrows:
-            print(f"  YARDSTICK UNAVAILABLE: no console dumps for frame "
-                  f"{a.frame + 1}, so no pass can be judged against its own "
-                  f"volatility. Rows below fall back to the global "
-                  f"threshold, which is exactly the reading this flag exists "
-                  f"to replace.")
-        else:
-            nr = rank_dests(nrows, lambda r: (r[1], r[2], r[3], r[4]),
-                            lambda r: r[7])
-            nxt = index_by_slot([r + (k,) for r, k in zip(nrows, nr)])
+        needed = {int(math.floor(a.drift_frames)),
+                  int(math.ceil(a.drift_frames))}
+        for distance in sorted(needed):
+            nrows = []
+            for f in td.glob(f"oracle_f{a.frame + distance}_copy*.bin"):
+                m = re.match(r"oracle_f\d+_copy(\d+)_src([CD])([0-9A-Fa-f]+)_"
+                             r"(\d+)x(\d+)_f(\d+)_e(\d+)_([0-9A-Fa-f]+)_(\d+)\.bin",
+                             f.name)
+                if m:
+                    nrows.append((int(m.group(1)),
+                                  f"{m.group(2)}{m.group(3).upper()}",
+                                  int(m.group(4)), int(m.group(5)),
+                                  int(m.group(6)), int(m.group(7)), f,
+                                  m.group(8).upper()))
+            nrows.sort()
+            if nrows:
+                nr = rank_dests(nrows, lambda r: (r[1], r[2], r[3], r[4]),
+                                lambda r: r[7])
+                next_by_distance[distance] = index_by_slot(
+                    [r + (k,) for r, k in zip(nrows, nr)])
+        absent = sorted(needed - set(next_by_distance))
+        if absent:
+            print(f"  YARDSTICK INCOMPLETE: no console dumps at distance(s) "
+                  f"{absent} needed to price {a.drift_frames:.3f} frames. "
+                  "Affected rows are UNPRICED and the tool will refuse a "
+                  "frontier.")
     if not ours or not theirs:
         raise SystemExit(f"REFUSING: {len(ours)} of our passes and "
                          f"{len(theirs)} console passes for frame {a.frame}. "
@@ -374,7 +406,7 @@ def main():
                   f"joined by ordinal against a DIFFERENT pass; treat their "
                   f"scores as unreliable.")
 
-    used, prev, first_drop, compared = set(), None, None, 0
+    used, prev, first_drop, compared, unpriced = set(), None, None, 0, 0
     slot_seen = collections.Counter()
     for draw, ordn, src, w, h, fmt, f, odest, orank in ours:
         key = (src, w, h, fmt, orank)
@@ -482,30 +514,36 @@ def main():
                     f"[console wrote {100*frac:.1f}%; scored over those rows; "
                     f"whole-buffer {r_all:+.4f}] ")
         compared += 1
-        # JUDGE THE SCORE AGAINST THIS PASS'S OWN VOLATILITY. Console against
-        # console, one frame apart, same slot -- whatever that loses is lost to
-        # time, and a cross score at or above it is not evidence of a defect.
-        yard = None
-        nb = nxt.get((key, slot_ord))
-        if nb is not None:
+        # JUDGE THE SCORE AGAINST THIS PASS'S OWN VOLATILITY at the PAIR'S
+        # measured temporal distance. Raw scores of different passes cannot be
+        # subtracted: they transform different data and move at different rates.
+        yard_points = {}
+        for distance, slots in next_by_distance.items():
+            nb = slots.get((key, slot_ord))
+            if nb is None:
+                continue
             ni, _ = load_console(str(nb[6]), w, h, fmt, nb[5], np)
             if ni is not None:
                 m2 = min(cc.shape[0], ni.shape[0])
-                # The temporal yardstick is deliberately unshifted: shifting
-                # would turn real frame-to-frame motion into apparent stability.
-                yard, _ = same_picture(cc[:m2], ni[:m2], np, search=False)
+                # Deliberately unshifted: shifting turns real motion into
+                # apparent stability.
+                yard_points[distance], _ = same_picture(
+                    cc[:m2], ni[:m2], np, search=False)
+        yard = interpolate_yardstick(yard_points, a.drift_frames)
         delta = "" if prev is None else f"{r - prev:+.4f}"
         note, ystr = "", ""
         if yard is not None:
-            ystr = f"[self {yard:+.4f}] "
+            ystr = (f"[self@{a.drift_frames:.2f} {yard:+.4f}; "
+                    f"deficit {yard-r:+.4f}] ")
             if r >= yard:
                 note = "at or above its own temporal yardstick"
-        flagged = prev is not None and (r - prev) <= -a.drop
-        if flagged and yard is not None and r >= yard:
-            note = ("DROP EXPLAINED BY VOLATILITY: this pass loses "
-                    f"{1 - yard:.2f} of correlation to ONE FRAME on the console "
-                    f"alone, so {r:.4f} is not evidence of a defect")
-            flagged = False
+        else:
+            unpriced += 1
+            note = "UNPRICED: this pass has no complete temporal yardstick"
+        flagged = yard is not None and (yard - r) >= a.drop
+        if yard is not None and not flagged and r < yard:
+            note = (f"within {a.drop:.2f} of its own drift-matched yardstick; "
+                    "raw cross-pass drops are not comparable")
         if flagged and first_drop is None:
             first_drop = (draw, label, prev, r, yard, None)
             note = "<-- FIRST OBSERVABLE LOSS OF AGREEMENT"
@@ -528,9 +566,15 @@ def main():
         print("NOTHING WAS COMPARED. Every pass was unpaired or undecodable, so "
               "this says nothing about the chain.", file=sys.stderr)
         return 2
+    if unpriced:
+        print(f"REFUSING A FRONTIER: {unpriced} of {compared} scored pass(es) "
+              "lack the complete drift-matched self curve. Raw predecessor "
+              "drops are display-only and cannot replace it.", file=sys.stderr)
+        return 2
     if first_drop is None:
-        print(f"NO PASS LOSES MORE THAN {a.drop} OF AGREEMENT across the "
-              f"{compared} pass(es) compared. Either the chain is clean at this "
+        print(f"NO PASS FALLS MORE THAN {a.drop} BELOW ITS OWN TEMPORAL "
+              f"YARDSTICK across the {compared} pass(es) compared. Either the "
+              "chain is clean at this "
               f"granularity, or the defect is inside a pass rather than at a "
               f"boundary, or it is in a pass with no resolve -- this tool "
               f"cannot see the last two.")
@@ -542,11 +586,12 @@ def main():
               f"cannot be correlated at all has failed harder than one that "
               f"correlates badly.")
     else:
-        print(f"FIRST OBSERVABLE LOSS: draw {draw}, {label}. Agreement falls "
-              f"from {before:.4f} to {after:.4f} across it"
-              + (f", against a temporal yardstick of {yard:.4f} for this pass."
+        print(f"FIRST OBSERVABLE LOSS: draw {draw}, {label}. "
+              + (f"Its score {after:.4f} falls more than {a.drop:.2f} below "
+                   f"its drift-matched temporal yardstick {yard:.4f}."
                  if yard is not None else
-                 ", with NO yardstick measured -- re-run with --yardstick "
+                 f"Agreement falls from {before:.4f} to {after:.4f}, with NO "
+                 "yardstick measured -- re-run with --yardstick "
                  "before believing this, because a volatile pass loses "
                  "correlation to the clock alone."))
     print("READ THIS AS A NEIGHBOURHOOD, NOT A CULPRIT. This tool sees only "

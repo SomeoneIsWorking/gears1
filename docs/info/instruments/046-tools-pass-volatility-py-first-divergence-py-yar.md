@@ -1,8 +1,9 @@
 ---
 id: I046
 kind: instrument
-status: trusted
+status: DISTRUSTED
 created: 2026-08-12
+distrusted_on: 2026-08-13
 ---
 
 ## Instrument
@@ -18,3 +19,9 @@ Re-validated 2026-08-13 on `scratch/camerapair/theirs`, 60 consecutive frames 79
 ## Known failure modes
 
 Before 2026-08-13, the tool invoked the full flip/shift same-picture search for every temporal pair and then discarded it, retaining only the unshifted correlation. At 720p that created hundreds of full-frame temporaries per pair and the process died partway through the report; partial output could be mistaken for a completed yardstick. The temporal path now asks explicitly for unshifted correlation, which is also semantically correct: spatial searching would hide the motion the tool is meant to price. A constant source or destination has undefined correlation; it is counted and printed as `CONSTANT`, never ranked as a numeric volatility score.
+
+## DISTRUSTED 2026-08-13
+
+It priced every pass at exactly +1 console frame and then still detected a loss from the raw correlation drop versus the previous, unrelated pass. On the equal-state pair priced by pair_score at 1.13 frames, this named f7 because raw r fell 0.2125 from velocity; f7 is actually only 0.0117 below its own interpolated self curve. Cross-pass raw correlations are not comparable.
+
+> Every result this instrument produced is suspect until it is re-validated.
