@@ -191,6 +191,24 @@ kill -9 "$rpid" 2>/dev/null || true
 wait "$rpid" 2>/dev/null || true
 trap - EXIT INT TERM
 
+# A close camera is not proof that both guests reached the same UI state.  A
+# disconnected native pad once left the NO STORAGE DEVICE modal over gameplay;
+# pair_score still passed because most background pixels remained correlated.
+# Prove both that the runtime accepted the script and that the title polled far
+# enough for at least one scripted transition to fire.
+input_lines=$(grep -c '^\[input\]' "$OUT/ours.log" 2>/dev/null || true)
+scripted_sources=$(grep -c '^\[input\] scripted input:' "$OUT/ours.log" 2>/dev/null || true)
+scripted_steps=$(grep -c '^\[input\] scripted pad at ' "$OUT/ours.log" 2>/dev/null || true)
+if [ "$scripted_sources" -ne 1 ] || [ "$scripted_steps" -lt 1 ]; then
+    echo "REFUSING: native input validation scanned $input_lines input log line(s)," >&2
+    echo "found $scripted_sources scripted-source declaration(s) and $scripted_steps" >&2
+    echo "fired scripted step(s). The camera can match behind a modal, so this pair" >&2
+    echo "cannot support a pixel or pass comparison." >&2
+    grep '^\[input\]' "$OUT/ours.log" | head -5 >&2 || true
+    exit 10
+fi
+echo "   native input validated: scanned $input_lines input log line(s), one scripted source, $scripted_steps fired step(s)"
+
 if grep -qi "DEVICE_LOST\|Graphics device lost" "$OUT/ours.log"; then
     echo "OUR RENDERER LOST THE VULKAN DEVICE. Nothing is retried." >&2
     exit 3
