@@ -53,7 +53,14 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 # other gameplay capture tools use; depending on a caller's exported shell
 # state made this script silently produce an oracle-only directory.
 . "$REPO/tools/menu_walk.sh"
-: "${GEARS_INPUT_SCRIPT:=$GEARS_MENU_WALK}"
+# A paired run must drive both guests from ONE semantic input table.  The two
+# runtimes use different syntax, so menu_walk.sh generates both strings.  A
+# caller may override GEARS_WALK_TABLE, but overriding only GEARS_INPUT_SCRIPT
+# would put the two guests back into different UI states and is deliberately
+# ignored here.
+PAIR_INPUT_OURS=$(gears_walk_ours)
+PAIR_INPUT_THEIRS=$(gears_walk_theirs)
+GEARS_INPUT_SCRIPT=$PAIR_INPUT_OURS
 export GEARS_INPUT_SCRIPT
 
 SECONDS_TO_RUN="${1:-300}"
@@ -95,8 +102,7 @@ GEARS_ORACLE_PRIM_STATS="${PRIM_STATS:-}" \
     --oracle_frames=$((SECONDS_TO_RUN * 30)) \
     --oracle_frame_interval=1200 \
     --oracle_frame_timeout="$SECONDS_TO_RUN" \
-    --oracle_allow_no_input=true \
-    --oracle_input="" > "$OUT/theirs.log" 2>&1 &
+    --oracle_input="$PAIR_INPUT_THEIRS" > "$OUT/theirs.log" 2>&1 &
 opid=$!
 trap 'kill -9 "$opid" 2>/dev/null || true' EXIT INT TERM
 # WAIT FOR THE WHOLE WINDOW, NOT FOR THE CONSTANTS. The constants land on the
@@ -121,6 +127,23 @@ g=0; while [ "$g" -lt 20 ] && kill -0 "$opid" 2>/dev/null; do sleep 1; g=$((g + 
 kill -9 "$opid" 2>/dev/null || true
 wait "$opid" 2>/dev/null || true
 trap - EXIT INT TERM
+
+# Prove the oracle accepted the generated half of the shared walk.  The old
+# harness explicitly selected no input here while native used a timed walk;
+# matching the 3D camera behind different menus then passed the pixel gate.
+oracle_input_lines=$(grep -c 'oracle:.*input' "$OUT/theirs.log" 2>/dev/null || true)
+oracle_schedules=$(grep -c 'oracle: [0-9][0-9]* scheduled press(es)' \
+    "$OUT/theirs.log" 2>/dev/null || true)
+oracle_frame_driven=$(grep -c 'oracle: input and captures are driven by the GUEST FRAME COUNTER' \
+    "$OUT/theirs.log" 2>/dev/null || true)
+if [ "$oracle_schedules" -ne 1 ] || [ "$oracle_frame_driven" -ne 1 ]; then
+    echo "REFUSING: oracle input validation scanned $oracle_input_lines input log line(s)," >&2
+    echo "found $oracle_schedules schedule declaration(s) and $oracle_frame_driven" >&2
+    echo "guest-frame declaration(s). Both guests must accept the shared walk." >&2
+    grep 'oracle:.*input' "$OUT/theirs.log" | head -5 >&2 || true
+    exit 10
+fi
+echo "   oracle input validated: scanned $oracle_input_lines input log line(s), one shared schedule"
 
 # A GPU fault ends the run. It is never retried here, and it is never treated
 # as an environmental hiccup: the FIRST device loss stops the session's GPU work.
