@@ -122,6 +122,21 @@ def main():
               "concluded about the pairing. Dump a window, not one frame.",
               file=sys.stderr)
         return 2
+    # A calibration curve can price a score only inside the range it actually
+    # measured.  The old code silently clamped anything below its last point to
+    # that point's frame count.  On a UI-mismatched pair the five console frames
+    # were nearly static (adjacent correlation 0.9999) while the cross score was
+    # 0.1522; clamping that to "+1 frame" certified two different pictures.
+    # Refuse instead of extrapolating beyond evidence.
+    drift_floor = min(r for _, r in drift)
+    if top[0] < drift_floor:
+        print(f"DRIFT CURVE DOES NOT REACH THE CROSS SCORE: the lowest of "
+              f"{len(drift)} measured console self-correlation point(s) is "
+              f"{drift_floor:+.4f}, but the pair is {top[0]:+.4f}. Its drift "
+              f"cannot be priced from this window; NOTHING is concluded about "
+              f"pairing. Dump a window whose self-curve spans the score, or "
+              f"fix the guest/UI-state mismatch.", file=sys.stderr)
+        return 2
     print("\nTHE CONSOLE AGAINST ITSELF, from the winning frame -- what one "
           "frame of drift costs THIS pass:")
     # Mark the BRACKETING pair, not one row: the score falls BETWEEN two
@@ -222,7 +237,10 @@ def equivalent_drift(score, curve):
             frac = (prev_r - score) / span if span > 1e-9 else 0.0
             return prev_k + frac * (k - prev_k)
         prev_k, prev_r = k, r
-    return float(curve[-1][0])
+    # Outside the measured curve is not "the last measured frame".  Callers
+    # must refuse before reaching this point; retaining None keeps this helper
+    # incapable of inventing an extrapolated number.
+    return None
 
 
 def scene(np, rng, n_blobs, h=180, w=320):
@@ -339,7 +357,16 @@ def selftest():
     print("  the negative is a different arrangement of content, not the same "
           "frame shifted -- a shifted low-frequency image scores 0.81 and would "
           "make this gate look broken when it is the test case that is wrong")
-    ok = p >= gate and n < gate
+    # Load-bearing negative for the drift calibration itself: a nearly static
+    # console window cannot price a wildly different cross-side picture.  This
+    # is the exact shape that falsely passed as one frame of drift in
+    # camerapair_shared_hdr_20260813.
+    static_curve = [(1, 0.9999)]
+    curve_refuses = n < min(r for _, r in static_curve)
+    print(f"NEGATIVE (cross score below measured drift curve): {n:+.4f} < "
+          f"{static_curve[0][1]:+.4f} -> "
+          f"{'REFUSE' if curve_refuses else 'WRONG'}")
+    ok = p >= gate and n < gate and curve_refuses
     print(f"selftest: {'PASS' if ok else 'FAIL'} (both classes driven)")
     return 0 if ok else 1
 
