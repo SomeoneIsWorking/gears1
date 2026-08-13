@@ -78,7 +78,7 @@ def load_oracle(path, width, height, fmt, endian):
     return np.nan_to_num(img)
 
 
-def same_picture(ours, theirs, np):
+def same_picture(ours, theirs, np, *, search=True):
     """Are these two artefacts even showing the same moment?
 
     THIS GATE EXISTS BECAUSE ITS ABSENCE PRODUCED TWO WRONG COMMITS. The camera
@@ -107,6 +107,12 @@ def same_picture(ours, theirs, np):
 
     base = r(o, t)
     best = ("as given", base)
+    # Some callers use this helper as a plain temporal correlation and consume
+    # only `base`.  Do not make those callers allocate 292 rolled 720p arrays
+    # merely to throw their results away: the flip/shift search is the
+    # same-picture gate, not part of the unshifted correlation measurement.
+    if not search:
+        return base, best
     for lbl, arr in (("vertical flip", o[::-1]), ("horizontal flip", o[:, ::-1]),
                      ("both flips", o[::-1, ::-1])):
         c = r(arr, t)

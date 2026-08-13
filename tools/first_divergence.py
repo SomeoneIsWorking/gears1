@@ -491,7 +491,9 @@ def main():
             ni, _ = load_console(str(nb[6]), w, h, fmt, nb[5], np)
             if ni is not None:
                 m2 = min(cc.shape[0], ni.shape[0])
-                yard, _ = same_picture(cc[:m2], ni[:m2], np)
+                # The temporal yardstick is deliberately unshifted: shifting
+                # would turn real frame-to-frame motion into apparent stability.
+                yard, _ = same_picture(cc[:m2], ni[:m2], np, search=False)
         delta = "" if prev is None else f"{r - prev:+.4f}"
         note, ystr = "", ""
         if yard is not None:
