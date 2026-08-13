@@ -36,7 +36,7 @@
 # 12-vertex draw in the next, because the per-frame draw count varies with the
 # number of shadow-casting lights. A run keyed on the ordinal silently dumps the
 # constants of whatever draw happens to land there, and the gate then refuses
-# with "0 of the 4 view-projection rows c230..c233".
+# when the selected four view-projection rows are absent.
 #
 # THE RESULT IS SCORED, NOT ASSUMED: it finishes by running the same-picture
 # gate over every console candidate and printing each score against the positive
@@ -87,6 +87,14 @@ RUNTIME="${GEARS_BUILD_DIR:-$REPO/scratch/build}/runtime/gears1"
 : "${GEARS_LAYER_AFTER:=300}"
 : "${CAMERA_NEAR:=0.013}"
 : "${CAMERA_ROT_NEAR:=0.005}"
+: "${CAMERA_CONST_BASE:=230}"
+case "$CAMERA_CONST_BASE" in
+    ''|*[!0-9]*) echo "REFUSING: CAMERA_CONST_BASE must be a decimal constant index" >&2; exit 2 ;;
+esac
+[ "$CAMERA_CONST_BASE" -le 252 ] || {
+    echo "REFUSING: CAMERA_CONST_BASE=$CAMERA_CONST_BASE cannot name four rows in c0..c255" >&2
+    exit 2
+}
 WALK_LAST_FRAME=$(gears_walk_last_frame)
 
 [ -x "$ORACLE" ]  || { echo "REFUSING: $ORACLE not built" >&2; exit 2; }
@@ -188,8 +196,16 @@ if [ -n "$CFRAME" ] && ! ls "$OUT/theirs" | grep -q "_f${CFRAME}_"; then
     echo "frames: $(ls "$OUT/theirs" | sed -n 's/.*_f\([0-9]*\)_copy.*/\1/p' | sort -un | tr '\n' ' ')" >&2
     exit 8
 fi
-grep -q "^c\[23[0-3]\]" "$CONSTS" || {
-    echo "REFUSING: $CONSTS carries no c230..c233, so it is not a camera. The" >&2
+camera_rows=0
+camera_end=$((CAMERA_CONST_BASE + 3))
+camera_idx=$CAMERA_CONST_BASE
+while [ "$camera_idx" -le "$camera_end" ]; do
+    grep -q "^c\[$camera_idx\]" "$CONSTS" && camera_rows=$((camera_rows + 1))
+    camera_idx=$((camera_idx + 1))
+done
+[ "$camera_rows" -eq 4 ] || {
+    echo "REFUSING: $CONSTS carries $camera_rows of c$CAMERA_CONST_BASE..c$camera_end," >&2
+    echo "so the selected shader/constant layout does not provide a camera. The" >&2
     echo "gate would run with no viewpoint at all. First line: $(head -1 "$CONSTS")" >&2
     exit 9; }
 echo "   camera: shader $VS_HASH at guest frame $CFRAME, inside the dumped window"
@@ -201,7 +217,8 @@ python3 "$REPO/tools/provenance.py" stamp "$OUT/theirs" --role theirs --pair "$P
     --camera "$CONSTS" --note "vs=$VS_HASH" --note "script=camera_pair.sh"
 python3 "$REPO/tools/provenance.py" stamp "$OUT/ours" --role ours --pair "$PAIR" \
     --camera "$CONSTS" --note "vs=$VS_HASH" --note "script=camera_pair.sh" \
-    --note "camera_near=$CAMERA_NEAR" --note "camera_rot_near=$CAMERA_ROT_NEAR"
+    --note "camera_near=$CAMERA_NEAR" --note "camera_rot_near=$CAMERA_ROT_NEAR" \
+    --note "camera_const_base=$CAMERA_CONST_BASE"
 FROZEN="$OUT/ours/camera.txt"
 
 # -------------------------------------------------------------------- our side
@@ -212,7 +229,7 @@ GEARS_DRAW_FRAME_MIN_GUEST_FRAME="$WALK_LAST_FRAME" \
 GEARS_DRAW_FRAME_AFTER_GAMEPLAY=0 \
 GEARS_DRAW_FRAME_COUNT=1 \
 GEARS_DRAW_FRAME_NEEDS="$VS_HASH" \
-GEARS_DRAW_FRAME_CAMERA="$FROZEN:$CAMERA_NEAR:$CAMERA_ROT_NEAR" \
+GEARS_DRAW_FRAME_CAMERA="$FROZEN:$CAMERA_NEAR:$CAMERA_ROT_NEAR:$CAMERA_CONST_BASE" \
 GEARS_DRAW_RESOLVE_DUMP_EACH=1 \
 GEARS_DRAW_DIAG="$OUT/ours/draws.tsv" \
 GEARS_DRAW_DIR="$OUT/ours" \
