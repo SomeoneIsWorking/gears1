@@ -134,6 +134,8 @@ add_test(NAME xconfig COMMAND test_xconfig)
 add_executable(test_xam_user
     test_xam_user.cpp
     ../runtime/xam_user.cpp
+    ../runtime/xam_notify.cpp
+    ../runtime/xam_apps.cpp
     ../runtime/user_profile.cpp
     ../runtime/xam_content.cpp
     ../runtime/xam_overlapped.cpp
@@ -150,6 +152,26 @@ target_include_directories(test_xam_user PRIVATE
     ../extern/XenonRecomp/XenonUtils)
 target_link_libraries(test_xam_user PRIVATE lucent::lucent)
 add_test(NAME xam_user COMMAND test_xam_user)
+
+# Xam system-UI notifications are part of the storage-selector protocol, not
+# decorative events: Gears keeps its own modal open until it receives the close
+# notification. Exercise the real queue through the imported guest seams.
+add_executable(test_xam_notify
+    test_xam_notify.cpp
+    ../runtime/xam_notify.cpp
+    ../runtime/xam_apps.cpp
+    ../runtime/xam_overlapped.cpp
+    ../runtime/kernel_objects.cpp
+    ../runtime/guest_heap.cpp
+    ../runtime/guest_memory.cpp
+    ../runtime/guest_thread.cpp)
+target_include_directories(test_xam_notify PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}"
+    "${THIRDPARTY_ROOT}/simde"
+    ../extern/XenonRecomp/XenonUtils)
+target_link_libraries(test_xam_notify PRIVATE lucent::lucent)
+add_test(NAME xam_notify COMMAND test_xam_notify)
 
 # THE INSTRUMENTS' OWN SELF-TESTS, wired into ctest so they cannot rot.
 #
