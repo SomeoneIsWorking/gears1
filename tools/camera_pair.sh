@@ -47,6 +47,7 @@ set -eu
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
 . "$REPO/tools/env.sh"
+GAME_DIR="${GEARS_GAME_DIR:-$REPO/scratch/game}"
 # The full gameplay walk ends at f6150 and is unusably slow under oracle
 # diagnostics. This pair-specific route is the measured minimum that reconciles
 # the two boot states: START opens/pauses their current screen and A closes both
@@ -72,15 +73,29 @@ export GEARS_WALK_TABLE
 # caller may override GEARS_WALK_TABLE, but overriding only GEARS_INPUT_SCRIPT
 # would put the two guests back into different UI states and is deliberately
 # ignored here.
-PAIR_INPUT_OURS=$(gears_walk_ours)
-PAIR_INPUT_THEIRS=$(gears_walk_theirs)
+STARTUP_MAP=$(python3 "$REPO/tools/startup_map.py" show --game-dir "$GAME_DIR" \
+    2>/dev/null | sed -n 's/.*LocalMap=\([^ ]*\).*/\1/p' | head -1)
+case "${STARTUP_MAP:-}" in
+    ""|[Ww]ar[Ss]tart*)
+        DIRECT_BOOT=0
+        PAIR_INPUT_OURS=$(gears_walk_ours)
+        PAIR_INPUT_THEIRS=$(gears_walk_theirs)
+        WALK_LAST_FRAME=$(gears_walk_last_frame)
+        ;;
+    *)
+        DIRECT_BOOT=1
+        PAIR_INPUT_OURS=""
+        PAIR_INPUT_THEIRS=""
+        WALK_LAST_FRAME=0
+        echo "startup map is '$STARTUP_MAP': both guests boot it directly with no pad schedule"
+        ;;
+esac
 GEARS_INPUT_SCRIPT=$PAIR_INPUT_OURS
 export GEARS_INPUT_SCRIPT
 
 SECONDS_TO_RUN="${1:-300}"
 OUT="${2:-$REPO/scratch/camerapair}"
 VS_HASH="${3:-f3e9368c1bb68ecc}"
-GAME_DIR="${GEARS_GAME_DIR:-$REPO/scratch/game}"
 ORACLE="$REPO/scratch/oracle/oracle-build/xenia_oracle"
 RUNTIME="${GEARS_BUILD_DIR:-$REPO/scratch/build}/runtime/gears1"
 : "${GEARS_LAYER_MIN_DRAWS:=400}"
@@ -95,8 +110,6 @@ esac
     echo "REFUSING: CAMERA_CONST_BASE=$CAMERA_CONST_BASE cannot name four rows in c0..c255" >&2
     exit 2
 }
-WALK_LAST_FRAME=$(gears_walk_last_frame)
-
 [ -x "$ORACLE" ]  || { echo "REFUSING: $ORACLE not built" >&2; exit 2; }
 [ -x "$RUNTIME" ] || { echo "REFUSING: $RUNTIME not built" >&2; exit 2; }
 [ -f "$GAME_DIR/default.xex" ] || { echo "REFUSING: no default.xex" >&2; exit 2; }
@@ -127,6 +140,7 @@ GEARS_ORACLE_PRIM_STATS="${PRIM_STATS:-}" \
     --oracle_frames=$((SECONDS_TO_RUN * 30)) \
     --oracle_frame_interval=1200 \
     --oracle_frame_timeout="$SECONDS_TO_RUN" \
+    --oracle_allow_no_input=$([ "$DIRECT_BOOT" = 1 ] && echo true || echo false) \
     --oracle_input="$PAIR_INPUT_THEIRS" > "$OUT/theirs.log" 2>&1 &
 opid=$!
 trap 'kill -9 "$opid" 2>/dev/null || true' EXIT INT TERM
@@ -161,14 +175,24 @@ oracle_schedules=$(grep -c 'oracle: [0-9][0-9]* scheduled press(es)' \
     "$OUT/theirs.log" 2>/dev/null || true)
 oracle_frame_driven=$(grep -c 'oracle: input and captures are driven by the GUEST FRAME COUNTER' \
     "$OUT/theirs.log" 2>/dev/null || true)
-if [ "$oracle_schedules" -ne 1 ] || [ "$oracle_frame_driven" -ne 1 ]; then
+oracle_no_input=$(grep -c 'oracle: NO input schedule, by request' \
+    "$OUT/theirs.log" 2>/dev/null || true)
+if [ "$DIRECT_BOOT" = 1 ]; then
+    if [ "$oracle_no_input" -ne 1 ] || [ "$oracle_schedules" -ne 0 ]; then
+        echo "REFUSING: direct-boot oracle input validation scanned $oracle_input_lines line(s)," >&2
+        echo "found $oracle_no_input no-input declaration(s) and $oracle_schedules schedule(s)." >&2
+        exit 10
+    fi
+    echo "   oracle input validated: direct startup-map boot, one explicit no-input declaration"
+elif [ "$oracle_schedules" -ne 1 ] || [ "$oracle_frame_driven" -ne 1 ]; then
     echo "REFUSING: oracle input validation scanned $oracle_input_lines input log line(s)," >&2
     echo "found $oracle_schedules schedule declaration(s) and $oracle_frame_driven" >&2
     echo "guest-frame declaration(s). Both guests must accept the shared walk." >&2
     grep 'oracle:.*input' "$OUT/theirs.log" | head -5 >&2 || true
     exit 10
+else
+    echo "   oracle input validated: scanned $oracle_input_lines input log line(s), one shared schedule"
 fi
-echo "   oracle input validated: scanned $oracle_input_lines input log line(s), one shared schedule"
 
 # A GPU fault ends the run. It is never retried here, and it is never treated
 # as an environmental hiccup: the FIRST device loss stops the session's GPU work.
@@ -257,21 +281,29 @@ trap - EXIT INT TERM
 input_lines=$(grep -c '^\[input\]' "$OUT/ours.log" 2>/dev/null || true)
 scripted_sources=$(grep -c '^\[input\] scripted input:' "$OUT/ours.log" 2>/dev/null || true)
 scripted_steps=$(grep -c '^\[input\] scripted pad at ' "$OUT/ours.log" 2>/dev/null || true)
-if [ "$scripted_sources" -ne 1 ] || [ "$scripted_steps" -lt 1 ]; then
+if [ "$DIRECT_BOOT" = 1 ]; then
+    if [ "$scripted_sources" -ne 0 ] || [ "$scripted_steps" -ne 0 ]; then
+        echo "REFUSING: direct-boot native unexpectedly accepted/fired a pad schedule" >&2
+        exit 10
+    fi
+    echo "   native input validated: direct startup-map boot, no scripted pad transitions"
+elif [ "$scripted_sources" -ne 1 ] || [ "$scripted_steps" -lt 1 ]; then
     echo "REFUSING: native input validation scanned $input_lines input log line(s)," >&2
     echo "found $scripted_sources scripted-source declaration(s) and $scripted_steps" >&2
     echo "fired scripted step(s). The camera can match behind a modal, so this pair" >&2
     echo "cannot support a pixel or pass comparison." >&2
     grep '^\[input\]' "$OUT/ours.log" | head -5 >&2 || true
     exit 10
+else
+    echo "   native input validated: scanned $input_lines input log line(s), one scripted source, $scripted_steps fired step(s)"
 fi
-echo "   native input validated: scanned $input_lines input log line(s), one scripted source, $scripted_steps fired step(s)"
 
 selector_calls=$(grep -c '^\[xam\] storage device selected automatically:' \
     "$OUT/ours.log" 2>/dev/null || true)
-if [ "$selector_calls" -ne 1 ]; then
+expected_selectors=$([ "$DIRECT_BOOT" = 1 ] && echo 0 || echo 1)
+if [ "$selector_calls" -ne "$expected_selectors" ]; then
     echo "REFUSING: native logged $selector_calls automatic storage selections;" >&2
-    echo "exactly one is required before the title-owned storage modal can be absent." >&2
+    echo "$expected_selectors required for direct_boot=$DIRECT_BOOT before UI-state scoring." >&2
     exit 11
 fi
 

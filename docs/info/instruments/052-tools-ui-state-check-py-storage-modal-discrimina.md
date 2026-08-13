@@ -11,8 +11,8 @@ tools/ui_state_check.py storage-modal discriminator
 
 ## Validated by
 
-Synthetic selftest accepts measured clean classes 1/2 and refuses measured modal classes 9/10, blind 0 and unknown 3. Real positives: scratch/camerapair_ui_repaired_20260814/ours/draws.tsv scans 863 rows and matches 1; scratch/camerapair_turn_clean_final_20260814/ours/draws.tsv scans 1658 rows and matches 2. Real negative scratch/camerapair_character_20260813/ours/draws.tsv scans 896 and matches 9, then refuses. Missing/empty and zero-match corpora also refuse.
+The discriminator is the shape of the UI draw run, not the frame-wide count. The real bad frame in scratch/camerapair_character_20260813/ours/draws.tsv has nine matches split as one baseline draw plus an eight-draw consecutive suffix; the clean repaired frame has one isolated draw, the clean turned frame has two isolated draws, and the clean static-world pair has two isolated draws. The shipping selftest therefore accepts one isolated draw, two isolated draws, zero draws, and nine isolated draws; refuses the measured one-plus-eight and eight-consecutive modal classes; and refuses an unknown three-consecutive class. The real bad table refuses after scanning 896 rows (9 matches, longest run 8), while the repaired real table passes after scanning 863 (1 match, longest run 1). Missing and empty tables still refuse.
 
 ## Known failure modes
 
-(none recorded yet)
+This detects the measured storage modal, not arbitrary title-owned UI. A run of two through seven consecutive occurrences refuses as unknown rather than being guessed clean or modal. Zero occurrences are accepted because materially different scenes need not issue this shader pair at all; absence is not used as evidence that the scene is overlay-free.

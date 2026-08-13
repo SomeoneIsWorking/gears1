@@ -278,9 +278,9 @@ if(Python3_Interpreter_FOUND)
         message(WARNING "NumPy unavailable: first_divergence selftest is not registered")
     endif()
     # A camera and input schedule can both match behind a title-owned modal.
-    # Exercise the measured clean (1/2 draws), storage-modal (9/10), blind (0)
-    # and unknown (3) classes so the capture harness cannot silently accept
-    # unequal UI state.
+    # Exercise isolated clean draws, the measured consecutive eight-draw modal
+    # suffix, zero occurrences and an unknown run so the capture harness cannot
+    # silently accept unequal UI state or overfit a whole-frame draw count.
     add_test(NAME instrument_ui_state
         COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_SOURCE_DIR}/tools/ui_state_check.py" --selftest)
