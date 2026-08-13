@@ -66,7 +66,8 @@ export GEARS_MENU_WALK_MIN_SECONDS
 # counter on both sides while the wall clock runs on. Indexed by frames, a load
 # that takes twice as long simply delays the next press instead of desyncing.
 #
-# Each entry is `<frame>:<name>`. A name is a BUTTON (START/A/B/X/Y) or a STICK
+# Each entry is `<frame>:<name>`. A name is a BUTTON (START/A/B/X/Y), a held
+# button (`START~120`), or a STICK
 # deflection (LX/LY/RX/RY with +, - or 0, where 0 re-centres). Buttons are held
 # briefly and released; a deflection is held until something touches that axis
 # again -- the same semantics on both sides.
@@ -84,11 +85,12 @@ export GEARS_WALK_HOLD_FRAMES
 gears_walk_ours() {
     _out=""
     for _e in $GEARS_WALK_TABLE; do
-        _f=${_e%%:*}; _n=${_e#*:}
+        _f=${_e%%:*}; _n=${_e#*:}; _hold=$GEARS_WALK_HOLD_FRAMES
+        case "$_n" in *~*) _hold=${_n#*~}; _n=${_n%%~*} ;; esac
         case "$_n" in
             L[XY]0|R[XY]0) _out="$_out,f$_f:" ;;          # re-centre
             L[XY][+-]|R[XY][+-]) _out="$_out,f$_f:$_n" ;; # hold a deflection
-            *) _out="$_out,f$_f:$_n,f$((_f + GEARS_WALK_HOLD_FRAMES)):" ;;
+            *) _out="$_out,f$_f:$_n,f$((_f + _hold)):" ;;
         esac
     done
     printf '%s' "${_out#,}"
@@ -99,8 +101,21 @@ gears_walk_ours() {
 gears_walk_theirs() {
     _out=""
     for _e in $GEARS_WALK_TABLE; do
-        _f=${_e%%:*}; _n=${_e#*:}
-        _out="$_out,$_n@$_f"
+        _f=${_e%%:*}; _n=${_e#*:}; _hold=$GEARS_WALK_HOLD_FRAMES
+        case "$_n" in *~*) _hold=${_n#*~}; _n=${_n%%~*} ;; esac
+        case "$_n" in
+            L[XY]0|R[XY]0|L[XY][+-]|R[XY][+-]) _out="$_out,$_n@$_f" ;;
+            *)
+                _at=$_f; _last=$((_f + _hold - GEARS_WALK_HOLD_FRAMES))
+                [ "$_last" -lt "$_f" ] && _last=$_f
+                while :; do
+                    _out="$_out,$_n@$_at"
+                    [ "$_at" -ge "$_last" ] && break
+                    _at=$((_at + GEARS_WALK_HOLD_FRAMES - 1))
+                    [ "$_at" -gt "$_last" ] && _at=$_last
+                done
+                ;;
+        esac
     done
     printf '%s' "${_out#,}"
 }
@@ -111,8 +126,9 @@ gears_walk_theirs() {
 gears_walk_last_frame() {
     _last=0
     for _e in $GEARS_WALK_TABLE; do
-        _f=${_e%%:*}
-        [ "$_f" -gt "$_last" ] && _last=$_f
+        _f=${_e%%:*}; _n=${_e#*:}; _end=$_f
+        case "$_n" in *~*) _end=$((_f + ${_n#*~})) ;; esac
+        [ "$_end" -gt "$_last" ] && _last=$_end
     done
     printf '%s' "$_last"
 }

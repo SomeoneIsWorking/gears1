@@ -277,6 +277,13 @@ if(Python3_Interpreter_FOUND)
     else()
         message(WARNING "NumPy unavailable: first_divergence selftest is not registered")
     endif()
+    # A camera and input schedule can both match behind a title-owned modal.
+    # Exercise the measured clean (1/2 draws), storage-modal (9/10), blind (0)
+    # and unknown (3) classes so the capture harness cannot silently accept
+    # unequal UI state.
+    add_test(NAME instrument_ui_state
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tools/ui_state_check.py" --selftest)
 endif()
 
 # RtlTimeToTimeFields / RtlTimeFieldsToTime. Verified until now only by "the
