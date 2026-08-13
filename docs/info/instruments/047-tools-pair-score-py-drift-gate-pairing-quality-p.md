@@ -1,8 +1,9 @@
 ---
 id: I047
 kind: instrument
-status: trusted
+status: DISTRUSTED
 created: 2026-08-12
+distrusted_on: 2026-08-13
 ---
 
 ## Instrument
@@ -16,3 +17,9 @@ The old 0.60 gate was calibrated on the positive control -- our frame.ppm agains
 ## Known failure modes
 
 (none recorded yet)
+
+## DISTRUSTED 2026-08-13
+
+camerapair_shared_hdr_20260813 compared an oracle pause menu (actual f840 raw decode) against native's NO STORAGE DEVICE modal at cross-correlation 0.1522; the five-frame oracle self-curve bottomed at 0.9999, but pair_score clamped the out-of-range score to its last point and falsely passed it as one frame of drift
+
+> Every result this instrument produced is suspect until it is re-validated.
