@@ -186,6 +186,12 @@ add_test(NAME xam_notify COMMAND test_xam_notify)
 # A self-test nobody runs is the same failure one level up, so they run here.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME source_structure
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py")
+    add_test(NAME source_structure_selftest
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py" --selftest)
     add_test(NAME instrument_find_addr_refs
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/find_addr_refs.py" --selftest)
     add_test(NAME instrument_atomic_audit
@@ -341,6 +347,13 @@ add_test(NAME queue_family COMMAND test_queue_family)
 add_executable(test_frame_artifact_policy test_frame_artifact_policy.cpp)
 target_include_directories(test_frame_artifact_policy PRIVATE ../runtime)
 add_test(NAME frame_artifact_policy COMMAND test_frame_artifact_policy)
+
+# Persistent EDRAM images are capacities, not a declaration that every frame
+# must have the same active sample grid. Shrinking used to destroy an image
+# while the window presenter was still blitting it.
+add_executable(test_gpu_extent_capacity test_gpu_extent_capacity.cpp)
+target_include_directories(test_gpu_extent_capacity PRIVATE ../runtime)
+add_test(NAME gpu_extent_capacity COMMAND test_gpu_extent_capacity)
 
 # The shared-VkInstance extension bookkeeping. Two devices cost a readback and a
 # staging upload of every frame; unifying them starts with the instance, since a
