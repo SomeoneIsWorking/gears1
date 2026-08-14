@@ -3,6 +3,7 @@
 
     tools/startup_map.py show
     tools/startup_map.py set SP_Prison_P
+    tools/startup_map.py checkpoint 45
     tools/startup_map.py restore
     tools/startup_map.py --selftest
     tools/startup_map.py maps
@@ -42,6 +43,7 @@ DEFAULT_CONFIG = "WarGame/Config/Xenon/Cooked/Coalesced.ini"
 # to and LocalMap is the standalone-play default; the title sets both, so this
 # sets both.
 URL_KEYS = ("Map", "LocalMap")
+FIRST_CHAPTER = 37
 
 
 def parse(data):
@@ -129,6 +131,22 @@ def set_url(body, values):
     return head + "\n".join(lines) + tail, changed
 
 
+def parse_checkpoint(data):
+    """Return the serialized (version, chapter, persistent map), or refuse."""
+    if len(data) < 21:
+        raise ValueError(f"checkpoint is only {len(data)} bytes")
+    version, chapter = struct.unpack_from(">II", data, 0)
+    strlen = struct.unpack_from(">i", data, 16)[0]
+    if strlen <= 1 or 20 + strlen > len(data) or data[20 + strlen - 1] != 0:
+        raise ValueError(f"checkpoint FString length {strlen} does not fit {len(data)} bytes")
+    mapname = data[20:20 + strlen - 1].decode("latin1")
+    return version, chapter, mapname
+
+
+def checkpoint_dir(path):
+    return path.parents[3] / "Checkpoints"
+
+
 def config_path(args):
     game = Path(args.game_dir) if args.game_dir else REPO / "scratch" / "game"
     return game / DEFAULT_CONFIG
@@ -153,6 +171,13 @@ def cmd_show(path):
     print(f"{found} of {len(files)} config file(s) carry a [URL] startup map")
     b = backup_path(path)
     print(f"backup: {'present at ' + str(b) if b.exists() else 'NONE -- set has not run yet'}")
+    slot = checkpoint_dir(path) / f"chapter{FIRST_CHAPTER}.sav"
+    if slot.is_file():
+        version, chapter, mapname = parse_checkpoint(slot.read_bytes())
+        print(f"campaign slot {FIRST_CHAPTER}: payload chapter={chapter} map={mapname} "
+              f"version={version} bytes={slot.stat().st_size}")
+    else:
+        print(f"campaign slot {FIRST_CHAPTER}: MISSING at {slot}")
     return 0
 
 
@@ -195,13 +220,65 @@ def cmd_set(path, mapname):
     return 0
 
 
+def cmd_checkpoint(path, chapter):
+    if chapter < 37 or chapter > 69:
+        print(f"REFUSING: chapter {chapter} is outside the shipped checkpoint range 37..69. "
+              "Nothing was written.")
+        return 2
+    checkpoints = checkpoint_dir(path)
+    slot = checkpoints / f"chapter{FIRST_CHAPTER}.sav"
+    original = slot.with_suffix(slot.suffix + ".orig")
+    source = checkpoints / f"chapter{chapter}.sav"
+    if chapter == FIRST_CHAPTER and original.is_file():
+        source = original
+    if not source.is_file():
+        print(f"REFUSING: {source} is missing, so the requested campaign state does "
+              "not exist. Nothing was written.")
+        return 2
+    source_data = source.read_bytes()
+    version, embedded_chapter, mapname = parse_checkpoint(source_data)
+    if version != 2 or embedded_chapter != chapter:
+        print(f"REFUSING: {source} identifies itself as version {version}, chapter "
+              f"{embedded_chapter}, not requested chapter {chapter}. Nothing was written.")
+        return 2
+    if not slot.is_file():
+        print(f"REFUSING: selected campaign slot {slot} is missing. Nothing was written.")
+        return 2
+    if not original.exists():
+        slot_version, slot_chapter, slot_map = parse_checkpoint(slot.read_bytes())
+        if slot_version != 2 or slot_chapter != FIRST_CHAPTER:
+            print(f"REFUSING: will not back up slot {FIRST_CHAPTER}: it currently embeds "
+                  f"version {slot_version}, chapter {slot_chapter}, map {slot_map}. "
+                  "Nothing was written.")
+            return 2
+        shutil.copy2(slot, original)
+        print(f"backed up original chapter-{FIRST_CHAPTER} slot to {original}")
+    shutil.copy2(source, slot)
+    if slot.read_bytes() != source_data:
+        print("REFUSING TO REPORT SUCCESS: selected checkpoint did not read back byte-identical")
+        return 2
+    print(f"campaign slot {FIRST_CHAPTER} now contains chapter {chapter}: {mapname} "
+          f"({len(source_data)} bytes, byte-identical readback); both emulators read this tree")
+    return 0
+
+
 def cmd_restore(path):
     b = backup_path(path)
-    if not b.exists():
-        print(f"nothing to restore: {b} does not exist")
+    slot = checkpoint_dir(path) / f"chapter{FIRST_CHAPTER}.sav"
+    original = slot.with_suffix(slot.suffix + ".orig")
+    restored = 0
+    if b.exists():
+        shutil.copy2(b, path)
+        print(f"restored {path} from {b}")
+        restored += 1
+    if original.is_file():
+        shutil.copy2(original, slot)
+        print(f"restored {slot} from {original}")
+        restored += 1
+    if restored == 0:
+        print(f"REFUSING: neither config backup {b} nor checkpoint backup {original} "
+              "exists; nothing was restored")
         return 1
-    shutil.copy2(b, path)
-    print(f"restored {path} from {b}")
     return cmd_show(path)
 
 
@@ -252,7 +329,18 @@ def selftest():
     rt = any(read_url(b).get("LocalMap") == "SELFTEST_MAP" for _, b in reread)
     print(f"selftest: the modified config re-parses and keeps the value: {rt} "
           f"(expected True)")
-    good = ok and fired and rt
+    checkpoints = checkpoint_dir(path)
+    chapter_results = []
+    for chapter in (37, 45):
+        cp = checkpoints / f"chapter{chapter}.sav"
+        if chapter == FIRST_CHAPTER and cp.with_suffix(cp.suffix + ".orig").is_file():
+            cp = cp.with_suffix(cp.suffix + ".orig")
+        version, embedded, mapname = parse_checkpoint(cp.read_bytes())
+        chapter_results.append(version == 2 and embedded == chapter and bool(mapname))
+        print(f"selftest: chapter{chapter}.sav embeds version={version}, chapter={embedded}, "
+              f"map={mapname}: {chapter_results[-1]} (expected True)")
+    chapter_ok = all(chapter_results)
+    good = ok and fired and rt and chapter_ok
     print("SELFTEST PASS" if good else "SELFTEST FAIL: do not let this tool write")
     return 0 if good else 1
 
@@ -261,8 +349,8 @@ def main(argv):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", nargs="?", default="show",
-                    choices=["show", "set", "restore", "maps"])
-    ap.add_argument("mapname", nargs="?")
+                    choices=["show", "set", "checkpoint", "restore", "maps"])
+    ap.add_argument("value", nargs="?")
     ap.add_argument("--game-dir", default=None,
                     help="the extracted game tree (default scratch/game)")
     ap.add_argument("--selftest", action="store_true",
@@ -282,10 +370,15 @@ def main(argv):
         if args.command == "restore":
             return cmd_restore(path)
         if args.command == "set":
-            if not args.mapname:
+            if not args.value:
                 print("REFUSING: `set` needs a map name. Try `maps` for the list.")
                 return 2
-            return cmd_set(path, args.mapname)
+            return cmd_set(path, args.value)
+        if args.command == "checkpoint":
+            if not args.value or not args.value.isdecimal():
+                print("REFUSING: `checkpoint` needs a decimal chapter number.")
+                return 2
+            return cmd_checkpoint(path, int(args.value))
     except ValueError as exc:
         print(f"REFUSING: {exc}. Nothing was written.")
         return 2

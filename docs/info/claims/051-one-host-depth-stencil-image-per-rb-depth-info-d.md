@@ -1,9 +1,10 @@
 ---
 id: C051
 kind: claim
-status: holds
+status: falsified
 created: 2026-08-12
 tags: 
+falsified_on: 2026-08-14
 ---
 
 ## Claim
@@ -17,3 +18,9 @@ tools/depth_arm_ab.sh on scratch/camerapair_ps: one frozen camera replayed throu
 ## What would falsify it
 
 any capture where the shadow atlas depth resolve scores below 0.95 against the console, or a change to SplitDepthEnabled() or its call sites in gpu_draw.cpp and gpu_draw_resolve_decode.cpp
+
+## FALSIFIED 2026-08-14
+
+Validated chapter-45 outdoor pair scratch/camerapair_chapter45_outdoor_wide_20260814, oracle f5737: first full shadow atlas scores 0.4633 against drift-matched console self 1.0000, below C051 expiry threshold 0.95. Scene color/depth remain at or above yardsticks, so this is a scene-specific atlas failure, catalog #109, not a broken pair.
+
+> Anything that cited this claim as proof must be re-checked. Grep the repo for it.
