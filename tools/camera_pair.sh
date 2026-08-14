@@ -250,7 +250,7 @@ echo "== our renderer, $SECONDS_TO_RUN s, gated on the console's own viewpoint =
 GEARS_NO_WINDOW=1 \
 GEARS_DRAW_FRAME_MIN_DRAWS="$GEARS_LAYER_MIN_DRAWS" \
 GEARS_DRAW_FRAME_MIN_GUEST_FRAME="$WALK_LAST_FRAME" \
-GEARS_DRAW_FRAME_AFTER_GAMEPLAY=0 \
+GEARS_DRAW_FRAME_AFTER_GAMEPLAY="$GEARS_LAYER_AFTER" \
 GEARS_DRAW_FRAME_COUNT=1 \
 GEARS_DRAW_FRAME_NEEDS="$VS_HASH" \
 GEARS_DRAW_FRAME_CAMERA="$FROZEN:$CAMERA_NEAR:$CAMERA_ROT_NEAR:$CAMERA_CONST_BASE" \
@@ -312,7 +312,8 @@ fi
 # retained NO STORAGE DEVICE while the oracle did not. The modal is eight extra
 # draws of a measured UI shader pair. Refuse before a moving-scene drift curve
 # can price the overlay as ordinary temporal change (issue #103).
-python3 "$REPO/tools/ui_state_check.py" "$OUT/ours/draws.tsv" || exit 11
+python3 "$REPO/tools/ui_state_check.py" "$OUT/ours/draws.tsv" \
+    --oracle "$OUT/theirs_order.tsv" || exit 11
 
 if grep -qi "DEVICE_LOST\|Graphics device lost" "$OUT/ours.log"; then
     echo "OUR RENDERER LOST THE VULKAN DEVICE. Nothing is retried." >&2
