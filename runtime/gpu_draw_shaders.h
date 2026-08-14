@@ -22,6 +22,7 @@
 
 #include "gpu_draw.h"
 #include "gpu_draw_renderer.h"
+#include "gpu_draw_shader_override.h"
 #include "gpu_draw_xlate.h"
 #include "spirv_clamp.h"
 
@@ -41,6 +42,7 @@ struct ShaderCache
     RendererPersistent& P;
     std::map<Key, ShaderXlate>& xlate;
     std::map<Key, VkShaderModule>& modules;
+    ShaderOverride diagnosticOverride;
 
     // What TRANSLATION cost this run, accumulated inside GetShader so the
     // number covers the misses and not the lookups. The frame timing line

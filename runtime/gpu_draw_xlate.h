@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "gpu_draw_texture_decode.h"
+
 // Bridge between the Xenos translator (which drags in Xenia's bundled
 // Vulkan-Headers) and the guest-draw renderer (which uses the system Vulkan
 // headers). The two header sets cannot coexist in one translation unit, so the
@@ -284,91 +286,6 @@ struct GuestViewport
 };
 bool DeriveViewport(const uint32_t* registerFile, GuestViewport& out);
 
-// --------------------------------------------------------------------------
-// Guest texture decode.
-//
-// A texture fetch constant (6 dwords at 0x4800 + fc*6) fully describes a guest
-// texture: base address, dimension, extents, format, tiling, endianness,
-// swizzle and mip range. This turns one into a host-uploadable blob using
-// Xenia's own texture_info / texture_util / texture_address -- the guest
-// layout, the tiled address function and the format table are all Xenia's, not
-// a reimplementation.
-//
-// Only the BASE level is decoded (host mip level 0). Mip tails are not read;
-// the caller creates a single-level image and the sampler clamps to it.
-
-// Host format for the decoded blob. Values are ours -- gpu_draw.cpp maps them
-// to VkFormat, because the two header sets cannot share a translation unit.
-enum class TexHostFormat : uint32_t
-{
-    kUnsupported = 0,
-    kR8Unorm,
-    kR8G8Unorm,
-    kR8G8B8A8Unorm,
-    kR5G6B5Pack16,
-    kA1R5G5B5Pack16,
-    kB4G4R4A4Pack16,
-    kA2B10G10R10Pack32,
-    kR16Sfloat,
-    kR16G16Sfloat,
-    kR16G16B16A16Sfloat,
-    kR16Unorm,
-    kR16G16Unorm,
-    kR16G16B16A16Unorm,
-    kR32Sfloat,
-    kR32G32Sfloat,
-    kR32G32B32A32Sfloat,
-    kBc1RgbaUnorm,
-    kBc2Unorm,
-    kBc3Unorm,
-    kBc4Unorm,
-    kBc5Unorm,
-};
-
-struct GuestTexture
-{
-    // --- description (always filled when Describe/Decode returns true) ---
-    uint32_t formatRaw = 0;        // xenos::TextureFormat as stored in the fetch
-    uint32_t baseFormatRaw = 0;    // after texture_info's GetBaseFormat
-    const char* formatName = "";   // Xenia's own name for formatRaw
-    uint32_t dimension = 0;        // xenos::DataDimension: 0=1D 1=2D/stacked 2=3D 3=cube
-    uint32_t width = 0;            // texels
-    uint32_t height = 0;
-    uint32_t depthOrArraySize = 1; // 3D depth, stacked array size, 6 for cube
-    bool tiled = false;
-    bool packedMips = false;
-    uint32_t mipMin = 0, mipMax = 0;
-    uint32_t baseAddress = 0;      // guest physical byte address of the base level
-    uint32_t endian = 0;           // xenos::Endian
-    uint32_t guestSwizzle = 0;     // raw 12-bit swizzle from the fetch
-
-    TexHostFormat hostFormat = TexHostFormat::kUnsupported;
-    // Per-component source, already combining the guest swizzle with the host
-    // format's own component order (Xenia TextureCache::GuestToHostSwizzle).
-    // Values: 0=R 1=G 2=B 3=A 4=zero 5=one. Index is the destination component.
-    uint8_t hostSwizzle[4] = {0, 1, 2, 3};
-
-    // The extent of the GUEST bytes this texture is decoded from, which is
-    // Xenia's own upper bound for the base level. Filled even when data was not
-    // asked for, because the texture cache needs it to notice that the guest has
-    // overwritten a texture at an address it is already caching -- the fetch
-    // constant is unchanged in that case, so nothing else distinguishes the new
-    // contents from the old.
-    uint32_t guestExtentBytes = 0;
-
-    // --- decoded payload (only when Decode was asked for data) -----------
-    uint32_t blockWidth = 1, blockHeight = 1, bytesPerBlock = 4;
-    uint32_t blocksX = 0, blocksY = 0; // base level extent in blocks
-    uint32_t layers = 1;               // host array layers (1 for 3D, 6 for cube)
-    uint32_t depth3D = 1;              // host image depth (1 unless 3D)
-    uint32_t rowPitchBytes = 0;        // tightly packed: blocksX * bytesPerBlock
-    std::vector<uint8_t> data;         // layer-major, then z, then rows
-
-    // Set when the fetch describes a texture the decoder deliberately did not
-    // upload; the reason is for the census, never for a silent substitution.
-    const char* skipReason = nullptr;
-};
-
 // Sampler state for one shader sampler binding, resolved against the texture
 // fetch constant it names (Xenia texture_util::GetClampModesForDimension plus
 // the kUseFetchConst filter fallbacks).
@@ -384,13 +301,5 @@ struct GuestSamplerState
 // Resolves one shader sampler binding against the fetch constant it names.
 bool DeriveSamplerState(const uint32_t* fetch6, const ShaderSamplerBinding& sb,
                         GuestSamplerState& out);
-
-// Decodes one texture fetch constant. `fetch6` points at the 6 raw dwords.
-// `guestBase`/`guestSize` are the guest physical window (the texture's base
-// address is an offset into it). With wantData=false only the description is
-// filled (cheap -- used for the frame census). Returns false only when the
-// fetch constant is not a texture fetch at all, or names address 0.
-bool DecodeGuestTexture(const uint32_t* fetch6, const uint8_t* guestBase,
-                        uint64_t guestSize, bool wantData, GuestTexture& out);
 
 } // namespace gears::draw

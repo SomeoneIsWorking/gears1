@@ -34,6 +34,7 @@ void Check(bool ok, const char* what)
 }
 
 using gears::HashGuestTexture;
+using gears::HashGuestTextureParts;
 using gears::GuestTextureUnchanged;
 
 void TestSameBytesHashTheSame()
@@ -85,6 +86,27 @@ void TestSingleBitChangeIsSeen()
         "and the policy reports it changed, so the cache re-uploads");
 }
 
+void TestEveryMipByteIsCovered()
+{
+    std::vector<uint8_t> base(256, 0x21);
+    std::vector<uint8_t> mips(1024, 0x42);
+    const uint64_t original = HashGuestTextureParts(
+        base.data(), base.size(), mips.data(), mips.size());
+    size_t missed = 0;
+    for (size_t i = 0; i < mips.size(); ++i)
+    {
+        mips[i] ^= 1;
+        missed += HashGuestTextureParts(base.data(), base.size(),
+                                        mips.data(), mips.size()) == original;
+        mips[i] ^= 1;
+    }
+    Check(missed == 0,
+        "every byte in disjoint mip storage changes the cache identity");
+    if (missed != 0)
+        printf("  %zu of %zu mip positions were invisible to the hash\n",
+               missed, mips.size());
+}
+
 // Length is part of the identity: a texture that grew must not be mistaken for the
 // same data.
 void TestLengthMatters()
@@ -125,6 +147,7 @@ int main()
     TestSameBytesHashTheSame();
     TestEverySinglePositionIsCovered();
     TestSingleBitChangeIsSeen();
+    TestEveryMipByteIsCovered();
     TestLengthMatters();
     TestOrderMatters();
     TestDegenerateInputs();

@@ -22,4 +22,19 @@ uint64_t HashGuestTexture(const uint8_t* bytes, size_t length)
     return uint64_t(XXH3_64bits(bytes, length));
 }
 
+uint64_t HashGuestTextureParts(const uint8_t* base, size_t baseLength,
+                               const uint8_t* mips, size_t mipLength)
+{
+    if ((base == nullptr && baseLength != 0) ||
+        (mips == nullptr && mipLength != 0))
+        return 0;
+    XXH3_state_t state;
+    XXH3_64bits_reset(&state);
+    if (baseLength != 0)
+        XXH3_64bits_update(&state, base, baseLength);
+    if (mipLength != 0)
+        XXH3_64bits_update(&state, mips, mipLength);
+    return uint64_t(XXH3_64bits_digest(&state));
+}
+
 } // namespace gears
