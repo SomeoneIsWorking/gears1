@@ -115,11 +115,18 @@ float HalfToFloat(uint16_t h)
     return f;
 }
 
-bool WritePpm(const std::filesystem::path& path, const uint8_t* rgba,
-              uint32_t w, uint32_t h)
+bool EnsureParentDirectory(const std::filesystem::path& path)
 {
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
+    return !ec;
+}
+
+bool WritePpm(const std::filesystem::path& path, const uint8_t* rgba,
+              uint32_t w, uint32_t h)
+{
+    if (!EnsureParentDirectory(path))
+        return false;
     std::ofstream f(path, std::ios::binary);
     if (!f)
         return false;

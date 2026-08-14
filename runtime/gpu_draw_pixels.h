@@ -55,6 +55,11 @@ float DepthUnorm24To32(uint32_t d24);
 // IEEE half to float, for reading back R16G16B16A16_SFLOAT targets.
 float HalfToFloat(uint16_t h);
 
+// Create the containing directory for a diagnostic artifact. All writers use
+// this owner so a new GEARS_DRAW_DIR works for the first artifact, not only
+// after another writer happened to create it.
+bool EnsureParentDirectory(const std::filesystem::path& path);
+
 // RGBA8 -> binary PPM. Returns false rather than throwing, and the caller is
 // expected to say so: a diagnostic image that failed to write must not be
 // reported as an image that showed nothing.
