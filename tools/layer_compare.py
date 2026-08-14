@@ -625,8 +625,8 @@ def selftest(work, np, Image):
 def main(argv):
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--ours", required=True)
-    ap.add_argument("--theirs", required=True)
+    ap.add_argument("--ours")
+    ap.add_argument("--theirs")
     ap.add_argument("--out", default=None)
     # A comparison that can only ever print "match" is not a comparison. This
     # feeds the tool a pair it MUST call equal and a pair it MUST call
@@ -643,7 +643,12 @@ def main(argv):
         return 2
 
     if args.selftest:
-        return selftest(Path(args.ours), np, Image)
+        work = Path(args.ours) if args.ours else Path("scratch/layer_compare_selftest")
+        return selftest(work, np, Image)
+
+    if not args.ours or not args.theirs:
+        print("REFUSING: --ours and --theirs are required. Nothing was compared.")
+        return 2
 
     ours_dir, theirs_dir = Path(args.ours), Path(args.theirs)
     for d in (ours_dir, theirs_dir):

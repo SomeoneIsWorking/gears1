@@ -290,7 +290,7 @@ trap - EXIT INT TERM
 
 # A close camera is not proof that both guests reached the same UI state.  A
 # disconnected native pad once left the NO STORAGE DEVICE modal over gameplay;
-# pair_score still passed because most background pixels remained correlated.
+# a whole-frame correlation hid it because most background pixels still agreed.
 # Prove both that the runtime accepted the script and that the title polled far
 # enough for at least one scripted transition to fire.
 input_lines=$(grep -c '^\[input\]' "$OUT/ours.log" 2>/dev/null || true)
@@ -341,7 +341,8 @@ grep -q "CAMERA MATCHED" "$OUT/ours.log" || {
     echo "run measured NOTHING." >&2
     exit 6; }
 
-# ------------------------------------------------------------------ the score
-echo "== scoring the pair (it is measured, not assumed) =="
+# ---------------------------------------------------------- structural passes
+echo "== structurally pairing every resolved pass =="
 python3 "$REPO/tools/provenance.py" check "$OUT/ours" "$OUT/theirs" || exit 7
-exec python3 "$REPO/tools/pair_score.py" --ours "$OUT/ours" --theirs "$OUT/theirs"
+exec python3 "$REPO/tools/layer_compare.py" \
+    --ours "$OUT/ours" --theirs "$OUT/theirs" --out "$OUT/layers"

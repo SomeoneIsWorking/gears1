@@ -69,7 +69,7 @@ def main():
 
     import numpy as np
     from front_buffer_percentiles import load_ppm, same_picture
-    from first_divergence import load_console, degenerate
+    from surface_decode import constant_buffer, load_console
 
     td = pathlib.Path(a.pair) / "theirs"
     frames = sorted({int(m.group(1)) for f in td.glob("oracle_f*_copy*.bin")
@@ -171,7 +171,7 @@ def main():
         for arm, path in (("shared", f), ("split", osp[6]),
                           ("control", ctrl[n][6]), ("default", dflt[n][6])):
             img = load_ppm(str(path))
-            flat, val = degenerate(img, np)
+            flat, val = constant_buffer(img, np)
             if flat:
                 cells.append(f"FLAT {val:.3f}")
                 vals[arm] = None
@@ -258,10 +258,10 @@ def main():
             if abs(d - sp) > abs(d - sh):
                 print(f"     {label}: default {d:+.4f} sits nearer shared "
                       f"{sh:+.4f} than split {sp:+.4f}")
-    print("\nA difference that clears the noise floor still has to clear the "
-          "pass's own TEMPORAL volatility (tools/pass_volatility.py) before it "
-          "means the depth model. And ONE MOMENT CANNOT ESTABLISH A MODEL -- at "
-          "most it removes a piece of evidence against one.")
+    print("\nA difference between arms is evidence only when it survives the "
+          "repeat control and camera-residual spread printed above. ONE MOMENT "
+          "CANNOT ESTABLISH A MODEL -- at most it removes a piece of evidence "
+          "against one.")
     return 0
 
 
@@ -269,15 +269,15 @@ def selftest():
     """Drive both classes: arms that must read identical, and one degenerate."""
     import numpy as np
     from front_buffer_percentiles import same_picture
-    from first_divergence import degenerate
+    from surface_decode import constant_buffer
     yy, xx = np.mgrid[0:120, 0:160]
     ref = np.stack([(np.exp(-((yy - 60) ** 2 + (xx - 80) ** 2) / 900.0)
                      ).astype(np.float32)] * 3, axis=-1)
     same = ref * 0.5
     flat = np.ones_like(ref)
     r_same, _ = same_picture(same, ref, np)
-    f_flat, v_flat = degenerate(flat, np)
-    f_ref, _ = degenerate(ref, np)
+    f_flat, v_flat = constant_buffer(flat, np)
+    f_ref, _ = constant_buffer(ref, np)
     ok = r_same > 0.9 and f_flat and v_flat == 1.0 and not f_ref
     print(f"IDENTICAL ARMS (scaled copy vs reference): {r_same:+.4f} > 0.90 -> "
           f"{'PASS' if r_same > 0.9 else 'FAIL'}")

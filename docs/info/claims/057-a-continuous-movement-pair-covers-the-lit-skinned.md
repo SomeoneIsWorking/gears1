@@ -1,10 +1,11 @@
 ---
 id: C057
 kind: claim
-status: holds
+status: falsified
 created: 2026-08-14
 tags: oracle,render,pairing,character,skinning,translucency
 depends: tools/camera_pair.sh, tools/menu_walk.sh, tools/ui_state_check.py, tools/first_divergence.py
+falsified_on: 2026-08-14
 ---
 
 ## Claim
@@ -18,3 +19,9 @@ scratch/camerapair_forward_crossing_20260814 used `90:START~120 600:A 700:RX+ 78
 ## What would falsify it
 
 A repeat failing startup/input/UI/provenance/camera/drift gates, evidence that the centered mesh is not a skinned character, or a corrected decoder/metric yielding a >=0.15 deficit on this preserved pair.
+
+## FALSIFIED 2026-08-14
+
+Withdrawn because its clean-renderer conclusion comes from the retired aggregate/per-pass correlation scorers rather than an exact first divergent draw.
+
+> Anything that cited this claim as proof must be re-checked. Grep the repo for it.
