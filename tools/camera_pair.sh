@@ -34,6 +34,10 @@
 #                          shader on BOTH sides. Use this for pass matrices
 #                          whose winning oracle frame is known only after the
 #                          drift curve is scored.
+#   VDUMP_VS=<vs hash>:<min>-<max> fingerprint the complete guest index and
+#                          vertex-fetch buffers of every matching draw on both
+#                          sides. This compares geometry inputs, not aggregate
+#                          primitive counts.
 #
 # THE CAMERA IS NAMED BY SHADER HASH, NOT BY DRAW ORDINAL. An ordinal is not
 # stable across runs -- ordinal 294 was the camera shader in one run and a
@@ -137,6 +141,8 @@ GEARS_ORACLE_DRAW_ORDER="$OUT/theirs_order.tsv" \
 GEARS_ORACLE_VS_CONSTS="$VS_HASH" \
 GEARS_ORACLE_VS_CONSTS_ALL="${VS_CONSTS_ALL:-}" \
 GEARS_ORACLE_VS_CONSTS_ALL_OUT="$OUT/theirs_vs_consts_all.txt" \
+GEARS_ORACLE_VDUMP_VS="${VDUMP_VS:-}" \
+GEARS_ORACLE_VDUMP_VS_OUT="$OUT/theirs_geometry.txt" \
 GEARS_ORACLE_PRIM_STATS="${PRIM_STATS:-}" \
     "$ORACLE" \
     --store_shaders=false \
@@ -261,6 +267,7 @@ GEARS_DRAW_FRAME_COUNT=1 \
 GEARS_DRAW_FRAME_NEEDS="$VS_HASH" \
 GEARS_DRAW_FRAME_CAMERA="$FROZEN:$CAMERA_NEAR:$CAMERA_ROT_NEAR:$CAMERA_CONST_BASE" \
 GEARS_DRAW_VS_CONSTS_VS="${VS_CONSTS_ALL:-}" \
+GEARS_DRAW_VDUMP_VS="${VDUMP_VS:-}" \
 GEARS_DRAW_RESOLVE_DUMP_EACH=1 \
 GEARS_DRAW_DIAG="$OUT/ours/draws.tsv" \
 GEARS_DRAW_DIR="$OUT/ours" \
