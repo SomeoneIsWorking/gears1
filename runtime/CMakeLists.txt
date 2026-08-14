@@ -244,7 +244,9 @@ if(Vulkan_FOUND AND GEARS_HAVE_XENOS_TRANSLATOR)
     # Vulkan-Headers) are consumed HERE and not re-exported to gears1. Linking
     # xenia_gpu PRIVATE means gears1 still gets its symbols at the final link but
     # none of its header world.
-    add_library(gears_draw_xlate STATIC gpu_draw_xlate.cpp)
+    add_library(gears_draw_xlate STATIC
+        gpu_draw_depth_bias.cpp
+        gpu_draw_xlate.cpp)
     target_compile_definitions(gears_draw_xlate PRIVATE GEARS_HAVE_GUEST_DRAW)
     target_include_directories(gears_draw_xlate PRIVATE .)
     target_link_libraries(gears_draw_xlate PRIVATE xenia_gpu lucent::lucent)

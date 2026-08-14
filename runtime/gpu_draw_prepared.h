@@ -25,6 +25,11 @@ struct PreparedDraw
     bool indexed;
     VkViewport viewport; // the guest's own, per draw
     VkRect2D scissor;
+    // Dynamic Vulkan depth bias translated from PA_SU_POLY_OFFSET_* using
+    // Xenia's host-render-target conversion. These are per draw: UE3 toggles
+    // and changes shadow-map bias without changing the shader.
+    float depthBiasConstant = 0.0f;
+    float depthBiasSlope = 0.0f;
     // Which EDRAM surface this draw renders into. The recording pass below
     // walks these in submission order and re-binds the render pass whenever
     // the surface changes.

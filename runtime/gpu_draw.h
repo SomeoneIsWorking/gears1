@@ -67,6 +67,10 @@ struct FrameDrawItem
     uint32_t indexCount = 0;   // == vertex count for a non-indexed (auto) draw
     bool indexed = true;       // false: auto/sequential index (source_select kAutoIndex)
     bool indexIs32 = true;
+    // VGT_DMA_SIZE.swap_mode. Index byte order is draw state, not a property
+    // of the title or index width; dropping it regrouped valid vertices into
+    // different triangles while leaving all primitive counts plausible.
+    uint32_t indexEndian = 0;
     uint32_t indexGuestBase = 0;
 };
 

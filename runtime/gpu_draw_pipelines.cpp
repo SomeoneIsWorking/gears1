@@ -179,10 +179,11 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
     vps.viewportCount = 1;
     vps.scissorCount = 1;
     const VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT,
-                                        VK_DYNAMIC_STATE_SCISSOR};
+                                        VK_DYNAMIC_STATE_SCISSOR,
+                                        VK_DYNAMIC_STATE_DEPTH_BIAS};
     VkPipelineDynamicStateCreateInfo dyn{
         VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
-    dyn.dynamicStateCount = 2;
+    dyn.dynamicStateCount = 3;
     dyn.pDynamicStates = dynStates;
     VkPipelineRasterizationStateCreateInfo rs{
         VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
@@ -194,6 +195,10 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
     static const bool noClamp = lucent::config::flag("DRAW_NOCLAMP");
     rs.depthClampEnable = (om.depthClamp && !noClamp) ? VK_TRUE : VK_FALSE;
     rs.polygonMode = VK_POLYGON_MODE_FILL;
+    // Xenia keeps this dynamic even when the current factors are zero: UE3
+    // changes PA_SU_POLY_OFFSET_* between draws and Vulkan otherwise ignores
+    // vkCmdSetDepthBias entirely. Every pass here has a depth attachment.
+    rs.depthBiasEnable = VK_TRUE;
     rs.cullMode = VK_CULL_MODE_NONE;
     rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     static const bool noCull = lucent::config::flag("DRAW_NOCULL");

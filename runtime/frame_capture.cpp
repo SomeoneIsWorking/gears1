@@ -22,7 +22,10 @@ constexpr char kMagic[8] = {'G', 'E', 'A', 'R', 'S', 'F', 'R', '1'};
 // is; only the fetch constant says how to read it -- format, size, tiling and
 // swizzle -- and an oracle handed the frame without it cannot present anything
 // at all (Xenia takes the swap texture from fetch slot 0).
-constexpr uint32_t kVersion = 3;
+// v4 preserves VGT_DMA_SIZE.swap_mode in the previously-unused upper bits of
+// each draw's flags. Versions 1..3 replay with k8in32, the only behavior the
+// old renderer could express, so old evidence does not silently change.
+constexpr uint32_t kVersion = 4;
 // Guest memory is stored per block so an untouched region costs nothing. 64 KiB
 // is small enough that a texture or vertex buffer does not drag in megabytes of
 // neighbouring emptiness, and large enough that the index stays short.
@@ -163,7 +166,8 @@ bool WriteFrameCapture(const std::filesystem::path& path, const FrameDrawInputs&
         w.pod(refs[i].ps);
         w.pod(d.primType);
         w.pod(d.indexCount);
-        w.pod(uint32_t((d.indexed ? 1u : 0u) | (d.indexIs32 ? 2u : 0u)));
+        w.pod(uint32_t((d.indexed ? 1u : 0u) | (d.indexIs32 ? 2u : 0u) |
+                       ((d.indexEndian & 3u) << 2)));
         w.pod(d.indexGuestBase);
     }
     const bool ok = w.ok;
@@ -281,6 +285,7 @@ bool ReadFrameCapture(const std::filesystem::path& path, FrameCapture& out)
         d.indexGuestBase = r.pod<uint32_t>();
         d.indexed = (flags & 1) != 0;
         d.indexIs32 = (flags & 2) != 0;
+        d.indexEndian = version >= 4 ? ((flags >> 2) & 3u) : 2u;
         if (vs < blobCount)
         {
             d.vsUcode = out.ucode[vs].data();
