@@ -122,10 +122,11 @@ esac
 [ -x "$RUNTIME" ] || { echo "REFUSING: $RUNTIME not built" >&2; exit 2; }
 [ -f "$GAME_DIR/default.xex" ] || { echo "REFUSING: no default.xex" >&2; exit 2; }
 
-rm -rf "$OUT"; mkdir -p "$OUT/ours" "$OUT/theirs"
+"$REPO/tools/cleanup_scratch_path.sh" "$OUT"
+mkdir -p "$OUT/ours" "$OUT/theirs"
 PAIR="camerapair-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 CONSTS="$REPO/scratch/oracle/vs_consts.txt"
-rm -f "$CONSTS"
+"$REPO/tools/cleanup_scratch_path.sh" "$CONSTS"
 
 # ---------------------------------------------------------------- the console
 echo "== the console, $SECONDS_TO_RUN s: resolves, a frame window, and the"

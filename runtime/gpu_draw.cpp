@@ -40,6 +40,7 @@
 #include <vulkan/vulkan.h>
 
 #include "gpu_draw_xlate.h"
+#include "gpu_draw_depth_bias.h"
 #include "gpu_draw_formats.h"
 #include "gpu_draw_pixels.h"
 #include "gpu_draw_prepared.h"
@@ -1441,6 +1442,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pd.psHash = d.psHash;
         pd.hasFragmentStage = pixelShaderUsed;
         pd.colorMask = om.colorMask;
+        const draw::DepthBias depthBias =
+            draw::DeriveDepthBias(R, om.polygonal);
+        pd.depthBiasConstant = depthBias.constantFactor;
+        pd.depthBiasSlope = depthBias.slopeFactor;
+        // GEARS_DRAW_NODEPTHBIAS=1 is the control arm for the formerly missing
+        // state. It is never a fallback or fix: zeroing guest bias should make
+        // a shadow-map regression reappear if this mechanism matters.
+        if (lucent::config::flag("DRAW_NODEPTHBIAS"))
+            pd.depthBiasConstant = pd.depthBiasSlope = 0.0f;
         pd.depthBase = R[0x2002] & 0xFFF;
         // WHICH HOST DEPTH IMAGE THIS DRAW RENDERS INTO -- a separate question
         // from which base the guest named, and the two must not be conflated.
@@ -1574,7 +1584,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                                  std::min(gv.scissorH * sy, SH - std::min(scy, SH))};
         }
         draw::DumpVertices(R, in, d, *vsX, *psX, issued, pd.diagIndex, pd.vsHash,
-                           d.indexCount, &UC.sysc);
+                           d.indexCount, &UC.sysc, &UC.fVs);
         draw::DumpVsConstants(*vsX, UC, d.vsHash, issued, pd.diagIndex, R);
         // What this draw fetches, and whether the mirror covers it, is in
         // gpu_draw_vertexfetch.{h,cpp}.
@@ -2486,6 +2496,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pd.pipeline);
         vkCmdSetViewport(cmd, 0, 1, &pd.viewport);
         vkCmdSetScissor(cmd, 0, 1, &pd.scissor);
+        vkCmdSetDepthBias(cmd, pd.depthBiasConstant, 0.0f, pd.depthBiasSlope);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pd.layout, 0,
             4, pd.sets, 0, nullptr);
         DS.Begin(cmd, drawn);
