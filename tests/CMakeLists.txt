@@ -335,6 +335,13 @@ add_executable(test_queue_family
 target_include_directories(test_queue_family PRIVATE ../runtime)
 add_test(NAME queue_family COMMAND test_queue_family)
 
+# Capture runs may render many warm-up frames but report only the final one.
+# Resolve artifacts from warm-up frames used to accumulate in the same directory,
+# turning a single-frame structural comparison into an accidental 301-frame corpus.
+add_executable(test_frame_artifact_policy test_frame_artifact_policy.cpp)
+target_include_directories(test_frame_artifact_policy PRIVATE ../runtime)
+add_test(NAME frame_artifact_policy COMMAND test_frame_artifact_policy)
+
 # The shared-VkInstance extension bookkeeping. Two devices cost a readback and a
 # staging upload of every frame; unifying them starts with the instance, since a
 # surface from one instance cannot be used with a device from another. The guarded
