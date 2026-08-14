@@ -384,8 +384,8 @@ struct Renderer
     // that clamp is reported rather than applied quietly.
     uint32_t maxViewportDim[2] = {16384, 16384};
 
-    // Built on the first frame, reused by every frame after it; released only on
-    // a target-size change. A raw pointer rather than a unique_ptr so the type can stay
+    // Built on the first frame and retained as a capacity allocation. A raw
+    // pointer rather than a unique_ptr so the type can stay
     // incomplete here: it names OutputMergerState and the texture structs,
     // which are declared further down.
     struct RendererPersistent* persistent = nullptr;
@@ -395,6 +395,7 @@ struct Renderer
     bool MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf,
                     VkDeviceMemory& mem, bool wantCached = false);
     bool RenderFrameImpl(const FrameDrawInputs& in);
+    void EnsurePersistentCapacity(uint32_t requiredWidth, uint32_t requiredHeight);
     void ReleasePersistent();
 };
 

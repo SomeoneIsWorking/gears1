@@ -623,18 +623,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
     }
 
-    // Everything below that outlives a frame lives in P. It is built on the
-    // first frame and reused after that; a change of target size rebuilds it,
-    // since the render target and framebuffer are sized to the frame. The
-    // SAMPLE grid is part of that size: turning the model on changes it.
-    if (persistent && (persistent->width != SW || persistent->height != SH))
-        ReleasePersistent();
-    if (!persistent)
-    {
-        persistent = new RendererPersistent();
-        persistent->width = SW;
-        persistent->height = SH;
-    }
+    // The persistent sample-grid allocation grows but never shrinks between
+    // frames. gpu_renderer_capacity.cpp owns its cross-thread lifetime rule.
+    EnsurePersistentCapacity(SW, SH);
     RendererPersistent& P = *persistent;
     const bool firstFrame = !P.built;
 
@@ -802,7 +793,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // needs, and the resolve compute pipeline -- is in gpu_draw_targets.{h,cpp}.
     // The cache's extents are the SAMPLE grid: its images are EDRAM, and
     // EDRAM is samples. Off the model SW,SH are W,H.
-    draw::RenderTargetCache RT(*this, P, in, SW, SH, depthFormat);
+    draw::RenderTargetCache RT(*this, P, in, P.width, P.height, depthFormat);
     RT.BuildResolvePipeline();
     // GEARS_DRAW_REINTERP=1: convert a surface's contents when the frame
     // re-declares its EDRAM base under a different colour format. Off by

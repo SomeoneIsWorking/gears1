@@ -226,6 +226,7 @@ add_library(gears_draw STATIC
     gpu_draw_vertexfetch.cpp
     gpu_instance.cpp
     gpu_queue_family.cpp
+    gpu_renderer_capacity.cpp
     gpu_shared_device.cpp
     guest_texture_hash.cpp
     native_pass.cpp

@@ -56,6 +56,9 @@ void Publish(const PadState& next)
     // The console's contract: the packet number changes only when the state
     // does, so a title that compares packet numbers sees real edges.
     ++g_packet;
+    lucent::info("input", "pad state {}: buttons {:#06x} triggers {},{} stick L({},{}) R({},{})",
+        g_packet, next.buttons, next.leftTrigger, next.rightTrigger,
+        next.thumbLX, next.thumbLY, next.thumbRX, next.thumbRY);
 }
 
 // A stick deflection named in a script step, e.g. "LY+" or "RX-". Returns false
