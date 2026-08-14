@@ -352,6 +352,12 @@ VkSampler TextureUploader::GetSampler(const GuestSamplerState& gs)
     si.addressModeW = vkAddressMode(gs.clamp[2]);
     si.borderColor = VK_BORDER_COLOR_FLOAT_TRANSPARENT_BLACK;
     si.maxLod = VK_LOD_CLAMP_NONE;
+    if (gs.anisoMax && R.hasSamplerAnisotropy)
+    {
+        si.anisotropyEnable = VK_TRUE;
+        si.maxAnisotropy = std::min(float(gs.anisoMax),
+                                    R.maxSamplerAnisotropy);
+    }
     VkSampler s = VK_NULL_HANDLE;
     if (vkCreateSampler(R.device, &si, nullptr, &s) != VK_SUCCESS)
         return P.stubSampler;

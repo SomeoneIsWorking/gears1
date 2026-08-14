@@ -28,6 +28,9 @@ void SelectDeviceFeatures(VkPhysicalDevice physical,
     enable.depthClamp = available.depthClamp;
     caps.depthClamp = available.depthClamp != VK_FALSE;
 
+    enable.samplerAnisotropy = available.samplerAnisotropy;
+    caps.samplerAnisotropy = available.samplerAnisotropy != VK_FALSE;
+
     enable.shaderStorageImageReadWithoutFormat =
         available.shaderStorageImageReadWithoutFormat;
     enable.shaderStorageImageWriteWithoutFormat =

@@ -148,6 +148,8 @@ bool Renderer::Init()
             hasGeometryShader = adoptedCaps.geometryShader;
             hasStorageImageWithoutFormat = adoptedCaps.storageImageWithoutFormat;
             hasDepthClamp = adoptedCaps.depthClamp;
+            hasSamplerAnisotropy = adoptedCaps.samplerAnisotropy;
+            maxSamplerAnisotropy = adoptedProps.limits.maxSamplerAnisotropy;
 
             // Says only what is true. Sharing the device makes it POSSIBLE to
             // stop reading the frame back and re-uploading it, because the image
@@ -258,6 +260,8 @@ bool Renderer::Init()
     hasGeometryShader = caps.geometryShader;
     hasStorageImageWithoutFormat = caps.storageImageWithoutFormat;
     hasDepthClamp = caps.depthClamp;
+    hasSamplerAnisotropy = caps.samplerAnisotropy;
+    maxSamplerAnisotropy = p.limits.maxSamplerAnisotropy;
 
     VkDeviceCreateInfo di{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     di.queueCreateInfoCount = 1;
@@ -1569,8 +1573,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             pd.scissor.extent = {std::min(gv.scissorW * sx, SW - std::min(scx, SW)),
                                  std::min(gv.scissorH * sy, SH - std::min(scy, SH))};
         }
-        draw::DumpVertices(R, in, *vsX, issued, pd.diagIndex, pd.vsHash,
-                           d.indexCount);
+        draw::DumpVertices(R, in, d, *vsX, *psX, issued, pd.diagIndex, pd.vsHash,
+                           d.indexCount, &UC.sysc);
         draw::DumpVsConstants(*vsX, UC, d.vsHash, issued, pd.diagIndex, R);
         // What this draw fetches, and whether the mirror covers it, is in
         // gpu_draw_vertexfetch.{h,cpp}.

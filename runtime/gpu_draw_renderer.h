@@ -369,6 +369,8 @@ struct Renderer
     // VkPhysicalDeviceFeatures.depthClamp -- see DeviceCapabilities::depthClamp
     // for what a device without it costs.
     bool hasDepthClamp = false;
+    bool hasSamplerAnisotropy = false;
+    float maxSamplerAnisotropy = 1.0f;
     VkDeviceSize uniformOffsetAlignment = 256;
     // THE HOST VIEWPORT IS NOT BOUNDED BY THE RENDER TARGET. With clipping
     // disabled (PA_CL_CLIP_CNTL.clip_disable) the guest expects no near/far or

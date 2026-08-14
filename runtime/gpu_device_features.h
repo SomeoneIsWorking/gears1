@@ -49,6 +49,11 @@ struct DeviceCapabilities
     // before rasterisation (catalog #91). Xenia gates the same state on the same
     // feature, so a device without it renders as we did before.
     bool depthClamp = false;
+
+    // Guest sampler fetches carry anisotropy explicitly. The renderer used to
+    // decode and cache that value, then omit it from VkSamplerCreateInfo, so a
+    // declared 4x sampler silently became isotropic.
+    bool samplerAnisotropy = false;
 };
 
 // Fills `enable` with what to ask for on this physical device, and `caps` with what
