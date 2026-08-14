@@ -390,6 +390,17 @@ target_include_directories(test_guest_texture_hash PRIVATE ../runtime
     "${THIRDPARTY_ROOT}/xxHash")
 add_test(NAME guest_texture_hash COMMAND test_guest_texture_hash)
 
+if(TARGET gears_draw_xlate)
+    add_executable(test_guest_texture_decode test_guest_texture_decode.cpp)
+    target_include_directories(test_guest_texture_decode PRIVATE
+        ../runtime "${CMAKE_SOURCE_DIR}/extern/xenia/src")
+    target_compile_definitions(test_guest_texture_decode PRIVATE
+        GEARS_HAVE_GUEST_DRAW)
+    target_compile_options(test_guest_texture_decode PRIVATE -mavx)
+    target_link_libraries(test_guest_texture_decode PRIVATE gears_draw_xlate)
+    add_test(NAME guest_texture_decode COMMAND test_guest_texture_decode)
+endif()
+
 # The swapchain format choice. It decides every pixel of the window and NO capture
 # in this project can see it: the renderer's screenshots come from its own readback,
 # before the blit into the swapchain. An sRGB swapchain re-encodes an

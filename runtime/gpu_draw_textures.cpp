@@ -22,6 +22,17 @@ namespace
 
 using Clock = std::chrono::steady_clock;
 
+uint64_t HashTextureStorage(const GuestTexture& texture,
+                            const FrameDrawInputs& inputs)
+{
+    const uint8_t* base = texture.baseGuestExtentBytes
+        ? inputs.guestBase + texture.baseAddress : nullptr;
+    const uint8_t* mips = texture.mipGuestExtentBytes
+        ? inputs.guestBase + texture.mipAddress : nullptr;
+    return gears::HashGuestTextureParts(
+        base, texture.baseGuestExtentBytes, mips, texture.mipGuestExtentBytes);
+}
+
 
 VkFormat hostVkFormat(TexHostFormat f)
 {
@@ -94,8 +105,11 @@ VkSamplerAddressMode vkAddressMode(uint32_t clamp)
 VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
 {
     ++texBindingCalls;
-    const std::array<uint32_t, 4> key{fetch6[0], fetch6[1], fetch6[2],
-                                      fetch6[3] & 0x1FFEu /*swizzle bits*/};
+    // The mip address/range and packed-tail flag live in dwords 4 and 5. A
+    // partial descriptor key aliases different authored mip chains and keeps
+    // sampling the first image uploaded for the shared base level.
+    const RendererPersistent::GuestTextureKey key{
+        fetch6[0], fetch6[1], fetch6[2], fetch6[3], fetch6[4], fetch6[5]};
     auto it = texCache.find(key);
     if (it != texCache.end())
     {
@@ -115,21 +129,20 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
             texCheckedThisFrame.insert(key).second &&
             DecodeGuestTexture(fetch6, in.guestBase,
                 uint64_t(in.guestWindowBytes), /*wantData=*/false, header) &&
-            header.skipReason == nullptr && header.guestExtentBytes != 0 &&
-            uint64_t(header.baseAddress) + header.guestExtentBytes <=
-                uint64_t(in.guestWindowBytes))
+            header.skipReason == nullptr && header.baseGuestExtentBytes != 0)
         {
             const auto tHash = Clock::now();
-            const uint64_t now = gears::HashGuestTexture(
-                in.guestBase + header.baseAddress, header.guestExtentBytes);
+            const uint64_t now = HashTextureStorage(header, in);
             const double thisHashMs =
                 std::chrono::duration<double, std::milli>(Clock::now() - tHash).count();
             msTexHash += thisHashMs;
-            texHashBytes += header.guestExtentBytes;
+            const uint64_t hashBytes = uint64_t(header.baseGuestExtentBytes) +
+                                       header.mipGuestExtentBytes;
+            texHashBytes += hashBytes;
             if (thisHashMs > texHashWorstMs)
             {
                 texHashWorstMs = thisHashMs;
-                texHashWorstBytes = header.guestExtentBytes;
+                texHashWorstBytes = hashBytes;
                 texHashWorstBase = header.baseAddress;
             }
             ++texContentChecked;
@@ -223,7 +236,7 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
     ci.imageType = is3D ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
     ci.format = vf;
     ci.extent = {gt.width, gt.height, gt.depth3D};
-    ci.mipLevels = 1;
+    ci.mipLevels = uint32_t(gt.levels.size());
     ci.arrayLayers = gt.layers;
     ci.samples = VK_SAMPLE_COUNT_1_BIT;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
@@ -264,7 +277,8 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
     vi.components.g = compSwizzle(gt.hostSwizzle[1]);
     vi.components.b = compSwizzle(gt.hostSwizzle[2]);
     vi.components.a = compSwizzle(gt.hostSwizzle[3]);
-    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, gt.layers};
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                           uint32_t(gt.levels.size()), 0, gt.layers};
     if (vkCreateImageView(R.device, &vi, nullptr, &tex.view) != VK_SUCCESS)
     {
         vkDestroyImage(R.device, tex.image, nullptr);
@@ -310,8 +324,19 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
     stagingBufs.push_back(staging);
     stagingMems.push_back(stagingMem);
     uploadedBytes += gt.data.size();
-    uploads.push_back({tex.image, staging, gt.width, gt.height, gt.depth3D,
-                       gt.layers});
+    PendingUpload upload{tex.image, staging, uint32_t(gt.levels.size()), {}};
+    upload.regions.reserve(gt.levels.size());
+    for (uint32_t level = 0; level < gt.levels.size(); ++level)
+    {
+        const GuestTextureLevel& decoded = gt.levels[level];
+        VkBufferImageCopy region{};
+        region.bufferOffset = decoded.dataOffset;
+        region.imageSubresource = {
+            VK_IMAGE_ASPECT_COLOR_BIT, level, 0, gt.layers};
+        region.imageExtent = {decoded.width, decoded.height, decoded.depth};
+        upload.regions.push_back(region);
+    }
+    uploads.push_back(std::move(upload));
     guestTextures[key] = tex;
     texCache[key] = tex.view;
     // Remember what these bytes hashed to, so a later frame can tell that the
@@ -322,12 +347,9 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
         GuestTexture header;
         if (DecodeGuestTexture(fetch6, in.guestBase,
                 uint64_t(in.guestWindowBytes), /*wantData=*/false, header) &&
-            header.skipReason == nullptr && header.guestExtentBytes != 0 &&
-            uint64_t(header.baseAddress) + header.guestExtentBytes <=
-                uint64_t(in.guestWindowBytes))
+            header.skipReason == nullptr && header.baseGuestExtentBytes != 0)
         {
-            texContentHash[key] = gears::HashGuestTexture(
-                in.guestBase + header.baseAddress, header.guestExtentBytes);
+            texContentHash[key] = HashTextureStorage(header, in);
         }
     }
     return tex.view;
@@ -498,13 +520,9 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
     ++baseCount[base];
     if (isRt)
         ++baseRtCount[base];
-    // THE SYSTEM CONSTANT WE NEVER SET. The translated fetch reads
-    // xe_uniform_system_constants.texture_swizzled_signs to decide between the
-    // unsigned and signed views of a texture and whether to apply a sign
-    // remap; this renderer leaves that constant ZERO, so every fetch takes the
-    // unsigned path. That is correct only while no fetch constant actually
-    // asks for a signed component -- which is a claim about the title, not
-    // about the renderer, so it is counted rather than assumed.
+    // The translated fetch reads texture_swizzled_signs to choose its sign
+    // remap. The system-constant builder now populates it; this census remains
+    // necessary because kSigned additionally needs a signed host image view.
     {
         const uint32_t d0 = regs[0x4800 + fc * 6];
         const uint32_t signs = (d0 >> 2) & 0xFF;   // sign_x/y/z/w, 2 bits each

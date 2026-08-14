@@ -55,9 +55,9 @@ struct TextureUploader
     // classification); here it becomes a host image. A fetch whose format has
     // no host mapping keeps the stub AND is counted with its reason -- nothing
     // is ever substituted to make the frame look better.
-    std::map<std::array<uint32_t, 4>, GuestTex>& guestTextures;
-    std::map<std::array<uint32_t, 4>, VkImageView>& texCache;
-    std::map<std::array<uint32_t, 4>, uint64_t>& texContentHash;
+    std::map<RendererPersistent::GuestTextureKey, GuestTex>& guestTextures;
+    std::map<RendererPersistent::GuestTextureKey, VkImageView>& texCache;
+    std::map<RendererPersistent::GuestTextureKey, uint64_t>& texContentHash;
     // MEASURING BEFORE FIXING. Whether the guest actually overwrites a texture
     // under a key we are caching has never been established -- the frontier entry
     // says "not yet observed", which meant "nobody looked". Eviction is only worth
@@ -83,7 +83,7 @@ struct TextureUploader
     // every binding in a frame sees the same bytes, and re-hashing per binding
     // answers the same question 5094 times instead of 26 (measured: 2.3 s of a
     // gameplay frame, which is why the check used to be off by default).
-    std::set<std::array<uint32_t, 4>> texCheckedThisFrame;
+    std::set<RendererPersistent::GuestTextureKey> texCheckedThisFrame;
     // Images an eviction replaced. They cannot be destroyed on the spot: draws
     // already recorded into THIS frame's command buffer may still reference them,
     // so they die after the frame's fence, with the other per-frame transients.
@@ -93,13 +93,14 @@ struct TextureUploader
     struct PendingUpload
     {
         VkImage image; VkBuffer staging;
-        uint32_t w, h, d, layers;
+        uint32_t mipLevels;
+        std::vector<VkBufferImageCopy> regions;
     };
     std::vector<PendingUpload> uploads;
     std::map<std::string, uint64_t> texSkips;  // reason -> bindings affected
     std::map<std::string, uint64_t> texFormatCensus;   // "fmt WxH dim tiled" summary
     std::map<std::string, uint64_t> texFormatBindings; // format name -> bindings
-    std::set<std::array<uint32_t, 4>> texDistinct;
+    std::set<RendererPersistent::GuestTextureKey> texDistinct;
     uint64_t uploadedBytes = 0;
     std::map<uint64_t, VkSampler>& samplerCache;
 
@@ -118,10 +119,9 @@ struct TextureUploader
 // each frame's bindings named.
 //
 // The census is not decoration. "24 of 5278 bindings served by a resolve
-// target" was once read as a defect and retracted, and the signed-fetch tally
-// exists because this renderer leaves texture_swizzled_signs at zero: that is
-// correct only while no fetch constant asks for a signed component, which is a
-// claim about the title rather than about the renderer, so it is counted.
+// target" was once read as a defect and retracted. The signed-fetch tally makes
+// the population behind texture_swizzled_signs visible and names bindings that
+// need a signed host view rather than allowing that path to fail silently.
 struct TextureBinder
 {
     TextureBinder(RendererPersistent& p, TextureUploader& tx,

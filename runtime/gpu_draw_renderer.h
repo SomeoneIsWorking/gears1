@@ -218,12 +218,13 @@ struct RendererPersistent
     // than a flat list because an entry whose GUEST BYTES changed has to be found
     // and destroyed, not just replaced in the view map -- see the eviction in
     // uploadTexture.
-    std::map<std::array<uint32_t, 4>, GuestTex> guestTextures;
-    std::map<std::array<uint32_t, 4>, VkImageView> texCache;
+    using GuestTextureKey = std::array<uint32_t, 6>;
+    std::map<GuestTextureKey, GuestTex> guestTextures;
+    std::map<GuestTextureKey, VkImageView> texCache;
     // The hash of the GUEST bytes each cached texture was built from. The cache key
     // is the fetch constant, which does not change when the guest overwrites the
     // pixels at the same address, so this is the only thing that can notice.
-    std::map<std::array<uint32_t, 4>, uint64_t> texContentHash;
+    std::map<GuestTextureKey, uint64_t> texContentHash;
     std::map<uint64_t, VkSampler> samplerCache;
     StubTex stub2D{}, stub3D{}, stubCube{};
     VkSampler stubSampler = VK_NULL_HANDLE;

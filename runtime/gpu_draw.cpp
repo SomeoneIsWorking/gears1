@@ -1726,7 +1726,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Guest textures: staging buffer -> image, once each, before any draw.
     for (const draw::TextureUploader::PendingUpload& u : TX.uploads)
     {
-        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, u.layers};
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0,
+                                      u.mipLevels, 0,
+                                      u.regions.front().imageSubresource.layerCount};
         VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         toDst.srcAccessMask = 0; toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
@@ -1735,13 +1737,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         toDst.image = u.image; toDst.subresourceRange = range;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
-        // The decoded blob is tightly packed, layer-major, so one region with
-        // zero row/image length (meaning "tightly packed") covers it.
-        VkBufferImageCopy region{};
-        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, u.layers};
-        region.imageExtent = {u.w, u.h, u.d};
+        // Each decoded mip is tightly packed at its recorded staging offset.
         vkCmdCopyBufferToImage(cmd, u.staging, u.image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, uint32_t(u.regions.size()),
+            u.regions.data());
         VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;

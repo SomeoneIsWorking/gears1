@@ -199,16 +199,38 @@ endif()
 # replay possible. tools/frame_replay links this and renders a captured frame in
 # about a second, with no guest, no menu walk and no 200-second boot; see
 # frame_capture.h. gears1 links it exactly as before.
-add_library(gears_draw STATIC gpu_draw.cpp gpu_draw_formats.cpp
-                              gpu_draw_pixels.cpp gpu_draw_untile.cpp gpu_draw_textures.cpp gpu_draw_targets.cpp gpu_draw_pipelines.cpp gpu_draw_shaders.cpp gpu_draw_arena.cpp gpu_draw_resolve.cpp gpu_draw_probe.cpp gpu_draw_uniforms.cpp gpu_draw_indices.cpp gpu_draw_descriptors.cpp gpu_draw_census.cpp gpu_draw_resolve_decode.cpp gpu_draw_vertexfetch.cpp gpu_draw_resolve_plan.cpp gpu_draw_reinterpret.cpp
-                              frame_capture.cpp frame_content.cpp
-                              spirv_clamp.cpp render_ab.cpp
-                              gpu_queue_family.cpp gpu_instance.cpp
-                              gpu_shared_device.cpp
-                              gpu_device_features.cpp
-                              native_pass.cpp
-                              guest_texture_hash.cpp
-                              frame_ab.cpp)
+add_library(gears_draw STATIC
+    frame_ab.cpp
+    frame_capture.cpp
+    frame_content.cpp
+    gpu_device_features.cpp
+    gpu_draw.cpp
+    gpu_draw_arena.cpp
+    gpu_draw_census.cpp
+    gpu_draw_descriptors.cpp
+    gpu_draw_formats.cpp
+    gpu_draw_indices.cpp
+    gpu_draw_pipelines.cpp
+    gpu_draw_pixels.cpp
+    gpu_draw_probe.cpp
+    gpu_draw_reinterpret.cpp
+    gpu_draw_resolve.cpp
+    gpu_draw_resolve_decode.cpp
+    gpu_draw_resolve_plan.cpp
+    gpu_draw_shader_override.cpp
+    gpu_draw_shaders.cpp
+    gpu_draw_targets.cpp
+    gpu_draw_textures.cpp
+    gpu_draw_uniforms.cpp
+    gpu_draw_untile.cpp
+    gpu_draw_vertexfetch.cpp
+    gpu_instance.cpp
+    gpu_queue_family.cpp
+    gpu_shared_device.cpp
+    guest_texture_hash.cpp
+    native_pass.cpp
+    render_ab.cpp
+    spirv_clamp.cpp)
 target_include_directories(gears_draw PUBLIC . PRIVATE "${THIRDPARTY_ROOT}/xxHash")
 target_link_libraries(gears_draw PRIVATE lucent::lucent)
 target_link_libraries(gears1 PRIVATE gears_draw)
@@ -246,6 +268,7 @@ if(Vulkan_FOUND AND GEARS_HAVE_XENOS_TRANSLATOR)
     # none of its header world.
     add_library(gears_draw_xlate STATIC
         gpu_draw_depth_bias.cpp
+        gpu_draw_texture_decode.cpp
         gpu_draw_xlate.cpp)
     target_compile_definitions(gears_draw_xlate PRIVATE GEARS_HAVE_GUEST_DRAW)
     target_include_directories(gears_draw_xlate PRIVATE .)
