@@ -3017,13 +3017,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                                   rd.guestFormat, rd.base, rd.drawIndex);
             };
             // This raw file is exactly the mapped VkImage copy: little-endian
-            // RGBA16F for colour, or R32F for depth. Its geometry, source
-            // format and draw index are in the stem, so a reader can refuse a
-            // mismatched interpretation rather than treating bytes as a PPM.
+            // Raw colour is RGBA16F; its geometry and draw are in the stem.
             if (dumpResolveFloat && !rd.isDepth)
             {
                 const std::filesystem::path raw = dumpDir / (dumpStem() + ".rgba16f");
-                std::ofstream out(raw, std::ios::binary | std::ios::trunc);
+                std::ofstream out;
+                if (EnsureParentDirectory(raw))
+                    out.open(raw, std::ios::binary | std::ios::trunc);
                 if (!out || !out.write(static_cast<const char*>(mapped), bytes))
                     lucent::warn("draw", "resolve target {:#x}: FAILED to write"
                         " raw RGBA16F dump {}; the PPM remains available, but"
