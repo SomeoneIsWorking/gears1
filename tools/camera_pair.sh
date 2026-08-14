@@ -6,7 +6,7 @@
 # WHY THIS EXISTS. Two separate scripts produced the two halves before, and
 # nothing tied them together:
 #
-#   * claim C042 -- a capture from 11:34 was scored against oracle dumps from an
+#   * claim C042 -- a capture from 11:34 was compared against oracle dumps from an
 #     11:54 run, and that later run had OVERWRITTEN the very camera file the
 #     capture was gated to. Two wrong conclusions were published before the file
 #     timestamps gave it away.
@@ -33,7 +33,7 @@
 #   VS_CONSTS_ALL=<vs hash> retain every dumped-frame bind of another vertex
 #                          shader on BOTH sides. Use this for pass matrices
 #                          whose winning oracle frame is known only after the
-#                          drift curve is scored.
+#                          candidate window is inspected.
 #   VDUMP_VS=<vs hash>:<min>-<max> fingerprint the complete guest index and
 #                          vertex-fetch buffers of every matching draw on both
 #                          sides. This compares geometry inputs, not aggregate
@@ -46,11 +46,9 @@
 # constants of whatever draw happens to land there, and the gate then refuses
 # when the selected four view-projection rows are absent.
 #
-# THE RESULT IS SCORED, NOT ASSUMED: it finishes by running the same-picture
-# gate over every console candidate and printing each score against the positive
-# control. A run whose best candidate is below the gate has produced a capture
-# that CANNOT support a pixelwise comparison, and it says so and exits non-zero
-# rather than leaving a directory that looks usable.
+# THE RESULT IS STRUCTURALLY PAIRED, NOT REDUCED TO AN AGGREGATE SCORE: the
+# final comparison identifies the first differing resolved pass. Exact draw and
+# ownership ledgers then locate the earliest divergence inside that pass.
 set -eu
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -173,7 +171,7 @@ while [ "$w" -lt "$SECONDS_TO_RUN" ]; do
         echo "   ... ${w}s: $got/$WANT console frames dumped"
     sleep 5; w=$((w + 5))
 done
-[ "$got" -ge "$WANT" ] || echo "   console reached only $got of $WANT frames in ${w}s; scoring will use what there is, and a BOUNDARY peak in the scores means the window still did not span our moment"
+[ "$got" -ge "$WANT" ] || echo "   console reached only $got of $WANT frames in ${w}s; structural pairing will use what exists, but the shortened window may omit the intended camera moment"
 kill -TERM "$opid" 2>/dev/null || true
 g=0; while [ "$g" -lt 20 ] && kill -0 "$opid" 2>/dev/null; do sleep 1; g=$((g + 1)); done
 kill -9 "$opid" 2>/dev/null || true
@@ -223,7 +221,7 @@ fi
     exit 4; }
 
 # THE CAMERA MUST COME FROM A FRAME THE CONSOLE DUMPED. Otherwise it names a
-# viewpoint there are no console resolves for, and the pair cannot be scored --
+# viewpoint there are no console resolves for, and the pair cannot be compared --
 # which is the failure that cost two runs here.
 CFRAME=$(sed -n 's/.*at guest frame \([0-9]*\).*/\1/p' "$CONSTS" | head -1)
 if [ -n "$CFRAME" ] && ! ls "$OUT/theirs" | grep -q "_f${CFRAME}_"; then
@@ -318,7 +316,7 @@ selector_calls=$(grep -c '^\[xam\] storage device selected automatically:' \
 expected_selectors=$([ "$DIRECT_BOOT" = 1 ] && echo 0 || echo 1)
 if [ "$selector_calls" -ne "$expected_selectors" ]; then
     echo "REFUSING: native logged $selector_calls automatic storage selections;" >&2
-    echo "$expected_selectors required for direct_boot=$DIRECT_BOOT before UI-state scoring." >&2
+    echo "$expected_selectors required for direct_boot=$DIRECT_BOOT before UI-state comparison." >&2
     exit 11
 fi
 

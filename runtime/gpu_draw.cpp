@@ -11,6 +11,7 @@
 // exist yet.
 #include "gpu_draw.h"
 #include "frame_ab.h"
+#include "frame_artifact_policy.h"
 #include "gpu_device_features.h"
 #include "guest_texture_hash.h"
 #include "native_pass.h"
@@ -1916,7 +1917,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         uint32_t drawIndex;
     };
     std::vector<ResolveDump> resolveDumps;
-    const bool dumpEachResolve = lucent::config::flag("DRAW_RESOLVE_DUMP_EACH");
+    // Capture artifacts belong only to the reported frame. A COUNT=N warm run
+    // renders N-1 unreported frames first; dumping those too produces hundreds
+    // of files with the same structural identities and makes the comparer pair
+    // a frame against an accidental multi-frame corpus.
+    const bool dumpEachResolve = gears::ShouldCaptureFrameArtifact(
+        in.report, lucent::config::flag("DRAW_RESOLVE_DUMP_EACH"));
     // The PPM snapshots below intentionally clamp HDR to [0,1]. That makes a
     // useful visual artefact, but it cannot answer whether the input to the
     // bloom threshold actually crossed 1.0. Keep the exact host half-floats

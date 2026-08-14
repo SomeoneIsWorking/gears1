@@ -38,8 +38,14 @@ def hex_field(text, width):
 
 
 def native_identity(row):
+    # The native table keeps the guest-bound pixel shader for diagnostics even
+    # when draw classification disables the fragment stage. Xenia records the
+    # shader actually executed, which is null in that case. Compare execution,
+    # not the bookkeeping representation, or every depth-only draw becomes a
+    # manufactured mismatch.
+    pixel_shader = row["ps_hash"] if number(row["frag_stage"]) else "0"
     return (
-        hex_field(row["vs_hash"], 16), hex_field(row["ps_hash"], 16),
+        hex_field(row["vs_hash"], 16), hex_field(pixel_shader, 16),
         hex_field(row["depth_control"], 8),
         hex_field(row["stencil_ref_mask_raw"], 8),
         hex_field(row["blend0"], 8), row["count"],
@@ -55,12 +61,15 @@ def native_ownership(row):
     color = number(row["surface"])
     color_fmt = number(row["color_fmt"])
     depth = number(row["depth_base"])
-    mask = number(row["color_mask"])
+    # Xenia logs the normalized mask after shader analysis. A draw with no
+    # fragment stage cannot write colour regardless of the raw RB_COLOR_MASK;
+    # native diagnostics intentionally retain that raw register separately.
+    mask = number(row["color_mask"]) if number(row["frag_stage"]) else 0
     return mode, color, color_fmt, depth, mask
 
 
 NATIVE_REQUIRED_FIELDS = (
-    "vs_hash", "ps_hash", "depth_control", "stencil_ref_mask_raw",
+    "vs_hash", "ps_hash", "frag_stage", "depth_control", "stencil_ref_mask_raw",
     "blend0", "count", "edram_mode", "surface", "color_fmt",
     "depth_base", "color_mask",
 )
@@ -111,6 +120,7 @@ def selftest():
         "stencil_ref_mask_raw": "0x4", "blend0": "0x5", "count": "6",
         "edram_mode": "4", "surface": "0x2d0", "color_fmt": "12",
         "depth_base": "0x0", "color_mask": "15", "draw": "10",
+        "frag_stage": "1",
     }
     oracle = ["10", "0000000000000001", "0000000000000002", "00000003",
               "00000004", "00000005", "6", "0", "0", "1280", "720",
@@ -132,8 +142,18 @@ def selftest():
     resolve = base.copy()
     resolve["depth_base"] = ""
     assert is_native_draw(base) and not is_native_draw(resolve)
+
+    depth_only = base.copy()
+    depth_only["frag_stage"] = "0"
+    depth_only["ps_hash"] = "deadbeef"
+    null_oracle = oracle.copy()
+    null_oracle[2] = "0000000000000000"
+    null_oracle[14] = "0"
+    _, exact, mismatches = audit([depth_only], [null_oracle])
+    assert exact == 1 and not mismatches
     print("draw interval ledger selftest: positive match, ownership mismatch, "
-          "inserted-draw negative and resolve-row rejection all fired")
+          "inserted-draw negative, resolve-row rejection and null fragment "
+          "normalization all fired")
 
 
 def main():
