@@ -1,10 +1,11 @@
 ---
 id: C053
 kind: claim
-status: holds
+status: falsified
 created: 2026-08-13
 tags:
 depends: tools/first_divergence.py, tools/pair_score.py
+falsified_on: 2026-08-14
 ---
 
 ## Claim
@@ -18,3 +19,9 @@ pair_score prices scratch/camerapair_short_ui_20260813 at 1.13 frames. first_div
 ## What would falsify it
 
 Any equal-state capture at a pair_score-priced drift where a decodable resolved pass falls at least 0.15 below its interpolated same-pass console self curve, or a correction to the decoder/metric that changes one of these deficits past 0.15.
+
+## FALSIFIED 2026-08-14
+
+Withdrawn because its parity conclusion depends on the retired pair_score/first_divergence correlation workflow. The project now requires the earliest exact draw/state divergence instead of per-pass aggregate scoring.
+
+> Anything that cited this claim as proof must be re-checked. Grep the repo for it.

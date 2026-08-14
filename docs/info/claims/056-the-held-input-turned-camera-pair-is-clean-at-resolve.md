@@ -1,10 +1,11 @@
 ---
 id: C056
 kind: claim
-status: holds
+status: falsified
 created: 2026-08-14
 tags: oracle,render,pairing,input,ui
 depends: tools/camera_pair.sh, tools/menu_walk.sh, tools/ui_state_check.py, tools/first_divergence.py, extern/xenia/src/xenia/base/threading_posix.cc
+falsified_on: 2026-08-14
 ---
 
 ## Claim
@@ -18,3 +19,9 @@ scratch/camerapair_turn_clean_final_20260814 used `90:START~120 600:A 700:RX+ 78
 ## What would falsify it
 
 A repeat of this route failing startup/input/UI/provenance/camera/drift gates, or a corrected decoder/metric yielding a >=0.15 deficit on this preserved pair.
+
+## FALSIFIED 2026-08-14
+
+Withdrawn because its no-resolve-loss conclusion comes from the retired aggregate/per-pass correlation scorers rather than an exact first divergent draw.
+
+> Anything that cited this claim as proof must be re-checked. Grep the repo for it.

@@ -59,6 +59,19 @@ def native_ownership(row):
     return mode, color, color_fmt, depth, mask
 
 
+NATIVE_REQUIRED_FIELDS = (
+    "vs_hash", "ps_hash", "depth_control", "stencil_ref_mask_raw",
+    "blend0", "count", "edram_mode", "surface", "color_fmt",
+    "depth_base", "color_mask",
+)
+
+
+def is_native_draw(row):
+    """True only for raster draw rows, never resolve/copy diagnostic rows."""
+    return row.get("draw", "").isdigit() and all(
+        row.get(field, "") != "" for field in NATIVE_REQUIRED_FIELDS)
+
+
 def oracle_ownership(row):
     mode, color_info, depth_info, mask = (
         number(row[11]), int(row[12], 16), int(row[13], 16), int(row[14], 16))
@@ -115,8 +128,12 @@ def selftest():
     inserted[6] = "9"
     opcodes, exact, _ = audit([base], [oracle, inserted])
     assert exact == 1 and any(tag == "insert" for tag, *_ in opcodes)
+
+    resolve = base.copy()
+    resolve["depth_base"] = ""
+    assert is_native_draw(base) and not is_native_draw(resolve)
     print("draw interval ledger selftest: positive match, ownership mismatch, "
-          "and inserted-draw negative all fired")
+          "inserted-draw negative and resolve-row rejection all fired")
 
 
 def main():
@@ -135,8 +152,10 @@ def main():
 
     with open(args.ours, newline="") as stream:
         rows = list(csv.DictReader(stream, delimiter="\t"))
-    native = [row for row in rows if row["draw"].isdigit() and
+    native_candidates = [row for row in rows if row["draw"].isdigit() and
               args.ours_range[0] <= int(row["draw"]) < args.ours_range[1]]
+    native = [row for row in native_candidates if is_native_draw(row)]
+    skipped_native = len(native_candidates) - len(native)
     with open(args.oracle) as stream:
         all_oracle = [line.rstrip("\n").split("\t") for line in stream if line.strip()]
     candidates = [row for row in all_oracle if len(row) >= 1 and
@@ -156,7 +175,8 @@ def main():
 
     opcodes, exact, mismatches = audit(native, oracle)
     print(f"scanned {len(native)} native and {len(oracle)} oracle draws; "
-          f"{exact} exact shader/state/geometry matches")
+          f"{exact} exact shader/state/geometry matches; skipped "
+          f"{skipped_native} native resolve/copy row(s)")
     for tag, i1, i2, j1, j2 in opcodes:
         if tag == "equal":
             continue

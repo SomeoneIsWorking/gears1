@@ -19,8 +19,8 @@ under-fires AT THE SAME TIME. One constant, two opposite symptoms, and no
 correlation anywhere in the frame moves. That is why it survived so long: it
 looked like two unrelated defects pulling in opposite directions.
 
-WHY IT IS NOT tools/first_divergence.py's SCALE COLUMN. That column compares
-RESOLVED surfaces, and this title's scene depth is resolved EARLY and then
+WHY RESOLVED-SURFACE CHECKS CANNOT REPLACE THIS. They compare resolved
+surfaces, and this title's scene depth is resolved EARLY and then
 overwritten by a depth-restore draw later in the frame. Measured: the depth
 resolve scores 1.0019x against the console both before and after the fix -- it
 was never wrong. The corruption lived in the buffer BETWEEN resolves, which the
@@ -65,7 +65,7 @@ def main():
                          "was compared.")
 
     import numpy as np
-    from first_divergence import load_console
+    from surface_decode import load_console
 
     dp = pathlib.Path(a.dump)
     if not dp.is_file():
