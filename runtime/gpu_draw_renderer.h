@@ -205,7 +205,7 @@ struct RendererPersistent
     // property of the DRAW's guest colour format, not of the microcode.
     std::map<std::tuple<uint64_t, uint64_t, int>, draw::ShaderXlate> xlate;
     std::map<std::tuple<uint64_t, uint64_t, int>, VkShaderModule> modules;
-    std::map<draw::RectangleGeometryShaderKey, VkShaderModule> geomShaders;
+    std::map<draw::GeometryShaderKey, VkShaderModule> geomShaders;
 
     std::map<std::string, VkDescriptorSetLayout> texLayouts;
     std::map<std::pair<std::string, std::string>, VkPipelineLayout> pipeLayouts;

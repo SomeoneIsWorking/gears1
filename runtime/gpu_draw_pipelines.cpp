@@ -18,23 +18,23 @@ using Clock = std::chrono::steady_clock;
 bool PipelineCache::Build()
 {
     const VkShaderStageFlags allStages =
-        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
-    VkDescriptorSetLayout& set0 = P.set0;
-    VkDescriptorSetLayout& set1 = P.set1;
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_GEOMETRY_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    VkDescriptorSetLayout &set0 = P.set0;
+    VkDescriptorSetLayout &set1 = P.set1;
     if (!MakeSetLayout({{0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, allStages, nullptr}}, set0) ||
-        !MakeSetLayout({
-            {0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
-            {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
-            {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
-            {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
-            {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr}}, set1))
+        !MakeSetLayout({{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
+                        {1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
+                        {2, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
+                        {3, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr},
+                        {4, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, allStages, nullptr}},
+                       set1))
         return false;
 
     return true;
 }
 
-bool PipelineCache::MakeSetLayout(const std::vector<VkDescriptorSetLayoutBinding>& b,
-                                  VkDescriptorSetLayout& l)
+bool PipelineCache::MakeSetLayout(const std::vector<VkDescriptorSetLayoutBinding> &b,
+                                  VkDescriptorSetLayout &l)
 {
     VkDescriptorSetLayoutCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     ci.bindingCount = uint32_t(b.size());
@@ -43,11 +43,11 @@ bool PipelineCache::MakeSetLayout(const std::vector<VkDescriptorSetLayoutBinding
     return true;
 }
 
-std::string PipelineCache::TexSignature(const ShaderXlate& x, VkShaderStageFlags stage)
+std::string PipelineCache::TexSignature(const ShaderXlate &x, VkShaderStageFlags stage)
 {
     std::string s;
     s.reserve(x.textures.size() * 2 + 8);
-    for (const auto& t : x.textures)
+    for (const auto &t : x.textures)
         s.push_back(char('0' + (t.dimension & 3)));
     s.push_back('|');
     s += std::to_string(x.samplerCount);
@@ -56,19 +56,24 @@ std::string PipelineCache::TexSignature(const ShaderXlate& x, VkShaderStageFlags
     return s;
 }
 
-bool PipelineCache::GetTexLayout(const ShaderXlate& x, VkShaderStageFlags stage,
-                                 VkDescriptorSetLayout& out)
+bool PipelineCache::GetTexLayout(const ShaderXlate &x, VkShaderStageFlags stage,
+                                 VkDescriptorSetLayout &out)
 {
     const std::string key = TexSignature(x, stage);
     auto it = texLayouts.find(key);
-    if (it != texLayouts.end()) { out = it->second; return true; }
+    if (it != texLayouts.end())
+    {
+        out = it->second;
+        return true;
+    }
     std::vector<VkDescriptorSetLayoutBinding> b;
+    b.reserve(x.textures.size() + x.samplerCount);
     for (uint32_t i = 0; i < uint32_t(x.textures.size()); ++i)
         b.push_back({i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, stage, nullptr});
     for (uint32_t j = 0; j < x.samplerCount; ++j)
-        b.push_back({uint32_t(x.textures.size()) + j, VK_DESCRIPTOR_TYPE_SAMPLER, 1,
-                     stage, nullptr});
-    VkDescriptorSetLayout l = 0;
+        b.push_back(
+            {uint32_t(x.textures.size()) + j, VK_DESCRIPTOR_TYPE_SAMPLER, 1, stage, nullptr});
+    VkDescriptorSetLayout l = VK_NULL_HANDLE;
     if (!MakeSetLayout(b, l))
         return false;
     texLayouts[key] = l;
@@ -76,10 +81,9 @@ bool PipelineCache::GetTexLayout(const ShaderXlate& x, VkShaderStageFlags stage,
     return true;
 }
 
-bool PipelineCache::GetPipeLayout(const ShaderXlate& vsX, const ShaderXlate& psX,
-                                  VkDescriptorSetLayout& outVsTex,
-                                  VkDescriptorSetLayout& outPsTex,
-                                  VkPipelineLayout& out)
+bool PipelineCache::GetPipeLayout(const ShaderXlate &vsX, const ShaderXlate &psX,
+                                  VkDescriptorSetLayout &outVsTex, VkDescriptorSetLayout &outPsTex,
+                                  VkPipelineLayout &out)
 {
     if (!GetTexLayout(vsX, VK_SHADER_STAGE_VERTEX_BIT, outVsTex) ||
         !GetTexLayout(psX, VK_SHADER_STAGE_FRAGMENT_BIT, outPsTex))
@@ -87,12 +91,16 @@ bool PipelineCache::GetPipeLayout(const ShaderXlate& vsX, const ShaderXlate& psX
     auto key = std::make_pair(TexSignature(vsX, VK_SHADER_STAGE_VERTEX_BIT),
                               TexSignature(psX, VK_SHADER_STAGE_FRAGMENT_BIT));
     auto it = pipeLayouts.find(key);
-    if (it != pipeLayouts.end()) { out = it->second; return true; }
+    if (it != pipeLayouts.end())
+    {
+        out = it->second;
+        return true;
+    }
     VkDescriptorSetLayout sets[4] = {P.set0, P.set1, outVsTex, outPsTex};
     VkPipelineLayoutCreateInfo pi{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     pi.setLayoutCount = 4;
     pi.pSetLayouts = sets;
-    VkPipelineLayout pl = 0;
+    VkPipelineLayout pl = VK_NULL_HANDLE;
     if (vkCreatePipelineLayout(R.device, &pi, nullptr, &pl) != VK_SUCCESS)
         return false;
     pipeLayouts[key] = pl;
@@ -100,17 +108,20 @@ bool PipelineCache::GetPipeLayout(const ShaderXlate& vsX, const ShaderXlate& psX
     return true;
 }
 
-bool PipelineCache::GetRectGeomShader(uint64_t vsModification, VkShaderModule& out)
+bool PipelineCache::GetRectGeomShader(uint64_t vsModification, VkShaderModule &out)
 {
     out = VK_NULL_HANDLE;
     if (!R.hasGeometryShader)
         return false;
-    RectangleGeometryShaderKey key;
+    GeometryShaderKey key;
     if (!DeriveRectangleGeometryShaderKey(vsModification, key))
         return false;
     auto it = geomShaders.find(key);
     if (it != geomShaders.end())
-    { out = it->second; return out != VK_NULL_HANDLE; }
+    {
+        out = it->second;
+        return out != VK_NULL_HANDLE;
+    }
     std::vector<uint32_t> spirv;
     VkShaderModule mod = VK_NULL_HANDLE;
     if (BuildRectangleGeometryShader(key, spirv))
@@ -121,10 +132,11 @@ bool PipelineCache::GetRectGeomShader(uint64_t vsModification, VkShaderModule& o
         if (vkCreateShaderModule(R.device, &ci, nullptr, &mod) != VK_SUCCESS)
             mod = VK_NULL_HANDLE;
         else
-            lucent::info("draw", "rectangle geometry shader: {} interpolators,"
-                " {} clip, {} cull distances, {} SPIR-V words",
-                key.interpolatorCount, key.clipDistanceCount,
-                key.cullDistanceCount, spirv.size());
+            lucent::info("draw",
+                         "rectangle geometry shader: {} interpolators,"
+                         " {} clip, {} cull distances, {} SPIR-V words",
+                         key.interpolatorCount, key.clipDistanceCount, key.cullDistanceCount,
+                         spirv.size());
     }
     if (mod == VK_NULL_HANDLE)
         lucent::warn("draw", "rectangle geometry shader build failed");
@@ -133,25 +145,69 @@ bool PipelineCache::GetRectGeomShader(uint64_t vsModification, VkShaderModule& o
     return mod != VK_NULL_HANDLE;
 }
 
-bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
-                                VkShaderModule gsMod, uint32_t primType,
-                                const OutputMergerState& om, VkRenderPass renderPass,
-                                VkPipelineLayout pipeLayout, VkPipeline& out)
+bool PipelineCache::GetPointGeomShader(uint64_t vsModification, uint64_t psModification,
+                                       VkShaderModule &out)
+{
+    out = VK_NULL_HANDLE;
+    if (!R.hasGeometryShader)
+        return false;
+    GeometryShaderKey key;
+    if (!DerivePointGeometryShaderKey(vsModification, psModification, key))
+        return false;
+    auto it = geomShaders.find(key);
+    if (it != geomShaders.end())
+    {
+        out = it->second;
+        return out != VK_NULL_HANDLE;
+    }
+    std::vector<uint32_t> spirv;
+    VkShaderModule mod = VK_NULL_HANDLE;
+    if (BuildPointGeometryShader(key, spirv))
+    {
+        VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+        ci.codeSize = spirv.size() * sizeof(uint32_t);
+        ci.pCode = spirv.data();
+        if (vkCreateShaderModule(R.device, &ci, nullptr, &mod) != VK_SUCCESS)
+            mod = VK_NULL_HANDLE;
+        else
+            lucent::info("draw",
+                         "point geometry shader: {} interpolators, "
+                         "{} clip, {} cull distances, size {}, coordinates {}, {} SPIR-V words",
+                         key.interpolatorCount, key.clipDistanceCount, key.cullDistanceCount,
+                         key.hasPointSize, key.hasPointCoordinates, spirv.size());
+    }
+    if (mod == VK_NULL_HANDLE)
+        lucent::warn("draw", "point geometry shader build failed");
+    geomShaders[key] = mod;
+    out = mod;
+    return mod != VK_NULL_HANDLE;
+}
+
+bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod, VkShaderModule gsMod,
+                                uint32_t primType, const OutputMergerState &om,
+                                VkRenderPass renderPass, VkPipelineLayout pipeLayout,
+                                VkPipeline &out)
 {
     auto key = std::make_tuple(vsMod, psMod, gsMod, primType, om, renderPass);
     auto it = pipelines.find(key);
-    if (it != pipelines.end()) { out = it->second; return true; }
+    if (it != pipelines.end())
+    {
+        out = it->second;
+        return true;
+    }
     VkPipelineShaderStageCreateInfo stages[3]{};
     uint32_t stageCount = 0;
     stages[stageCount] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
     stages[stageCount].stage = VK_SHADER_STAGE_VERTEX_BIT;
-    stages[stageCount].module = vsMod; stages[stageCount].pName = "main";
+    stages[stageCount].module = vsMod;
+    stages[stageCount].pName = "main";
     ++stageCount;
     if (gsMod != VK_NULL_HANDLE)
     {
         stages[stageCount] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
         stages[stageCount].stage = VK_SHADER_STAGE_GEOMETRY_BIT;
-        stages[stageCount].module = gsMod; stages[stageCount].pName = "main";
+        stages[stageCount].module = gsMod;
+        stages[stageCount].pName = "main";
         ++stageCount;
     }
     // A null psMod means this draw has NO fragment stage. That is not an
@@ -162,7 +218,8 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
     {
         stages[stageCount] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
         stages[stageCount].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
-        stages[stageCount].module = psMod; stages[stageCount].pName = "main";
+        stages[stageCount].module = psMod;
+        stages[stageCount].pName = "main";
         ++stageCount;
     }
     VkPipelineVertexInputStateCreateInfo vin{
@@ -174,15 +231,12 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
     // PA_SC_*), so they are dynamic state rather than baked in -- a
     // host-fixed full-target viewport put this frame's geometry in the
     // top-left corner at the wrong scale.
-    VkPipelineViewportStateCreateInfo vps{
-        VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    VkPipelineViewportStateCreateInfo vps{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
     vps.viewportCount = 1;
     vps.scissorCount = 1;
-    const VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT,
-                                        VK_DYNAMIC_STATE_SCISSOR,
+    const VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR,
                                         VK_DYNAMIC_STATE_DEPTH_BIAS};
-    VkPipelineDynamicStateCreateInfo dyn{
-        VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
     dyn.dynamicStateCount = 3;
     dyn.pDynamicStates = dynStates;
     VkPipelineRasterizationStateCreateInfo rs{
@@ -205,15 +259,17 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
     static const bool invertFace = lucent::config::flag("DRAW_CULL_INVERT");
     if (om.polygonal && !noCull)
     {
-        if (om.suScModeCntl & 1) rs.cullMode |= VK_CULL_MODE_FRONT_BIT;
-        if (om.suScModeCntl & 2) rs.cullMode |= VK_CULL_MODE_BACK_BIT;
+        if (om.suScModeCntl & 1)
+            rs.cullMode |= VK_CULL_MODE_FRONT_BIT;
+        if (om.suScModeCntl & 2)
+            rs.cullMode |= VK_CULL_MODE_BACK_BIT;
         // face: 0 = front is counter-clockwise. GEARS_DRAW_CULL_INVERT is a
         // control arm for the one thing not settled by the register: our
         // Y-flip lives in the shader's ndc_scale, and a Y flip reverses
         // screen-space winding.
         const bool cw = ((om.suScModeCntl >> 2) & 1) != 0;
-        rs.frontFace = (cw != invertFace) ? VK_FRONT_FACE_CLOCKWISE
-                                          : VK_FRONT_FACE_COUNTER_CLOCKWISE;
+        rs.frontFace =
+            (cw != invertFace) ? VK_FRONT_FACE_CLOCKWISE : VK_FRONT_FACE_COUNTER_CLOCKWISE;
     }
     rs.lineWidth = 1.0f;
     VkPipelineMultisampleStateCreateInfo ms{
@@ -226,8 +282,7 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
     // "this draw is depth-rejected" from "this draw shades black". It is
     // never a fix -- the depth state below is the guest's own.
     static const bool noDepth = lucent::config::flag("DRAW_NODEPTH");
-    ds.depthTestEnable =
-        (!noDepth && ((om.depthControl >> 1) & 1)) ? VK_TRUE : VK_FALSE;
+    ds.depthTestEnable = (!noDepth && ((om.depthControl >> 1) & 1)) ? VK_TRUE : VK_FALSE;
     ds.depthWriteEnable = ((om.depthControl >> 2) & 1) ? VK_TRUE : VK_FALSE;
     ds.depthCompareOp = CompareOpOf(om.depthControl >> 4);
     // STENCIL, from RB_DEPTHCONTROL (enable +0, func +8, fail +11, zpass +14,
@@ -239,8 +294,7 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
     // with no stencil test every one of them ran over the whole screen
     // (catalog #91). GEARS_DRAW_NOSTENCIL=1 restores that as a control arm.
     static const bool noStencil = lucent::config::flag("DRAW_NOSTENCIL");
-    ds.stencilTestEnable =
-        (!noStencil && (om.depthControl & 1)) ? VK_TRUE : VK_FALSE;
+    ds.stencilTestEnable = (!noStencil && (om.depthControl & 1)) ? VK_TRUE : VK_FALSE;
     // Counted so "this title never uses stencil" and "nobody looked" cannot
     // read the same. Reported once per frame with its denominator.
     ++pipelinesBuilt;
@@ -274,10 +328,14 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
     // 0..3), and blending from RB_BLENDCONTROL0. A draw the guest masked off
     // entirely writes nothing, as on hardware.
     VkPipelineColorBlendAttachmentState cba{};
-    if (om.colorMask & 1) cba.colorWriteMask |= VK_COLOR_COMPONENT_R_BIT;
-    if (om.colorMask & 2) cba.colorWriteMask |= VK_COLOR_COMPONENT_G_BIT;
-    if (om.colorMask & 4) cba.colorWriteMask |= VK_COLOR_COMPONENT_B_BIT;
-    if (om.colorMask & 8) cba.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
+    if (om.colorMask & 1)
+        cba.colorWriteMask |= VK_COLOR_COMPONENT_R_BIT;
+    if (om.colorMask & 2)
+        cba.colorWriteMask |= VK_COLOR_COMPONENT_G_BIT;
+    if (om.colorMask & 4)
+        cba.colorWriteMask |= VK_COLOR_COMPONENT_B_BIT;
+    if (om.colorMask & 8)
+        cba.colorWriteMask |= VK_COLOR_COMPONENT_A_BIT;
     const uint32_t cSrc = om.blend0 & 0x1F;
     const uint32_t cOp = (om.blend0 >> 5) & 0x7;
     const uint32_t cDst = (om.blend0 >> 8) & 0x1F;
@@ -301,9 +359,11 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
     cba.alphaBlendOp = BlendOpOf(aOp);
     VkPipelineColorBlendStateCreateInfo cb{
         VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
-    cb.attachmentCount = 1; cb.pAttachments = &cba;
+    cb.attachmentCount = 1;
+    cb.pAttachments = &cba;
     VkGraphicsPipelineCreateInfo gp{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
-    gp.stageCount = stageCount; gp.pStages = stages;
+    gp.stageCount = stageCount;
+    gp.pStages = stages;
     gp.pVertexInputState = &vin;
     gp.pInputAssemblyState = &ia;
     gp.pViewportState = &vps;

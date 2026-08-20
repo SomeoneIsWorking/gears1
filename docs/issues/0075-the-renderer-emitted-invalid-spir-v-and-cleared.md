@@ -5,7 +5,7 @@ status: resolved
 symptom: GEARS_DRAW_VALIDATE=1 reports five distinct VUIDs, where the docs claim only the point-list PointSize warning
 tags: gpu,vulkan,validation,spirv,resolve,depth
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-21
 ---
 
 ## What was observed
@@ -31,3 +31,6 @@ All 8 captures hash identically via tools/frame_hashes.sh. That does NOT cover t
 ## The workflow lesson
 
 `tools/frame_hashes.sh` sets no GEARS_DRAW_* knob, so the validator, the probes and every dump are dead code in the routine gate (see instrument I006). 'Validation clean' is only true as of the last run of the validator -- cite the run, not the memory.
+
+### Note (2026-08-21)
+2026-08-21: The final previously allowed VUID, topology-08773 on point lists, is now fixed at its cause. Xenos points are rectangular sprites and must not be submitted as bare Vulkan points: runtime/gpu_draw_point_geometry.cpp ports Xenia point-list geometry expansion, reading PA_SU_POINT_SIZE-derived system constants and emitting a four-vertex triangle strip; the shared constants descriptor is now geometry-stage visible. chapter45_recovered.gfr contains 48 point draws and creates the 564-word point GS; tools/validate_all.sh reports zero VUIDs. Its contract is tightened from one allowed warning to zero. These particular draws have color mask 0, so their repair intentionally does not change the final frame hash.
