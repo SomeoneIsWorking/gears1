@@ -109,6 +109,11 @@ Then build and run the runtime against the generated code:
 ./run.sh --headless      # no window, for measurement
 ```
 
+The default run also starts the loopback interactive debug API at
+`http://127.0.0.1:32123`. It can drive the same controller state the guest reads
+and request an authoritative renderer screenshot plus live counters after the
+process has started. See [docs/interactive-debug.md](docs/interactive-debug.md).
+
 `run.sh` is a thin wrapper over the three steps it saves you typing:
 
 ```sh

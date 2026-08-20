@@ -14,6 +14,7 @@
 #   --no-build          run whatever is already built
 #   --log <path>        tee the run's output here (default scratch/logs/run.log)
 #   --script <steps>    scripted pad input, e.g. '25000:START,25300:'
+#   --http-port <port>  loopback debug API (default 32123; 0 disables)
 #   --present-dump N    write the next N frames AS PRESENTED to scratch/screenshots
 #                       (after frame 300). This is the only capture that goes
 #                       through the swapchain blit -- every other screenshot this
@@ -27,6 +28,7 @@
 #   GEARS_GAME_DIR      the title's data files, extracted from your disc
 #                       (default scratch/game)
 #   GEARS_BUILD_DIR     build directory (default scratch/build)
+#   GEARS_DEBUG_HTTP_PORT loopback control/probe port (default 32123)
 #   Every GEARS_* knob in docs/knobs.md is passed through untouched.
 
 set -eu
@@ -41,6 +43,7 @@ build=1
 headless=0
 input_script="${GEARS_INPUT_SCRIPT:-}"
 present_dump=""
+http_port="${GEARS_DEBUG_HTTP_PORT:-32123}"
 
 # The walk that reaches Act 1 gameplay, kept in one place -- it is the same
 # sequence tools/capture_gameplay_frame.sh and tools/run_to_checkpoint.sh use,
@@ -62,6 +65,7 @@ while [ $# -gt 0 ]; do
         --no-build)  build=0 ;;
         --log)       log="$2"; shift ;;
         --script)    input_script="$2"; shift ;;
+        --http-port) http_port="$2"; shift ;;
         --menu-walk) input_script="$menu_walk" ;;
         --present-dump) present_dump="$2"; shift ;;
         -h|--help)   usage; exit 0 ;;
@@ -113,8 +117,12 @@ if [ -n "$present_dump" ]; then
     export GEARS_PRESENT_DUMP_AT
     echo "run.sh: will write $present_dump presented frame(s) to scratch/screenshots" >&2
 fi
+export GEARS_DEBUG_HTTP_PORT="$http_port"
 
 echo "run.sh: $binary $game_dir/default.xex (log: $log)" >&2
+if [ "$http_port" != 0 ]; then
+    echo "run.sh: interactive debug API http://127.0.0.1:$http_port" >&2
+fi
 
 # The log is a TEE, not a redirect: a run you are watching should still print to
 # the terminal, and a run you want to grep afterwards should still leave a file.
@@ -130,7 +138,7 @@ echo "run.sh: $binary $game_dir/default.xex (log: $log)" >&2
 # script's status, and the trap takes it down with us. A SIGKILL of the script
 # itself is the one case nothing can cover -- kill run.sh with TERM, not KILL.
 fifo="$log.fifo"
-rm -f "$fifo"
+[ ! -e "$fifo" ] || "$self/tools/cleanup_scratch_path.sh" "$fifo"
 mkfifo "$fifo"
 tee "$log" < "$fifo" &
 tee_pid=$!
@@ -142,5 +150,5 @@ trap 'kill -TERM "$pid" 2>/dev/null || true' INT TERM HUP
 rc=0
 wait "$pid" || rc=$?
 wait "$tee_pid" 2>/dev/null || true
-rm -f "$fifo"
+[ ! -e "$fifo" ] || "$self/tools/cleanup_scratch_path.sh" "$fifo"
 exit "$rc"

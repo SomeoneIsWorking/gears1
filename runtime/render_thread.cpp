@@ -1,5 +1,7 @@
 #include "render_thread.h"
 
+#include "graphics_probe_render.h"
+
 #include <atomic>
 #include <cerrno>
 #include <cstdio>
@@ -23,8 +25,8 @@ namespace
 {
 
 std::mutex g_mutex;
-std::condition_variable g_wake;      // renderer waits for work
-std::condition_variable g_idle;      // WaitForRenderIdle waits for the renderer
+std::condition_variable g_wake; // renderer waits for work
+std::condition_variable g_idle; // WaitForRenderIdle waits for the renderer
 std::optional<FrameDrawInputs> g_pending;
 bool g_rendering = false;
 bool g_stop = false;
@@ -53,7 +55,7 @@ uint64_t ThreadCpuNanos()
 // The scheduler's own account of time spent RUNNABLE but not running.
 uint64_t ThreadRunqueueNanos()
 {
-    std::FILE* f = std::fopen("/proc/thread-self/schedstat", "r");
+    std::FILE *f = std::fopen("/proc/thread-self/schedstat", "r");
     if (!f)
         return 0;
     unsigned long long ran = 0, waited = 0, slices = 0;
@@ -77,8 +79,10 @@ void RenderThreadMain()
     // weights; it needs no privileges to lower a priority.
     const int tid = int(syscall(SYS_gettid));
     if (setpriority(PRIO_PROCESS, id_t(tid), 5) != 0)
-        lucent::warn("draw", "render thread: could not nice down (errno {});"
-            " it will compete with the guest's audio for cores", errno);
+        lucent::warn("draw",
+                     "render thread: could not nice down (errno {});"
+                     " it will compete with the guest's audio for cores",
+                     errno);
 
     for (;;)
     {
@@ -86,9 +90,16 @@ void RenderThreadMain()
         {
             std::unique_lock<std::mutex> lock(g_mutex);
             g_wake.wait(lock, [] { return g_pending.has_value() || g_stop; });
-            if (g_stop && !g_pending.has_value())
-                return;
-            work = std::move(*g_pending);
+            if (!g_pending.has_value())
+            {
+                // The wait predicate permits this state only for shutdown.
+                // Keeping the check explicit also makes the optional access
+                // locally proven rather than dependent on the predicate.
+                if (g_stop)
+                    return;
+                continue;
+            }
+            work = std::move(g_pending.value());
             g_pending.reset();
             g_rendering = true;
         }
@@ -96,10 +107,10 @@ void RenderThreadMain()
         const auto t0 = std::chrono::steady_clock::now();
         const uint64_t cpu0 = ThreadCpuNanos();
         const uint64_t rq0 = ThreadRunqueueNanos();
-        RenderFrame(work);
-        g_busyMillis.fetch_add(uint64_t(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - t0).count()));
+        RenderFrameWithGraphicsProbe(work);
+        g_busyMillis.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            std::chrono::steady_clock::now() - t0)
+                                            .count()));
         g_cpuMillis.fetch_add((ThreadCpuNanos() - cpu0) / 1000000ull);
         g_runqueueMillis.fetch_add((ThreadRunqueueNanos() - rq0) / 1000000ull);
         g_rendered.fetch_add(1);
@@ -114,7 +125,7 @@ void RenderThreadMain()
 
 } // namespace
 
-bool SubmitFrameForRender(FrameDrawInputs&& in)
+bool SubmitFrameForRender(FrameDrawInputs &&in)
 {
     std::unique_lock<std::mutex> lock(g_mutex);
     if (!g_started)
@@ -122,8 +133,8 @@ bool SubmitFrameForRender(FrameDrawInputs&& in)
         g_started = true;
         g_thread = std::thread(RenderThreadMain);
         lucent::info("draw", "render thread started: the command processor hands over"
-            " each frame's draw list and returns, so the guest's VdSwap no longer"
-            " waits for the render");
+                             " each frame's draw list and returns, so the guest's VdSwap no longer"
+                             " waits for the render");
     }
     g_submitted.fetch_add(1);
     // BUSY MEANS DROP, not queue. A queued frame is already stale by the time it

@@ -1,0 +1,13 @@
+Checks: >
+  -*,
+  bugprone-dangling-handle,
+  bugprone-misplaced-widening-cast,
+  bugprone-unchecked-optional-access,
+  bugprone-use-after-move,
+  clang-analyzer-*,
+  modernize-use-nullptr,
+  performance-*,
+  readability-container-size-empty
+WarningsAsErrors: '*'
+HeaderFilterRegex: '^(runtime|tests|tools)/'
+FormatStyle: file
