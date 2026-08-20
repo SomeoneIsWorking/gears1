@@ -58,4 +58,6 @@ an FNV-1a identity hash of the exact RGBA bytes.
 It returns that renderer readback as binary PPM. A timeout is HTTP 504; a frame
 that could not render or did not yield correctly sized RGBA is HTTP 503. Neither
 case is returned as an empty or black image, because absence and black output are
-different graphics findings.
+different graphics findings. The returned bytes come from the same post-gamma
+scan-out image published to the presenter; the HTTP probe does not observe a
+brighter pre-LUT rendering path.

@@ -19,19 +19,22 @@
 #include "gpu_draw_formats.h"
 #include "gpu_draw_pixels.h"
 #include "gpu_draw_xlate.h"
+#include "gpu_scanout.h"
 
 #include <lucent/log.h>
 
 // Every renderer translation unit builds Vulkan objects and every one of them
 // has to fail loudly rather than carry on with a null handle. One definition,
 // so a TU cannot quietly use a laxer one.
-#define VK_CHECK(expr)                                                       \
-    do {                                                                     \
-        VkResult _r = (expr);                                                \
-        if (_r != VK_SUCCESS) {                                              \
-            lucent::warn("draw", "{} -> {}", #expr, ::gears::draw::VkStr(_r)); \
-            return false;                                                    \
-        }                                                                    \
+#define VK_CHECK(expr)                                                                             \
+    do                                                                                             \
+    {                                                                                              \
+        VkResult _r = (expr);                                                                      \
+        if (_r != VK_SUCCESS)                                                                      \
+        {                                                                                          \
+            lucent::warn("draw", "{} -> {}", #expr, ::gears::draw::VkStr(_r));                     \
+            return false;                                                                          \
+        }                                                                                          \
     } while (0)
 
 namespace gears::draw
@@ -161,9 +164,9 @@ struct ResolveTarget
     // rendered in predicated tiles -- see catalog #32, where one 1280x720
     // half-float target was being split into two unrelated images because the
     // guest folds the second tile's row offset into RB_COPY_DEST_BASE.
-    uint32_t base = 0;       // RB_COPY_DEST_BASE of the texture's first row
+    uint32_t base = 0;              // RB_COPY_DEST_BASE of the texture's first row
     uint32_t pitch = 0, height = 0; // in pixels, from RB_COPY_DEST_PITCH
-    uint32_t bpp = 0;        // bytes per pixel of the guest destination format
+    uint32_t bpp = 0;               // bytes per pixel of the guest destination format
     // The raw RB_COPY_DEST_INFO.copy_dest_format. Kept beside the derived bpp
     // because the cross-emulator pass comparison has to DECODE these bytes, and
     // one frame carries four-byte and eight-byte destinations under otherwise
@@ -171,7 +174,7 @@ struct ResolveTarget
     // plausible picture of the wrong pass.
     uint32_t guestFormat = 0;
     uint32_t width = 0, imageHeight = 0; // what the host image was created with
-    bool everWritten = false; // whether a resolve has landed in it yet
+    bool everWritten = false;            // whether a resolve has landed in it yet
     // A DEPTH destination. It is not a copy of a colour surface: the guest reads
     // it back as k_24_8_FLOAT and its shaders take .x, so the host image holds
     // the depth as a float. R16G16B16A16_SFLOAT would be wrong here -- half
@@ -179,8 +182,6 @@ struct ResolveTarget
     // depth would band where it matters most.
     bool isDepth = false;
 };
-
-
 
 // Everything a frame render needs that does not change between frames.
 //
@@ -210,8 +211,10 @@ struct RendererPersistent
     std::map<std::pair<std::string, std::string>, VkPipelineLayout> pipeLayouts;
     // The render pass is part of the key: a pipeline is only valid against a
     // render pass it is compatible with, and each colour format now has its own.
-    std::map<std::tuple<VkShaderModule, VkShaderModule, VkShaderModule, uint32_t,
-                        OutputMergerState, VkRenderPass>, VkPipeline> pipelines;
+    std::map<std::tuple<VkShaderModule, VkShaderModule, VkShaderModule, uint32_t, OutputMergerState,
+                        VkRenderPass>,
+             VkPipeline>
+        pipelines;
     VkDescriptorSetLayout set0 = VK_NULL_HANDLE, set1 = VK_NULL_HANDLE;
 
     // Guest textures, their views by fetch key, and their samplers. Keyed rather
@@ -232,8 +235,8 @@ struct RendererPersistent
     // The render-target cache: one host target per EDRAM colour surface, one
     // host image per resolve destination, and a pair of render passes (clear
     // and load) per host colour format.
-    std::map<uint32_t, SurfaceTarget> surfaceTargets; // EDRAM color_base -> target
-    std::map<uint32_t, ResolveTarget> resolveTargets; // RB_COPY_DEST_BASE -> image
+    std::map<uint32_t, SurfaceTarget> surfaceTargets;                 // EDRAM color_base -> target
+    std::map<uint32_t, ResolveTarget> resolveTargets;                 // RB_COPY_DEST_BASE -> image
     std::map<VkFormat, std::pair<VkRenderPass, VkRenderPass>> passes; // clear, load
 
     // The resolve compute pipeline. A resolve is not a blit: it applies the
@@ -294,27 +297,19 @@ struct RendererPersistent
     // RenderTargetCache::GetDepthTarget as the frame moves between bases -- so
     // every existing user (the mid-frame clear, the depth resolve, the aliasing
     // pass, the probes) keeps reading one place and gets the right image.
-    std::map<uint32_t, DepthTarget> depthTargets;   // depth_base -> target
+    std::map<uint32_t, DepthTarget> depthTargets; // depth_base -> target
     uint32_t boundDepthBase = UINT32_MAX;
-    VkImage depth = VK_NULL_HANDLE; VkDeviceMemory depthMem = VK_NULL_HANDLE;
+    VkImage depth = VK_NULL_HANDLE;
+    VkDeviceMemory depthMem = VK_NULL_HANDLE;
     VkImageView depthView = VK_NULL_HANDLE;
 
-    // The image the finished frame is handed to the presenter in: 8888, one blit
-    // from whatever surface the frame ended on.
-    //
-    // TWO OF THEM, ALTERNATING, and that is the whole point. The presenter runs on
-    // its own thread and the renderer on another, so publishing the live render
-    // target meant the presenter could blit a surface the renderer had already
-    // started drawing the next frame into. Alternating means the image being shown
-    // is never the image being written.
-    VkImage presentStage[2]{};
-    VkDeviceMemory presentStageMem[2]{};
-    uint32_t presentStageIndex = 0;
+    GpuScanout scanout;
 
     // The guest-memory mirror the translated shaders fetch through. The buffer
     // is persistent; its CONTENTS are refreshed every frame, because guest
     // memory is exactly what changes between frames.
-    VkBuffer ssbo = VK_NULL_HANDLE; VkDeviceMemory ssboMem = VK_NULL_HANDLE;
+    VkBuffer ssbo = VK_NULL_HANDLE;
+    VkDeviceMemory ssboMem = VK_NULL_HANDLE;
     VkDeviceSize ssboBytes = 0;
 
     // One persistently-mapped buffer the per-draw uniform blocks and expanded
@@ -325,8 +320,9 @@ struct RendererPersistent
     // It grows to the previous frame's high-water mark; a frame that outgrows
     // it mid-way falls back to standalone buffers for the remainder rather than
     // dropping draws, and the next frame is sized to fit.
-    VkBuffer arena = VK_NULL_HANDLE; VkDeviceMemory arenaMem = VK_NULL_HANDLE;
-    void* arenaMapped = nullptr;
+    VkBuffer arena = VK_NULL_HANDLE;
+    VkDeviceMemory arenaMem = VK_NULL_HANDLE;
+    void *arenaMapped = nullptr;
     VkDeviceSize arenaBytes = 0;
     VkDeviceSize arenaHighWater = 0;
 
@@ -338,14 +334,12 @@ struct RendererPersistent
     VkFence fence = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
     uint32_t descriptorPoolDraws = 0; // what it was sized for
-    VkBuffer readback = VK_NULL_HANDLE; VkDeviceMemory readbackMem = VK_NULL_HANDLE;
-    void* readbackMapped = nullptr;
+    VkBuffer readback = VK_NULL_HANDLE;
+    VkDeviceMemory readbackMem = VK_NULL_HANDLE;
+    void *readbackMapped = nullptr;
     VkDeviceSize readbackBytes = 0;
-    void* ssboMapped = nullptr;
+    void *ssboMapped = nullptr;
 };
-
-
-
 
 // -------------------------------------------------------------------------
 // Vulkan renderer, headless, one draw. Everything is torn down at the end; the
@@ -388,13 +382,13 @@ struct Renderer
     // pointer rather than a unique_ptr so the type can stay
     // incomplete here: it names OutputMergerState and the texture structs,
     // which are declared further down.
-    struct RendererPersistent* persistent = nullptr;
+    struct RendererPersistent *persistent = nullptr;
 
     bool Init();
-    bool FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_t& out);
-    bool MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer& buf,
-                    VkDeviceMemory& mem, bool wantCached = false);
-    bool RenderFrameImpl(const FrameDrawInputs& in);
+    bool FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_t &out);
+    bool MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer &buf, VkDeviceMemory &mem,
+                    bool wantCached = false);
+    bool RenderFrameImpl(const FrameDrawInputs &in);
     void EnsurePersistentCapacity(uint32_t requiredWidth, uint32_t requiredHeight);
     void ReleasePersistent();
 };

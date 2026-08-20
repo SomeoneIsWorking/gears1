@@ -27,7 +27,7 @@ case "$src" in
 esac
 
 tmp=$(mktemp -d "${SCRATCH:-scratch}/gen_native_spv.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT
+trap 'tools/cleanup_scratch_path.sh "$tmp"' EXIT
 
 glslangValidator -V --target-env vulkan1.1 -S "$stage" "$src" -o "$tmp/out.spv"
 

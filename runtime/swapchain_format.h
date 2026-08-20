@@ -32,8 +32,25 @@ inline bool SwapchainFormatIsSrgb(VkFormat f)
 inline bool SwapchainFormatIsUnorm(VkFormat f)
 {
     return f == VK_FORMAT_B8G8R8A8_UNORM || f == VK_FORMAT_R8G8B8A8_UNORM ||
-           f == VK_FORMAT_A2B10G10R10_UNORM_PACK32 ||
-           f == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+           f == VK_FORMAT_A2B10G10R10_UNORM_PACK32 || f == VK_FORMAT_A2R10G10B10_UNORM_PACK32;
+}
+
+// The raw-copy stage must have the SAME COMPONENT LAYOUT as the sRGB
+// swapchain. vkCmdCopyImage preserves bytes, so hardcoding a BGRA stage for an
+// RGBA swapchain exchanges red and blue across the whole window.
+inline VkFormat SwapchainSrgbStageFormat(VkFormat f)
+{
+    switch (f)
+    {
+    case VK_FORMAT_R8G8B8A8_SRGB:
+        return VK_FORMAT_R8G8B8A8_UNORM;
+    case VK_FORMAT_B8G8R8A8_SRGB:
+        return VK_FORMAT_B8G8R8A8_UNORM;
+    case VK_FORMAT_A8B8G8R8_SRGB_PACK32:
+        return VK_FORMAT_A8B8G8R8_UNORM_PACK32;
+    default:
+        return VK_FORMAT_UNDEFINED;
+    }
 }
 
 // THE COLOUR SPACE IS PART OF THE ANSWER, not a detail of it.
@@ -62,8 +79,8 @@ inline bool SwapchainFormatIsUnorm(VkFormat f)
 // The caller must then get the frame in WITHOUT a conversion -- blitting into an
 // sRGB image encodes it a second time -- which gpu_present.cpp does with a
 // size-compatible vkCmdCopyImage through a UNORM stage.
-inline VkSurfaceFormatKHR ChooseSwapchainFormat(const VkSurfaceFormatKHR* formats,
-                                                size_t count, bool preferSrgb = false)
+inline VkSurfaceFormatKHR ChooseSwapchainFormat(const VkSurfaceFormatKHR *formats, size_t count,
+                                                bool preferSrgb = false)
 {
     if (formats != nullptr && count != 0 && preferSrgb)
         for (size_t i = 0; i < count; ++i)
@@ -73,14 +90,14 @@ inline VkSurfaceFormatKHR ChooseSwapchainFormat(const VkSurfaceFormatKHR* format
     if (formats == nullptr || count == 0)
         return VkSurfaceFormatKHR{VK_FORMAT_UNDEFINED, VK_COLOR_SPACE_SRGB_NONLINEAR_KHR};
 
-    auto find = [&](bool wantSrgbSpace, bool wantUnorm) -> const VkSurfaceFormatKHR* {
+    auto find = [&](bool wantSrgbSpace, bool wantUnorm) -> const VkSurfaceFormatKHR *
+    {
         for (size_t i = 0; i < count; ++i)
         {
-            const VkSurfaceFormatKHR& c = formats[i];
+            const VkSurfaceFormatKHR &c = formats[i];
             if (wantSrgbSpace && c.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
                 continue;
-            if (wantUnorm ? !SwapchainFormatIsUnorm(c.format)
-                          : SwapchainFormatIsSrgb(c.format))
+            if (wantUnorm ? !SwapchainFormatIsUnorm(c.format) : SwapchainFormatIsSrgb(c.format))
                 continue;
             return &c;
         }
@@ -91,10 +108,14 @@ inline VkSurfaceFormatKHR ChooseSwapchainFormat(const VkSurfaceFormatKHR* format
         if (formats[i].format == VK_FORMAT_B8G8R8A8_UNORM &&
             formats[i].colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
             return formats[i];
-    if (const VkSurfaceFormatKHR* c = find(true, true))   return *c;
-    if (const VkSurfaceFormatKHR* c = find(true, false))  return *c;
-    if (const VkSurfaceFormatKHR* c = find(false, true))  return *c;
-    if (const VkSurfaceFormatKHR* c = find(false, false)) return *c;
+    if (const VkSurfaceFormatKHR *c = find(true, true))
+        return *c;
+    if (const VkSurfaceFormatKHR *c = find(true, false))
+        return *c;
+    if (const VkSurfaceFormatKHR *c = find(false, true))
+        return *c;
+    if (const VkSurfaceFormatKHR *c = find(false, false))
+        return *c;
     return formats[0];
 }
 

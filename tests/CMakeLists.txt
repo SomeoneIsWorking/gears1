@@ -166,6 +166,12 @@ add_executable(test_graphics_probe
 target_include_directories(test_graphics_probe PRIVATE ../runtime)
 add_test(NAME graphics_probe COMMAND test_graphics_probe)
 
+add_executable(test_scanout_gamma
+    test_scanout_gamma.cpp
+    ../runtime/scanout_gamma.cpp)
+target_include_directories(test_scanout_gamma PRIVATE ../runtime)
+add_test(NAME scanout_gamma COMMAND test_scanout_gamma)
+
 # Xam system-UI notifications are part of the storage-selector protocol, not
 # decorative events: Gears keeps its own modal open until it receives the close
 # notification. Exercise the real queue through the imported guest seams.

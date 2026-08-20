@@ -19,7 +19,7 @@ namespace
 
 int g_failures = 0;
 
-void Check(bool ok, const char* what)
+void Check(bool ok, const char *what)
 {
     if (!ok)
     {
@@ -42,10 +42,9 @@ void TestSrgbFirstIsNotChosenWhenUnormExists()
     };
     const VkSurfaceFormatKHR got = ChooseSwapchainFormat(formats.data(), formats.size());
     Check(got.format == VK_FORMAT_B8G8R8A8_UNORM,
-        "a surface listing sRGB FIRST and UNORM second gives the UNORM -- the old"
-        " code took formats[0] and washed out the whole window");
-    Check(!gears::SwapchainFormatIsSrgb(got.format),
-        "and the chosen format is not an sRGB one");
+          "a surface listing sRGB FIRST and UNORM second gives the UNORM -- the old"
+          " code took formats[0] and washed out the whole window");
+    Check(!gears::SwapchainFormatIsSrgb(got.format), "and the chosen format is not an sRGB one");
 }
 
 void TestAnyUnormBeatsAnySrgb()
@@ -57,7 +56,7 @@ void TestAnyUnormBeatsAnySrgb()
     };
     const VkSurfaceFormatKHR got = ChooseSwapchainFormat(formats.data(), formats.size());
     Check(got.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32,
-        "a ten-bit UNORM is preferred over an eight-bit sRGB");
+          "a ten-bit UNORM is preferred over an eight-bit sRGB");
 }
 
 void TestNonSrgbBeatsSrgbEvenWhenNotUnorm()
@@ -68,7 +67,7 @@ void TestNonSrgbBeatsSrgbEvenWhenNotUnorm()
     };
     const VkSurfaceFormatKHR got = ChooseSwapchainFormat(formats.data(), formats.size());
     Check(!gears::SwapchainFormatIsSrgb(got.format),
-        "with no UNORM offered, any non-sRGB format is still preferred to an sRGB one");
+          "with no UNORM offered, any non-sRGB format is still preferred to an sRGB one");
 }
 
 // A surface really can offer nothing else. The choice is then forced, and the
@@ -80,16 +79,29 @@ void TestSrgbOnlySurfaceIsReportedHonestly()
     };
     const VkSurfaceFormatKHR got = ChooseSwapchainFormat(formats.data(), formats.size());
     Check(got.format == VK_FORMAT_B8G8R8A8_SRGB,
-        "an sRGB-only surface yields the sRGB format rather than an invalid one");
+          "an sRGB-only surface yields the sRGB format rather than an invalid one");
     Check(gears::SwapchainFormatIsSrgb(got.format),
-        "and it is recognisable as sRGB, which is what makes the caller warn");
+          "and it is recognisable as sRGB, which is what makes the caller warn");
 }
 
 void TestEmptyListDoesNotInventAFormat()
 {
     const VkSurfaceFormatKHR got = ChooseSwapchainFormat(nullptr, 0);
     Check(got.format == VK_FORMAT_UNDEFINED,
-        "no formats yields UNDEFINED rather than a plausible guess");
+          "no formats yields UNDEFINED rather than a plausible guess");
+}
+
+void TestSrgbStagePreservesComponentLayout()
+{
+    Check(gears::SwapchainSrgbStageFormat(VK_FORMAT_R8G8B8A8_SRGB) == VK_FORMAT_R8G8B8A8_UNORM,
+          "an RGBA sRGB swapchain gets an RGBA UNORM raw-copy stage");
+    Check(gears::SwapchainSrgbStageFormat(VK_FORMAT_B8G8R8A8_SRGB) == VK_FORMAT_B8G8R8A8_UNORM,
+          "a BGRA sRGB swapchain gets a BGRA UNORM raw-copy stage");
+    Check(gears::SwapchainSrgbStageFormat(VK_FORMAT_A8B8G8R8_SRGB_PACK32) ==
+              VK_FORMAT_A8B8G8R8_UNORM_PACK32,
+          "a packed A8B8G8R8 sRGB swapchain keeps its packed component layout");
+    Check(gears::SwapchainSrgbStageFormat(VK_FORMAT_R16G16B16A16_SFLOAT) == VK_FORMAT_UNDEFINED,
+          "a format with no byte-compatible stage is refused");
 }
 
 // AN HDR DESKTOP. The surface offers UNORM formats, but paired with colour spaces
@@ -105,10 +117,9 @@ void TestColourSpaceBeatsFormatPreference()
         {VK_FORMAT_B8G8R8A8_UNORM, kSrgbNonlinear},
     };
     const VkSurfaceFormatKHR got = ChooseSwapchainFormat(formats.data(), formats.size());
-    Check(got.format == VK_FORMAT_B8G8R8A8_UNORM &&
-          got.colorSpace == kSrgbNonlinear,
-        "with HDR colour spaces listed FIRST, the sRGB-nonlinear UNORM still wins --"
-        " a linear or PQ colour space re-interprets an already-encoded frame");
+    Check(got.format == VK_FORMAT_B8G8R8A8_UNORM && got.colorSpace == kSrgbNonlinear,
+          "with HDR colour spaces listed FIRST, the sRGB-nonlinear UNORM still wins --"
+          " a linear or PQ colour space re-interprets an already-encoded frame");
 }
 
 void TestSrgbNonlinearWinsEvenWithoutAUnormFormat()
@@ -119,7 +130,7 @@ void TestSrgbNonlinearWinsEvenWithoutAUnormFormat()
     };
     const VkSurfaceFormatKHR got = ChooseSwapchainFormat(formats.data(), formats.size());
     Check(got.colorSpace == kSrgbNonlinear,
-        "a UNORM with SRGB_NONLINEAR is preferred to a float format in a linear space");
+          "a UNORM with SRGB_NONLINEAR is preferred to a float format in a linear space");
 }
 
 } // namespace
@@ -133,6 +144,7 @@ int main()
     TestNonSrgbBeatsSrgbEvenWhenNotUnorm();
     TestSrgbOnlySurfaceIsReportedHonestly();
     TestEmptyListDoesNotInventAFormat();
+    TestSrgbStagePreservesComponentLayout();
     if (g_failures != 0)
     {
         printf("%d failure(s)\n", g_failures);

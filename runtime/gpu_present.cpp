@@ -42,6 +42,7 @@
 #include <lucent/log.h>
 
 #include "gpu_device_features.h"
+#include "gpu_present_stage.h"
 #include "gpu_shared_device.h"
 #include "gpu_queue_family.h"
 #include "swapchain_format.h"
@@ -70,71 +71,69 @@ namespace
 constexpr uint32_t kWindowWidth = 1280;
 constexpr uint32_t kWindowHeight = 720;
 
-const char* ResultName(VkResult r)
+const char *ResultName(VkResult r)
 {
     switch (r)
     {
-    case VK_SUCCESS: return "VK_SUCCESS";
-    case VK_SUBOPTIMAL_KHR: return "VK_SUBOPTIMAL_KHR";
-    case VK_ERROR_OUT_OF_DATE_KHR: return "VK_ERROR_OUT_OF_DATE_KHR";
-    case VK_ERROR_SURFACE_LOST_KHR: return "VK_ERROR_SURFACE_LOST_KHR";
-    case VK_ERROR_DEVICE_LOST: return "VK_ERROR_DEVICE_LOST";
-    case VK_ERROR_INITIALIZATION_FAILED: return "VK_ERROR_INITIALIZATION_FAILED";
-    case VK_ERROR_OUT_OF_HOST_MEMORY: return "VK_ERROR_OUT_OF_HOST_MEMORY";
-    case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
-    case VK_ERROR_EXTENSION_NOT_PRESENT: return "VK_ERROR_EXTENSION_NOT_PRESENT";
-    default: return "VkResult";
+    case VK_SUCCESS:
+        return "VK_SUCCESS";
+    case VK_SUBOPTIMAL_KHR:
+        return "VK_SUBOPTIMAL_KHR";
+    case VK_ERROR_OUT_OF_DATE_KHR:
+        return "VK_ERROR_OUT_OF_DATE_KHR";
+    case VK_ERROR_SURFACE_LOST_KHR:
+        return "VK_ERROR_SURFACE_LOST_KHR";
+    case VK_ERROR_DEVICE_LOST:
+        return "VK_ERROR_DEVICE_LOST";
+    case VK_ERROR_INITIALIZATION_FAILED:
+        return "VK_ERROR_INITIALIZATION_FAILED";
+    case VK_ERROR_OUT_OF_HOST_MEMORY:
+        return "VK_ERROR_OUT_OF_HOST_MEMORY";
+    case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+        return "VK_ERROR_OUT_OF_DEVICE_MEMORY";
+    case VK_ERROR_EXTENSION_NOT_PRESENT:
+        return "VK_ERROR_EXTENSION_NOT_PRESENT";
+    default:
+        return "VkResult";
     }
 }
 
 struct Presenter
 {
+    static constexpr uint32_t kInFlight = 2;
+
     // --- host objects, touched only by the present thread -------------------
-    SDL_Window* window = nullptr;
+    SDL_Window *window = nullptr;
     VkInstance instance = VK_NULL_HANDLE;
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
-    uint32_t queueFamily = 0;
     VkQueue queue = VK_NULL_HANDLE;
-
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
-    VkFormat format = VK_FORMAT_UNDEFINED;
-    VkExtent2D extent{};
-    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
-    std::vector<VkImage> images;
-    // One semaphore per swapchain image: a present-wait semaphore stays in use
-    // until the presentation engine is done with that image, so it cannot be
-    // recycled per in-flight frame without a race.
-    std::vector<VkSemaphore> presentReady;
-
-    VkPhysicalDeviceMemoryProperties memProps{};
-
-    // Whether the surface permits reading the presented image back. Reported rather
-    // than assumed: if it is false the capture is simply unavailable, and a request
-    // for one has to say so instead of writing nothing and looking like it worked.
-    bool canCapturePresented = false;
-    // Run the whole present path against VK_EXT_headless_surface instead of a
-    // window (GEARS_PRESENT_HEADLESS=1).
-    bool headlessSurface = false;
-    // The last drawn frame blitted, so the same one is not blitted twice, and a
-    // one-shot note so the fast path announces itself once rather than every frame.
     uint64_t lastBlittedFrame = 0;
-    bool announcedBlit = false;
-    // Presents that had no drawn frame to show and went out black. Reported, so
-    // "the window was black" is a number rather than an impression.
     uint64_t blankPresents = 0;
-    bool announcedBlank = false;
-    // Presents showing a frame the renderer had just produced, and presents
-    // re-showing the previous one because it had not produced a new one yet.
     uint64_t freshFramesShown = 0;
     uint64_t repeatedFramesShown = 0;
+
+    // Presented-image readback is independent from the upload path it checks.
     VkBuffer presentCapture = VK_NULL_HANDLE;
     VkDeviceMemory presentCaptureMem = VK_NULL_HANDLE;
-    void* presentCaptureMapped = nullptr;
+    void *presentCaptureMapped = nullptr;
     VkDeviceSize presentCaptureBytes = 0;
-    uint64_t presentCaptureWanted = 0;   // how many frames still to write
-    uint64_t presentCaptureAfter = 0;    // ...but not before this present
+    uint64_t presentCaptureWanted = 0; // how many frames still to write
+    uint64_t presentCaptureAfter = 0;  // ...but not before this present
+
+    VkBuffer guestStaging = VK_NULL_HANDLE;
+    VkDeviceMemory guestStagingMem = VK_NULL_HANDLE;
+    void *guestStagingMapped = nullptr;
+    VkDeviceSize guestStagingSize = 0;
+
+    VkCommandPool commandPool = VK_NULL_HANDLE;
+
+    // --- measurement --------------------------------------------------------
+    uint64_t presentCount = 0;
+    uint64_t presentMicros = 0;
+    std::chrono::steady_clock::time_point lastReport;
 
     // THE SWAPCHAIN IS TAGGED sRGB, AND THE FRAME GOES IN AS RAW BYTES.
     //
@@ -145,44 +144,47 @@ struct Presenter
     // sRGB-encoded -- the guest tonemapped them -- so the honest thing is to say so,
     // and a *_SRGB swapchain format is how that is said.
     //
-    // The catch is that vkCmdBlitImage into an sRGB image CONVERTS, which would
-    // encode the frame a second time. So the frame is blitted into this
-    // B8G8R8A8_UNORM stage first (a UNORM->UNORM blit reorders channels and touches
-    // no transfer function), and then vkCmdCopyImage moves it into the sRGB
-    // swapchain image: a copy between size-compatible formats is a raw byte move,
-    // with no conversion at all. The bytes that reach the screen are exactly the
-    // bytes the renderer produced, now correctly labelled.
-    VkImage srgbStage = VK_NULL_HANDLE;
-    VkDeviceMemory srgbStageMem = VK_NULL_HANDLE;
-    bool swapchainIsSrgb = false;
-
-    VkBuffer guestStaging = VK_NULL_HANDLE;
-    VkDeviceMemory guestStagingMem = VK_NULL_HANDLE;
-    void* guestStagingMapped = nullptr;
-    VkDeviceSize guestStagingSize = 0;
-
-    VkCommandPool commandPool = VK_NULL_HANDLE;
-    static constexpr uint32_t kInFlight = 2;
+    // The catch is that a blit into sRGB encodes a second time. The frame is
+    // therefore blitted into the matching UNORM component layout, then copied as
+    // raw bytes. The stage format is derived from the swapchain; hardcoding BGRA
+    // made an RGBA-only surface exchange red and blue across the whole window.
+    gears::SrgbRawCopyStage srgbStage;
     VkCommandBuffer commands[kInFlight]{};
     VkSemaphore acquired[kInFlight]{};
     VkFence submitted[kInFlight]{};
-    uint32_t frameSlot = 0;
-    bool slotUsed[kInFlight]{};
+    std::vector<VkImage> images;
+    // One semaphore per swapchain image: a present-wait semaphore stays in use
+    // until the presentation engine is done with that image.
+    std::vector<VkSemaphore> presentReady;
 
     // --- handshake with the command processor -------------------------------
     std::mutex mutex;
     std::condition_variable request;
     std::condition_variable done;
+    VkPhysicalDeviceMemoryProperties memProps{};
+
+    uint32_t queueFamily = 0;
+    VkFormat format = VK_FORMAT_UNDEFINED;
+    VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+    uint32_t frameSlot = 0;
+    uint32_t pendingSequence = 0;
+    uint32_t presentedFrameSamples = 0;
+    uint32_t presentedFrameBestP99 = 0;
+    VkExtent2D extent{};
+
+    // These flags are kept together after the naturally aligned state above so
+    // Presenter does not spend cache space on alignment holes between them.
+    bool canCapturePresented = false;
+    bool headlessSurface = false;
+    bool announcedBlit = false;
+    bool announcedBlank = false;
+    bool swapchainIsSrgb = false;
     bool pending = false;
     bool serviced = false;
-    uint32_t pendingSequence = 0;
     std::atomic<bool> running{false};
     std::atomic<bool> shuttingDown{false};
-
-    // --- measurement --------------------------------------------------------
-    uint64_t presentCount = 0;
-    uint64_t presentMicros = 0;
-    std::chrono::steady_clock::time_point lastReport;
+    bool presentedFrameChecked = false;
+    bool slotUsed[kInFlight]{};
 
     bool Start();
     void Stop();
@@ -199,11 +201,7 @@ struct Presenter
     void WritePresentedFrame(uint32_t width, uint32_t height, VkFormat format);
     // One look at the numbers of a real presented frame, to catch the frame
     // being finished-looking-but-not-finished. Runs once per run.
-    void CheckPresentedFrameLooksFinished(uint32_t width, uint32_t height,
-                                          VkFormat format);
-    bool presentedFrameChecked = false;
-    uint32_t presentedFrameSamples = 0;
-    uint32_t presentedFrameBestP99 = 0;
+    void CheckPresentedFrameLooksFinished(uint32_t width, uint32_t height, VkFormat format);
     bool PresentOne(uint32_t sequence);
     void PumpEvents();
 };
@@ -224,7 +222,7 @@ bool Presenter::CreateInstanceAndDevice()
     // with a real swapchain, real images, the real blit and a real vkQueuePresent.
     // GEARS_PRESENT_HEADLESS=1 takes that path, and GEARS_PRESENT_DUMP then
     // captures what would have reached the screen.
-    std::vector<const char*> extensions;
+    std::vector<const char *> extensions;
     if (headlessSurface)
     {
         uint32_t available = 0;
@@ -232,15 +230,16 @@ bool Presenter::CreateInstanceAndDevice()
         std::vector<VkExtensionProperties> props(available);
         vkEnumerateInstanceExtensionProperties(nullptr, &available, props.data());
         bool have = false;
-        for (const auto& e : props)
+        for (const auto &e : props)
             if (std::strcmp(e.extensionName, "VK_EXT_headless_surface") == 0)
                 have = true;
         if (!have)
         {
-            lucent::error("present", "GEARS_PRESENT_HEADLESS=1 but this loader has no"
-                " VK_EXT_headless_surface, so there is no way to exercise the present"
-                " path without a window. Refusing rather than silently presenting"
-                " nothing");
+            lucent::error("present",
+                          "GEARS_PRESENT_HEADLESS=1 but this loader has no"
+                          " VK_EXT_headless_surface, so there is no way to exercise the present"
+                          " path without a window. Refusing rather than silently presenting"
+                          " nothing");
             return false;
         }
         extensions.push_back("VK_KHR_surface");
@@ -249,8 +248,7 @@ bool Presenter::CreateInstanceAndDevice()
     else
     {
         uint32_t sdlExtensionCount = 0;
-        const char* const* sdlExtensions =
-            SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
+        const char *const *sdlExtensions = SDL_Vulkan_GetInstanceExtensions(&sdlExtensionCount);
         if (sdlExtensions == nullptr)
         {
             lucent::warn("present", "SDL_Vulkan_GetInstanceExtensions: {}", SDL_GetError());
@@ -280,15 +278,14 @@ bool Presenter::CreateInstanceAndDevice()
     {
         auto create = (PFN_vkCreateHeadlessSurfaceEXT)vkGetInstanceProcAddr(
             instance, "vkCreateHeadlessSurfaceEXT");
-        VkHeadlessSurfaceCreateInfoEXT hs{
-            VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
+        VkHeadlessSurfaceCreateInfoEXT hs{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
         if (create == nullptr || create(instance, &hs, nullptr, &surface) != VK_SUCCESS)
         {
             lucent::error("present", "vkCreateHeadlessSurfaceEXT failed");
             return false;
         }
         lucent::info("present", "headless surface created: the real swapchain, blit"
-            " and present run with no window");
+                                " and present run with no window");
     }
     else if (!SDL_Vulkan_CreateSurface(window, instance, nullptr, &surface))
     {
@@ -321,22 +318,20 @@ bool Presenter::CreateInstanceAndDevice()
         {
             VkBool32 supported = VK_FALSE;
             vkGetPhysicalDeviceSurfaceSupportKHR(candidate, i, surface, &supported);
-            capabilities[i].graphics =
-                (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
+            capabilities[i].graphics = (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) != 0;
             capabilities[i].present = supported == VK_TRUE;
             capabilities[i].count = families[i].queueCount;
         }
 
-        const uint32_t chosen =
-            gears::ChooseQueueFamily(capabilities, /*needPresent=*/true);
+        const uint32_t chosen = gears::ChooseQueueFamily(capabilities, /*needPresent=*/true);
         if (chosen == gears::kNoQueueFamily)
             continue;
 
         VkPhysicalDeviceProperties props{};
         vkGetPhysicalDeviceProperties(candidate, &props);
-        const int score =
-            props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2 :
-            props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 1 : 0;
+        const int score = props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? 2
+                          : props.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 1
+                                                                                       : 0;
         if (score > bestScore)
         {
             bestScore = score;
@@ -347,8 +342,10 @@ bool Presenter::CreateInstanceAndDevice()
 
     if (physical == VK_NULL_HANDLE)
     {
-        lucent::warn("present", "no Vulkan device can present to this surface"
-            " ({} device(s) enumerated)", deviceCount);
+        lucent::warn("present",
+                     "no Vulkan device can present to this surface"
+                     " ({} device(s) enumerated)",
+                     deviceCount);
         return false;
     }
 
@@ -361,7 +358,7 @@ bool Presenter::CreateInstanceAndDevice()
     queueInfo.queueCount = 1;
     queueInfo.pQueuePriorities = &priority;
 
-    const char* deviceExtensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+    const char *deviceExtensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
     // THE RENDERER'S FEATURES TOO, because this is the device the draw path adopts
     // rather than creating a second one. Two devices costs a readback of every
@@ -428,8 +425,8 @@ bool Presenter::CreateInstanceAndDevice()
             return false;
     }
 
-    lucent::info("present", "Vulkan device \"{}\" (queue family {})",
-        props.deviceName, queueFamily);
+    lucent::info("present", "Vulkan device \"{}\" (queue family {})", props.deviceName,
+                 queueFamily);
     return true;
 }
 
@@ -466,7 +463,7 @@ bool Presenter::CreateSwapchain()
     {
         lucent::Line fl;
         fl.add("surface offers {} format/colour-space pair(s):", formats.size());
-        for (const VkSurfaceFormatKHR& f : formats)
+        for (const VkSurfaceFormatKHR &f : formats)
             fl.add(" [{}/{}]", uint32_t(f.format), uint32_t(f.colorSpace));
         fl.add(" (colour space 0 is SRGB_NONLINEAR, which is the one to want;"
                " 1000104002 is EXTENDED_SRGB_LINEAR and 1000104008 is HDR10_ST2084,"
@@ -497,15 +494,17 @@ bool Presenter::CreateSwapchain()
         formats.data(), formats.size(), !lucent::config::flag("PRESENT_UNORM"));
     format = chosen.format;
     if (gears::SwapchainFormatIsSrgb(format))
-        lucent::warn("present", "this surface offers no non-sRGB format, so the"
-            " swapchain is {} and the blit will RE-ENCODE the already-tonemapped"
-            " frame to sRGB: the window will look washed out and flat. The frame"
-            " itself is correct -- compare the renderer's own screenshot",
-            uint32_t(format));
+        lucent::warn("present",
+                     "this surface offers no non-sRGB format, so the"
+                     " swapchain is {} and the blit will RE-ENCODE the already-tonemapped"
+                     " frame to sRGB: the window will look washed out and flat. The frame"
+                     " itself is correct -- compare the renderer's own screenshot",
+                     uint32_t(format));
     else
-        lucent::info("present", "swapchain format {} (non-sRGB, so the blit copies"
-            " the drawn frame's bytes without a colour-space conversion)",
-            uint32_t(format));
+        lucent::info("present",
+                     "swapchain format {} (non-sRGB, so the blit copies"
+                     " the drawn frame's bytes without a colour-space conversion)",
+                     uint32_t(format));
 
     // THE COLOUR SPACE MATTERS AS MUCH AS THE FORMAT, and only the format was
     // reported. A UNORM format paired with EXTENDED_SRGB_LINEAR or an HDR10 space
@@ -515,13 +514,15 @@ bool Presenter::CreateSwapchain()
     // all the way to vkQueuePresent. That is indistinguishable, from inside this
     // process, from the frame being right -- because it IS right.
     if (chosen.colorSpace != VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
-        lucent::warn("present", "swapchain colour space is {} rather than"
-            " SRGB_NONLINEAR: the compositor will re-interpret the frame's bytes"
-            " and the window can look washed out even though every pixel handed to"
-            " the swapchain is correct", uint32_t(chosen.colorSpace));
+        lucent::warn("present",
+                     "swapchain colour space is {} rather than"
+                     " SRGB_NONLINEAR: the compositor will re-interpret the frame's bytes"
+                     " and the window can look washed out even though every pixel handed to"
+                     " the swapchain is correct",
+                     uint32_t(chosen.colorSpace));
     else
         lucent::info("present", "swapchain colour space SRGB_NONLINEAR (the"
-            " compositor takes the bytes as sRGB, which is what they are)");
+                                " compositor takes the bytes as sRGB, which is what they are)");
 
     // FIFO is the only mode the spec guarantees, but it would make every
     // present block on the host's 60 Hz refresh -- a host clock leaking into
@@ -564,8 +565,7 @@ bool Presenter::CreateSwapchain()
     // change here removes that readback and blits the drawn image straight into the
     // swapchain, and "it did not crash" is not verification of a change that can go
     // subtly wrong in colour, orientation or extent.
-    canCapturePresented =
-        (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
+    canCapturePresented = (caps.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) != 0;
     if (canCapturePresented)
         info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -592,43 +592,9 @@ bool Presenter::CreateSwapchain()
     vkGetSwapchainImagesKHR(device, swapchain, &count, images.data());
 
     swapchainIsSrgb = gears::SwapchainFormatIsSrgb(format);
-    if (swapchainIsSrgb && srgbStage == VK_NULL_HANDLE)
-    {
-        VkImageCreateInfo si{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        si.imageType = VK_IMAGE_TYPE_2D;
-        si.format = VK_FORMAT_B8G8R8A8_UNORM;
-        si.extent = {extent.width, extent.height, 1};
-        si.mipLevels = 1;
-        si.arrayLayers = 1;
-        si.samples = VK_SAMPLE_COUNT_1_BIT;
-        si.tiling = VK_IMAGE_TILING_OPTIMAL;
-        si.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        if (vkCreateImage(device, &si, nullptr, &srgbStage) == VK_SUCCESS)
-        {
-            VkMemoryRequirements req{};
-            vkGetImageMemoryRequirements(device, srgbStage, &req);
-            uint32_t type = 0;
-            for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i)
-                if ((req.memoryTypeBits & (1u << i)) &&
-                    (memProps.memoryTypes[i].propertyFlags &
-                     VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT))
-                { type = i; break; }
-            VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-            ai.allocationSize = req.size;
-            ai.memoryTypeIndex = type;
-            if (vkAllocateMemory(device, &ai, nullptr, &srgbStageMem) != VK_SUCCESS ||
-                vkBindImageMemory(device, srgbStage, srgbStageMem, 0) != VK_SUCCESS)
-            {
-                vkDestroyImage(device, srgbStage, nullptr);
-                srgbStage = VK_NULL_HANDLE;
-                lucent::warn("present", "no memory for the raw-copy stage; the frame"
-                    " will be blitted into the sRGB swapchain and encoded twice");
-            }
-        }
-        lucent::info("present", "swapchain is sRGB-tagged: the frame goes in as raw"
-            " bytes through a UNORM stage, so the compositor is told the bytes are"
-            " encoded without encoding them again");
-    }
+    if (swapchainIsSrgb && !srgbStage.Create(device, memProps, extent, format))
+        lucent::warn("present", "no raw-copy stage; the frame will be blitted"
+                                " into the sRGB swapchain and encoded twice");
 
     presentReady.resize(count);
     for (uint32_t i = 0; i < count; i++)
@@ -637,21 +603,14 @@ bool Presenter::CreateSwapchain()
         vkCreateSemaphore(device, &semaphoreInfo, nullptr, &presentReady[i]);
     }
 
-    lucent::info("present", "swapchain {}x{}, {} images, {}",
-        extent.width, extent.height, count,
-        presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX" : "FIFO (vsync-paced)");
+    lucent::info("present", "swapchain {}x{}, {} images, {}", extent.width, extent.height, count,
+                 presentMode == VK_PRESENT_MODE_MAILBOX_KHR ? "MAILBOX" : "FIFO (vsync-paced)");
     return true;
 }
 
 void Presenter::DestroySwapchain()
 {
-    if (srgbStage != VK_NULL_HANDLE)
-    {
-        vkDestroyImage(device, srgbStage, nullptr);
-        vkFreeMemory(device, srgbStageMem, nullptr);
-        srgbStage = VK_NULL_HANDLE;
-        srgbStageMem = VK_NULL_HANDLE;
-    }
+    srgbStage.Destroy(device);
     for (VkSemaphore s : presentReady)
         if (s != VK_NULL_HANDLE)
             vkDestroySemaphore(device, s, nullptr);
@@ -706,7 +665,7 @@ bool Presenter::EnsurePresentCapture(VkDeviceSize size)
         vkDestroyBuffer(device, presentCapture, nullptr);
         presentCapture = VK_NULL_HANDLE;
         lucent::warn("present", "no host-visible memory for a presented-frame"
-            " capture, so none can be written");
+                                " capture, so none can be written");
         return false;
     }
 
@@ -715,8 +674,7 @@ bool Presenter::EnsurePresentCapture(VkDeviceSize size)
     ai.memoryTypeIndex = type;
     if (vkAllocateMemory(device, &ai, nullptr, &presentCaptureMem) != VK_SUCCESS ||
         vkBindBufferMemory(device, presentCapture, presentCaptureMem, 0) != VK_SUCCESS ||
-        vkMapMemory(device, presentCaptureMem, 0, req.size, 0,
-                    &presentCaptureMapped) != VK_SUCCESS)
+        vkMapMemory(device, presentCaptureMem, 0, req.size, 0, &presentCaptureMapped) != VK_SUCCESS)
     {
         lucent::warn("present", "could not map a presented-frame capture buffer");
         return false;
@@ -739,14 +697,12 @@ bool Presenter::EnsurePresentCapture(VkDeviceSize size)
 // specular -- and reaches near the top of the range. A linear-light buffer does
 // not. The threshold is deliberately low so a genuinely dark scene does not trip
 // it; the case this is for sits at 0.30.
-void Presenter::CheckPresentedFrameLooksFinished(uint32_t width, uint32_t height,
-                                                 VkFormat format)
+void Presenter::CheckPresentedFrameLooksFinished(uint32_t width, uint32_t height, VkFormat format)
 {
     if (presentCaptureMapped == nullptr || presentedFrameChecked)
         return;
-    const bool bgr = format == VK_FORMAT_B8G8R8A8_UNORM ||
-                     format == VK_FORMAT_B8G8R8A8_SRGB;
-    const uint8_t* px = static_cast<const uint8_t*>(presentCaptureMapped);
+    const bool bgr = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
+    const uint8_t *px = static_cast<const uint8_t *>(presentCaptureMapped);
     uint64_t histogram[256] = {};
     const uint64_t pixels = uint64_t(width) * height;
     for (uint64_t i = 0; i < pixels; ++i)
@@ -761,7 +717,11 @@ void Presenter::CheckPresentedFrameLooksFinished(uint32_t width, uint32_t height
     for (uint32_t v = 0; v < 256; ++v)
     {
         seen += histogram[v];
-        if (seen >= pixels * 99 / 100) { p99 = v; break; }
+        if (seen >= pixels * 99 / 100)
+        {
+            p99 = v;
+            break;
+        }
     }
     // KEEP LOOKING until a frame has highlights, rather than judging the first one
     // sampled. The title's opening minute is legitimately black -- logos fading in,
@@ -773,26 +733,28 @@ void Presenter::CheckPresentedFrameLooksFinished(uint32_t width, uint32_t height
     if (p99 >= 90)
     {
         presentedFrameChecked = true;
-        lucent::info("present", "presented frame checked after {} sample(s):"
-            " 99th-percentile brightness {}/255, so what reaches the screen has"
-            " highlights and is not an untonemapped buffer", presentedFrameSamples,
-            p99);
+        lucent::info("present",
+                     "presented frame checked after {} sample(s):"
+                     " 99th-percentile brightness {}/255, so what reaches the screen has"
+                     " highlights and is not an untonemapped buffer",
+                     presentedFrameSamples, p99);
     }
     else if (presentedFrameSamples >= 12)
     {
         presentedFrameChecked = true;
-        lucent::warn("present", "{} presented frames sampled over this run and the"
-            " brightest 99th percentile any of them reached was {}/255: nothing that"
-            " reaches the screen has highlights. A finished frame reaches the top of"
-            " the range somewhere -- UI text, a light, a sky. This is what an"
-            " untonemapped linear-light buffer looks like presented as display-ready;"
-            " check the presented surface against the guest's front-buffer address in"
-            " the draw log", presentedFrameSamples, presentedFrameBestP99);
+        lucent::warn("present",
+                     "{} presented frames sampled over this run and the"
+                     " brightest 99th percentile any of them reached was {}/255: nothing that"
+                     " reaches the screen has highlights. A finished frame reaches the top of"
+                     " the range somewhere -- UI text, a light, a sky. This is what an"
+                     " untonemapped linear-light buffer looks like presented as display-ready;"
+                     " check the presented surface against the guest's front-buffer address in"
+                     " the draw log",
+                     presentedFrameSamples, presentedFrameBestP99);
     }
 }
 
-void Presenter::WritePresentedFrame(uint32_t width, uint32_t height,
-                                    VkFormat format)
+void Presenter::WritePresentedFrame(uint32_t width, uint32_t height, VkFormat format)
 {
     if (presentCaptureMapped == nullptr)
         return;
@@ -800,27 +762,23 @@ void Presenter::WritePresentedFrame(uint32_t width, uint32_t height,
     // The swapchain is BGRA on every driver seen here, but the format is passed in
     // rather than assumed: writing the channels the wrong way round would make a
     // correct blit look broken, which is worse than not capturing at all.
-    const bool bgr = format == VK_FORMAT_B8G8R8A8_UNORM ||
-                     format == VK_FORMAT_B8G8R8A8_SRGB;
+    const bool bgr = format == VK_FORMAT_B8G8R8A8_UNORM || format == VK_FORMAT_B8G8R8A8_SRGB;
 
-    const std::string& dirText = lucent::config::text("PRESENT_DUMP_DIR");
-    const std::filesystem::path dir =
-        dirText.empty() ? std::filesystem::path("scratch/screenshots")
-                        : std::filesystem::path(dirText);
+    const std::string &dirText = lucent::config::text("PRESENT_DUMP_DIR");
+    const std::filesystem::path dir = dirText.empty() ? std::filesystem::path("scratch/screenshots")
+                                                      : std::filesystem::path(dirText);
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
-    const std::filesystem::path out =
-        dir / std::format("presented_{}.ppm", presentCaptureWanted);
+    const std::filesystem::path out = dir / std::format("presented_{}.ppm", presentCaptureWanted);
 
-    std::FILE* f = std::fopen(out.string().c_str(), "wb");
+    std::FILE *f = std::fopen(out.string().c_str(), "wb");
     if (f == nullptr)
     {
-        lucent::warn("present", "could not open {} for the presented frame",
-                     out.string());
+        lucent::warn("present", "could not open {} for the presented frame", out.string());
         return;
     }
     std::fprintf(f, "P6\n%u %u\n255\n", width, height);
-    const uint8_t* src = static_cast<const uint8_t*>(presentCaptureMapped);
+    const uint8_t *src = static_cast<const uint8_t *>(presentCaptureMapped);
     uint64_t nonBlack = 0;
     std::set<std::array<uint8_t, 3>> distinct;
     std::vector<uint8_t> row(size_t(width) * 3);
@@ -828,7 +786,7 @@ void Presenter::WritePresentedFrame(uint32_t width, uint32_t height,
     {
         for (uint32_t x = 0; x < width; ++x)
         {
-            const uint8_t* p = src + (size_t(y) * width + x) * 4;
+            const uint8_t *p = src + (size_t(y) * width + x) * 4;
             const uint8_t r = bgr ? p[2] : p[0];
             const uint8_t g = p[1];
             const uint8_t b = bgr ? p[0] : p[2];
@@ -850,18 +808,19 @@ void Presenter::WritePresentedFrame(uint32_t width, uint32_t height,
     // produced anything. Non-black is satisfied by any clear, so on its own it says
     // almost nothing; a count of 1 says the frame is flat, and that is the reading
     // that matters when checking whether a real rendered frame reached the window.
-    lucent::info("present", "presented frame written to {} -- {}/{} px non-black"
-        " ({:.1f}%), {} distinct colour(s){}", out.string(), nonBlack,
-        uint64_t(width) * height,
-        100.0 * double(nonBlack) / (double(width) * height),
-        // The counter stops at 4096 so a busy frame does not cost a set insertion
-        // per pixel forever; say so, or the number reads as an exact count that
-        // suspiciously lands on a power of two.
-        distinct.size() >= 4096 ? std::string("4096+ (counter capped)")
-                                : std::to_string(distinct.size()),
-        distinct.size() <= 2
-            ? "  <- FLAT, so this is a clear colour and not a rendered frame"
-            : "");
+    lucent::info("present",
+                 "presented frame written to {} -- {}/{} px non-black"
+                 " ({:.1f}%), {} distinct colour(s){}",
+                 out.string(), nonBlack, uint64_t(width) * height,
+                 100.0 * double(nonBlack) / (double(width) * height),
+                 // The counter stops at 4096 so a busy frame does not cost a set insertion
+                 // per pixel forever; say so, or the number reads as an exact count that
+                 // suspiciously lands on a power of two.
+                 distinct.size() >= 4096 ? std::string("4096+ (counter capped)")
+                                         : std::to_string(distinct.size()),
+                 distinct.size() <= 2
+                     ? "  <- FLAT, so this is a clear colour and not a rendered frame"
+                     : "");
 }
 
 bool Presenter::EnsureGuestStaging(VkDeviceSize size)
@@ -926,15 +885,16 @@ bool Presenter::PresentOne(uint32_t sequence)
         vkWaitForFences(device, 1, &submitted[slot], VK_TRUE, UINT64_MAX);
 
     uint32_t imageIndex = 0;
-    VkResult r = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
-        acquired[slot], VK_NULL_HANDLE, &imageIndex);
+    VkResult r = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired[slot],
+                                       VK_NULL_HANDLE, &imageIndex);
     if (r == VK_ERROR_OUT_OF_DATE_KHR)
     {
         // The window was resized between frames. Rebuild and drop this frame
         // rather than presenting into a stale surface; the guest's next VdSwap
         // brings the next one.
         vkDeviceWaitIdle(device);
-        for (bool& used : slotUsed) used = false;
+        for (bool &used : slotUsed)
+            used = false;
         return CreateSwapchain();
     }
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR)
@@ -966,7 +926,7 @@ bool Presenter::PresentOne(uint32_t sequence)
     toClear.image = images[imageIndex];
     toClear.subresourceRange = range;
     vkCmdPipelineBarrier(commands[slot], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toClear);
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toClear);
 
     // The frame the guest-draw backend rendered, and nothing else. Two ways in:
     // a blit from the drawn image when the draw path shares this device, or a
@@ -991,15 +951,15 @@ bool Presenter::PresentOne(uint32_t sequence)
         // Skipping the blit here is what made the window flicker: roughly three of
         // every four presents fell through to the clear below.
         gears::SharedFrameImage drawn;
-        if (gears::AcquireSharedFrameImage(drawn) &&
-            drawn.width == extent.width && drawn.height == extent.height)
+        if (gears::AcquireSharedFrameImage(drawn) && drawn.width == extent.width &&
+            drawn.height == extent.height)
         {
             VkImageBlit blit{};
             blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             blit.srcOffsets[1] = {int32_t(drawn.width), int32_t(drawn.height), 1};
             blit.dstOffsets[1] = {int32_t(extent.width), int32_t(extent.height), 1};
-            if (swapchainIsSrgb && srgbStage != VK_NULL_HANDLE)
+            if (swapchainIsSrgb && srgbStage.Image() != VK_NULL_HANDLE)
             {
                 // Two steps, and the second one converts nothing. Blit into the
                 // UNORM stage (channel order, no transfer function), then a
@@ -1011,40 +971,36 @@ bool Presenter::PresentOne(uint32_t sequence)
                 toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
                 toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
                 toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex =
-                    VK_QUEUE_FAMILY_IGNORED;
-                toDst.image = srgbStage;
+                toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                toDst.image = srgbStage.Image();
                 toDst.subresourceRange = one;
-                vkCmdPipelineBarrier(commands[slot],
-                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    0, 0, nullptr, 0, nullptr, 1, &toDst);
-                vkCmdBlitImage(commands[slot],
-                    drawn.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    srgbStage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    1, &blit, VK_FILTER_NEAREST);
+                vkCmdPipelineBarrier(commands[slot], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                                     &toDst);
+                vkCmdBlitImage(commands[slot], drawn.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               srgbStage.Image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                               VK_FILTER_NEAREST);
                 VkImageMemoryBarrier toSrc = toDst;
                 toSrc.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
                 toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
                 toSrc.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
                 toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                vkCmdPipelineBarrier(commands[slot],
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    0, 0, nullptr, 0, nullptr, 1, &toSrc);
+                vkCmdPipelineBarrier(commands[slot], VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                                     &toSrc);
                 VkImageCopy copy{};
                 copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                 copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
                 copy.extent = {extent.width, extent.height, 1};
-                vkCmdCopyImage(commands[slot],
-                    srgbStage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    images[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    1, &copy);
+                vkCmdCopyImage(commands[slot], srgbStage.Image(),
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, images[imageIndex],
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
             }
             else
             {
-                vkCmdBlitImage(commands[slot],
-                    drawn.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                    images[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                    1, &blit, VK_FILTER_NEAREST);
+                vkCmdBlitImage(commands[slot], drawn.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                               images[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                               VK_FILTER_NEAREST);
             }
             if (drawn.sequence != lastBlittedFrame)
             {
@@ -1067,22 +1023,23 @@ bool Presenter::PresentOne(uint32_t sequence)
                 // upload are gone. The DRAW side still copies the frame into its own
                 // readback buffer, which now feeds only its diagnostics -- claiming
                 // otherwise would credit this change with a cost it has not removed.
-                lucent::info("present", "presenting the drawn image by BLIT on the"
-                    " shared device: the staging buffer, the CPU red/blue swap, the"
-                    " buffer-to-image upload and the draw side's frame readback are"
-                    " all bypassed (the readback still runs on reported frames, where"
-                    " its diagnostics need the pixels)");
+                lucent::info("present",
+                             "presenting the drawn image by BLIT on the"
+                             " shared device: the staging buffer, the CPU red/blue swap, the"
+                             " buffer-to-image upload and the draw side's frame readback are"
+                             " all bypassed (the readback still runs on reported frames, where"
+                             " its diagnostics need the pixels)");
             }
         }
     }
 
-    const std::vector<uint8_t>& guest = gears::GuestFramePixels();
+    const std::vector<uint8_t> &guest = gears::GuestFramePixels();
     const uint32_t gw = gears::GuestFrameWidth();
     const uint32_t gh = gears::GuestFrameHeight();
     if (!uploadedGuest && !guest.empty() && gw == extent.width && gh == extent.height &&
         EnsureGuestStaging(VkDeviceSize(guest.size())))
     {
-        uint8_t* dst = static_cast<uint8_t*>(guestStagingMapped);
+        uint8_t *dst = static_cast<uint8_t *>(guestStagingMapped);
         for (size_t i = 0; i < guest.size(); i += 4)
         {
             dst[i + 0] = guest[i + 2]; // B
@@ -1094,7 +1051,7 @@ bool Presenter::PresentOne(uint32_t sequence)
         copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         copy.imageExtent = {extent.width, extent.height, 1};
         vkCmdCopyBufferToImage(commands[slot], guestStaging, images[imageIndex],
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
         uploadedGuest = true;
     }
     if (!uploadedGuest)
@@ -1111,15 +1068,16 @@ bool Presenter::PresentOne(uint32_t sequence)
         VkClearColorValue black{};
         black.float32[3] = 1.0f;
         vkCmdClearColorImage(commands[slot], images[imageIndex],
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+                             VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
         ++blankPresents;
         if (!announcedBlank)
         {
             announcedBlank = true;
-            lucent::info("present", "presenting BLACK: the guest swapped (sequence {})"
-                " before the draw backend published a frame. Every present until the"
-                " first drawn frame is black, and the count is reported at shutdown.",
-                sequence);
+            lucent::info("present",
+                         "presenting BLACK: the guest swapped (sequence {})"
+                         " before the draw backend published a frame. Every present until the"
+                         " first drawn frame is black, and the count is reported at shutdown.",
+                         sequence);
         }
     }
 
@@ -1134,13 +1092,11 @@ bool Presenter::PresentOne(uint32_t sequence)
     // says whether what reaches the screen has any highlights in it. It is the only
     // thing in the runtime that looks at what a person actually sees.
     const bool selfCheckThisFrame =
-        !presentedFrameChecked && presentCount > 300 &&
-        (presentCount % 300) == 0 && uploadedGuest &&
-        canCapturePresented &&
+        !presentedFrameChecked && presentCount > 300 && (presentCount % 300) == 0 &&
+        uploadedGuest && canCapturePresented &&
         EnsurePresentCapture(VkDeviceSize(extent.width) * extent.height * 4);
     const bool capturingThisFrame =
-        (presentCaptureWanted > 0 && sequence >= presentCaptureAfter &&
-         canCapturePresented &&
+        (presentCaptureWanted > 0 && sequence >= presentCaptureAfter && canCapturePresented &&
          EnsurePresentCapture(VkDeviceSize(extent.width) * extent.height * 4)) ||
         selfCheckThisFrame;
     if (capturingThisFrame)
@@ -1151,26 +1107,26 @@ bool Presenter::PresentOne(uint32_t sequence)
         toSrc.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         vkCmdPipelineBarrier(commands[slot], VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toSrc);
 
         VkBufferImageCopy grab{};
         grab.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         grab.imageExtent = {extent.width, extent.height, 1};
         vkCmdCopyImageToBuffer(commands[slot], images[imageIndex],
-            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, presentCapture, 1, &grab);
+                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, presentCapture, 1, &grab);
     }
 
     VkImageMemoryBarrier toPresent = toClear;
     toPresent.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     toPresent.dstAccessMask = 0;
-    toPresent.oldLayout = capturingThisFrame
-        ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-        : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    toPresent.srcAccessMask = capturingThisFrame ? VK_ACCESS_TRANSFER_READ_BIT
-                                                 : VK_ACCESS_TRANSFER_WRITE_BIT;
+    toPresent.oldLayout = capturingThisFrame ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                                             : VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    toPresent.srcAccessMask =
+        capturingThisFrame ? VK_ACCESS_TRANSFER_READ_BIT : VK_ACCESS_TRANSFER_WRITE_BIT;
     toPresent.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     vkCmdPipelineBarrier(commands[slot], VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1, &toPresent);
+                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                         &toPresent);
 
     vkEndCommandBuffer(commands[slot]);
 
@@ -1191,8 +1147,7 @@ bool Presenter::PresentOne(uint32_t sequence)
         // Wait for THIS frame's submit before reading the buffer. It stalls the
         // presenter for one frame, which is the right trade for a gated diagnostic
         // and is why it is not on by default.
-        if (vkWaitForFences(device, 1, &submitted[slot], VK_TRUE,
-                            UINT64_MAX) == VK_SUCCESS)
+        if (vkWaitForFences(device, 1, &submitted[slot], VK_TRUE, UINT64_MAX) == VK_SUCCESS)
         {
             if (selfCheckThisFrame)
                 CheckPresentedFrameLooksFinished(extent.width, extent.height, format);
@@ -1204,9 +1159,10 @@ bool Presenter::PresentOne(uint32_t sequence)
         }
         else
         {
-            lucent::warn("present", "a presented-frame capture was requested but"
-                " the fence wait failed, so nothing was written -- do not read the"
-                " absence of a file as an empty frame");
+            lucent::warn("present",
+                         "a presented-frame capture was requested but"
+                         " the fence wait failed, so nothing was written -- do not read the"
+                         " absence of a file as an empty frame");
             presentCaptureWanted = 0;
         }
     }
@@ -1221,7 +1177,8 @@ bool Presenter::PresentOne(uint32_t sequence)
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR)
     {
         vkDeviceWaitIdle(device);
-        for (bool& used : slotUsed) used = false;
+        for (bool &used : slotUsed)
+            used = false;
         return CreateSwapchain();
     }
     if (r != VK_SUCCESS)
@@ -1242,14 +1199,15 @@ void Presenter::PumpEvents()
     while (SDL_PollEvent(&event))
     {
 
-        if (event.type == SDL_EVENT_QUIT ||
-            event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
+        if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
         {
             // Closing the window must not kill the guest: the runtime's job is
             // to keep executing the title. Presenting stops, everything else
             // carries on exactly as in a headless run.
-            lucent::info("present", "window closed after {} presents;"
-                " continuing headless", presentCount);
+            lucent::info("present",
+                         "window closed after {} presents;"
+                         " continuing headless",
+                         presentCount);
             running = false;
         }
     }
@@ -1273,23 +1231,22 @@ void Presenter::Thread()
     if (!headlessSurface && !SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
     {
         lucent::warn("present", "SDL_Init(VIDEO|GAMEPAD) failed: {} -- running headless",
-            SDL_GetError());
+                     SDL_GetError());
         return;
     }
     if (!headlessSurface && !SDL_Vulkan_LoadLibrary(nullptr))
     {
         lucent::warn("present", "SDL_Vulkan_LoadLibrary failed: {} -- running headless",
-            SDL_GetError());
+                     SDL_GetError());
         return;
     }
 
     if (!headlessSurface)
-        window = SDL_CreateWindow("gears1",
-            int(kWindowWidth), int(kWindowHeight), SDL_WINDOW_VULKAN);
+        window =
+            SDL_CreateWindow("gears1", int(kWindowWidth), int(kWindowHeight), SDL_WINDOW_VULKAN);
     if (!headlessSurface && window == nullptr)
     {
-        lucent::warn("present", "SDL_CreateWindow failed: {} -- running headless",
-            SDL_GetError());
+        lucent::warn("present", "SDL_CreateWindow failed: {} -- running headless", SDL_GetError());
         return;
     }
 
@@ -1314,21 +1271,23 @@ void Presenter::Thread()
     {
         // Refuse loudly rather than writing nothing: an absent file would read as a
         // capture that came out empty.
-        lucent::warn("present", "{} presented frame(s) were requested but this"
-            " surface does not permit TRANSFER_SRC on its swapchain images, so NONE"
-            " can be captured. This is a refusal, not an empty frame.",
-            presentCaptureWanted);
+        lucent::warn("present",
+                     "{} presented frame(s) were requested but this"
+                     " surface does not permit TRANSFER_SRC on its swapchain images, so NONE"
+                     " can be captured. This is a refusal, not an empty frame.",
+                     presentCaptureWanted);
         presentCaptureWanted = 0;
     }
     else if (presentCaptureWanted != 0)
     {
-        lucent::info("present", "will write the next {} presented frame(s) to"
-            " scratch/screenshots (override with GEARS_PRESENT_DUMP_DIR)",
-            presentCaptureWanted);
+        lucent::info("present",
+                     "will write the next {} presented frame(s) to"
+                     " scratch/screenshots (override with GEARS_PRESENT_DUMP_DIR)",
+                     presentCaptureWanted);
     }
 
     lucent::info("present", "window up; presenting the drawn guest frame on the"
-        " guest's VdSwap. Presents before the first drawn frame go out black.");
+                            " guest's VdSwap. Presents before the first drawn frame go out black.");
     running = true;
     lastReport = std::chrono::steady_clock::now();
 
@@ -1341,7 +1300,7 @@ void Presenter::Thread()
             // the guest is between frames. It never presents: a present happens
             // solely because the command processor asked for one.
             request.wait_for(lock, std::chrono::milliseconds(8),
-                [this] { return pending || shuttingDown.load(); });
+                             [this] { return pending || shuttingDown.load(); });
             if (!pending)
             {
                 lock.unlock();
@@ -1366,20 +1325,19 @@ void Presenter::Thread()
         const auto finish = std::chrono::steady_clock::now();
 
         presentCount++;
-        presentMicros += uint64_t(
-            std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count());
+        presentMicros +=
+            uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(finish - start).count());
         if (presentCount % 300 == 0)
         {
-            const double seconds =
-                std::chrono::duration<double>(finish - lastReport).count();
+            const double seconds = std::chrono::duration<double>(finish - lastReport).count();
             lastReport = finish;
-            lucent::info("present", "{} presents ({} new frames, {} repeats of the"
-                " previous one, {} black before the first frame),"
-                " last 300 in {:.2f}s ({:.2f} fps), mean present cost {:.2f} ms",
-                presentCount, freshFramesShown, repeatedFramesShown, blankPresents,
-                seconds,
-                seconds > 0 ? 300.0 / seconds : 0.0,
-                double(presentMicros) / double(presentCount) / 1000.0);
+            lucent::info("present",
+                         "{} presents ({} new frames, {} repeats of the"
+                         " previous one, {} black before the first frame),"
+                         " last 300 in {:.2f}s ({:.2f} fps), mean present cost {:.2f} ms",
+                         presentCount, freshFramesShown, repeatedFramesShown, blankPresents,
+                         seconds, seconds > 0 ? 300.0 / seconds : 0.0,
+                         double(presentMicros) / double(presentCount) / 1000.0);
         }
 
         {
@@ -1418,8 +1376,7 @@ void PresentFrame(uint32_t frontBuffer, uint32_t sequence)
     if (!g_presenter.running.load())
         return;
 
-    lucent::debug("present", "present seq {} (guest front buffer {:#x})",
-        sequence, frontBuffer);
+    lucent::debug("present", "present seq {} (guest front buffer {:#x})", sequence, frontBuffer);
 
     std::unique_lock<std::mutex> lock(g_presenter.mutex);
     g_presenter.pending = true;
@@ -1430,8 +1387,8 @@ void PresentFrame(uint32_t frontBuffer, uint32_t sequence)
     // queue in between, so whatever presenting costs is visible in the guest's
     // own frame rate rather than absorbed silently. The timeout is a safety
     // net -- a wedged presenter must not wedge the command processor.
-    if (!g_presenter.done.wait_for(lock, std::chrono::milliseconds(500),
-            [] { return g_presenter.serviced || !g_presenter.running.load(); }))
+    if (!g_presenter.done.wait_for(lock, std::chrono::milliseconds(500), []
+                                   { return g_presenter.serviced || !g_presenter.running.load(); }))
         lucent::warn("present", "present did not complete within 500 ms (seq {})", sequence);
 }
 
@@ -1444,12 +1401,13 @@ namespace gears
 
 bool PresenterStart()
 {
-    lucent::warn("present",
-        "built without SDL3/Vulkan: no host window, command stream only");
+    lucent::warn("present", "built without SDL3/Vulkan: no host window, command stream only");
     return false;
 }
 
-void PresentFrame(uint32_t, uint32_t) {}
+void PresentFrame(uint32_t, uint32_t)
+{
+}
 
 } // namespace gears
 
