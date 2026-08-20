@@ -90,6 +90,9 @@ struct FrameDrawInputs
     // summary lines and the PPM screenshot. ~40 ms, which is most of a warm
     // frame -- it belongs to a capture, not to every frame of a live run.
     bool report = true;
+    // An explicit HTTP readback. This is intentionally independent of report:
+    // probing a frame must not emit capture artifacts or consume capture quota.
+    bool probe = false;
 
     // THE FRONT BUFFER THE GUEST NAMED, from the swap packet that ended this frame
     // (VdSwap's data[0], physical, alias bits included). Zero when unknown.

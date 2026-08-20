@@ -33,12 +33,10 @@ struct DeviceCapabilities
     // Deriving it needs the shaded vertices, so it happens in a geometry shader.
     bool geometryShader = false;
 
-    // The resolve compute pass reads and writes storage images whose format it does
-    // not know at build time: an EDRAM surface may be 8888, 7e3 carried as
-    // half-float, or two-channel float, and the destination is whatever the guest
-    // asked for. Declaring a format in the shader and binding another silently
-    // returns garbage, so the shader declares Unknown and these two features carry
-    // it.
+    // Resolve, reinterpretation, and depth-alias passes access storage images whose
+    // host format varies with the guest surface. Declaring one format in a shader
+    // and binding another produces undefined values, so those modules declare
+    // Unknown and these two features carry them.
     bool storageImageWithoutFormat = false;
 
     // PA_CL_CLIP_CNTL.clip_disable says the guest wants no near/far clipping at
@@ -59,8 +57,7 @@ struct DeviceCapabilities
 // Fills `enable` with what to ask for on this physical device, and `caps` with what
 // that will grant. Safe to call without creating a device, which is how the adopting
 // side learns its capabilities.
-void SelectDeviceFeatures(VkPhysicalDevice physical,
-                          VkPhysicalDeviceFeatures& enable,
-                          DeviceCapabilities& caps);
+void SelectDeviceFeatures(VkPhysicalDevice physical, VkPhysicalDeviceFeatures &enable,
+                          DeviceCapabilities &caps);
 
 } // namespace gears
