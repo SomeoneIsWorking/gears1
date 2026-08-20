@@ -19,6 +19,12 @@ subsystems rather than copying platform-specific implementations.
 - `runtime/graphics_probe.cpp` owns on-demand readback state and publication;
   `runtime/graphics_probe_render.cpp` is the narrow renderer adapter. Shipping
   render passes do not depend on HTTP.
+- `runtime/gpu_scanout.cpp` owns finished-frame staging and scan-out transforms;
+  `runtime/gpu_scanout_gamma.cpp` owns the Vulkan guest-LUT pass, while
+  `runtime/scanout_gamma.cpp` owns the shared pure LUT conversion.
+- `runtime/gpu_present.cpp` orchestrates presentation. Swapchain-dependent
+  staging resources belong in focused owners such as `gpu_present_stage.cpp`,
+  not in the presenter orchestration file.
 
 Pure state transitions belong behind production interfaces with focused tests.
 Run `tools/check_source_structure.py`, its self-test, and the CTest suite before

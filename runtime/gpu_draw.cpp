@@ -72,7 +72,6 @@ namespace gears
 namespace draw
 {
 
-
 constexpr uint32_t kWidth = 1280;
 constexpr uint32_t kHeight = 720;
 
@@ -86,24 +85,23 @@ constexpr uint32_t kHeight = 720;
 // measurement cannot quietly lose a case.
 class ScopedMs
 {
-public:
-    explicit ScopedMs(double& sink)
-        : sink_(sink), begin_(std::chrono::steady_clock::now()) {}
+  public:
+    explicit ScopedMs(double &sink) : sink_(sink), begin_(std::chrono::steady_clock::now()) {}
     ~ScopedMs()
     {
-        sink_ += std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - begin_).count();
+        sink_ +=
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin_)
+                .count();
     }
-    ScopedMs(const ScopedMs&) = delete;
-    ScopedMs& operator=(const ScopedMs&) = delete;
+    ScopedMs(const ScopedMs &) = delete;
+    ScopedMs &operator=(const ScopedMs &) = delete;
 
-private:
-    double& sink_;
+  private:
+    double &sink_;
     std::chrono::steady_clock::time_point begin_;
 };
 
 std::vector<uint8_t> g_frame; // last rendered R8G8B8A8 frame (file-local)
-
 
 // VK_CHECK is in gpu_draw_renderer.h, shared with the renderer's other files.
 
@@ -138,8 +136,8 @@ bool Renderer::Init()
             vkGetPhysicalDeviceMemoryProperties(physical, &memProps);
             VkPhysicalDeviceProperties adoptedProps{};
             vkGetPhysicalDeviceProperties(physical, &adoptedProps);
-            uniformOffsetAlignment = std::max<VkDeviceSize>(
-                adoptedProps.limits.minUniformBufferOffsetAlignment, 4);
+            uniformOffsetAlignment =
+                std::max<VkDeviceSize>(adoptedProps.limits.minUniformBufferOffsetAlignment, 4);
             maxViewportDim[0] = adoptedProps.limits.maxViewportDimensions[0];
             maxViewportDim[1] = adoptedProps.limits.maxViewportDimensions[1];
 
@@ -159,10 +157,12 @@ bool Renderer::Init()
             // still in place and still runs. Claiming the readback is gone here
             // would have a future reader believe a cost that is still being paid
             // has been removed.
-            lucent::info("draw", "adopted the presenter's Vulkan device \"{}\""
-                " (queue family {}); the rendered image and the swapchain are on ONE"
-                " device, so the frame reaches the window by BLIT rather than through"
-                " host memory", adoptedProps.deviceName, queueFamily);
+            lucent::info("draw",
+                         "adopted the presenter's Vulkan device \"{}\""
+                         " (queue family {}); the rendered image and the swapchain are on ONE"
+                         " device, so the frame reaches the window by BLIT rather than through"
+                         " host memory",
+                         adoptedProps.deviceName, queueFamily);
             return true;
         }
     }
@@ -172,8 +172,8 @@ bool Renderer::Init()
     app.apiVersion = VK_API_VERSION_1_2;
     VkInstanceCreateInfo ii{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ii.pApplicationInfo = &app;
-    const char* valLayer = "VK_LAYER_KHRONOS_validation";
-    const char* dbgExt = "VK_EXT_debug_utils";
+    const char *valLayer = "VK_LAYER_KHRONOS_validation";
+    const char *dbgExt = "VK_EXT_debug_utils";
     if (lucent::config::flag("DRAW_VALIDATE"))
     {
         ii.enabledLayerCount = 1;
@@ -217,15 +217,15 @@ bool Renderer::Init()
             caps[i].count = fam[i].queueCount;
         }
 
-        const uint32_t chosen =
-            gears::ChooseQueueFamily(caps, /*needPresent=*/false);
+        const uint32_t chosen = gears::ChooseQueueFamily(caps, /*needPresent=*/false);
         if (chosen == gears::kNoQueueFamily)
             continue;
 
         VkPhysicalDeviceProperties p{};
         vkGetPhysicalDeviceProperties(cand, &p);
-        int score = p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU ? 2
-                  : p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 1 : 0;
+        int score = p.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU     ? 2
+                    : p.deviceType == VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU ? 1
+                                                                             : 0;
         if (score > best)
         {
             best = score;
@@ -304,25 +304,25 @@ bool Renderer::Init()
                                  VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
             mi.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
                              VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT;
-            mi.pfnUserCallback = +[](VkDebugUtilsMessageSeverityFlagBitsEXT,
-                VkDebugUtilsMessageTypeFlagsEXT,
-                const VkDebugUtilsMessengerCallbackDataEXT* d, void*) -> VkBool32 {
+            mi.pfnUserCallback =
+                +[](VkDebugUtilsMessageSeverityFlagBitsEXT, VkDebugUtilsMessageTypeFlagsEXT,
+                    const VkDebugUtilsMessengerCallbackDataEXT *d, void *) -> VkBool32
+            {
                 lucent::warn("draw", "VK: {}", d->pMessage);
                 return VK_FALSE;
             };
             create(instance, &mi, nullptr, &messenger);
         }
     }
-    lucent::info("draw", "headless Vulkan device \"{}\" (queue family {})",
-        p.deviceName, queueFamily);
+    lucent::info("draw", "headless Vulkan device \"{}\" (queue family {})", p.deviceName,
+                 queueFamily);
     return true;
 }
 
-bool Renderer::FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_t& out)
+bool Renderer::FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_t &out)
 {
     for (uint32_t i = 0; i < memProps.memoryTypeCount; ++i)
-        if ((typeBits & (1u << i)) &&
-            (memProps.memoryTypes[i].propertyFlags & want) == want)
+        if ((typeBits & (1u << i)) && (memProps.memoryTypes[i].propertyFlags & want) == want)
         {
             out = i;
             return true;
@@ -330,8 +330,8 @@ bool Renderer::FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_
     return false;
 }
 
-bool Renderer::MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
-                          VkBuffer& buf, VkDeviceMemory& mem, bool wantCached)
+bool Renderer::MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer &buf,
+                          VkDeviceMemory &mem, bool wantCached)
 {
     VkBufferCreateInfo bi{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
     bi.size = size;
@@ -362,54 +362,58 @@ bool Renderer::MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
     return true;
 }
 
-
-
 void Renderer::ReleasePersistent()
 {
     if (!persistent)
         return;
-    RendererPersistent& P = *persistent;
-    for (auto& [k, p] : P.pipelines) vkDestroyPipeline(device, p, nullptr);
-    for (auto& [k, l] : P.pipeLayouts) vkDestroyPipelineLayout(device, l, nullptr);
-    for (auto& [k, l] : P.texLayouts) vkDestroyDescriptorSetLayout(device, l, nullptr);
-    for (auto& [k, m] : P.modules) vkDestroyShaderModule(device, m, nullptr);
-    for (auto& [k, m] : P.geomShaders)
-        if (m != VK_NULL_HANDLE) vkDestroyShaderModule(device, m, nullptr);
-    for (auto& [k, sm] : P.samplerCache) vkDestroySampler(device, sm, nullptr);
+    RendererPersistent &P = *persistent;
+    for (auto &[k, p] : P.pipelines)
+        vkDestroyPipeline(device, p, nullptr);
+    for (auto &[k, l] : P.pipeLayouts)
+        vkDestroyPipelineLayout(device, l, nullptr);
+    for (auto &[k, l] : P.texLayouts)
+        vkDestroyDescriptorSetLayout(device, l, nullptr);
+    for (auto &[k, m] : P.modules)
+        vkDestroyShaderModule(device, m, nullptr);
+    for (auto &[k, m] : P.geomShaders)
+        if (m != VK_NULL_HANDLE)
+            vkDestroyShaderModule(device, m, nullptr);
+    for (auto &[k, sm] : P.samplerCache)
+        vkDestroySampler(device, sm, nullptr);
     vkDestroyDescriptorSetLayout(device, P.set0, nullptr);
     vkDestroyDescriptorSetLayout(device, P.set1, nullptr);
-    for (auto& [k, t] : P.guestTextures)
+    for (auto &[k, t] : P.guestTextures)
     {
         vkDestroyImageView(device, t.view, nullptr);
         vkDestroyImage(device, t.image, nullptr);
         vkFreeMemory(device, t.mem, nullptr);
     }
-    for (StubTex* t : {&P.stub2D, &P.stub3D, &P.stubCube})
+    for (StubTex *t : {&P.stub2D, &P.stub3D, &P.stubCube})
     {
         vkDestroyImageView(device, t->view, nullptr);
         vkDestroyImage(device, t->image, nullptr);
         vkFreeMemory(device, t->mem, nullptr);
     }
     vkDestroySampler(device, P.stubSampler, nullptr);
-    for (auto& [k, s] : P.surfaceTargets)
+    for (auto &[k, s] : P.surfaceTargets)
     {
-        for (auto& [db, fb] : s.fbs)
+        for (auto &[db, fb] : s.fbs)
             vkDestroyFramebuffer(device, fb, nullptr);
         vkDestroyImageView(device, s.storageView, nullptr);
         vkDestroyImageView(device, s.colorView, nullptr);
         vkDestroyImage(device, s.color, nullptr);
         vkFreeMemory(device, s.colorMem, nullptr);
     }
-    for (auto& [k, r] : P.resolveTargets)
+    for (auto &[k, r] : P.resolveTargets)
     {
         vkDestroyImageView(device, r.view, nullptr);
-        for (auto& [swz, v] : r.swizzleViews)
+        for (auto &[swz, v] : r.swizzleViews)
             vkDestroyImageView(device, v, nullptr);
         vkDestroyImageView(device, r.storageView, nullptr);
         vkDestroyImage(device, r.image, nullptr);
         vkFreeMemory(device, r.mem, nullptr);
     }
-    for (auto& [k, rp] : P.passes)
+    for (auto &[k, rp] : P.passes)
     {
         vkDestroyRenderPass(device, rp.first, nullptr);
         vkDestroyRenderPass(device, rp.second, nullptr);
@@ -432,7 +436,7 @@ void Renderer::ReleasePersistent()
     vkDestroyDescriptorSetLayout(device, P.resolveSetLayout, nullptr);
     vkDestroyShaderModule(device, P.resolveModule, nullptr);
     vkDestroyDescriptorPool(device, P.resolveDescPool, nullptr);
-    for (auto& [db, d] : P.depthTargets)
+    for (auto &[db, d] : P.depthTargets)
     {
         vkDestroyImageView(device, d.stencilSampledView, nullptr);
         vkDestroyImageView(device, d.depthSampledView, nullptr);
@@ -441,20 +445,21 @@ void Renderer::ReleasePersistent()
         vkFreeMemory(device, d.mem, nullptr);
     }
     P.depthTargets.clear();
-    P.depth = VK_NULL_HANDLE; P.depthMem = VK_NULL_HANDLE;
-    P.depthView = VK_NULL_HANDLE; P.depthSampledView = VK_NULL_HANDLE;
-    P.stencilSampledView = VK_NULL_HANDLE; P.boundDepthBase = UINT32_MAX;
-    for (uint32_t i = 0; i < 2; ++i)
-    {
-        vkDestroyImage(device, P.presentStage[i], nullptr);
-        vkFreeMemory(device, P.presentStageMem[i], nullptr);
-    }
+    P.depth = VK_NULL_HANDLE;
+    P.depthMem = VK_NULL_HANDLE;
+    P.depthView = VK_NULL_HANDLE;
+    P.depthSampledView = VK_NULL_HANDLE;
+    P.stencilSampledView = VK_NULL_HANDLE;
+    P.boundDepthBase = UINT32_MAX;
+    P.scanout.Release(*this);
     if (P.ssboMapped)
         vkUnmapMemory(device, P.ssboMem);
-    vkDestroyBuffer(device, P.ssbo, nullptr); vkFreeMemory(device, P.ssboMem, nullptr);
+    vkDestroyBuffer(device, P.ssbo, nullptr);
+    vkFreeMemory(device, P.ssboMem, nullptr);
     if (P.arenaMapped)
         vkUnmapMemory(device, P.arenaMem);
-    vkDestroyBuffer(device, P.arena, nullptr); vkFreeMemory(device, P.arenaMem, nullptr);
+    vkDestroyBuffer(device, P.arena, nullptr);
+    vkFreeMemory(device, P.arenaMem, nullptr);
     if (P.readbackMapped)
         vkUnmapMemory(device, P.readbackMem);
     vkDestroyBuffer(device, P.readback, nullptr);
@@ -466,20 +471,13 @@ void Renderer::ReleasePersistent()
     persistent = nullptr;
 }
 
-
-
-
-
-
-
-
 // ---------------------------------------------------------------------------
 // Whole-frame rendering. Every draw of the frame is issued, in submission
 // order, into ONE persistent colour+depth target inside a single render pass so
 // the geometry accumulates. Each draw carries its own register-file snapshot
 // (constants live at that draw) and its own bound shader pair; distinct shader
 // pairs are translated and their pipelines/modules cached across the frame.
-bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
+bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
 {
     const uint32_t W = in.width ? in.width : kWidth;
     const uint32_t H = in.height ? in.height : kHeight;
@@ -490,9 +488,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // assuming it is the caches.
     using Clock = std::chrono::steady_clock;
     const auto tStart = Clock::now();
-    auto sinceStartMs = [&] {
-        return std::chrono::duration<double, std::milli>(Clock::now() - tStart).count();
-    };
+    auto sinceStartMs = [&]
+    { return std::chrono::duration<double, std::milli>(Clock::now() - tStart).count(); };
     double msSetup = 0, msDrawLoop = 0, msSubmit = 0, msReadback = 0;
     // Inside the draw loop. Recording a gameplay frame costs ~31 ms of CPU
     // for ~700 draws and the existing breakdown accounts for only ~2 of it,
@@ -525,9 +522,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     static AbTest abUntile(lucent::config::flag("DRAW_AB_UNTILE"));
     abUntile.BeginFrame();
     if (ab.Enabled() && abUntile.Enabled())
-        lucent::error("draw", "GEARS_DRAW_AB_CENSUS and GEARS_DRAW_AB_UNTILE are"
-            " both on. They alternate independently and both record the same frame"
-            " cost, so neither result would mean anything. Enable ONE.");
+        lucent::error("draw",
+                      "GEARS_DRAW_AB_CENSUS and GEARS_DRAW_AB_UNTILE are"
+                      " both on. They alternate independently and both record the same frame"
+                      " cost, so neither result would mean anything. Enable ONE.");
     // ON BY DEFAULT. A renderer that is native does not emulate the console's
     // EDRAM tiling, and this one no longer does: GEARS_DRAW_TILED=1 puts the
     // faithful per-tile replay back for an A/B or a bisect.
@@ -541,12 +539,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // no measurable time either way (C008). So this is a change of posture, not
     // an optimisation: the renderer now does the host thing by default and the
     // console thing on request.
-    const bool untileThisFrame = abUntile.Enabled()
-        ? abUntile.Arm() : !lucent::config::flag("DRAW_TILED");
+    const bool untileThisFrame =
+        abUntile.Enabled() ? abUntile.Arm() : !lucent::config::flag("DRAW_TILED");
     double msSsboUpload = 0;
-    auto accumulate = [](double& into, Clock::time_point from) {
-        into += std::chrono::duration<double, std::milli>(Clock::now() - from).count();
-    };
+    auto accumulate = [](double &into, Clock::time_point from)
+    { into += std::chrono::duration<double, std::milli>(Clock::now() - from).count(); };
 
     // --- the EDRAM SAMPLE GRID ---------------------------------------------
     //
@@ -587,17 +584,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     {
         uint32_t maxScaleY = 1, maxSamplePitch = W;
         std::set<uint32_t> seen;
-        for (const FrameDrawItem& d : in.draws)
+        for (const FrameDrawItem &d : in.draws)
         {
-            const uint32_t* R = d.registers();
+            const uint32_t *R = d.registers();
             if (!R)
                 continue;
             const uint32_t si = R[0x2000];
             const uint32_t msaa = (si >> 16) & 3;
             seen.insert(msaa);
             maxScaleY = std::max(maxScaleY, draw::MsaaScaleY(msaa));
-            maxSamplePitch = std::max(maxSamplePitch,
-                                      (si & 0x3FFF) * draw::MsaaScaleX(msaa));
+            maxSamplePitch = std::max(maxSamplePitch, (si & 0x3FFF) * draw::MsaaScaleX(msaa));
         }
         if (msaaModel)
         {
@@ -610,9 +606,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (in.report)
         {
             lucent::Line l;
-            l.add("EDRAM sample grid: {}x{} ({}), sample counts programmed:",
-                  SW, SH, msaaModel ? "sample model on"
-                                    : "OFF -- GEARS_DRAW_NOMSAA is set");
+            l.add("EDRAM sample grid: {}x{} ({}), sample counts programmed:", SW, SH,
+                  msaaModel ? "sample model on" : "OFF -- GEARS_DRAW_NOMSAA is set");
             for (uint32_t m : seen)
                 l.add(" {}X", 1u << m);
             if (seen.size() > 1 && !msaaModel)
@@ -626,7 +621,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // The persistent sample-grid allocation grows but never shrinks between
     // frames. gpu_renderer_capacity.cpp owns its cross-thread lifetime rule.
     EnsurePersistentCapacity(SW, SH);
-    RendererPersistent& P = *persistent;
+    RendererPersistent &P = *persistent;
     const bool firstFrame = !P.built;
 
     // Shader translation and its cache live in gpu_draw_shaders.{h,cpp}: the
@@ -656,19 +651,19 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     {
         vkDestroyBuffer(device, P.ssbo, nullptr);
         vkFreeMemory(device, P.ssboMem, nullptr);
-        P.ssbo = VK_NULL_HANDLE; P.ssboMem = VK_NULL_HANDLE;
+        P.ssbo = VK_NULL_HANDLE;
+        P.ssboMem = VK_NULL_HANDLE;
     }
     if (P.ssbo == VK_NULL_HANDLE)
     {
-        if (!MakeBuffer(in.guestPhysicalMirrorBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                P.ssbo, P.ssboMem))
+        if (!MakeBuffer(in.guestPhysicalMirrorBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, P.ssbo,
+                        P.ssboMem))
             return false;
         P.ssboBytes = in.guestPhysicalMirrorBytes;
     }
     VkBuffer ssbo = P.ssbo;
     if (!P.ssboMapped)
-        VK_CHECK(vkMapMemory(device, P.ssboMem, 0, in.guestPhysicalMirrorBytes, 0,
-            &P.ssboMapped));
+        VK_CHECK(vkMapMemory(device, P.ssboMem, 0, in.guestPhysicalMirrorBytes, 0, &P.ssboMapped));
     // The ranges this frame's draws actually fetch, filled in by the preparation
     // loop and uploaded after it. Byte ranges into the guest window.
     std::vector<std::pair<uint64_t, uint64_t>> fetchRanges;
@@ -681,11 +676,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // a binding must have the matching view type, so one stub of each kind is
     // created here and picked per binding. Real texture upload is the next step;
     // until then a sampling draw reads white rather than nothing.
-    StubTex& stub2D = P.stub2D; StubTex& stub3D = P.stub3D; StubTex& stubCube = P.stubCube;
-    VkSampler& samp = P.stubSampler;
-    auto makeStub = [&](VkImageType imageType, VkImageViewType viewType,
-                        uint32_t layers, uint32_t depth3d, VkImageCreateFlags flags,
-                        StubTex& out) -> bool {
+    StubTex &stub2D = P.stub2D;
+    StubTex &stub3D = P.stub3D;
+    StubTex &stubCube = P.stubCube;
+    VkSampler &samp = P.stubSampler;
+    auto makeStub = [&](VkImageType imageType, VkImageViewType viewType, uint32_t layers,
+                        uint32_t depth3d, VkImageCreateFlags flags, StubTex &out) -> bool
+    {
         VkImageCreateInfo ti{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
         ti.flags = flags;
         ti.imageType = imageType;
@@ -715,19 +712,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         VK_CHECK(vkCreateImageView(device, &vi, nullptr, &out.view));
         return true;
     };
-    if (firstFrame &&
-        (!makeStub(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 1, 1, 0, stub2D) ||
-         !makeStub(VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D, 1, 1, 0, stub3D) ||
-         !makeStub(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_CUBE, 6, 1,
-                   VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT, stubCube)))
+    if (firstFrame && (!makeStub(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 1, 1, 0, stub2D) ||
+                       !makeStub(VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D, 1, 1, 0, stub3D) ||
+                       !makeStub(VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_CUBE, 6, 1,
+                                 VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT, stubCube)))
         return false;
     if (firstFrame)
     {
         VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
         si.magFilter = si.minFilter = VK_FILTER_LINEAR;
         si.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-        si.addressModeU = si.addressModeV = si.addressModeW =
-            VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        si.addressModeU = si.addressModeV = si.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         VK_CHECK(vkCreateSampler(device, &si, nullptr, &samp));
     }
 
@@ -736,8 +731,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // records is printed there -- a skipped texture that is not reported is a
     // texture silently replaced by a stub.
     draw::TextureUploader TX(*this, P, in);
-    std::vector<VkBuffer>& stagingBufs = TX.stagingBufs;
-    std::vector<VkDeviceMemory>& stagingMems = TX.stagingMems;
+    std::vector<VkBuffer> &stagingBufs = TX.stagingBufs;
+    std::vector<VkDeviceMemory> &stagingMems = TX.stagingMems;
 
     // --- depth, one target per RB_DEPTH_INFO.depth_base ---------------------
     // D32_SFLOAT_S8_UINT, not D32_SFLOAT: the guest's depth buffer carries an
@@ -758,35 +753,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // single image let the shadow atlas overwrite the scene's stencil
     // (catalog #91). Which bases a frame uses is not known until its draws are
     // prepared, so nothing is allocated here.
-    if (firstFrame)
-    {
-        VkImageCreateInfo si{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-        si.imageType = VK_IMAGE_TYPE_2D;
-        si.format = VK_FORMAT_R8G8B8A8_UNORM;
-        si.extent = {W, H, 1};
-        si.mipLevels = 1;
-        si.arrayLayers = 1;
-        si.samples = VK_SAMPLE_COUNT_1_BIT;
-        si.tiling = VK_IMAGE_TILING_OPTIMAL;
-        si.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        for (uint32_t i = 0; i < 2; ++i)
-        {
-            VK_CHECK(vkCreateImage(device, &si, nullptr, &P.presentStage[i]));
-            VkMemoryRequirements sreq{};
-            vkGetImageMemoryRequirements(device, P.presentStage[i], &sreq);
-            uint32_t stype = 0;
-            if (!FindMemory(sreq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, stype))
-                FindMemory(sreq.memoryTypeBits, 0, stype);
-            VkMemoryAllocateInfo sai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-            sai.allocationSize = sreq.size;
-            sai.memoryTypeIndex = stype;
-            VK_CHECK(vkAllocateMemory(device, &sai, nullptr, &P.presentStageMem[i]));
-            VK_CHECK(vkBindImageMemory(device, P.presentStage[i], P.presentStageMem[i], 0));
-        }
-    }
-    // This frame's half of the pair. The presenter may still be blitting the other.
-    VkImage presentStage = P.presentStage[P.presentStageIndex];
-    P.presentStageIndex ^= 1u;
+    if (firstFrame && !P.scanout.Initialize(*this, W, H))
+        return false;
 
     // The render-target cache -- one host colour target per EDRAM surface, one
     // host image per resolve destination, the render passes each host format
@@ -828,7 +796,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // --- descriptor pool sized for every draw ----------------------------
     msSetup = sinceStartMs();
     const uint32_t nDraws = uint32_t(in.draws.size());
-    VkDescriptorPool& pool = P.descriptorPool;
+    VkDescriptorPool &pool = P.descriptorPool;
     if (pool != VK_NULL_HANDLE && P.descriptorPoolDraws < nDraws)
     {
         vkDestroyDescriptorPool(device, pool, nullptr);
@@ -878,12 +846,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // that wrote a surface" and "the later draws that sample it".
     struct ResolveEvent
     {
-        uint32_t drawIndex = 0;   // position in the frame's draw list
-        uint32_t srcSelect = 0;   // RB_COPY_CONTROL.copy_src_select
+        uint32_t drawIndex = 0; // position in the frame's draw list
+        uint32_t srcSelect = 0; // RB_COPY_CONTROL.copy_src_select
         bool srcIsDepth = false;
-        uint32_t srcBase = 0;     // EDRAM tile base of the source surface
-        uint32_t srcFormat = 0;   // its ColorRenderTargetFormat (colour only)
-        uint32_t destBase = 0;    // RB_COPY_DEST_BASE, main memory
+        uint32_t srcBase = 0;   // EDRAM tile base of the source surface
+        uint32_t srcFormat = 0; // its ColorRenderTargetFormat (colour only)
+        uint32_t destBase = 0;  // RB_COPY_DEST_BASE, main memory
         // A resolve can also CLEAR the surface it copies from: RB_COPY_CONTROL
         // carries colour/depth clear enables, and the values live in
         // RB_COLOR_CLEAR / RB_DEPTH_CLEAR. This is where the guest's own clear
@@ -947,9 +915,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         {
             vkDestroyDescriptorPool(device, P.resolveDescPool, nullptr);
             P.resolveDescPool = VK_NULL_HANDLE;
-            const VkDescriptorPoolSize ps[2] = {
-                {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, want * 3}, // colour sets use 2 each, depth sets 1
-                {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, want}};
+            const VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+                                                 want * 3}, // colour sets use 2 each, depth sets 1
+                                                {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, want}};
             VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             pi.maxSets = want * 2; // colour sets and depth sets
             pi.poolSizeCount = 2;
@@ -960,8 +928,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (P.resolveDescPool != VK_NULL_HANDLE)
         {
             vkResetDescriptorPool(device, P.resolveDescPool, 0);
-            std::vector<VkDescriptorSetLayout> layouts(P.resolveDescCapacity,
-                                                       P.resolveSetLayout);
+            std::vector<VkDescriptorSetLayout> layouts(P.resolveDescCapacity, P.resolveSetLayout);
             RT.resolveSets.resize(P.resolveDescCapacity);
             VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
             ai.descriptorPool = P.resolveDescPool;
@@ -974,12 +941,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 std::vector<VkDescriptorSetLayout> dlayouts(P.resolveDescCapacity,
                                                             P.resolveDepthSetLayout);
                 RT.resolveDepthSets.resize(P.resolveDescCapacity);
-                VkDescriptorSetAllocateInfo dai{
-                    VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+                VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
                 dai.descriptorPool = P.resolveDescPool;
                 dai.descriptorSetCount = P.resolveDescCapacity;
                 dai.pSetLayouts = dlayouts.data();
-                if (vkAllocateDescriptorSets(device, &dai, RT.resolveDepthSets.data()) != VK_SUCCESS)
+                if (vkAllocateDescriptorSets(device, &dai, RT.resolveDepthSets.data()) !=
+                    VK_SUCCESS)
                     RT.resolveDepthSets.clear();
             }
         }
@@ -1062,7 +1029,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // used to produce nothing at all, with no line saying why. It now pulls the
     // listing in for the draws it names, and only those, rather than requiring
     // GEARS_DRAW_FRAME_LIST=1 (which prints a line for every draw in the frame).
-    const std::string& psConstsWant = lucent::config::text("DRAW_PS_CONSTS");
+    const std::string &psConstsWant = lucent::config::text("DRAW_PS_CONSTS");
     const uint64_t psConstsHash =
         psConstsWant.empty() ? 0 : std::strtoull(psConstsWant.c_str(), nullptr, 16);
     uint32_t psConstsMatched = 0;
@@ -1091,15 +1058,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // is filled at the TOP of the loop body, above every early exit, so the
     // difference between it and the prepared counts IS the set we drop.
     std::map<std::pair<uint64_t, uint64_t>, uint32_t> rawCounts;
-    static const std::string& rawStreamPath = lucent::config::text("DRAW_STREAM_RAW");
+    static const std::string &rawStreamPath = lucent::config::text("DRAW_STREAM_RAW");
     const bool wantRawStream = !rawStreamPath.empty();
 
-    for (const FrameDrawItem& d : in.draws)
+    for (const FrameDrawItem &d : in.draws)
     {
         const double stateBegin = sinceStartMs();
-        const uint32_t* R = d.registers();
+        const uint32_t *R = d.registers();
         if (!R)
-        { CN.Skip(1); continue; }
+        {
+            CN.Skip(1);
+            continue;
+        }
 
         if (wantRawStream)
         {
@@ -1127,8 +1097,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             re.srcSelect = R[0x2318] & 0x7;
             re.srcIsDepth = re.srcSelect >= 4; // kMaxColorRenderTargets
             static const uint32_t kColorInfo[4] = {0x2001, 0x2003, 0x2004, 0x2005};
-            const uint32_t info = re.srcIsDepth ? R[0x2002]
-                                                : R[kColorInfo[re.srcSelect & 3]];
+            const uint32_t info = re.srcIsDepth ? R[0x2002] : R[kColorInfo[re.srcSelect & 3]];
             re.srcBase = info & 0xFFF;
             re.srcFormat = (info >> 16) & 0xF;
             re.destBase = R[0x2319] & ~0xFFFu;
@@ -1144,7 +1113,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // is shifted by it exactly as geometry is, which is what makes a
             // predicated tile resolve to its own part of the destination.
             const uint32_t wo = R[0x2080];
-            auto sign15 = [](uint32_t v) {
+            auto sign15 = [](uint32_t v)
+            {
                 v &= 0x7FFF;
                 return int32_t(v) - int32_t((v & 0x4000) << 1);
             };
@@ -1158,7 +1128,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             const uint32_t vf1 = R[0x4801];
             if ((vf0 & 3) == 3 && ((vf1 >> 2) & 0xFFFFFF) == 6)
             {
-                const uint64_t addr = uint64_t((vf0 >> 2) << 2);
+                const uint64_t addr = uint64_t(vf0) & ~uint64_t(3);
                 if (addr + 6 * 4 <= in.guestWindowBytes)
                 {
                     for (int k = 0; k < 6; ++k)
@@ -1186,7 +1156,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // How many distinct depth surfaces the frame uses. One host depth image
         // is shared by every colour target; this is the number that says when
         // that stops being faithful.
-        
+
         // Which (colour surface, depth base) pairs the frame actually uses, and
         // how many draws each. One shared host depth image is only wrong if a
         // surface's draws span more than one depth base, or two surfaces share
@@ -1201,10 +1171,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // has three such draws" cannot say which pass they belong to
         // (catalog #91).
         if ((R[0x2001] & 0xFFF) == (R[0x2002] & 0xFFF))
-            lucent::debug("draw", "diag draw {} renders colour AND depth at the"
-                " SAME EDRAM base {:#x}: on the console its depth/stencil writes"
-                " overwrite that surface's colour bits",
-                uint32_t(&d - in.draws.data()), R[0x2001] & 0xFFF);
+            lucent::debug("draw",
+                          "diag draw {} renders colour AND depth at the"
+                          " SAME EDRAM base {:#x}: on the console its depth/stencil writes"
+                          " overwrite that surface's colour bits",
+                          uint32_t(&d - in.draws.data()), R[0x2001] & 0xFFF);
 
         // A resolve is not geometry. It copies an EDRAM surface out to main
         // memory, and the primitive only selects the region; issuing it as a
@@ -1218,7 +1189,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             continue;
         }
         if (!d.vsUcode || !d.psUcode)
-        { CN.Skip(1); continue; }
+        {
+            CN.Skip(1);
+            continue;
+        }
 
         draw::ShaderXlate *vsX = nullptr, *psX = nullptr;
         VkShaderModule vsMod = VK_NULL_HANDLE, psMod = VK_NULL_HANDLE;
@@ -1232,10 +1206,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // because the failure path takes a `continue` -- and a draw whose
             // modification cannot be derived is exactly the one worth counting.
             ScopedMs modifyTime(msModify);
-            if (!draw::DeriveShaderModifications(R, d.vsUcode, d.vsUcodeSize,
-                    d.vsHash, d.psUcode, d.psUcodeSize, d.psHash, vsModification,
-                    psModification))
-            { CN.Skip(2); continue; }
+            if (!draw::DeriveShaderModifications(R, d.vsUcode, d.vsUcodeSize, d.vsHash, d.psUcode,
+                                                 d.psUcodeSize, d.psHash, vsModification,
+                                                 psModification))
+            {
+                CN.Skip(2);
+                continue;
+            }
         }
         // Set before ANY texture binding of this draw is resolved: TextureBinder::SelectView
         // runs while the descriptor sets are built, which is earlier than the
@@ -1243,8 +1220,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // to the PREVIOUS draw's shader -- and sent me disassembling a shader
         // with no texture fetch in it at all.
         TB.currentPsHash = d.psHash;
-        VkDescriptorSetLayout vsTexLayout = 0, psTexLayout = 0;
-        VkPipelineLayout pipeLayout = 0;
+        VkDescriptorSetLayout vsTexLayout = VK_NULL_HANDLE, psTexLayout = VK_NULL_HANDLE;
+        VkPipelineLayout pipeLayout = VK_NULL_HANDLE;
         {
             // The cache LOOKUPS, not the translation: msTranslate and msPipeline
             // already measure the work done on a miss, and both are ~0 once the
@@ -1260,11 +1237,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             {
                 const GuestClamp want = GuestColorFormatClamp((R[0x2001] >> 16) & 0xF);
                 auto sit = P.surfaceTargets.find(R[0x2001] & 0xFFF);
-                const bool hostIsFloat =
-                    sit != P.surfaceTargets.end() &&
-                    (sit->second.hostFormat == VK_FORMAT_R16G16B16A16_SFLOAT ||
-                     sit->second.hostFormat == VK_FORMAT_R32G32_SFLOAT ||
-                     sit->second.hostFormat == VK_FORMAT_R16G16_SFLOAT);
+                const bool hostIsFloat = sit != P.surfaceTargets.end() &&
+                                         (sit->second.hostFormat == VK_FORMAT_R16G16B16A16_SFLOAT ||
+                                          sit->second.hostFormat == VK_FORMAT_R32G32_SFLOAT ||
+                                          sit->second.hostFormat == VK_FORMAT_R16G16_SFLOAT);
                 if (hostIsFloat && want != GuestClamp::kNone)
                 {
                     clampPs = true;
@@ -1272,28 +1248,43 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                                                           : draw::ClampMode::kAlphaOnly;
                 }
             }
-            if (!SC.GetShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification,
-                              false, draw::ClampMode::kRgba, vsX, vsMod) ||
-                !SC.GetShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification,
-                              clampPs, clampMode, psX, psMod))
-            { CN.Skip(2); continue; }
+            if (!SC.GetShader(true, d.vsUcode, d.vsUcodeSize, d.vsHash, vsModification, false,
+                              draw::ClampMode::kRgba, vsX, vsMod) ||
+                !SC.GetShader(false, d.psUcode, d.psUcodeSize, d.psHash, psModification, clampPs,
+                              clampMode, psX, psMod))
+            {
+                CN.Skip(2);
+                continue;
+            }
             if (!PC.GetPipeLayout(*vsX, *psX, vsTexLayout, psTexLayout, pipeLayout))
-            { CN.Skip(3); continue; }
+            {
+                CN.Skip(3);
+                continue;
+            }
         }
         // GEARS_DRAW_ONLY_BASE=<hex>: render only draws targeting one EDRAM
         // surface. A DIAGNOSTIC control arm -- it isolates one surface's
         // contribution -- never a fix.
         static const long onlyBase = lucent::config::number("DRAW_ONLY_BASE", -1);
         if (onlyBase >= 0 && surfaceBase != uint32_t(onlyBase))
-        { CN.Skip(0); continue; }
+        {
+            CN.Skip(0);
+            continue;
+        }
         // This draw's own host render target, and the render pass its pipeline
         // must be built against.
-        SurfaceTarget* target = nullptr;
+        SurfaceTarget *target = nullptr;
         if (!RT.GetSurfaceTarget(surfaceBase, target))
-        { CN.Skip(8); continue; }
-        std::pair<VkRenderPass, VkRenderPass>* rp = nullptr;
+        {
+            CN.Skip(8);
+            continue;
+        }
+        std::pair<VkRenderPass, VkRenderPass> *rp = nullptr;
         if (!RT.GetPasses(target->hostFormat, rp))
-        { CN.Skip(8); continue; }
+        {
+            CN.Skip(8);
+            continue;
+        }
         OutputMergerState om;
         om.colorMask = R[0x2104];
         om.blend0 = R[0x2201];
@@ -1325,8 +1316,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // runs its pixel shader writes colour the hardware never wrote.
         // GEARS_DRAW_DEPTHONLY_PS=1 restores the old behaviour: a DIAGNOSTIC
         // control arm for A/B-ing exactly this, never a fix.
-        static const bool depthOnlyRunsPs =
-            lucent::config::flag("DRAW_DEPTHONLY_PS");
+        static const bool depthOnlyRunsPs = lucent::config::flag("DRAW_DEPTHONLY_PS");
         bool pixelShaderUsed = edramMode == 4 /*kColorDepth*/ || depthOnlyRunsPs;
         // AND THE OTHER TWO CONDITIONS XENIA APPLIES. edram_mode is only the
         // middle one of three; see draw::ClassifyDraw. Measured at the same
@@ -1364,9 +1354,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (!pixelShaderUsed)
             ++CN.drawsNoPixelShader;
         VkPipeline pipe = VK_NULL_HANDLE;
-        if (!PC.GetPipeline(vsMod, pixelShaderUsed ? psMod : VK_NULL_HANDLE, gsMod,
-                         d.primType, om, rp->first, pipeLayout, pipe))
-        { CN.Skip(3); continue; }
+        if (!PC.GetPipeline(vsMod, pixelShaderUsed ? psMod : VK_NULL_HANDLE, gsMod, d.primType, om,
+                            rp->first, pipeLayout, pipe))
+        {
+            CN.Skip(3);
+            continue;
+        }
 
         // The five per-draw constant blocks and the cache that keeps consecutive
         // draws from repacking identical bytes live in gpu_draw_uniforms.{h,cpp}.
@@ -1374,11 +1367,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         msState += uniformsBegin - stateBegin;
         const draw::UniformCache::Result ur = UC.Update(R, d, *vsX, *psX);
         if (ur == draw::UniformCache::Result::kFailed)
-        { CN.Skip(4); continue; }
+        {
+            CN.Skip(4);
+            continue;
+        }
         VkDescriptorBufferInfo biSys = UC.biSys, biFvs = UC.biFvs;
         VkDescriptorBufferInfo biFps = UC.biFps, biBl = UC.biBl;
         VkDescriptorBufferInfo biFetch = UC.biFetch;
-        const bool sameConstants = ur == draw::UniformCache::Result::kReused;
         msUniforms += sinceStartMs() - uniformsBegin;
         const double indexBegin = sinceStartMs();
 
@@ -1387,11 +1382,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         draw::PreparedIndices idx;
         switch (draw::PrepareIndices(AR, in, d, idx))
         {
-            case draw::IndexResult::kEmptyQuad:
-                CN.Skip(7); continue;
-            case draw::IndexResult::kArenaFull:
-                CN.Skip(5); continue;
-            case draw::IndexResult::kOk: break;
+        case draw::IndexResult::kEmptyQuad:
+            CN.Skip(7);
+            continue;
+        case draw::IndexResult::kArenaFull:
+            CN.Skip(5);
+            continue;
+        case draw::IndexResult::kOk:
+            break;
         }
         const VkBuffer ibuf = idx.buffer;
         const VkDeviceSize ibufOffset = idx.offset;
@@ -1411,9 +1409,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // The draw's four descriptor sets, and the per-frame cache that lets most
         // draws reuse the expensive two, are in gpu_draw_descriptors.{h,cpp}.
         VkDescriptorSet sets[4] = {};
-        if (!DB.Build(R, d, RT.resolveGeneration, *vsX, *psX,
-                      vsTexLayout, psTexLayout, UC, sets))
-        { CN.Skip(6); continue; }
+        if (!DB.Build(R, d, RT.resolveGeneration, *vsX, *psX, vsTexLayout, psTexLayout, UC, sets))
+        {
+            CN.Skip(6);
+            continue;
+        }
 
         // Building the PreparedDraw and deriving this draw's viewport/scissor.
         // Runs to the end of the body, which has no further `continue`.
@@ -1421,7 +1421,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         PreparedDraw pd{};
         pd.pipeline = pipe;
         pd.layout = pipeLayout;
-        pd.sets[0] = sets[0]; pd.sets[1] = sets[1]; pd.sets[2] = sets[2]; pd.sets[3] = sets[3];
+        pd.sets[0] = sets[0];
+        pd.sets[1] = sets[1];
+        pd.sets[2] = sets[2];
+        pd.sets[3] = sets[3];
         pd.ibuf = ibuf;
         pd.ibufOffset = ibufOffset;
         pd.count = drawCount;
@@ -1434,8 +1437,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         pd.psHash = d.psHash;
         pd.hasFragmentStage = pixelShaderUsed;
         pd.colorMask = om.colorMask;
-        const draw::DepthBias depthBias =
-            draw::DeriveDepthBias(R, om.polygonal);
+        const draw::DepthBias depthBias = draw::DeriveDepthBias(R, om.polygonal);
         pd.depthBiasConstant = depthBias.constantFactor;
         pd.depthBiasSlope = depthBias.slopeFactor;
         // GEARS_DRAW_NODEPTHBIAS=1 is the control arm for the formerly missing
@@ -1496,8 +1498,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (fixedVp)
             {
                 gv.x = gv.y = gv.scissorX = gv.scissorY = 0;
-                gv.w = gv.scissorW = W; gv.h = gv.scissorH = H;
-                gv.zMin = 0.0f; gv.zMax = 1.0f;
+                gv.w = gv.scissorW = W;
+                gv.h = gv.scissorH = H;
+                gv.zMin = 0.0f;
+                gv.zMax = 1.0f;
             }
             // A std::format plus a map insert PER DRAW, feeding a census that is
             // only ever printed under `in.report` -- so on the 59 frames out of
@@ -1512,9 +1516,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (in.report || ab.Arm())
             {
                 ScopedMs censusTime(msCensus);
-                ++CN.viewportCensus[std::format("{},{} {}x{} scissor {},{} {}x{}",
-                    gv.x, gv.y, gv.w, gv.h, gv.scissorX, gv.scissorY,
-                    gv.scissorW, gv.scissorH)];
+                ++CN.viewportCensus[std::format("{},{} {}x{} scissor {},{} {}x{}", gv.x, gv.y, gv.w,
+                                                gv.h, gv.scissorX, gv.scissorY, gv.scissorW,
+                                                gv.scissorH)];
             }
             // THE VIEWPORT IS BOUNDED BY THE DEVICE, NOT BY THE TARGET.
             //
@@ -1545,11 +1549,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // old one did -- so it is said out loud rather than applied
                 // quietly. 8192 is the largest Xenia's viewport code returns and
                 // every device this has run on allows 16384.
-                lucent::warn("draw", "diag draw {}: the guest wants a {}x{} host"
-                    " viewport (clipping disabled) and this device allows only"
-                    " {}x{}. It is clamped, and this draw's geometry WILL be"
-                    " smaller than the console's by that ratio",
-                    pd.diagIndex, gv.w, gv.h, vpMaxW, vpMaxH);
+                lucent::warn("draw",
+                             "diag draw {}: the guest wants a {}x{} host"
+                             " viewport (clipping disabled) and this device allows only"
+                             " {}x{}. It is clamped, and this draw's geometry WILL be"
+                             " smaller than the console's by that ratio",
+                             pd.diagIndex, gv.w, gv.h, vpMaxW, vpMaxH);
             }
             // INTO THE SAMPLE GRID. The viewport and scissor the guest
             // programmed are in PIXELS of ITS surface; the target is EDRAM,
@@ -1558,10 +1563,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // fill and a 1X 1280x720 composite cover the same 1280x720 samples
             // -- the same bytes the console gives them. Both scales are 1 with
             // the model off, so this line is the identity there.
-            const uint32_t sx = msaaModel
-                ? draw::MsaaScaleX((pd.surfaceInfo >> 16) & 3) : 1u;
-            const uint32_t sy = msaaModel
-                ? draw::MsaaScaleY((pd.surfaceInfo >> 16) & 3) : 1u;
+            const uint32_t sx = msaaModel ? draw::MsaaScaleX((pd.surfaceInfo >> 16) & 3) : 1u;
+            const uint32_t sy = msaaModel ? draw::MsaaScaleY((pd.surfaceInfo >> 16) & 3) : 1u;
             pd.viewport.x = float(gv.x * sx);
             pd.viewport.y = float(gv.y * sy);
             pd.viewport.width = float(std::min(gv.w * sx, vpMaxW));
@@ -1570,13 +1573,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             pd.viewport.maxDepth = gv.zMax;
             const uint32_t scx = gv.scissorX * sx, scy = gv.scissorY * sy;
 
-            pd.scissor.offset = {int32_t(std::min(scx, SW)),
-                                 int32_t(std::min(scy, SH))};
+            pd.scissor.offset = {int32_t(std::min(scx, SW)), int32_t(std::min(scy, SH))};
             pd.scissor.extent = {std::min(gv.scissorW * sx, SW - std::min(scx, SW)),
                                  std::min(gv.scissorH * sy, SH - std::min(scy, SH))};
         }
-        draw::DumpVertices(R, in, d, *vsX, *psX, issued, pd.diagIndex, pd.vsHash,
-                           d.indexCount, &UC.sysc, &UC.fVs);
+        draw::DumpVertices(R, in, d, *vsX, *psX, issued, pd.diagIndex, pd.vsHash, d.indexCount,
+                           &UC.sysc, &UC.fVs);
         draw::DumpVsConstants(*vsX, UC, d.vsHash, issued, pd.diagIndex, R);
         // What this draw fetches, and whether the mirror covers it, is in
         // gpu_draw_vertexfetch.{h,cpp}.
@@ -1595,9 +1597,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // CONSTANTS. Both print nothing, and the difference is "you asked about a
     // shader this frame never ran" versus "the constants are all zero".
     if (psConstsHash != 0 && psConstsMatched == 0)
-        lucent::warn("draw", "GEARS_DRAW_PS_CONSTS={}: NO draw in this frame"
-            " used that pixel shader, so nothing was printed about it. The"
-            " frame issued {} draws", psConstsWant, issued);
+        lucent::warn("draw",
+                     "GEARS_DRAW_PS_CONSTS={}: NO draw in this frame"
+                     " used that pixel shader, so nothing was printed about it. The"
+                     " frame issued {} draws",
+                     psConstsWant, issued);
 
     // The EDRAM-tiling collapse lives in gpu_draw_untile.{h,cpp}; the reasoning
     // for it, and for what it refuses to do, is on that header.
@@ -1616,7 +1620,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     {
         const auto tUpload = Clock::now();
         constexpr uint64_t kPage = 0x1000;
-        for (auto& r : fetchRanges)
+        for (auto &r : fetchRanges)
         {
             r.first &= ~(kPage - 1);
             r.second = (r.second + kPage - 1) & ~(kPage - 1);
@@ -1632,8 +1636,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 end = std::max(end, fetchRanges[j].second);
             if (end > begin)
             {
-                std::memcpy(static_cast<uint8_t*>(P.ssboMapped) + begin,
-                            in.guestBase + begin, size_t(end - begin));
+                std::memcpy(static_cast<uint8_t *>(P.ssboMapped) + begin, in.guestBase + begin,
+                            size_t(end - begin));
                 uploadedBytesSsbo += end - begin;
                 ++spans;
             }
@@ -1641,17 +1645,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
         accumulate(msSsboUpload, tUpload);
         if (in.report)
-            lucent::info("draw", "frame guest-memory upload: {} KiB in {} spans"
-                " (mirror spans {} MiB)", uploadedBytesSsbo / 1024, spans,
-                in.guestPhysicalMirrorBytes >> 20);
+            lucent::info("draw",
+                         "frame guest-memory upload: {} KiB in {} spans"
+                         " (mirror spans {} MiB)",
+                         uploadedBytesSsbo / 1024, spans, in.guestPhysicalMirrorBytes >> 20);
     }
 
     // --- readback buffer -------------------------------------------------
     const VkDeviceSize rbBytes = VkDeviceSize(SW) * SH * 4;
     if (P.readback == VK_NULL_HANDLE)
     {
-        if (!MakeBuffer(rbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, P.readback,
-                P.readbackMem, /*wantCached=*/true))
+        if (!MakeBuffer(rbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, P.readback, P.readbackMem,
+                        /*wantCached=*/true))
             return false;
         P.readbackBytes = rbBytes;
         VK_CHECK(vkMapMemory(device, P.readbackMem, 0, rbBytes, 0, &P.readbackMapped));
@@ -1659,14 +1664,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     VkBuffer readback = P.readback;
 
     // --- command buffer: clear once, draw all in order -------------------
-    VkCommandPool& cmdPool = P.cmdPool;
+    VkCommandPool &cmdPool = P.cmdPool;
     if (cmdPool == VK_NULL_HANDLE)
     {
         VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         ci.queueFamilyIndex = queueFamily;
         VK_CHECK(vkCreateCommandPool(device, &ci, nullptr, &cmdPool));
     }
-    VkCommandBuffer& cmd = P.cmd;
+    VkCommandBuffer &cmd = P.cmd;
     if (cmd == VK_NULL_HANDLE)
     {
         VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -1685,21 +1690,22 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // until the frame's first resolve into it nothing has been rendered there,
     // and black says that honestly rather than washing the sampling pass white.
     std::vector<std::tuple<VkImage, uint32_t, bool>> initialClears{
-        {stub2D.image, 1u, false}, {stub3D.image, 1u, false},
-        {stubCube.image, 6u, false}};
-    for (const auto& [destBase, rt] : P.resolveTargets)
+        {stub2D.image, 1u, false}, {stub3D.image, 1u, false}, {stubCube.image, 6u, false}};
+    for (const auto &[destBase, rt] : P.resolveTargets)
         initialClears.emplace_back(rt.image, 1u, true);
-    for (const auto& [img, layers, isRt] : initialClears)
+    for (const auto &[img, layers, isRt] : initialClears)
     {
         VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, layers};
         VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        toDst.srcAccessMask = 0; toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toDst.srcAccessMask = 0;
+        toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toDst.image = img; toDst.subresourceRange = range;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
+        toDst.image = img;
+        toDst.subresourceRange = range;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &toDst);
         VkClearColorValue fill{};
         fill.float32[0] = fill.float32[1] = fill.float32[2] = isRt ? 0.0f : 1.0f;
         fill.float32[3] = 1.0f;
@@ -1710,39 +1716,43 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         toRead.srcQueueFamilyIndex = toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toRead.image = img; toRead.subresourceRange = range;
+        toRead.image = img;
+        toRead.subresourceRange = range;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toRead);
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                             &toRead);
     }
 
     // Guest textures: staging buffer -> image, once each, before any draw.
-    for (const draw::TextureUploader::PendingUpload& u : TX.uploads)
+    for (const draw::TextureUploader::PendingUpload &u : TX.uploads)
     {
-        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0,
-                                      u.mipLevels, 0,
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, u.mipLevels, 0,
                                       u.regions.front().imageSubresource.layerCount};
         VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-        toDst.srcAccessMask = 0; toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toDst.srcAccessMask = 0;
+        toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toDst.image = u.image; toDst.subresourceRange = range;
-        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toDst);
+        toDst.image = u.image;
+        toDst.subresourceRange = range;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &toDst);
         // Each decoded mip is tightly packed at its recorded staging offset.
-        vkCmdCopyBufferToImage(cmd, u.staging, u.image,
-            VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, uint32_t(u.regions.size()),
-            u.regions.data());
+        vkCmdCopyBufferToImage(cmd, u.staging, u.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                               uint32_t(u.regions.size()), u.regions.data());
         VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         toRead.srcQueueFamilyIndex = toRead.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        toRead.image = u.image; toRead.subresourceRange = range;
+        toRead.image = u.image;
+        toRead.subresourceRange = range;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            0, 0, nullptr, 0, nullptr, 1, &toRead);
+                             VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, nullptr, 0, nullptr, 1, &toRead);
     }
 
     // The depth clear value the guest programmed, taken from the frame's own
@@ -1751,25 +1761,27 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // frame that clears differently is never silently given someone else's value.
     float guestDepthClear = 1.0f;
     bool haveGuestDepthClear = false;
-    for (const ResolveEvent& re : resolves)
+    for (const ResolveEvent &re : resolves)
     {
         if (!re.depthClear)
             continue;
         // RB_DEPTH_CLEAR packs depth in bits 8..31 and stencil in bits 0..7.
         const uint32_t d24 = re.depthClearValue >> 8;
-        const float v = re.depthFormat == 1 /*kD24FS8*/ ? Depth20e4To32(d24)
-                                                        : DepthUnorm24To32(d24);
+        const float v =
+            re.depthFormat == 1 /*kD24FS8*/ ? Depth20e4To32(d24) : DepthUnorm24To32(d24);
         if (haveGuestDepthClear && v != guestDepthClear)
-            lucent::warn("draw", "frame programs two different depth clears"
-                " ({} and {}); using the first", guestDepthClear, v);
+            lucent::warn("draw",
+                         "frame programs two different depth clears"
+                         " ({} and {}); using the first",
+                         guestDepthClear, v);
         else
             guestDepthClear = v;
         haveGuestDepthClear = true;
     }
     if (in.report)
         lucent::info("draw", "frame depth clear: {} ({})", guestDepthClear,
-            haveGuestDepthClear ? "the guest's own, from RB_DEPTH_CLEAR"
-                                : "HOST DEFAULT -- this frame programs no depth clear");
+                     haveGuestDepthClear ? "the guest's own, from RB_DEPTH_CLEAR"
+                                         : "HOST DEFAULT -- this frame programs no depth clear");
 
     // The colour clear. Like the depth clear, the guest's rides on a copy draw:
     // RB_COPY_CONTROL bit 8 is color_clear_enable and the value is in
@@ -1789,27 +1801,30 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     float guestColorClear[4] = {0.0f, 0.0f, 0.0f, 0.0f};
     bool haveGuestColorClear = false;
     uint32_t unverifiableColorClears = 0;
-    for (const ResolveEvent& re : resolves)
+    for (const ResolveEvent &re : resolves)
     {
         if (!re.colorClear)
             continue;
         if (re.colorClearValue != 0)
-        { ++unverifiableColorClears; continue; }
+        {
+            ++unverifiableColorClears;
+            continue;
+        }
         haveGuestColorClear = true;
     }
     if (unverifiableColorClears)
-        lucent::warn("draw", "frame programs {} NON-ZERO colour clears; this build"
-            " only honours a zero clear, because no captured frame of this title"
-            " has ever programmed another value and the per-format unpack of"
-            " RB_COLOR_CLEAR is therefore untestable. Falling back.",
-            unverifiableColorClears);
+        lucent::warn("draw",
+                     "frame programs {} NON-ZERO colour clears; this build"
+                     " only honours a zero clear, because no captured frame of this title"
+                     " has ever programmed another value and the per-format unpack of"
+                     " RB_COLOR_CLEAR is therefore untestable. Falling back.",
+                     unverifiableColorClears);
     static const bool slateClear = lucent::config::flag("DRAW_SLATE_CLEAR");
-    const bool useGuestColorClear = haveGuestColorClear &&
-                                    !unverifiableColorClears && !slateClear;
+    const bool useGuestColorClear = haveGuestColorClear && !unverifiableColorClears && !slateClear;
     if (in.report)
-        lucent::info("draw", "frame colour clear: {}", useGuestColorClear
-            ? "the guest's own (0x00000000)"
-            : "HOST DIAGNOSTIC SLATE -- not the guest's colour");
+        lucent::info("draw", "frame colour clear: {}",
+                     useGuestColorClear ? "the guest's own (0x00000000)"
+                                        : "HOST DIAGNOSTIC SLATE -- not the guest's colour");
 
     VkClearValue clears[2]{};
     clears[0].color.float32[0] = useGuestColorClear ? 0.0f : 0.05f;
@@ -1830,9 +1845,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     //
     // GEARS_DRAW_DEPTH_CLEAR=<float> remains as an override, a control arm only.
     {
-        const std::string& dc = lucent::config::text("DRAW_DEPTH_CLEAR");
-        clears[1].depthStencil =
-            {dc.empty() ? guestDepthClear : float(std::atof(dc.c_str())), 0};
+        const std::string &dc = lucent::config::text("DRAW_DEPTH_CLEAR");
+        clears[1].depthStencil = {dc.empty() ? guestDepthClear : float(std::atof(dc.c_str())), 0};
     }
     // The mid-render probes -- GEARS_DRAW_FRAME_STEP's checkpoint images and
     // GEARS_DRAW_PIXEL_TRACE's per-draw texel -- live in gpu_draw_probe.{h,cpp},
@@ -1855,7 +1869,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // gpu_draw_resolve.cpp: it already owns the descriptor sets they consume
     // and the counters that report a resolve it could not serve.
 
-
     // Per-draw pipeline statistics and the diagnostic table built on them live
     // in gpu_draw_probe.{h,cpp}, with the frame's other instruments.
     draw::DrawStats DS(*this);
@@ -1867,13 +1880,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // storageFormat goes with begunThisFrame: a surface whose first use this
     // frame CLEARS it holds no format's bits yet, so the first draw's format
     // defines the contents and needs no conversion.
-    for (auto& [k, s] : P.surfaceTargets)
-    { s.begunThisFrame = false; s.drawsThisFrame = 0; s.storageFormat = UINT32_MAX; }
-    for (auto& [k, r] : P.resolveTargets)
+    for (auto &[k, s] : P.surfaceTargets)
+    {
+        s.begunThisFrame = false;
+        s.drawsThisFrame = 0;
+        s.storageFormat = UINT32_MAX;
+    }
+    for (auto &[k, r] : P.resolveTargets)
         r.copies = 0;
     // Same rule for the depth targets: the frame's first use of each one
     // clears it, as the frame's first pass on a surface clears the colour.
-    for (auto& [k, d] : P.depthTargets)
+    for (auto &[k, d] : P.depthTargets)
         d.usedThisFrame = false;
 
     // WHERE A RESOLVE'S PIXELS GO, PER RESOLVE RATHER THAN PER DESTINATION.
@@ -1904,7 +1921,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         bool isDepth;
         VkBuffer buf;
         VkDeviceMemory mem;
-        uint32_t ordinal;    // UINT32_MAX for the post-frame per-target dump
+        uint32_t ordinal; // UINT32_MAX for the post-frame per-target dump
         uint32_t drawIndex;
     };
     std::vector<ResolveDump> resolveDumps;
@@ -1933,7 +1950,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // k_16_16_16_16_FLOAT. Keyed from the target, all five were named
     // `srcC400 f32`, so four of them paired with nothing on the console's side
     // and were read as passes the console executes and we do not (catalog #90).
-    auto snapshotResolveTarget = [&](const draw::ResolveTarget& r, uint32_t ordinal,
+    auto snapshotResolveTarget = [&](const draw::ResolveTarget &r, uint32_t ordinal,
                                      uint32_t drawIndex, uint32_t sourceBase,
                                      uint32_t guestFormat) -> bool
     {
@@ -1949,7 +1966,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         }
         const uint32_t bpp = r.isDepth ? 4u : 8u;
         const VkDeviceSize bytes = VkDeviceSize(r.width) * r.imageHeight * bpp;
-        VkBuffer b = VK_NULL_HANDLE; VkDeviceMemory m = VK_NULL_HANDLE;
+        VkBuffer b = VK_NULL_HANDLE;
+        VkDeviceMemory m = VK_NULL_HANDLE;
         if (!MakeBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m, true))
             return false;
         // The destination image sits in SHADER_READ_ONLY between resolves, which
@@ -1963,22 +1981,21 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         tb.image = r.image;
         tb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &tb);
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &tb);
         VkBufferImageCopy rg{};
         rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         rg.imageExtent = {r.width, r.imageHeight, 1};
-        vkCmdCopyImageToBuffer(cmd, r.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            b, 1, &rg);
+        vkCmdCopyImageToBuffer(cmd, r.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b, 1, &rg);
         VkImageMemoryBarrier rb2 = tb;
         rb2.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
         rb2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         rb2.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
         rb2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb2);
-        resolveDumps.push_back({r.base, r.width, r.imageHeight, sourceBase,
-                                r.pitch, r.height, guestFormat, r.isDepth,
-                                b, m, ordinal, drawIndex});
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                             &rb2);
+        resolveDumps.push_back({r.base, r.width, r.imageHeight, sourceBase, r.pitch, r.height,
+                                guestFormat, r.isDepth, b, m, ordinal, drawIndex});
         return true;
     };
 
@@ -2019,7 +2036,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // as well as on the colour surface: they are two attachments of one
     // framebuffer, and the guest changes them independently.
     uint32_t openDepthBase = UINT32_MAX;
-    SurfaceTarget* openTarget = nullptr;
+    SurfaceTarget *openTarget = nullptr;
     // The last surface a pass was opened on, which -- unlike openTarget -- SURVIVES
     // endPass(). A checkpoint asked for immediately after a resolve has no pass
     // open, and using openTarget there dropped the checkpoint silently: exactly the
@@ -2027,9 +2044,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // colour image sits in TRANSFER_SRC_OPTIMAL either way, so reading it closed is
     // as valid as reading it open.
     uint32_t lastSurface = 0;
-    SurfaceTarget* lastTarget = nullptr;
+    SurfaceTarget *lastTarget = nullptr;
 
-    auto endPass = [&]() {
+    auto endPass = [&]()
+    {
         if (!inPass)
             return;
         vkCmdEndRenderPass(cmd);
@@ -2038,11 +2056,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     };
     // Opens a pass on `key`'s target, clearing it if this frame has not touched
     // it yet and loading it otherwise.
-    auto beginPassOn = [&](uint32_t base, uint32_t depthBase) -> bool {
-        SurfaceTarget* t = nullptr;
+    auto beginPassOn = [&](uint32_t base, uint32_t depthBase) -> bool
+    {
+        SurfaceTarget *t = nullptr;
         if (!RT.GetSurfaceTarget(base, t))
             return false;
-        std::pair<VkRenderPass, VkRenderPass>* rp = nullptr;
+        std::pair<VkRenderPass, VkRenderPass> *rp = nullptr;
         if (!RT.GetPasses(t->hostFormat, rp))
             return false;
         // Binds the depth target for this base as well as naming it, so the
@@ -2059,9 +2078,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // declare a layout it has never been in. Cleared explicitly here to the
         // same values that pass would have used, which keeps the single-base
         // case exactly as it was.
-        DepthTarget* dt = nullptr;
-        if (RT.GetDepthTarget(depthBase, dt) && dt && !dt->usedThisFrame &&
-            t->begunThisFrame)
+        DepthTarget *dt = nullptr;
+        if (RT.GetDepthTarget(depthBase, dt) && dt && !dt->usedThisFrame && t->begunThisFrame)
         {
             VkImageSubresourceRange dr{kDepthAspects, 0, 1, 0, 1};
             VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -2073,10 +2091,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             b.image = dt->image;
             b.subresourceRange = dr;
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-            vkCmdClearDepthStencilImage(cmd, dt->image,
-                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                &clears[1].depthStencil, 1, &dr);
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
+            vkCmdClearDepthStencilImage(cmd, dt->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                                        &clears[1].depthStencil, 1, &dr);
             VkImageMemoryBarrier r{b};
             r.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
             r.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
@@ -2084,8 +2101,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
             r.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0, 0, nullptr,
-                0, nullptr, 1, &r);
+                                 VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0, 0, nullptr, 0,
+                                 nullptr, 1, &r);
         }
         if (dt)
             dt->usedThisFrame = true;
@@ -2102,11 +2119,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // (catalog #62). "Which pass, which framebuffer, clear or load" is not
         // derivable from any existing line.
         if (passLog)
-            lucent::info("draw", "  pass begin at draw {}: surface {:#x} host"
-                " format {} framebuffer {} -- {} pass{}", drawn, base,
-                uint32_t(t->hostFormat), (void*)fb,
-                t->begunThisFrame ? "LOAD" : "CLEAR",
-                t->begunThisFrame ? "" : " (first use this frame)");
+            lucent::info("draw",
+                         "  pass begin at draw {}: surface {:#x} host"
+                         " format {} framebuffer {} -- {} pass{}",
+                         drawn, base, uint32_t(t->hostFormat), (void *)fb,
+                         t->begunThisFrame ? "LOAD" : "CLEAR",
+                         t->begunThisFrame ? "" : " (first use this frame)");
         vkCmdBeginRenderPass(cmd, &bi, VK_SUBPASS_CONTENTS_INLINE);
         t->begunThisFrame = true;
         inPass = true;
@@ -2119,7 +2137,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         return true;
     };
 
-    for (const PreparedDraw& pd : prepared)
+    for (const PreparedDraw &pd : prepared)
     {
         if (pd.isResolve)
         {
@@ -2128,7 +2146,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // frame the guest clears depth once per tile, and doing it only at
             // the start of the frame leaves the second tile testing against the
             // first tile's depth.
-            auto doDepthClear = [&]() {
+            auto doDepthClear = [&]()
+            {
                 if (!pd.clearsDepth)
                     return;
                 // WHICH depth buffer. There is one per RB_DEPTH_INFO base now,
@@ -2136,7 +2155,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // clear the wrong one -- the shadow atlas's clear wiping the
                 // scene's depth is the same class of bug as the stencil one
                 // this split exists to fix (catalog #91).
-                DepthTarget* cdt = nullptr;
+                DepthTarget *cdt = nullptr;
                 if (!RT.GetDepthTarget(pd.depthTargetBase, cdt) || !cdt)
                     return;
                 cdt->usedThisFrame = true;
@@ -2150,11 +2169,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 b.image = P.depth;
                 b.subresourceRange = dr;
                 vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-                VkClearDepthStencilValue cv{pd.depthClearValue,
-                                            pd.stencilClearValue};
-                vkCmdClearDepthStencilImage(cmd, P.depth,
-                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv, 1, &dr);
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                                     &b);
+                VkClearDepthStencilValue cv{pd.depthClearValue, pd.stencilClearValue};
+                vkCmdClearDepthStencilImage(cmd, P.depth, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &cv,
+                                            1, &dr);
                 VkImageMemoryBarrier r{b};
                 r.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
                 r.dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
@@ -2162,8 +2181,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
                 r.newLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
                 vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                    VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0, 0, nullptr,
-                    0, nullptr, 1, &r);
+                                     VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT, 0, 0, nullptr, 0,
+                                     nullptr, 1, &r);
                 ++depthClearsDone;
             };
             // A DEPTH resolve: sample the host depth image and write the depth
@@ -2175,22 +2194,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // whichever pass ran last: this frame resolves the scene's
                 // depth (base 0x0) and the shadow atlas's (0x5a0), and reading
                 // the wrong one copies out a different pass's picture.
-                DepthTarget* rdt = nullptr;
+                DepthTarget *rdt = nullptr;
                 RT.GetDepthTarget(pd.depthTargetBase, rdt);
                 auto dst = P.resolveTargets.find(pd.resolveDest);
-                if (dst != P.resolveTargets.end() &&
-                    P.resolveDepthPipeline != VK_NULL_HANDLE &&
+                if (dst != P.resolveTargets.end() && P.resolveDepthPipeline != VK_NULL_HANDLE &&
                     dst->second.storageView != VK_NULL_HANDLE &&
                     RT.resolveDepthSetsUsed < RT.resolveDepthSets.size())
                 {
-                    RT.ResolveDepthTo(cmd, dst->second, pd.resolveSrcRect,
-                                   pd.resolveDstX, pd.resolveDstY,
-                                   pd.resolveDepthIsFloat24,
-                                   msaaModel
-                                       ? draw::DeriveResolveSampling(
-                                             pd.surfaceInfo,
-                                             pd.resolveSampleSelect, true)
-                                       : draw::ResolveSampling{});
+                    RT.ResolveDepthTo(cmd, dst->second, pd.resolveSrcRect, pd.resolveDstX,
+                                      pd.resolveDstY, pd.resolveDepthIsFloat24,
+                                      msaaModel ? draw::DeriveResolveSampling(
+                                                      pd.surfaceInfo, pd.resolveSampleSelect, true)
+                                                : draw::ResolveSampling{});
                     depthResolvesFloat24 += pd.resolveDepthIsFloat24 ? 1 : 0;
                     ++depthResolvesDone;
                     // A DEPTH COPY IS A PASS LIKE ANY OTHER, and leaving it out
@@ -2202,9 +2217,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     // destination in SHADER_READ_ONLY_OPTIMAL, the same layout
                     // the colour path's snapshot expects.
                     if (dumpEachResolve &&
-                        !snapshotResolveTarget(dst->second, resolveOrdinal,
-                                               pd.diagIndex, pd.surfaceBase,
-                                               pd.resolveDestFormat))
+                        !snapshotResolveTarget(dst->second, resolveOrdinal, pd.diagIndex,
+                                               pd.surfaceBase, pd.resolveDestFormat))
                         ++resolveSnapshotsFailed;
                     ++resolveOrdinal;
                 }
@@ -2242,11 +2256,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // draw was copied out lifted: catalog #83's wall pixel (640,350)
             // goes to (2.547, 4.031, 11.125) at draw 650 and the resolves at
             // 657 and 659 carried that away before anything restored it.
-            if (reinterpretEnabled &&
-                src->second.storageFormat != UINT32_MAX)
+            if (reinterpretEnabled && src->second.storageFormat != UINT32_MAX)
             {
-                const uint32_t want =
-                    draw::StorageColorFormat(pd.resolveSrcFormat);
+                const uint32_t want = draw::StorageColorFormat(pd.resolveSrcFormat);
                 if (src->second.storageFormat != want)
                 {
                     // A REFUSED CONVERSION MUST NOT RELABEL -- see the same
@@ -2254,25 +2266,20 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     // touched, and a surface that claims a format its contents
                     // are not in makes the NEXT conversion convert from a
                     // format the data was never in.
-                    if (RT.ReinterpretSurface(cmd, src->second,
-                                              src->second.storageFormat, want))
+                    if (RT.ReinterpretSurface(cmd, src->second, src->second.storageFormat, want))
                         src->second.storageFormat = want;
                 }
             }
-            RT.ResolveSurfaceTo(cmd, src->second, dst->second, pd.resolveSrcRect,
-                             pd.resolveDstX, pd.resolveDstY, pd.resolveScale,
-                             pd.resolveSwapRB,
-                             msaaModel
-                                 ? draw::DeriveResolveSampling(
-                                       pd.surfaceInfo,
-                                       pd.resolveSampleSelect, false)
-                                 : draw::ResolveSampling{});
+            RT.ResolveSurfaceTo(cmd, src->second, dst->second, pd.resolveSrcRect, pd.resolveDstX,
+                                pd.resolveDstY, pd.resolveScale, pd.resolveSwapRB,
+                                msaaModel ? draw::DeriveResolveSampling(
+                                                pd.surfaceInfo, pd.resolveSampleSelect, false)
+                                          : draw::ResolveSampling{});
             // Snapshot BEFORE the next resolve can touch this destination. The
             // ordinal advances whether or not the snapshot succeeds, so the
             // numbering keeps matching the oracle's even when one copy fails.
-            if (dumpEachResolve &&
-                !snapshotResolveTarget(dst->second, resolveOrdinal, pd.diagIndex,
-                                       pd.surfaceBase, pd.resolveDestFormat))
+            if (dumpEachResolve && !snapshotResolveTarget(dst->second, resolveOrdinal, pd.diagIndex,
+                                                          pd.surfaceBase, pd.resolveDestFormat))
                 ++resolveSnapshotsFailed;
             ++resolveOrdinal;
             doDepthClear();
@@ -2282,7 +2289,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (onlyDraw >= 0 && long(drawn) == onlyDraw)
             ++onlyDrawMatched;
         if (onlyDraw >= 0 && long(drawn) != onlyDraw)
-        { ++drawn; continue; }
+        {
+            ++drawn;
+            continue;
+        }
         if (PB.CheckpointDue(drawn))
         {
             // THE TARGET MUST BE READ BEFORE endPass(), which nulls it. Taking the
@@ -2293,7 +2303,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // pass is open yet: without it those checkpoints vanished with no line,
             // and they are the ones that say whether a pass's output survived to
             // its resolve.
-            SurfaceTarget* const checkpointTarget = openTarget ? openTarget : lastTarget;
+            SurfaceTarget *const checkpointTarget = openTarget ? openTarget : lastTarget;
             const uint32_t checkpointBase = openTarget ? openSurface : lastSurface;
             endPass();
             PB.Checkpoint(cmd, drawn, checkpointTarget, checkpointBase);
@@ -2302,16 +2312,19 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // the copy cannot happen inside a render pass.
         if (PB.Tracing())
         {
-            SurfaceTarget* t = openTarget ? openTarget : lastTarget;
+            SurfaceTarget *t = openTarget ? openTarget : lastTarget;
             uint32_t base = openTarget ? openSurface : lastSurface;
             // With GEARS_DRAW_SURFACE set, sample THAT surface after every draw
             // rather than only when it is the bound one -- see PinnedSurface().
             if (PB.PinnedSurface() >= 0)
             {
-                SurfaceTarget* pinned = nullptr;
+                SurfaceTarget *pinned = nullptr;
                 const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
                 if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
-                { t = pinned; base = pinnedBase; }
+                {
+                    t = pinned;
+                    base = pinnedBase;
+                }
             }
             endPass();
             PB.TracePixel(cmd, drawn, lastIssuedPrep, t, base);
@@ -2323,20 +2336,21 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // the knob (see gpu_draw_probe.h).
         if (PB.Dumping() && lastIssuedPrep < prepared.size())
         {
-            SurfaceTarget* t = openTarget ? openTarget : lastTarget;
+            SurfaceTarget *t = openTarget ? openTarget : lastTarget;
             uint32_t base = openTarget ? openSurface : lastSurface;
             if (PB.PinnedSurface() >= 0)
             {
-                SurfaceTarget* pinned = nullptr;
+                SurfaceTarget *pinned = nullptr;
                 const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
                 if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
-                { t = pinned; base = pinnedBase; }
+                {
+                    t = pinned;
+                    base = pinnedBase;
+                }
             }
             endPass();
-            PB.DumpSurface(cmd, drawn, lastIssuedPrep,
-                           prepared[lastIssuedPrep].diagIndex, t, base,
-                           prepared[lastIssuedPrep].psHash,
-                           prepared[lastIssuedPrep].colorMask);
+            PB.DumpSurface(cmd, drawn, lastIssuedPrep, prepared[lastIssuedPrep].diagIndex, t, base,
+                           prepared[lastIssuedPrep].psHash, prepared[lastIssuedPrep].colorMask);
         }
         // The DEPTH buffer after a NAMED draw. There is one depth image, so no
         // surface is chosen and GEARS_DRAW_SURFACE does not apply -- what makes
@@ -2344,23 +2358,25 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         if (PB.DumpingDepth() && lastIssuedPrep < prepared.size())
         {
             endPass();
-            PB.DumpDepth(cmd, drawn, lastIssuedPrep,
-                         prepared[lastIssuedPrep].diagIndex, P.depth, depthFormat,
-                         prepared[lastIssuedPrep].psHash,
+            PB.DumpDepth(cmd, drawn, lastIssuedPrep, prepared[lastIssuedPrep].diagIndex, P.depth,
+                         depthFormat, prepared[lastIssuedPrep].psHash,
                          prepared[lastIssuedPrep].colorMask);
         }
         // The render comparer: a thumbnail of the surface after every draw.
         // Same pass-boundary requirement as the other two probes.
         if (PB.Comparing())
         {
-            SurfaceTarget* t = openTarget ? openTarget : lastTarget;
+            SurfaceTarget *t = openTarget ? openTarget : lastTarget;
             uint32_t base = openTarget ? openSurface : lastSurface;
             if (PB.PinnedSurface() >= 0)
             {
-                SurfaceTarget* pinned = nullptr;
+                SurfaceTarget *pinned = nullptr;
                 const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
                 if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
-                { t = pinned; base = pinnedBase; }
+                {
+                    t = pinned;
+                    base = pinnedBase;
+                }
             }
             endPass();
             PB.TraceAll(cmd, drawn, lastIssuedPrep, t, base);
@@ -2397,7 +2413,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // below rather than silently.
         if (reinterpretEnabled)
         {
-            SurfaceTarget* t = nullptr;
+            SurfaceTarget *t = nullptr;
             const uint32_t want = draw::StorageColorFormat(pd.colorFormat);
             if (RT.GetSurfaceTarget(pd.surfaceBase, t) && t && t->begunThisFrame &&
                 t->storageFormat != UINT32_MAX && t->storageFormat != want)
@@ -2423,67 +2439,69 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // by format PAIR, which cannot say WHICH draw met a change or
                 // in what order -- the two questions needed to follow a
                 // surface's interpretation through a pass (catalog #91).
-                lucent::debug("draw", "diag draw {} (ps {:#x}) meets format"
-                    " change {} -> {} on surface {:#x}: mask {:#x} frag {}"
-                    " blend {:#x}", pd.diagIndex, pd.psHash,
-                    draw::ColorFormatName(t->storageFormat),
-                    draw::ColorFormatName(want), pd.surfaceBase,
-                    pd.colorMask & 0xF, pd.hasFragmentStage ? 1 : 0, pd.blend0);
+                lucent::debug("draw",
+                              "diag draw {} (ps {:#x}) meets format"
+                              " change {} -> {} on surface {:#x}: mask {:#x} frag {}"
+                              " blend {:#x}",
+                              pd.diagIndex, pd.psHash, draw::ColorFormatName(t->storageFormat),
+                              draw::ColorFormatName(want), pd.surfaceBase, pd.colorMask & 0xF,
+                              pd.hasFragmentStage ? 1 : 0, pd.blend0);
                 if ((pd.colorMask & 0xF) == 0 || !pd.hasFragmentStage)
                 {
                     ++RT.reinterpretsNoWrite;
                 }
                 else
                 {
-                // A resolve reads the surface by definition. A geometry draw
-                // reads it only when the blend equation is not the identity
-                // (src ONE, dst ZERO) -- the same predicate the pipeline uses
-                // to decide whether to enable blending at all.
-                const bool readsDestination =
-                    pd.isResolve || !draw::BlendIsIdentity(pd.blend0);
-                bool relabel = true;
-                if (readsDestination)
-                {
-                    endPass();
-                    // A REFUSED CONVERSION MUST NOT RELABEL. The bits were not
-                    // touched, so a surface that now claims the new format is
-                    // claiming a format its contents are not in -- and the next
-                    // conversion then converts FROM a format the data was never
-                    // in, which is not a missed improvement but active damage.
-                    //
-                    // Measured on walk_gameplay.gfr: draw 613 meets
-                    // k_8_8_8_8 -> k_16_16, this pass refuses that pair, and the
-                    // surface used to be relabelled k_16_16 anyway; draw 615
-                    // then converted "k_16_16 -> k_2_10_10_10_FLOAT" on data
-                    // that was still 8888. The two copies downstream of it
-                    // (diag 639 and 657) came out at mean 0.0869 where the
-                    // console has 0.1760, and at 0.1804 with the whole pass
-                    // switched off -- so the conversion chain, not the idea of
-                    // converting, was what moved them (catalog #95).
-                    relabel = RT.ReinterpretSurface(cmd, *t, t->storageFormat, want);
-                }
-                else
-                {
-                    ++RT.reinterpretsNotRead;
-                    RT.reinterpretNotReadPairs.insert(
-                        (uint64_t(t->storageFormat) << 32) | want);
-                }
-                // A converted surface holds the new interpretation, and an
-                // unconverted one that is about to be overwritten by a draw
-                // writing in `want` will hold it shortly. A REFUSED one holds
-                // neither, and keeps the format its bits are in.
-                if (relabel)
-                    t->storageFormat = want;
+                    // A resolve reads the surface by definition. A geometry draw
+                    // reads it only when the blend equation is not the identity
+                    // (src ONE, dst ZERO) -- the same predicate the pipeline uses
+                    // to decide whether to enable blending at all.
+                    const bool readsDestination = pd.isResolve || !draw::BlendIsIdentity(pd.blend0);
+                    bool relabel = true;
+                    if (readsDestination)
+                    {
+                        endPass();
+                        // A REFUSED CONVERSION MUST NOT RELABEL. The bits were not
+                        // touched, so a surface that now claims the new format is
+                        // claiming a format its contents are not in -- and the next
+                        // conversion then converts FROM a format the data was never
+                        // in, which is not a missed improvement but active damage.
+                        //
+                        // Measured on walk_gameplay.gfr: draw 613 meets
+                        // k_8_8_8_8 -> k_16_16, this pass refuses that pair, and the
+                        // surface used to be relabelled k_16_16 anyway; draw 615
+                        // then converted "k_16_16 -> k_2_10_10_10_FLOAT" on data
+                        // that was still 8888. The two copies downstream of it
+                        // (diag 639 and 657) came out at mean 0.0869 where the
+                        // console has 0.1760, and at 0.1804 with the whole pass
+                        // switched off -- so the conversion chain, not the idea of
+                        // converting, was what moved them (catalog #95).
+                        relabel = RT.ReinterpretSurface(cmd, *t, t->storageFormat, want);
+                    }
+                    else
+                    {
+                        ++RT.reinterpretsNotRead;
+                        RT.reinterpretNotReadPairs.insert((uint64_t(t->storageFormat) << 32) |
+                                                          want);
+                    }
+                    // A converted surface holds the new interpretation, and an
+                    // unconverted one that is about to be overwritten by a draw
+                    // writing in `want` will hold it shortly. A REFUSED one holds
+                    // neither, and keeps the format its bits are in.
+                    if (relabel)
+                        t->storageFormat = want;
                 }
             }
         }
         // Open a pass if there is none, or re-open on a different surface OR a
         // different depth base -- both are attachments of the framebuffer.
-        if (!inPass || openSurface != pd.surfaceBase ||
-            openDepthBase != pd.depthTargetBase)
+        if (!inPass || openSurface != pd.surfaceBase || openDepthBase != pd.depthTargetBase)
         {
             if (inPass)
-            { endPass(); ++surfaceSwitches; }
+            {
+                endPass();
+                ++surfaceSwitches;
+            }
             if (!beginPassOn(pd.surfaceBase, pd.depthTargetBase))
                 continue;
         }
@@ -2493,8 +2511,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         vkCmdSetViewport(cmd, 0, 1, &pd.viewport);
         vkCmdSetScissor(cmd, 0, 1, &pd.scissor);
         vkCmdSetDepthBias(cmd, pd.depthBiasConstant, 0.0f, pd.depthBiasSlope);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pd.layout, 0,
-            4, pd.sets, 0, nullptr);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pd.layout, 0, 4, pd.sets, 0,
+                                nullptr);
         DS.Begin(cmd, drawn);
         if (pd.indexed)
         {
@@ -2524,15 +2542,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // copy by 0.02 where the aliasing is worth 0.25.
         if (reinterpretEnabled && !noAlias && pd.depthBase == pd.surfaceBase)
         {
-            draw::SurfaceTarget* at = nullptr;
-            if (RT.GetSurfaceTarget(pd.surfaceBase, at) && at &&
-                at->begunThisFrame)
+            draw::SurfaceTarget *at = nullptr;
+            if (RT.GetSurfaceTarget(pd.surfaceBase, at) && at && at->begunThisFrame)
             {
                 endPass();
                 {
                     // Same rule as the depth resolve: alias the depth buffer
                     // this draw actually rendered against.
-                    DepthTarget* adt = nullptr;
+                    DepthTarget *adt = nullptr;
                     RT.GetDepthTarget(pd.depthTargetBase, adt);
                 }
                 RT.AliasDepthIntoSurface(cmd, *at, pd.resolveDepthIsFloat24);
@@ -2547,29 +2564,29 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // draw. DumpSurface ignores a diag index it has already taken.
     if (PB.Dumping() && lastIssuedPrep < prepared.size())
     {
-        SurfaceTarget* t = openTarget ? openTarget : lastTarget;
+        SurfaceTarget *t = openTarget ? openTarget : lastTarget;
         uint32_t base = openTarget ? openSurface : lastSurface;
         if (PB.PinnedSurface() >= 0)
         {
-            SurfaceTarget* pinned = nullptr;
+            SurfaceTarget *pinned = nullptr;
             const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
             if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
-            { t = pinned; base = pinnedBase; }
+            {
+                t = pinned;
+                base = pinnedBase;
+            }
         }
         endPass();
-        PB.DumpSurface(cmd, drawn, lastIssuedPrep,
-                       prepared[lastIssuedPrep].diagIndex, t, base,
-                       prepared[lastIssuedPrep].psHash,
-                       prepared[lastIssuedPrep].colorMask);
+        PB.DumpSurface(cmd, drawn, lastIssuedPrep, prepared[lastIssuedPrep].diagIndex, t, base,
+                       prepared[lastIssuedPrep].psHash, prepared[lastIssuedPrep].colorMask);
     }
     // The last draw's depth, for the same reason: aimed at the final draw, the
     // in-loop site never comes round again.
     if (PB.DumpingDepth() && lastIssuedPrep < prepared.size())
     {
         endPass();
-        PB.DumpDepth(cmd, drawn, lastIssuedPrep,
-                     prepared[lastIssuedPrep].diagIndex, P.depth, depthFormat,
-                     prepared[lastIssuedPrep].psHash,
+        PB.DumpDepth(cmd, drawn, lastIssuedPrep, prepared[lastIssuedPrep].diagIndex, P.depth,
+                     depthFormat, prepared[lastIssuedPrep].psHash,
                      prepared[lastIssuedPrep].colorMask);
     }
     endPass();
@@ -2593,7 +2610,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // "swizzle XYZW" and "we never recorded a constant" would otherwise read
     // identically, and only one of them is evidence.
     {
-        const uint32_t* fb = in.frontBufferFetch;
+        const uint32_t *fb = in.frontBufferFetch;
         const bool haveFetch = (fb[0] | fb[1] | fb[2] | fb[3] | fb[4] | fb[5]) != 0;
         // First frame, and every CHANGE after it. A per-frame line would bury a
         // change in six thousand identical ones, and a first-frame-only line
@@ -2601,8 +2618,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // gameplay uses a different one -- which is the whole question here.
         static uint32_t reportedKey = 0;
         static bool reportedOnce = false;
-        const uint32_t key = fb[0] ^ fb[1] ^ fb[2] ^ fb[3] ^ fb[4] ^ fb[5]
-            ^ in.frontBufferAddress;
+        const uint32_t key = fb[0] ^ fb[1] ^ fb[2] ^ fb[3] ^ fb[4] ^ fb[5] ^ in.frontBufferAddress;
         const bool report = !reportedOnce || key != reportedKey;
         reportedOnce = true;
         reportedKey = key;
@@ -2613,14 +2629,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         else if (!haveFetch)
         {
             lucent::info("draw", "front-buffer fetch constant: NONE -- all six"
-                " dwords are zero. This frame says NOTHING about the scanout"
-                " format or swizzle; it does not say the swizzle is identity."
-                " (A capture older than frame_capture version 3, or a swap"
-                " packet written before VdSwap carried the constant.)");
+                                 " dwords are zero. This frame says NOTHING about the scanout"
+                                 " format or swizzle; it does not say the swizzle is identity."
+                                 " (A capture older than frame_capture version 3, or a swap"
+                                 " packet written before VdSwap carried the constant.)");
         }
         else
         {
-            static const char* kSwz[8] = {"X", "Y", "Z", "W", "0", "1", "?6", "?7"};
+            static const char *kSwz[8] = {"X", "Y", "Z", "W", "0", "1", "?6", "?7"};
             const uint32_t swizzle = (fb[3] >> 1) & 0xFFFu;
             char swz[5] = {0};
             for (int i = 0; i < 4; ++i)
@@ -2632,23 +2648,24 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             const uint32_t pitch = ((fb[0] >> 22) & 0x1FFu) * 32u;
             const uint32_t w = (fb[2] & 0x1FFFu) + 1u;
             const uint32_t h = ((fb[2] >> 13) & 0x1FFFu) + 1u;
-            lucent::info("draw", "front-buffer fetch constant: base {:#x} {}x{}"
-                " fmt {} endian {} tiled {} pitch {} SWIZZLE {} ({:#05x});"
-                " the guest's address for this frame is {:#x}",
-                base, w, h, fmt, endian, tiled, pitch, swz, swizzle,
-                in.frontBufferAddress);
+            lucent::info("draw",
+                         "front-buffer fetch constant: base {:#x} {}x{}"
+                         " fmt {} endian {} tiled {} pitch {} SWIZZLE {} ({:#05x});"
+                         " the guest's address for this frame is {:#x}",
+                         base, w, h, fmt, endian, tiled, pitch, swz, swizzle,
+                         in.frontBufferAddress);
             // The one line that matters for catalog #62. Say both readings out
             // loud, because "ZYXW" is only meaningful next to what it implies.
             if (swz[0] == 'Z' && swz[1] == 'Y' && swz[2] == 'X')
                 lucent::info("draw", "  -> scanout reads the front buffer with"
-                    " RED AND BLUE EXCHANGED. A resolve that also swaps cancels"
-                    " against this, and the image a person sees is the resolve"
-                    " SOURCE, not the destination.");
+                                     " RED AND BLUE EXCHANGED. A resolve that also swaps cancels"
+                                     " against this, and the image a person sees is the resolve"
+                                     " SOURCE, not the destination.");
             else if (swz[0] == 'X' && swz[1] == 'Y' && swz[2] == 'Z')
                 lucent::info("draw", "  -> scanout reads the front buffer"
-                    " STRAIGHT. Nothing cancels a resolve swap, so the image a"
-                    " person sees is the resolve DESTINATION -- the front"
-                    " buffer's own bytes.");
+                                     " STRAIGHT. Nothing cancels a resolve swap, so the image a"
+                                     " person sees is the resolve DESTINATION -- the front"
+                                     " buffer's own bytes.");
         }
     }
 
@@ -2659,7 +2676,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     if (in.frontBufferAddress != 0)
     {
         const uint32_t front = in.frontBufferAddress & 0x1FFFFFFFu; // drop the alias
-        for (const auto& pd : prepared)
+        for (const auto &pd : prepared)
         {
             if (!pd.isResolve || pd.resolveDest == 0)
                 continue;
@@ -2670,9 +2687,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             break;
         }
         if (!havePresent)
-            lucent::debug("draw", "front buffer {:#x} names no resolve destination in"
-                " this frame; falling back to the last-geometry-draw rule",
-                in.frontBufferAddress);
+            lucent::debug("draw",
+                          "front buffer {:#x} names no resolve destination in"
+                          " this frame; falling back to the last-geometry-draw rule",
+                          in.frontBufferAddress);
     }
     // The old rule is still computed, and DISAGREEMENT IS REPORTED. If it ever
     // differs from what the guest named, that frame is one the renderer would have
@@ -2690,10 +2708,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         break;
     }
     if (havePresent && ruleBase != 0 && ruleBase != presentBase)
-        lucent::warn("draw", "the guest's front buffer names surface {:#x} but the"
-            " last-geometry-draw rule would have picked {:#x} -- presenting the"
-            " guest's. Before this frame the rule decided, and on frames like it the"
-            " window showed the wrong buffer", presentBase, ruleBase);
+        lucent::warn("draw",
+                     "the guest's front buffer names surface {:#x} but the"
+                     " last-geometry-draw rule would have picked {:#x} -- presenting the"
+                     " guest's. Before this frame the rule decided, and on frames like it the"
+                     " window showed the wrong buffer",
+                     presentBase, ruleBase);
     for (auto it = prepared.rbegin(); !havePresent && it != prepared.rend(); ++it)
     {
         if (it->isResolve)
@@ -2706,6 +2726,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // presenter when the device is shared, so it can blit rather than receive the
     // pixels through host memory.
     VkImage presentableImage = VK_NULL_HANDLE;
+    bool gpuScanoutGammaApplied = false;
+    GpuScanoutResult scanoutResult;
 
     // WHETHER THE PIXELS ARE STILL NEEDED ON THE HOST. Since the presenter blits the
     // published image directly, the readback only serves this frame's own diagnostics
@@ -2715,7 +2737,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // would present nothing at all, so the condition is deliberately generous.
     const bool needHostPixels = in.report || ownsDevice;
 
-    SurfaceTarget* presentTarget = nullptr;
+    SurfaceTarget *presentTarget = nullptr;
     if (havePresent)
     {
         auto it = P.surfaceTargets.find(presentBase);
@@ -2732,97 +2754,24 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // base' and 'a target that never began this frame' have different
         // causes.
         if (!presentTarget)
-            lucent::warn("draw", "PRESENTING NOTHING NEW: surface {:#x} {} --"
-                " the published image and the screenshot therefore still hold"
-                " the PREVIOUS frame's pixels, and every other line about this"
-                " frame describes pixels nobody saw", presentBase,
-                it == P.surfaceTargets.end()
-                    ? "has no render target at all"
-                    : "has a render target that was never begun this frame");
+            lucent::warn("draw",
+                         "PRESENTING NOTHING NEW: surface {:#x} {} --"
+                         " the published image and the screenshot therefore still hold"
+                         " the PREVIOUS frame's pixels, and every other line about this"
+                         " frame describes pixels nobody saw",
+                         presentBase,
+                         it == P.surfaceTargets.end()
+                             ? "has no render target at all"
+                             : "has a render target that was never begun this frame");
     }
 
-    // WHY THE SOURCE SURFACE AND NOT THE FRONT BUFFER -- TESTED, NOT ASSUMED.
-    //
-    // The guest scans out the resolve DESTINATION, and the resolve is not a plain
-    // copy: RB_COPY_DEST_INFO carries a red/blue swap, which this frame sets. So
-    // "present what the guest scans out" looks like the obviously correct rule, and
-    // on a gameplay frame it turns the cold blue-grey image into a warm sepia one
-    // that matches how Gears of War is usually described.
-    //
-    // IT IS WRONG, and the thing that settles it is the boot movie. On that frame
-    // the source surface holds the Epic Games logo in its correct orange, and the
-    // front buffer holds it in blue. The guest writes swapped bytes BECAUSE the
-    // scanout format reads them back swapped; the two cancel, and the image a
-    // person sees is the source surface. Presenting the destination would invert
-    // every frame in the game.
-    //
-    // This also explains the red/blue swap that was shipped and reverted earlier
-    // (catalog #62): there is nothing to compensate anywhere, and every "fix" that
-    // swaps channels somewhere is undoing a swap that was never wrong. Checked
-    // against real footage too -- an in-engine reference frame has red as its
-    // lowest channel, as this path produces and the swapped version does not.
     if (presentTarget)
     {
-        // Readback is 8-bit RGBA. A presented surface in any other host format
-        // (an HDR one, if a frame ever ends on it) goes through a blit into an
-        // 8888 staging image rather than being reinterpreted, which would read
-        // the float bits as bytes.
-        VkImage source = presentTarget->color;
-        // ALWAYS through the staging image, not only when the format differs. The
-        // presenter runs on its own thread now: handing it presentTarget->color
-        // means it can be blitting the surface while the renderer draws the NEXT
-        // frame into it. The blit below is one 1280x720 copy into this frame's half
-        // of an alternating pair, so what the presenter shows is finished and stays
-        // finished until two frames later.
-        if (presentStage != VK_NULL_HANDLE)
-        {
-            VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-            VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-            b.srcAccessMask = 0; b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            b.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-            b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            b.image = presentStage; b.subresourceRange = range;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &b);
-            VkImageBlit bl{};
-            bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            // THE SOURCE IS W x H AND THAT IS CORRECT -- TESTED, NOT ASSUMED.
-            // The surface image is allocated SW x SH (1280x1440 on a frame with
-            // 2X vertical MSAA), so reading {W, H} looks like it takes half the
-            // sample rows, and catalog #86 predicted exactly that. IT IS WRONG.
-            // Changing this to {SW, SH} and measuring the presented frame put
-            // the lit content in rows 0..358 of 720 instead of 0..718: the
-            // scene's pixels occupy the TOP 720 ROWS of the 1440-row
-            // allocation, not all of it, so scaling the full grid down halves
-            // the image. The allocation is sized to hold the samples; the
-            // resolved content is not spread across them.
-            bl.srcOffsets[1] = {int32_t(W), int32_t(H), 1};
-            bl.dstOffsets[1] = {int32_t(W), int32_t(H), 1};
-            vkCmdBlitImage(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                presentStage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl,
-                VK_FILTER_NEAREST);
-            VkImageMemoryBarrier r = b;
-            r.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-            r.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-            r.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-            r.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &r);
-            source = presentStage;
-        }
-        // Published to the presenter: the staging copy when there is one, and only
-        // otherwise the live surface.
-        presentableImage = source;
-        if (needHostPixels)
-        {
-            VkBufferImageCopy region{};
-            region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            region.imageExtent = {W, H, 1};
-            vkCmdCopyImageToBuffer(cmd, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                readback, 1, &region);
-        }
+        if (!P.scanout.Record(*this, cmd, presentTarget->color, W, H, in.gammaRamp, readback,
+                              needHostPixels, scanoutResult))
+            return false;
+        presentableImage = scanoutResult.image;
+        gpuScanoutGammaApplied = scanoutResult.gammaApplied;
     }
     // GEARS_DRAW_RESOLVE_DUMP=1: copy every resolve target out so it can be
     // written to a PPM after the frame. These images are what the guest's post
@@ -2835,13 +2784,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // indistinguishable from "the resolve wrote nothing".
     if (lucent::config::flag("DRAW_RESOLVE_DUMP"))
     {
-        for (auto& [k, r] : P.resolveTargets)
+        for (auto &[k, r] : P.resolveTargets)
         {
             if (!r.everWritten || r.width == 0 || r.imageHeight == 0)
                 continue;
             const uint32_t bpp = r.isDepth ? 4u : 8u;
             const VkDeviceSize bytes = VkDeviceSize(r.width) * r.imageHeight * bpp;
-            VkBuffer b = VK_NULL_HANDLE; VkDeviceMemory m = VK_NULL_HANDLE;
+            VkBuffer b = VK_NULL_HANDLE;
+            VkDeviceMemory m = VK_NULL_HANDLE;
             if (!MakeBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m, true))
                 continue;
             VkImageMemoryBarrier tb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -2853,23 +2803,21 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             tb.image = r.image;
             tb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &tb);
+                                 VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &tb);
             VkBufferImageCopy rg{};
             rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             rg.imageExtent = {r.width, r.imageHeight, 1};
-            vkCmdCopyImageToBuffer(cmd, r.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                b, 1, &rg);
+            vkCmdCopyImageToBuffer(cmd, r.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b, 1, &rg);
             VkImageMemoryBarrier rb2 = tb;
             rb2.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
             rb2.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
             rb2.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
             rb2.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
             vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb2);
-            resolveDumps.push_back({r.base, r.width, r.imageHeight,
-                                    r.sourceBase, r.pitch, r.height,
-                                    r.guestFormat, r.isDepth, b, m,
-                                    UINT32_MAX, 0});
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
+                                 1, &rb2);
+            resolveDumps.push_back({r.base, r.width, r.imageHeight, r.sourceBase, r.pitch, r.height,
+                                    r.guestFormat, r.isDepth, b, m, UINT32_MAX, 0});
         }
     }
 
@@ -2885,39 +2833,49 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Reports per channel, and counts the pixels ABOVE 1.0 -- an HDR surface
     // that never exceeds 1.0 is the specific thing worth noticing, and a max
     // alone can be a single stray pixel.
-    struct SurfDump { uint32_t base; VkFormat fmt; VkBuffer buf; VkDeviceMemory mem; };
+    struct SurfDump
+    {
+        uint32_t base;
+        VkFormat fmt;
+        VkBuffer buf;
+        VkDeviceMemory mem;
+    };
     std::vector<SurfDump> surfDumps;
     if (lucent::config::flag("DRAW_SURFACE_RANGE"))
     {
-        for (auto& [base, st] : P.surfaceTargets)
+        for (auto &[base, st] : P.surfaceTargets)
         {
             uint32_t bpp = 0;
-            if (st.hostFormat == VK_FORMAT_R8G8B8A8_UNORM) bpp = 4;
-            else if (st.hostFormat == VK_FORMAT_R16G16B16A16_SFLOAT) bpp = 8;
+            if (st.hostFormat == VK_FORMAT_R8G8B8A8_UNORM)
+                bpp = 4;
+            else if (st.hostFormat == VK_FORMAT_R16G16B16A16_SFLOAT)
+                bpp = 8;
             if (bpp == 0)
             {
                 // REFUSED, not guessed. Reading these bytes as a format they are
                 // not is how the resolve dump once reported 0.000 for every
                 // depth target, which looks exactly like "nothing was written".
-                lucent::warn("draw", "GEARS_DRAW_SURFACE_RANGE: surface {:#x} is"
-                    " host format {} which this probe cannot decode, so NO range"
-                    " is reported for it", base, uint32_t(st.hostFormat));
+                lucent::warn("draw",
+                             "GEARS_DRAW_SURFACE_RANGE: surface {:#x} is"
+                             " host format {} which this probe cannot decode, so NO range"
+                             " is reported for it",
+                             base, uint32_t(st.hostFormat));
                 continue;
             }
             const VkDeviceSize bytes = VkDeviceSize(W) * H * bpp;
-            VkBuffer b = VK_NULL_HANDLE; VkDeviceMemory m = VK_NULL_HANDLE;
+            VkBuffer b = VK_NULL_HANDLE;
+            VkDeviceMemory m = VK_NULL_HANDLE;
             if (!MakeBuffer(bytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, b, m, true))
                 continue;
             VkBufferImageCopy rg{};
             rg.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
             rg.imageExtent = {W, H, 1};
-            vkCmdCopyImageToBuffer(cmd, st.color,
-                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b, 1, &rg);
+            vkCmdCopyImageToBuffer(cmd, st.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b, 1, &rg);
             surfDumps.push_back({base, st.hostFormat, b, m});
         }
         if (surfDumps.empty())
             lucent::warn("draw", "GEARS_DRAW_SURFACE_RANGE: no surface could be"
-                " read back, so this run says NOTHING about any surface's range");
+                                 " read back, so this run says NOTHING about any surface's range");
     }
 
     VK_CHECK(vkEndCommandBuffer(cmd));
@@ -2925,12 +2883,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     AR.EndFrame();
     msDrawLoop = sinceStartMs() - msSetup;
     const auto tSubmit = Clock::now();
-    VkFence& fence = P.fence;
+    VkFence &fence = P.fence;
     if (fence == VK_NULL_HANDLE)
-    { VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-      VK_CHECK(vkCreateFence(device, &fi, nullptr, &fence)); }
+    {
+        VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        VK_CHECK(vkCreateFence(device, &fi, nullptr, &fence));
+    }
     else
-    { VK_CHECK(vkResetFences(device, 1, &fence)); }
+    {
+        VK_CHECK(vkResetFences(device, 1, &fence));
+    }
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
@@ -2938,11 +2900,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     VK_CHECK(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
     accumulate(msSubmit, tSubmit);
 
-    for (const SurfDump& sd : surfDumps)
+    for (const SurfDump &sd : surfDumps)
     {
         const uint32_t bpp = sd.fmt == VK_FORMAT_R8G8B8A8_UNORM ? 4u : 8u;
         const VkDeviceSize bytes = VkDeviceSize(W) * H * bpp;
-        void* mapped = nullptr;
+        void *mapped = nullptr;
         if (vkMapMemory(device, sd.mem, 0, bytes, 0, &mapped) == VK_SUCCESS)
         {
             float lo[4] = {1e30f, 1e30f, 1e30f, 1e30f};
@@ -2961,60 +2923,72 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 float v[4];
                 if (bpp == 4)
                 {
-                    const uint8_t* p8 = static_cast<const uint8_t*>(mapped) + i * 4;
-                    for (int c = 0; c < 4; ++c) v[c] = p8[c] / 255.0f;
+                    const uint8_t *p8 = static_cast<const uint8_t *>(mapped) + i * 4;
+                    for (int c = 0; c < 4; ++c)
+                        v[c] = p8[c] / 255.0f;
                 }
                 else
                 {
-                    const uint16_t* p16 =
-                        static_cast<const uint16_t*>(mapped) + i * 4;
-                    for (int c = 0; c < 4; ++c) v[c] = HalfToFloat(p16[c]);
+                    const uint16_t *p16 = static_cast<const uint16_t *>(mapped) + i * 4;
+                    for (int c = 0; c < 4; ++c)
+                        v[c] = HalfToFloat(p16[c]);
                 }
                 bool over = false;
                 for (int c = 0; c < 4; ++c)
                 {
-                    if (v[c] < lo[c]) lo[c] = v[c];
-                    if (v[c] > hi[c]) hi[c] = v[c];
+                    if (v[c] < lo[c])
+                        lo[c] = v[c];
+                    if (v[c] > hi[c])
+                        hi[c] = v[c];
                     sum[c] += v[c];
-                    if (c < 3 && v[c] > 1.0f) over = true;
+                    if (c < 3 && v[c] > 1.0f)
+                        over = true;
                 }
-                if (over) ++above1;
+                if (over)
+                    ++above1;
                 const float lum = std::max(std::max(v[0], v[1]), v[2]);
-                if (lum > brightestVal) { brightestVal = lum; brightest = i; }
+                if (lum > brightestVal)
+                {
+                    brightestVal = lum;
+                    brightest = i;
+                }
             }
             vkUnmapMemory(device, sd.mem);
-            lucent::info("draw", "surface {:#x} range: R {:.4f}..{:.4f} G"
-                " {:.4f}..{:.4f} B {:.4f}..{:.4f} | means R {:.4f} G {:.4f} B"
-                " {:.4f} | {} of {} px have a colour channel ABOVE 1.0 ({:.2f}%)",
-                sd.base, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2],
-                sum[0] / double(px), sum[1] / double(px), sum[2] / double(px),
-                above1, px, 100.0 * double(above1) / double(px));
-            lucent::info("draw", "  surface {:#x} brightest pixel is ({},{}) at"
-                " {:.4f} -- GEARS_DRAW_PIXEL_TRACE={},{} follows it",
-                sd.base, uint32_t(brightest % W), uint32_t(brightest / W),
-                brightestVal, uint32_t(brightest % W), uint32_t(brightest / W));
+            lucent::info("draw",
+                         "surface {:#x} range: R {:.4f}..{:.4f} G"
+                         " {:.4f}..{:.4f} B {:.4f}..{:.4f} | means R {:.4f} G {:.4f} B"
+                         " {:.4f} | {} of {} px have a colour channel ABOVE 1.0 ({:.2f}%)",
+                         sd.base, lo[0], hi[0], lo[1], hi[1], lo[2], hi[2], sum[0] / double(px),
+                         sum[1] / double(px), sum[2] / double(px), above1, px,
+                         100.0 * double(above1) / double(px));
+            lucent::info("draw",
+                         "  surface {:#x} brightest pixel is ({},{}) at"
+                         " {:.4f} -- GEARS_DRAW_PIXEL_TRACE={},{} follows it",
+                         sd.base, uint32_t(brightest % W), uint32_t(brightest / W), brightestVal,
+                         uint32_t(brightest % W), uint32_t(brightest / W));
         }
         vkDestroyBuffer(device, sd.buf, nullptr);
         vkFreeMemory(device, sd.mem, nullptr);
     }
 
-    for (const ResolveDump& rd : resolveDumps)
+    for (const ResolveDump &rd : resolveDumps)
     {
-        void* mapped = nullptr;
+        void *mapped = nullptr;
         const VkDeviceSize bytes = VkDeviceSize(rd.w) * rd.h * (rd.isDepth ? 4 : 8);
         if (vkMapMemory(device, rd.mem, 0, bytes, 0, &mapped) == VK_SUCCESS)
         {
-            const std::string& dirStr = lucent::config::text("DRAW_DIR");
+            const std::string &dirStr = lucent::config::text("DRAW_DIR");
             const std::filesystem::path dumpDir = dirStr.empty()
-                ? std::filesystem::path("scratch/screenshots")
-                : std::filesystem::path(dirStr);
-            const auto dumpStem = [&]() {
+                                                      ? std::filesystem::path("scratch/screenshots")
+                                                      : std::filesystem::path(dirStr);
+            const auto dumpStem = [&]()
+            {
                 return rd.ordinal == UINT32_MAX
-                    ? std::format("resolve_{:08x}", rd.base)
-                    : std::format("resolve_{:02}_src{}{:03X}_{}x{}_f{}_{:08x}_draw{}",
-                                  rd.ordinal, rd.isDepth ? 'D' : 'C',
-                                  rd.sourceBase, rd.destPitch, rd.destHeight,
-                                  rd.guestFormat, rd.base, rd.drawIndex);
+                           ? std::format("resolve_{:08x}", rd.base)
+                           : std::format("resolve_{:02}_src{}{:03X}_{}x{}_f{}_{:08x}_draw{}",
+                                         rd.ordinal, rd.isDepth ? 'D' : 'C', rd.sourceBase,
+                                         rd.destPitch, rd.destHeight, rd.guestFormat, rd.base,
+                                         rd.drawIndex);
             };
             // This raw file is exactly the mapped VkImage copy: little-endian
             // Raw colour is RGBA16F; its geometry and draw are in the stem.
@@ -3024,13 +2998,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 std::ofstream out;
                 if (EnsureParentDirectory(raw))
                     out.open(raw, std::ios::binary | std::ios::trunc);
-                if (!out || !out.write(static_cast<const char*>(mapped), bytes))
-                    lucent::warn("draw", "resolve target {:#x}: FAILED to write"
-                        " raw RGBA16F dump {}; the PPM remains available, but"
-                        " HDR values were NOT captured", rd.base, raw.string());
+                if (!out || !out.write(static_cast<const char *>(mapped), bytes))
+                    lucent::warn("draw",
+                                 "resolve target {:#x}: FAILED to write"
+                                 " raw RGBA16F dump {}; the PPM remains available, but"
+                                 " HDR values were NOT captured",
+                                 rd.base, raw.string());
                 else
-                    lucent::info("draw", "resolve target {:#x}: raw RGBA16F"
-                        " dump {} ({} bytes, unclamped)", rd.base, raw.string(), bytes);
+                    lucent::info("draw",
+                                 "resolve target {:#x}: raw RGBA16F"
+                                 " dump {} ({} bytes, unclamped)",
+                                 rd.base, raw.string(), bytes);
             }
             // R16G16B16A16_SFLOAT -> 8-bit, clamped. An HDR target holds values
             // well above 1, so the clamp is honest saturation, not a tonemap.
@@ -3061,14 +3039,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 // R32_SFLOAT depth, written as greyscale. Reverse-Z puts the
                 // near plane at 1.0, so a correct depth buffer reads BRIGHT
                 // where geometry is close.
-                const float* src = static_cast<const float*>(mapped);
+                const float *src = static_cast<const float *>(mapped);
                 for (size_t i = 0; i < size_t(rd.w) * rd.h; ++i)
                 {
                     const float v = src[i];
                     maxSeen = std::max(maxSeen, double(v));
                     minSeen = std::min(minSeen, double(v));
                     ++samples;
-                    if (v != 0.0f) ++nonZero;
+                    if (v != 0.0f)
+                        ++nonZero;
                     const uint8_t g = uint8_t(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f);
                     rgba[i * 4 + 0] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = g;
                     rgba[i * 4 + 3] = 255;
@@ -3076,7 +3055,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             }
             else
             {
-                const uint16_t* src = static_cast<const uint16_t*>(mapped);
+                const uint16_t *src = static_cast<const uint16_t *>(mapped);
                 for (size_t i = 0; i < size_t(rd.w) * rd.h; ++i)
                     for (int c = 0; c < 4; ++c)
                     {
@@ -3086,7 +3065,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                             maxSeen = std::max(maxSeen, double(v));
                             minSeen = std::min(minSeen, double(v));
                             ++samples;
-                            if (v != 0.0f) ++nonZero;
+                            if (v != 0.0f)
+                                ++nonZero;
                             // NaN would silently poison a sum and print as
                             // -nan, which says nothing about how many samples
                             // were bad. Counted per channel instead.
@@ -3114,16 +3094,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             {
                 const double lo = samples ? minSeen : 0.0;
                 const double hi = samples ? maxSeen : 0.0;
-                lucent::info("draw", "resolve target {:#x} ({}x{}) dumped to {}"
-                    " (range {:.6f} .. {:.6f}, {} of {} components non-zero"
-                    " [{:.1f}%]){}", rd.base, rd.w, rd.h, out.string(), lo, hi,
-                    nonZero, samples,
-                    samples ? 100.0 * double(nonZero) / double(samples) : 0.0,
-                    nonZero != 0 && hi <= 1.0 / 255.0 && lo >= -1.0 / 255.0
-                        ? " -- NOT EMPTY: every value is below one 8-bit step, so"
-                          " the PPM is black and tells you nothing. This is what a"
-                          " velocity or similar sub-unit buffer looks like"
-                        : "");
+                lucent::info("draw",
+                             "resolve target {:#x} ({}x{}) dumped to {}"
+                             " (range {:.6f} .. {:.6f}, {} of {} components non-zero"
+                             " [{:.1f}%]){}",
+                             rd.base, rd.w, rd.h, out.string(), lo, hi, nonZero, samples,
+                             samples ? 100.0 * double(nonZero) / double(samples) : 0.0,
+                             nonZero != 0 && hi <= 1.0 / 255.0 && lo >= -1.0 / 255.0
+                                 ? " -- NOT EMPTY: every value is below one 8-bit step, so"
+                                   " the PPM is black and tells you nothing. This is what a"
+                                   " velocity or similar sub-unit buffer looks like"
+                                 : "");
                 // The per-channel means, and the ratio catalog #62 is about.
                 // A depth target has no channels to compare, and a target whose
                 // green mean is zero has no ratio at all -- both say so rather
@@ -3146,8 +3127,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     const uint64_t perChan = samples / 3;
                     for (int c = 0; c < 3; ++c)
                         if (chanCount[c] != perChan)
-                            cl.add("; channel {} had {} NaN samples of {}",
-                                   c, perChan - chanCount[c], perChan);
+                            cl.add("; channel {} had {} NaN samples of {}", c,
+                                   perChan - chanCount[c], perChan);
                     cl.flush(lucent::Level::Info, "draw");
                 }
             }
@@ -3162,16 +3143,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // being read as a fact about the frame.
     if (dumpEachResolve)
     {
-        const size_t taken = std::count_if(resolveDumps.begin(), resolveDumps.end(),
-            [](const ResolveDump& d) { return d.ordinal != UINT32_MAX; });
+        const size_t taken =
+            std::count_if(resolveDumps.begin(), resolveDumps.end(),
+                          [](const ResolveDump &d) { return d.ordinal != UINT32_MAX; });
         lucent::Line rl;
         rl.add("per-resolve snapshots: {} captured, of {} resolves this renderer"
-               " EXECUTED and {} copy draws the frame CONTAINS", taken,
-               resolveOrdinal, resolves.size());
+               " EXECUTED and {} copy draws the frame CONTAINS",
+               taken, resolveOrdinal, resolves.size());
         if (resolveSnapshotsFailed)
             rl.add("; {} FAILED to allocate a readback buffer and are MISSING"
                    " from the output -- a gap is that, not a resolve that wrote"
-                   " nothing", resolveSnapshotsFailed);
+                   " nothing",
+                   resolveSnapshotsFailed);
         if (resolveSnapshotsUnwritten)
             rl.add("; {} destination(s) were never written by their dispatch"
                    " (degenerate rectangle or an offset past the image) and are"
@@ -3196,8 +3179,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         rl.flush(lucent::Level::Info, "draw");
         if (resolveOrdinal == 0)
             lucent::warn("draw", "GEARS_DRAW_RESOLVE_DUMP_EACH is on but this"
-                " frame executed NO resolves, so nothing was captured and this"
-                " run says nothing about any resolve");
+                                 " frame executed NO resolves, so nothing was captured and this"
+                                 " run says nothing about any resolve");
     }
 
     // GEARS_DRAW_STREAM=<path>: ONE LINE PER FRAME describing WHAT THE GUEST
@@ -3218,16 +3201,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // The Xenia fork emits the identical format at its own swap, and
     // tools/draw_stream_compare.py reads both.
     {
-        static const std::string& streamPath = lucent::config::text("DRAW_STREAM");
+        static const std::string &streamPath = lucent::config::text("DRAW_STREAM");
         if (!streamPath.empty())
         {
-            static std::FILE* sf = std::fopen(streamPath.c_str(), "wb");
+            static std::FILE *sf = std::fopen(streamPath.c_str(), "wb");
             static uint64_t streamFrame = 0;
             const uint64_t thisFrame = streamFrame++;
             if (sf)
             {
                 std::map<std::pair<uint64_t, uint64_t>, uint32_t> counts;
-                for (const draw::PreparedDraw& pd : prepared)
+                for (const draw::PreparedDraw &pd : prepared)
                 {
                     // NORMALISED TO WHAT THE OTHER SIDE MEANS BY IT. Xenia sets
                     // pixel_shader = nullptr on a draw with no fragment stage,
@@ -3240,11 +3223,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                     // reading as the headline divergence.
                     ++counts[{pd.vsHash, pd.hasFragmentStage ? pd.psHash : 0}];
                 }
-                std::string line = std::format("{}\t{}", thisFrame,
-                                               prepared.size());
-                for (const auto& [pair, n] : counts)
-                    line += std::format("\t{:016x}:{:016x}:{}", pair.first,
-                                        pair.second, n);
+                std::string line = std::format("{}\t{}", thisFrame, prepared.size());
+                for (const auto &[pair, n] : counts)
+                    line += std::format("\t{:016x}:{:016x}:{}", pair.first, pair.second, n);
                 line += '\n';
                 std::fwrite(line.data(), 1, line.size(), sf);
                 std::fflush(sf);
@@ -3260,18 +3241,17 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // drop (a renderer bug), and only a pre-drop recording separates them.
     if (wantRawStream)
     {
-        static std::FILE* rf = std::fopen(rawStreamPath.c_str(), "wb");
+        static std::FILE *rf = std::fopen(rawStreamPath.c_str(), "wb");
         static uint64_t rawFrame = 0;
         const uint64_t thisFrame = rawFrame++;
         if (rf)
         {
             uint32_t rawTotal = 0;
-            for (const auto& [pair, n] : rawCounts)
+            for (const auto &[pair, n] : rawCounts)
                 rawTotal += n;
             std::string line = std::format("{}\t{}", thisFrame, rawTotal);
-            for (const auto& [pair, n] : rawCounts)
-                line += std::format("\t{:016x}:{:016x}:{}", pair.first,
-                                    pair.second, n);
+            for (const auto &[pair, n] : rawCounts)
+                line += std::format("\t{:016x}:{:016x}:{}", pair.first, pair.second, n);
             line += '\n';
             std::fwrite(line.data(), 1, line.size(), rf);
             std::fflush(rf);
@@ -3285,36 +3265,19 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             if (!warned)
             {
                 warned = true;
-                lucent::error("draw", "GEARS_DRAW_STREAM_RAW={} could not be"
-                    " opened for writing; NOTHING was recorded and this run says"
-                    " nothing about what the guest programmed", rawStreamPath);
+                lucent::error("draw",
+                              "GEARS_DRAW_STREAM_RAW={} could not be"
+                              " opened for writing; NOTHING was recorded and this run says"
+                              " nothing about what the guest programmed",
+                              rawStreamPath);
             }
         }
     }
 
     DS.Report(drawn, prepared);
 
-    // PUBLISH THE IMAGE, so the presenter can blit it instead of receiving these
-    // pixels through host memory. Only when this renderer ADOPTED the presenter's
-    // device: if it created its own, the image lives on a different device and is
-    // useless to the presenter, which is the headless case.
-    //
-    // `source` is left in TRANSFER_SRC_OPTIMAL above, and the frame's fence has been
-    // waited on by the time this runs, so the contents are complete. A blit between
-    // R8G8B8A8 and the swapchain's B8G8R8A8 is a FORMAT conversion, mapping component
-    // to component, so it does not need the manual red/blue swap the host upload path
-    // does -- that swap exists because a CPU memcpy into a BGRA image is byte-order
-    // sensitive and a GPU blit is not.
     if (!ownsDevice && presentableImage != VK_NULL_HANDLE)
-    {
-        static uint64_t published = 0;
-        gears::SharedFrameImage frame;
-        frame.image = presentableImage;
-        frame.width = W;
-        frame.height = H;
-        frame.sequence = ++published;
-        gears::PublishSharedFrameImage(frame);
-    }
+        P.scanout.Publish(scanoutResult, W, H);
 
     // --- read pixels + coverage numbers ----------------------------------
     // Only when they are still wanted: on the shared-device path the presenter blits
@@ -3333,30 +3296,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // of 256 entries differ from linear, darkening the low end -- input 4 of
         // 255 maps to 6 of 1023 where linear would give 16).
         //
-        // Applied here, on the way to host pixels, which covers the screenshot,
-        // the census and the presenter's UPLOAD path. It does NOT cover the
-        // shared-device path, where the presenter blits the rendered image
-        // straight to the swapchain and never reads these bytes -- that one needs
-        // the LUT in the blit itself, which is a shader pass this does not add.
-        // Said out loud below rather than left as a difference between what a
-        // screenshot shows and what a window shows.
-        if (in.gammaRamp)
+        // On a shared device the published image has already passed through the
+        // GPU LUT, and this readback is of those transformed pixels. Headless and
+        // cross-device runs instead use this authoritative CPU implementation.
+        if (in.gammaRamp && !gpuScanoutGammaApplied)
         {
-            uint8_t lut[3][256];
-            for (uint32_t i = 0; i < 256; ++i)
-            {
-                const uint32_t e = in.gammaRamp[i];
-                // 10-bit per channel, packed blue/green/red, back down to 8.
-                lut[0][i] = uint8_t(((e >> 20) & 0x3FF) >> 2);   // red
-                lut[1][i] = uint8_t(((e >> 10) & 0x3FF) >> 2);   // green
-                lut[2][i] = uint8_t((e & 0x3FF) >> 2);           // blue
-            }
-            for (size_t i = 0; i + 3 < g_frame.size(); i += 4)
-            {
-                g_frame[i + 0] = lut[0][g_frame[i + 0]];
-                g_frame[i + 1] = lut[1][g_frame[i + 1]];
-                g_frame[i + 2] = lut[2][g_frame[i + 2]];
-            }
+            const ScanoutGammaLut scanoutGammaLut = BuildScanoutGammaLut(in.gammaRamp);
+            if (!ApplyScanoutGamma(g_frame, scanoutGammaLut))
+                return false;
         }
     }
     // The per-frame census -- a full per-pixel scan, a dozen summary lines and a
@@ -3373,25 +3320,26 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         uint64_t lit = 0, changed = 0;
         for (uint32_t i = 0; i < W * H; ++i)
         {
-            const uint8_t* px = &g_frame[size_t(i) * 4];
+            const uint8_t *px = &g_frame[size_t(i) * 4];
             if (!(px[0] == 13 && px[1] == 13 && px[2] == 20)) // != the clear
                 ++changed;
             if (px[0] || px[1] || px[2])
                 ++lit;
         }
         std::set<std::pair<uint64_t, uint64_t>> pairs;
-        for (const FrameDrawItem& d : in.draws)
+        for (const FrameDrawItem &d : in.draws)
             pairs.emplace(d.vsHash, d.psHash);
-        lucent::info("draw", "frame: {} of {} draws issued, {} skipped; {} distinct shader"
-            " pairs, {} distinct shaders, {} pipelines, {} texture layouts,"
-            " {} pipeline layouts; {} texture bindings ({} guest textures,"
-            " {} from the rendered RT, {} from a stub); {}/{} px non-black"
-            " ({:.1f}%), {} px changed from the clear ({:.1f}%)",
-            issued, in.draws.size(), CN.skipped, pairs.size(), SC.modules.size(), PC.pipelines.size(),
-            PC.texLayouts.size(), PC.pipeLayouts.size(),
-            TB.Binds(), TB.bindsGuest, TB.bindsRt,
-            TB.bindsStub, lit, uint64_t(W) * H, 100.0 * double(lit) / (double(W) * H),
-            changed, 100.0 * double(changed) / (double(W) * H));
+        lucent::info("draw",
+                     "frame: {} of {} draws issued, {} skipped; {} distinct shader"
+                     " pairs, {} distinct shaders, {} pipelines, {} texture layouts,"
+                     " {} pipeline layouts; {} texture bindings ({} guest textures,"
+                     " {} from the rendered RT, {} from a stub); {}/{} px non-black"
+                     " ({:.1f}%), {} px changed from the clear ({:.1f}%)",
+                     issued, in.draws.size(), CN.skipped, pairs.size(), SC.modules.size(),
+                     PC.pipelines.size(), PC.texLayouts.size(), PC.pipeLayouts.size(), TB.Binds(),
+                     TB.bindsGuest, TB.bindsRt, TB.bindsStub, lit, uint64_t(W) * H,
+                     100.0 * double(lit) / (double(W) * H), changed,
+                     100.0 * double(changed) / (double(W) * H));
 
         // WHERE THE UNIFORM TIME GOES. Uniforms are the largest item in the frame
         // (118 ms of 187), and this cache exists to avoid recomputing blocks that
@@ -3400,24 +3348,26 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // part of the key differed -- the register snapshot is compared by POINTER,
         // so a draw carrying its own copy would miss however identical the contents,
         // and that failure would look exactly like "the constants really do change".
-        lucent::info("draw", "uniform cache: {} lookup(s), {} hit ({:.1f}%);"
-            " misses: {} on the register snapshot, {} on the shader pair",
-            UC.lookups, UC.hits,
-            UC.lookups ? 100.0 * double(UC.hits) / double(UC.lookups) : 0.0,
-            UC.missSnapshot, UC.missShaders);
+        lucent::info("draw",
+                     "uniform cache: {} lookup(s), {} hit ({:.1f}%);"
+                     " misses: {} on the register snapshot, {} on the shader pair",
+                     UC.lookups, UC.hits,
+                     UC.lookups ? 100.0 * double(UC.hits) / double(UC.lookups) : 0.0,
+                     UC.missSnapshot, UC.missShaders);
         // WHAT IS IN the blocks, not just how often they were rebuilt. A NaN
         // here takes a whole frame to black and no draw-level probe can see it.
         UC.ReportConstantCensus();
         if (UC.recomputes != 0)
-            lucent::info("draw", "uniform headroom: of {} recompute(s) measured,"
-                " {} produced BYTE-IDENTICAL blocks ({:.1f}%) -- that is the work a"
-                " content comparison would skip", UC.recomputes,
-                UC.recomputesIdentical,
-                100.0 * double(UC.recomputesIdentical) / double(UC.recomputes));
+            lucent::info("draw",
+                         "uniform headroom: of {} recompute(s) measured,"
+                         " {} produced BYTE-IDENTICAL blocks ({:.1f}%) -- that is the work a"
+                         " content comparison would skip",
+                         UC.recomputes, UC.recomputesIdentical,
+                         100.0 * double(UC.recomputesIdentical) / double(UC.recomputes));
         else
             lucent::info("draw", "uniform headroom: not measured (set"
-                " GEARS_DRAW_UBOCHECK=1); a percentage cannot be inferred from the"
-                " hit rate alone");
+                                 " GEARS_DRAW_UBOCHECK=1); a percentage cannot be inferred from the"
+                                 " hit rate alone");
 
         // WHAT THE TEXTURE CACHE EVICTED. The cache is keyed on the fetch
         // constant, which does not change when the guest overwrites the pixels at
@@ -3427,31 +3377,36 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // the number of textures that were actually checked -- a zero denominator
         // would mean the check never ran, which is a different statement.
         gears::native::ReportRoster();
-        lucent::info("draw", "descriptor sets: {} draws reused an earlier draw's"
-            " texture sets, {} built new ones, {} distinct sets in the frame."
-            " The key is the shader pair plus the fetch constants behind every"
-            " texture and sampler binding, so a reuse skips resolving those"
-            " bindings entirely; the uniform sets are always the draw's own",
-            DB.hits, DB.builds, DB.CacheSize());
-        lucent::info("draw", "texture cache: slowest single hash {:.2f} ms for"
-            " {:.2f} MiB at {:#x} ({:.2f} GB/s)", TX.texHashWorstMs,
-            double(TX.texHashWorstBytes) / (1024.0 * 1024.0), TX.texHashWorstBase,
-            TX.texHashWorstMs > 0
-                ? double(TX.texHashWorstBytes) / (TX.texHashWorstMs * 1e6) : 0.0);
-        lucent::info("draw", "texture cache: {} distinct texture(s) re-hashed"
-            " ({:.2f} MiB in {:.1f} ms) over {} bindings, {} CHANGED under an"
-            " unchanged fetch constant and were evicted and re-uploaded{}",
-            TX.texContentChecked, double(TX.texHashBytes) / (1024.0 * 1024.0), TX.msTexHash,
-            TX.texBindingCalls, TX.texContentChanged,
-            TX.texContentChecked == 0
-                ? " -- the denominator is ZERO: no cache hit could be checked at"
-                  " all, so this says NOTHING about staleness"
-                : "");
+        lucent::info("draw",
+                     "descriptor sets: {} draws reused an earlier draw's"
+                     " texture sets, {} built new ones, {} distinct sets in the frame."
+                     " The key is the shader pair plus the fetch constants behind every"
+                     " texture and sampler binding, so a reuse skips resolving those"
+                     " bindings entirely; the uniform sets are always the draw's own",
+                     DB.hits, DB.builds, DB.CacheSize());
+        lucent::info(
+            "draw",
+            "texture cache: slowest single hash {:.2f} ms for"
+            " {:.2f} MiB at {:#x} ({:.2f} GB/s)",
+            TX.texHashWorstMs, double(TX.texHashWorstBytes) / (1024.0 * 1024.0),
+            TX.texHashWorstBase,
+            TX.texHashWorstMs > 0 ? double(TX.texHashWorstBytes) / (TX.texHashWorstMs * 1e6) : 0.0);
+        lucent::info("draw",
+                     "texture cache: {} distinct texture(s) re-hashed"
+                     " ({:.2f} MiB in {:.1f} ms) over {} bindings, {} CHANGED under an"
+                     " unchanged fetch constant and were evicted and re-uploaded{}",
+                     TX.texContentChecked, double(TX.texHashBytes) / (1024.0 * 1024.0),
+                     TX.msTexHash, TX.texBindingCalls, TX.texContentChanged,
+                     TX.texContentChecked == 0
+                         ? " -- the denominator is ZERO: no cache hit could be checked at"
+                           " all, so this says NOTHING about staleness"
+                         : "");
 
         if (PC.rectDraws)
-            lucent::info("draw", "frame rectangle lists: {} of {} draws expanded by a"
-                " geometry shader ({} distinct)", PC.rectDrawsExpanded, PC.rectDraws,
-                PC.geomShaders.size());
+            lucent::info("draw",
+                         "frame rectangle lists: {} of {} draws expanded by a"
+                         " geometry shader ({} distinct)",
+                         PC.rectDrawsExpanded, PC.rectDraws, PC.geomShaders.size());
         {
             CN.ReportSurfaces();
         }
@@ -3461,33 +3416,34 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         {
             lucent::Line rl;
             rl.add("render-target cache: {} host surfaces (surface:format ->"
-                   " host format, draws this frame):", P.surfaceTargets.size());
-            for (const auto& [base, t] : P.surfaceTargets)
-                rl.add(" {:#x}->vk{}x{}", base, uint32_t(t.hostFormat),
-                       t.drawsThisFrame);
+                   " host format, draws this frame):",
+                   P.surfaceTargets.size());
+            for (const auto &[base, t] : P.surfaceTargets)
+                rl.add(" {:#x}->vk{}x{}", base, uint32_t(t.hostFormat), t.drawsThisFrame);
             rl.flush(lucent::Level::Info, "draw");
             lucent::Line dl;
             dl.add("render-target cache: {} resolve destinations (dest<-copies):",
                    P.resolveTargets.size());
-            for (const auto& [base, r] : P.resolveTargets)
+            for (const auto &[base, r] : P.resolveTargets)
                 dl.add(" {:#x}<-{}", base, r.copies);
             dl.flush(lucent::Level::Info, "draw");
             // Says WHICH RULE picked the surface. The old wording claimed the
             // guest's front-buffer address chose it even on frames where that
             // address was zero and the fallback decided -- which is every replay of
             // a v1 capture.
-            lucent::info("draw", "render-target cache: presenting surface {:#x},"
-                " chosen by {} (front buffer {:#x}); the guest's copy swap is NOT"
-                " undone here and must not be -- the scanout format reads it back"
-                " swapped, see the Epic-logo evidence in catalog #64;"
-                " resolves issued {}, skipped {}; {} distinct"
-                " RB_DEPTH_INFO depth bases (one shared host depth image)",
-                presentBase,
-                in.frontBufferAddress != 0 ? "the guest's front-buffer address"
-                                           : "the LAST-GEOMETRY-DRAW FALLBACK (no"
-                                             " front-buffer address in this frame)",
-                in.frontBufferAddress,
-                CN.issuedResolves, CN.skippedResolves, CN.depthBases.size());
+            lucent::info("draw",
+                         "render-target cache: presenting surface {:#x},"
+                         " chosen by {} (front buffer {:#x}); the guest's copy swap is NOT"
+                         " undone here and must not be -- the scanout format reads it back"
+                         " swapped, see the Epic-logo evidence in catalog #64;"
+                         " resolves issued {}, skipped {}; {} distinct"
+                         " RB_DEPTH_INFO depth bases (one shared host depth image)",
+                         presentBase,
+                         in.frontBufferAddress != 0 ? "the guest's front-buffer address"
+                                                    : "the LAST-GEOMETRY-DRAW FALLBACK (no"
+                                                      " front-buffer address in this frame)",
+                         in.frontBufferAddress, CN.issuedResolves, CN.skippedResolves,
+                         CN.depthBases.size());
             {
                 CN.ReportDepthPairs();
             }
@@ -3497,56 +3453,60 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             // frame resolves the same surface once per predicated tile, so the
             // raw event list is long and the pairing is what matters.
             std::map<std::string, uint32_t> pairs;
-            for (const ResolveEvent& re : resolves)
-                ++pairs[re.srcIsDepth
-                    ? std::format("depth@{:#x} -> {:#x}", re.srcBase, re.destBase)
-                    : std::format("color{}@{:#x}:f{} -> {:#x}", re.srcSelect,
-                                  re.srcBase, re.srcFormat, re.destBase)];
-            lucent::info("draw", "frame resolves: {} copy draws, {} distinct"
-                " source->destination pairs", resolves.size(), pairs.size());
+            for (const ResolveEvent &re : resolves)
+                ++pairs[re.srcIsDepth ? std::format("depth@{:#x} -> {:#x}", re.srcBase, re.destBase)
+                                      : std::format("color{}@{:#x}:f{} -> {:#x}", re.srcSelect,
+                                                    re.srcBase, re.srcFormat, re.destBase)];
+            lucent::info("draw",
+                         "frame resolves: {} copy draws, {} distinct"
+                         " source->destination pairs",
+                         resolves.size(), pairs.size());
             // The guest's own clear values, which the render target cache does
             // NOT yet use -- our depth clear is a host constant (catalog #31).
             // Reported so the values are visible before they are trusted.
             std::map<std::string, uint32_t> clears;
-            for (const ResolveEvent& re : resolves)
+            for (const ResolveEvent &re : resolves)
             {
                 if (!re.colorClear && !re.depthClear)
                     continue;
                 ++clears[std::format("cmd{} color{}={:#010x} depth{}={:#010x}"
-                    " (depth base {:#x} fmt {})", re.copyCommand,
-                    re.colorClear ? "" : "(off)", re.colorClearValue,
-                    re.depthClear ? "" : "(off)", re.depthClearValue,
-                    re.depthBase, re.depthFormat)];
+                                     " (depth base {:#x} fmt {})",
+                                     re.copyCommand, re.colorClear ? "" : "(off)",
+                                     re.colorClearValue, re.depthClear ? "" : "(off)",
+                                     re.depthClearValue, re.depthBase, re.depthFormat)];
             }
             // Every resolve's rectangle and destination, which is how the
             // frame's predicated tiles are assembled -- or, while the resolve
             // blit ignores the rectangle, are not (catalog #32).
-            for (const ResolveEvent& re : resolves)
+            for (const ResolveEvent &re : resolves)
                 // WHICH copy carries a clear, not just how many the frame
                 // programs. A mid-frame clear is a pass boundary: the aggregate
                 // count says the frame has two, and cannot say that the colour
                 // one lands right before the mask pass (catalog #91).
-                lucent::info("draw", "  resolve draw {}: {}@{:#x} -> {:#x}"
-                    " rect [{} {}] [{} {}] [{} {}] window ({},{}) clears:{}{}{}",
-                    re.drawIndex, re.srcIsDepth ? "depth" : "color", re.srcBase,
-                    re.destBase, re.rect[0], re.rect[1], re.rect[2], re.rect[3],
-                    re.rect[4], re.rect[5], re.windowX, re.windowY,
-                    re.colorClear ? " COLOUR" : "", re.depthClear ? " DEPTH" : "",
-                    (re.colorClear || re.depthClear) ? "" : " none",
-                    re.haveRect ? "" : " (NO RECT: vf0 is not 3x2 floats)");
-            for (const ResolveEvent& re : resolves)
-                lucent::info("draw", "  resolve draw {} destination: {:#x}"
-                    " pitch {} height {} format {} number {} exp_bias {}"
-                    " endian {} swap {}", re.drawIndex, re.destBase,
-                    re.destPitch, re.destHeight, re.destFormat, re.destNumber,
-                    re.destExpBias, re.destEndian, re.destSwap);
+                lucent::info("draw",
+                             "  resolve draw {}: {}@{:#x} -> {:#x}"
+                             " rect [{} {}] [{} {}] [{} {}] window ({},{}) clears:{}{}{}",
+                             re.drawIndex, re.srcIsDepth ? "depth" : "color", re.srcBase,
+                             re.destBase, re.rect[0], re.rect[1], re.rect[2], re.rect[3],
+                             re.rect[4], re.rect[5], re.windowX, re.windowY,
+                             re.colorClear ? " COLOUR" : "", re.depthClear ? " DEPTH" : "",
+                             (re.colorClear || re.depthClear) ? "" : " none",
+                             re.haveRect ? "" : " (NO RECT: vf0 is not 3x2 floats)");
+            for (const ResolveEvent &re : resolves)
+                lucent::info("draw",
+                             "  resolve draw {} destination: {:#x}"
+                             " pitch {} height {} format {} number {} exp_bias {}"
+                             " endian {} swap {}",
+                             re.drawIndex, re.destBase, re.destPitch, re.destHeight, re.destFormat,
+                             re.destNumber, re.destExpBias, re.destEndian, re.destSwap);
             lucent::Line cl;
             cl.add("frame clears programmed by resolves: {} of {} copy draws"
-                   " carry a clear;", clears.size(), resolves.size());
-            for (const auto& [k, n] : clears)
+                   " carry a clear;",
+                   clears.size(), resolves.size());
+            for (const auto &[k, n] : clears)
                 cl.add(" [{}x {}]", n, k);
             cl.flush(lucent::Level::Info, "draw");
-            for (const auto& [what, n] : pairs)
+            for (const auto &[what, n] : pairs)
                 lucent::info("draw", "  resolve {} x{}", what, n);
         }
         // WARN when any draw fetches past the mirror, not info. Those draws read
@@ -3564,10 +3524,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
         // A NEGATIVE THAT CARRIES ITS DENOMINATOR: "no signed fetches" has to be
         // distinguishable from "nobody looked".
         if (TB.fetchesWithSigns.empty())
-            lucent::info("draw", "frame texture signs: 0 of {} bindings ask for a"
-                " signed or gamma component, so the decode is a no-op on this frame"
-                " -- printed with its denominator so it is not mistaken for nobody"
-                " having looked", TB.Binds());
+            lucent::info("draw",
+                         "frame texture signs: 0 of {} bindings ask for a"
+                         " signed or gamma component, so the decode is a no-op on this frame"
+                         " -- printed with its denominator so it is not mistaken for nobody"
+                         " having looked",
+                         TB.Binds());
         else
         {
             lucent::Line sl;
@@ -3575,9 +3537,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                    " (0x3f is kGamma on RGB, 0x55 is kSigned on all four). These are"
                    " decoded per the fetch constant; GEARS_DRAW_NO_TEX_SIGNS=1 is the"
                    " control arm that reads them all unsigned:",
-                   TB.fetchesWithSigns.size(),
-                   TB.Binds());
-            for (const auto& [bits, n] : TB.fetchesWithSigns)
+                   TB.fetchesWithSigns.size(), TB.Binds());
+            for (const auto &[bits, n] : TB.fetchesWithSigns)
                 sl.add(" [{:#04x} x{}]", bits, n);
             sl.flush(lucent::Level::Info, "draw");
         }
@@ -3587,28 +3548,31 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
             bl.add("frame kSigned textures: {} distinct bases want the SIGNED view,"
                    " which this renderer does not create -- the unsigned view is"
                    " bound to both slots, so these fetches read 0..1 where the"
-                   " shader expects -1..1:", TB.signedBases.size());
-            for (const auto& [b, n] : TB.signedBases)
+                   " shader expects -1..1:",
+                   TB.signedBases.size());
+            for (const auto &[b, n] : TB.signedBases)
                 bl.add(" [{:#x} x{}]", b, n);
             bl.flush(lucent::Level::Warn, "draw");
         }
-        lucent::info("draw", "frame textures: {} distinct fetch constants, {} uploaded"
-            " ({:.1f} MiB), {} samplers", TX.texDistinct.size(), TX.uploads.size(),
-            double(TX.uploadedBytes) / (1024.0 * 1024.0), TX.samplerCache.size());
-        for (const auto& [fmt, n] : TX.texFormatBindings)
+        lucent::info("draw",
+                     "frame textures: {} distinct fetch constants, {} uploaded"
+                     " ({:.1f} MiB), {} samplers",
+                     TX.texDistinct.size(), TX.uploads.size(),
+                     double(TX.uploadedBytes) / (1024.0 * 1024.0), TX.samplerCache.size());
+        for (const auto &[fmt, n] : TX.texFormatBindings)
             lucent::info("draw", "  format {}: {} distinct fetches", fmt, n);
-        for (const auto& [why, n] : TX.texSkips)
+        for (const auto &[why, n] : TX.texSkips)
             lucent::warn("draw", "  NOT uploaded, {} distinct fetches: {}", n, why);
-        for (const auto& [what, n] : TX.texFormatCensus)
+        for (const auto &[what, n] : TX.texFormatCensus)
             lucent::info("draw", "  texture {} x{}", what, n);
         CN.ReportViewports();
         {
             std::map<uint32_t, uint32_t> prims;
-            for (const FrameDrawItem& d : in.draws)
+            for (const FrameDrawItem &d : in.draws)
                 ++prims[d.primType];
             lucent::Line pl;
             pl.add("frame primitive types:");
-            for (const auto& [p, n] : prims)
+            for (const auto &[p, n] : prims)
                 pl.add(" {}x{}", PrimName(p), n);
             pl.flush(lucent::Level::Info, "draw");
         }
@@ -3621,62 +3585,69 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                 lucent::Line dl;
                 dl.add("frame shaders sampling a DEPTH resolve destination"
                        " (served by the depth resolve):");
-                for (const auto& [k, n] : TB.depthDestSamplers)
+                for (const auto &[k, n] : TB.depthDestSamplers)
                     dl.add(" {:#x}<-ps{:016x}x{}", k.first, k.second, n);
                 dl.flush(lucent::Level::Info, "draw");
             }
             tb.add("frame texture bases ({} distinct):", TB.baseCount.size());
-            for (const auto& [base, n] : TB.baseCount)
+            for (const auto &[base, n] : TB.baseCount)
             {
                 // Three cases, and only the third is a routing miss: the base IS
                 // a resolve target; the base falls INSIDE one (so the guest is
                 // sampling a sub-rectangle of something we resolved, and we hand
                 // it stale guest memory); or it is an ordinary guest asset.
-                const char* tag = "";
+                const char *tag = "";
                 if (TB.baseRtCount.count(base))
                     tag = "(RT)";
                 else
-                    for (const auto& [k, r] : P.resolveTargets)
+                    for (const auto &[k, r] : P.resolveTargets)
                     {
                         if (r.bpp == 0 || r.pitch == 0)
                             continue;
-                        const uint64_t extent =
-                            uint64_t(r.pitch) * r.height * r.bpp;
+                        const uint64_t extent = uint64_t(r.pitch) * r.height * r.bpp;
                         if (base > r.base && base < r.base + extent)
-                        { tag = "(INSIDE-RT)"; break; }
+                        {
+                            tag = "(INSIDE-RT)";
+                            break;
+                        }
                     }
                 tb.add(" {:#x}x{}{}", base, n, tag);
             }
             tb.flush(lucent::Level::Info, "draw");
         }
         if (RT.resolvesOutOfSets)
-            lucent::warn("draw", "frame resolves: {} had no descriptor set and were"
-                " DROPPED -- the pool was sized too small", RT.resolvesOutOfSets);
+            lucent::warn("draw",
+                         "frame resolves: {} had no descriptor set and were"
+                         " DROPPED -- the pool was sized too small",
+                         RT.resolvesOutOfSets);
         if (RT.resolvesUnstorable)
-            lucent::warn("draw", "frame resolves: {} could not run the compute"
-                " resolve (host cannot use the format as a storage image), so the"
-                " guest's exponent bias and red/blue swap were NOT applied",
-                RT.resolvesUnstorable);
+            lucent::warn("draw",
+                         "frame resolves: {} could not run the compute"
+                         " resolve (host cannot use the format as a storage image), so the"
+                         " guest's exponent bias and red/blue swap were NOT applied",
+                         RT.resolvesUnstorable);
         if (RT.resolveNoRect || RT.resolveNoFormat)
-            lucent::warn("draw", "frame resolves: {} without a readable vf0"
-                " rectangle (whole surface copied), {} with a destination format"
-                " of unknown size (cannot be placed in a texture)",
-                RT.resolveNoRect, RT.resolveNoFormat);
-        lucent::info("draw", "frame depth resolves: {} executed ({} encoded as"
-            " float24/kD24FS8, {} as unorm24/kD24S8, from RB_DEPTH_INFO at each"
-            " copy), {} skipped", depthResolvesDone, depthResolvesFloat24,
-            depthResolvesDone - depthResolvesFloat24, depthResolvesSkipped);
+            lucent::warn("draw",
+                         "frame resolves: {} without a readable vf0"
+                         " rectangle (whole surface copied), {} with a destination format"
+                         " of unknown size (cannot be placed in a texture)",
+                         RT.resolveNoRect, RT.resolveNoFormat);
+        lucent::info("draw",
+                     "frame depth resolves: {} executed ({} encoded as"
+                     " float24/kD24FS8, {} as unorm24/kD24S8, from RB_DEPTH_INFO at each"
+                     " copy), {} skipped",
+                     depthResolvesDone, depthResolvesFloat24,
+                     depthResolvesDone - depthResolvesFloat24, depthResolvesSkipped);
         {
             lucent::Line al;
-            al.add("frame EDRAM colour/depth aliasing: {} draw(s) served",
-                   RT.depthAliasesDone);
+            al.add("frame EDRAM colour/depth aliasing: {} draw(s) served", RT.depthAliasesDone);
             if (RT.depthAliasOutOfSets)
-                al.add(", {} left unserved for want of a descriptor set",
-                       RT.depthAliasOutOfSets);
+                al.add(", {} left unserved for want of a descriptor set", RT.depthAliasOutOfSets);
             if (RT.depthAliasRefused)
             {
                 al.add(", {} REFUSED because the surface's storage format is one"
-                       " this pass does not unpack:", RT.depthAliasRefused);
+                       " this pass does not unpack:",
+                       RT.depthAliasRefused);
                 for (uint32_t f : RT.depthAliasRefusedFormats)
                     al.add(" {}", draw::ColorFormatName(f));
             }
@@ -3685,42 +3656,47 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
                        " separate and no draw was served");
             al.flush(lucent::Level::Info, "draw");
         }
-        lucent::info("draw", "frame stencil: {} of {} pipelines built this frame"
-            " have RB_DEPTHCONTROL.stencil_enable set", PC.pipelinesWithStencil,
-            PC.pipelinesBuilt);
-        lucent::info("draw", "frame mid-stream depth clears: {} executed of {}"
-            " carried by the frame's copy draws (the guest clears depth once per"
-            " predicated tile)", depthClearsDone, RT.midFrameDepthClears);
+        lucent::info("draw",
+                     "frame stencil: {} of {} pipelines built this frame"
+                     " have RB_DEPTHCONTROL.stencil_enable set",
+                     PC.pipelinesWithStencil, PC.pipelinesBuilt);
+        lucent::info("draw",
+                     "frame mid-stream depth clears: {} executed of {}"
+                     " carried by the frame's copy draws (the guest clears depth once per"
+                     " predicated tile)",
+                     depthClearsDone, RT.midFrameDepthClears);
         if (onlyDraw >= 0)
-            lucent::info("draw", "GEARS_DRAW_ONLY={}: matched {} draw(s) of the"
-                " {} this frame ISSUED (the index counts issued draws, not the"
-                " diag table's guest index). It renders that draw over the"
-                " CLEAR, so a draw that samples a resolve target or a rendered"
-                " texture has no inputs here and produces black however correct"
-                " it is", onlyDraw, onlyDrawMatched, drawn);
-        lucent::info("draw", "frame render pass: {} segments across {} surface"
-            " switches, {} resolves executed (RT link {})", segments,
-            surfaceSwitches, resolvesDone, TB.rtLinkEnabled ? "on" : "off");
+            lucent::info("draw",
+                         "GEARS_DRAW_ONLY={}: matched {} draw(s) of the"
+                         " {} this frame ISSUED (the index counts issued draws, not the"
+                         " diag table's guest index). It renders that draw over the"
+                         " CLEAR, so a draw that samples a resolve target or a rendered"
+                         " texture has no inputs here and produces black however correct"
+                         " it is",
+                         onlyDraw, onlyDrawMatched, drawn);
+        lucent::info("draw",
+                     "frame render pass: {} segments across {} surface"
+                     " switches, {} resolves executed (RT link {})",
+                     segments, surfaceSwitches, resolvesDone, TB.rtLinkEnabled ? "on" : "off");
         RT.ReportReinterpretation(reinterpretEnabled);
 
-        lucent::info("draw", "scan-out gamma: {}", in.gammaRamp
-            ? "the guest's ramp WAS applied to these host pixels (screenshot,"
-              " census and the presenter's upload path). The shared-device BLIT"
-              " path does not go through it, so a window can look brighter than"
-              " this screenshot until the LUT moves into the blit"
-            : "no ramp programmed by the guest yet, so none applied -- this image"
-              " is the composite's own output");
+        lucent::info("draw", "scan-out gamma: {}",
+                     in.gammaRamp
+                         ? "the guest's ramp WAS applied to the published image and these"
+                           " host pixels; the shared-device window, screenshots, census and"
+                           " fallback upload now consume the same transformed scan-out"
+                         : "no ramp programmed by the guest yet, so none applied -- this image"
+                           " is the composite's own output");
 
-        const std::string& dirStr = lucent::config::text("DRAW_DIR");
-        const char* dir = dirStr.empty() ? nullptr : dirStr.c_str();
+        const std::string &dirStr = lucent::config::text("DRAW_DIR");
+        const char *dir = dirStr.empty() ? nullptr : dirStr.c_str();
         const std::filesystem::path reportDir =
             dir ? std::filesystem::path(dir) : std::filesystem::path("scratch/screenshots");
         std::filesystem::path out = in.sequence >= 0
-            ? reportDir / std::format("frame_{:05}.ppm", in.sequence)
-            : reportDir / "frame.ppm";
+                                        ? reportDir / std::format("frame_{:05}.ppm", in.sequence)
+                                        : reportDir / "frame.ppm";
         if (WritePpm(out, g_frame.data(), W, H))
             lucent::info("draw", "frame screenshot written to {}", out.string());
-
     }
     msReadback = sinceStartMs() - msSetup - msDrawLoop - msSubmit;
     // TWO OF THESE ARE SUPERSETS AND THE LINE SAYS SO. state+pipeline contains
@@ -3744,23 +3720,23 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // subtracted here -- subtracting a child twice is how a residual goes
     // negative and gets waved away as a rounding artefact.
     const double msRecordOwn = msRecord - DB.msAlloc - DB.msWrite - msPrepare;
-    const double msLoopOther =
-        msDrawLoop - msState - msUniforms - msIndex - msRecord;
-    lucent::info("draw", "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f},"
-        " guest-memory upload {:.0f}, submit+wait {:.0f}, readback+report {:.0f}",
-        sinceStartMs(), msSetup, msDrawLoop, msSsboUpload, msSubmit, msReadback);
-    lucent::info("draw", "  draw loop {:.0f} ms = state+pipeline {:.0f}"
-        " (shader translation {:.0f} + pipeline creation {:.0f} + modification"
-        " derivation {:.0f} + shader/layout cache lookups {:.0f} + own {:.0f})"
-        " + uniforms {:.0f} + index prep {:.0f} + record {:.0f} (descriptor alloc"
-        " {:.0f} + descriptor writes {:.0f} of which texture upload {:.0f} and the"
-        " driver's update {:.0f}, so own {:.0f} + prepare {:.0f} of which viewport"
-        " census {:.0f} + own {:.0f}) + unattributed {:.0f}",
-        msDrawLoop, msState, SC.msTranslate, PC.msPipeline, msModify, msShaderLookup,
-        msStateOwn,
-        msUniforms, msIndex, msRecord, DB.msAlloc, DB.msWrite, TB.msUpload,
-        DB.msUpdate, DB.msWrite - TB.msUpload - DB.msUpdate,
-        msPrepare, msCensus, msRecordOwn, msLoopOther);
+    const double msLoopOther = msDrawLoop - msState - msUniforms - msIndex - msRecord;
+    lucent::info("draw",
+                 "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f},"
+                 " guest-memory upload {:.0f}, submit+wait {:.0f}, readback+report {:.0f}",
+                 sinceStartMs(), msSetup, msDrawLoop, msSsboUpload, msSubmit, msReadback);
+    lucent::info("draw",
+                 "  draw loop {:.0f} ms = state+pipeline {:.0f}"
+                 " (shader translation {:.0f} + pipeline creation {:.0f} + modification"
+                 " derivation {:.0f} + shader/layout cache lookups {:.0f} + own {:.0f})"
+                 " + uniforms {:.0f} + index prep {:.0f} + record {:.0f} (descriptor alloc"
+                 " {:.0f} + descriptor writes {:.0f} of which texture upload {:.0f} and the"
+                 " driver's update {:.0f}, so own {:.0f} + prepare {:.0f} of which viewport"
+                 " census {:.0f} + own {:.0f}) + unattributed {:.0f}",
+                 msDrawLoop, msState, SC.msTranslate, PC.msPipeline, msModify, msShaderLookup,
+                 msStateOwn, msUniforms, msIndex, msRecord, DB.msAlloc, DB.msWrite, TB.msUpload,
+                 DB.msUpdate, DB.msWrite - TB.msUpload - DB.msUpdate, msPrepare, msCensus,
+                 msRecordOwn, msLoopOther);
 
     // The draw loop rather than the whole frame, and NOT on report frames: a
     // report frame reads the image back and writes a PPM, which costs more than
@@ -3785,35 +3761,40 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // One reporter for whichever A/B is running. Both arms are summarised the
     // same way, including the case it must not get wrong: a difference smaller
     // than the run's own resolution is noise and is printed as such.
-    auto summarise = [&](AbTest& t, const char* what) {
+    auto summarise = [&](AbTest &t, const char *what)
+    {
         if (!t.Enabled() || !in.report)
             return;
         AbSummary sm;
         if (!t.Summarise(sm))
         {
-            lucent::info("draw", "A/B ({}): nothing recorded yet -- every frame so"
-                " far was a report frame, which is excluded", what);
+            lucent::info("draw",
+                         "A/B ({}): nothing recorded yet -- every frame so"
+                         " far was a report frame, which is excluded",
+                         what);
             return;
         }
         if (sm.resolved)
         {
-            lucent::info("draw", "A/B ({}): the experimental arm is {:+.2f} ms"
-                " ({:.2f} vs {:.2f} ms over {} and {} frames), and that is"
-                " larger than the {:.2f} ms this run can resolve", what,
-                sm.differenceMs, sm.armMs, sm.baselineMs, sm.armFrames,
-                sm.baselineFrames, sm.noiseMs);
+            lucent::info("draw",
+                         "A/B ({}): the experimental arm is {:+.2f} ms"
+                         " ({:.2f} vs {:.2f} ms over {} and {} frames), and that is"
+                         " larger than the {:.2f} ms this run can resolve",
+                         what, sm.differenceMs, sm.armMs, sm.baselineMs, sm.armFrames,
+                         sm.baselineFrames, sm.noiseMs);
         }
         else
         {
             // THE NEGATIVE, WITH ITS DENOMINATOR. "No difference" from a run that
             // could not have seen one is not a measurement, so the resolution is
             // printed next to the difference every time.
-            lucent::info("draw", "A/B ({}): NOT RESOLVED. The arms differ by"
-                " {:+.2f} ms ({:.2f} vs {:.2f} over {} and {} frames) but this run"
-                " can only resolve {:.2f} ms, so that number is noise -- do not"
-                " read it as a small effect in either direction", what,
-                sm.differenceMs, sm.armMs, sm.baselineMs, sm.armFrames,
-                sm.baselineFrames, sm.noiseMs);
+            lucent::info("draw",
+                         "A/B ({}): NOT RESOLVED. The arms differ by"
+                         " {:+.2f} ms ({:.2f} vs {:.2f} over {} and {} frames) but this run"
+                         " can only resolve {:.2f} ms, so that number is noise -- do not"
+                         " read it as a small effect in either direction",
+                         what, sm.differenceMs, sm.armMs, sm.baselineMs, sm.armFrames,
+                         sm.baselineFrames, sm.noiseMs);
         }
     };
     summarise(ab, "per-draw viewport census");
@@ -3834,7 +3815,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // Textures evicted this frame because the guest overwrote their bytes. The
     // fence above has been waited on, so no draw of this frame still references
     // them; they were kept alive until here precisely because earlier draws did.
-    for (GuestTex& t : TX.texRetired)
+    for (GuestTex &t : TX.texRetired)
     {
         vkDestroyImageView(device, t.view, nullptr);
         vkDestroyImage(device, t.image, nullptr);
@@ -3846,14 +3827,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
 
 } // namespace draw
 
-using draw::kWidth;
 using draw::kHeight;
+using draw::kWidth;
 using draw::Renderer;
 
 // The renderer is built once and kept. Rebuilding it per frame was what made a
 // frame cost ~300 ms; the device, render target, shader translations, pipelines
 // and textures all survive from one frame to the next now.
-Renderer& FrameRenderer()
+Renderer &FrameRenderer()
 {
     static Renderer r;
     static bool initialised = r.Init();
@@ -3861,9 +3842,9 @@ Renderer& FrameRenderer()
     return r;
 }
 
-bool RenderFrame(const FrameDrawInputs& in)
+bool RenderFrame(const FrameDrawInputs &in)
 {
-    Renderer& r = FrameRenderer();
+    Renderer &r = FrameRenderer();
     if (r.device == VK_NULL_HANDLE)
     {
         draw::g_frame.clear();
@@ -3877,7 +3858,7 @@ bool RenderFrame(const FrameDrawInputs& in)
 
 void ResetRendererForComparison()
 {
-    Renderer& r = FrameRenderer();
+    Renderer &r = FrameRenderer();
     if (r.device != VK_NULL_HANDLE)
     {
         vkDeviceWaitIdle(r.device);
@@ -3885,9 +3866,18 @@ void ResetRendererForComparison()
     }
 }
 
-const std::vector<uint8_t>& GuestFramePixels() { return draw::g_frame; }
-uint32_t GuestFrameWidth() { return kWidth; }
-uint32_t GuestFrameHeight() { return kHeight; }
+const std::vector<uint8_t> &GuestFramePixels()
+{
+    return draw::g_frame;
+}
+uint32_t GuestFrameWidth()
+{
+    return kWidth;
+}
+uint32_t GuestFrameHeight()
+{
+    return kHeight;
+}
 
 } // namespace gears
 
@@ -3895,19 +3885,25 @@ uint32_t GuestFrameHeight() { return kHeight; }
 
 namespace gears
 {
-bool RenderFrame(const FrameDrawInputs&)
+bool RenderFrame(const FrameDrawInputs &)
 {
     lucent::warn("draw", "built without the guest-draw backend"
-        " (needs Vulkan + the Xenos translator)");
+                         " (needs Vulkan + the Xenos translator)");
     return false;
 }
-const std::vector<uint8_t>& GuestFramePixels()
+const std::vector<uint8_t> &GuestFramePixels()
 {
     static std::vector<uint8_t> empty;
     return empty;
 }
-uint32_t GuestFrameWidth() { return 0; }
-uint32_t GuestFrameHeight() { return 0; }
+uint32_t GuestFrameWidth()
+{
+    return 0;
+}
+uint32_t GuestFrameHeight()
+{
+    return 0;
+}
 } // namespace gears
 
 #endif

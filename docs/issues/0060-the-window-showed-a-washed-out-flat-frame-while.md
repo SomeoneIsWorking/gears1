@@ -5,7 +5,7 @@ status: resolved
 symptom: In a windowed run the game looks flat grey, low contrast, dithered, with no shadow detail; headless captures of the same scene look correct
 tags: gpu,present,vulkan,colour,srgb
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-20
 ---
 
 ## Symptom
@@ -108,3 +108,6 @@ here" was wrong both times: the frame_replay mirror made a wrong picture look li
 a renderer bug, and the present path looked unreachable without a window. Both
 had an instrument available. Before accepting that something is unmeasurable,
 check whether the API offers a headless form of it.
+
+### Note (2026-08-20)
+Scope correction from the RGBA-sRGB channel-swap finding: verify_present_path proved only the format selected by VK_EXT_headless_surface, which was B8G8R8A8_UNORM (44). It could not validate the RGBA-sRGB (43) branch selected by the actual SDL surface; that branch used a hardcoded BGRA staging image and swapped red/blue. The issue remains resolved for its washed-out symptom, but the old statement that the headless pass proved all present layouts is withdrawn.

@@ -1,0 +1,32 @@
+#version 450
+
+// The Xbox 360 display controller applies the guest's 256-entry, per-channel
+// DC_LUT at scan-out. This pass runs in place on the finished RGBA8 image that
+// is published to the shared-device presenter. Each invocation owns one texel,
+// so reading and writing the same storage image has no cross-invocation hazard.
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(rgba8, binding = 0) uniform image2D xe_scanout;
+layout(std430, binding = 1) readonly buffer XeScanoutGammaLut {
+    uvec4 entries[256];
+} xe_gamma;
+
+layout(push_constant) uniform XeScanoutExtent {
+    uint width;
+    uint height;
+} xe_extent;
+
+void main()
+{
+    const uvec2 position = gl_GlobalInvocationID.xy;
+    if (position.x >= xe_extent.width || position.y >= xe_extent.height)
+        return;
+
+    const ivec2 texel = ivec2(position);
+    const vec4 source = imageLoad(xe_scanout, texel);
+    const uvec3 index = uvec3(round(clamp(source.rgb, 0.0, 1.0) * 255.0));
+    const vec3 mapped = vec3(xe_gamma.entries[index.r].r,
+                             xe_gamma.entries[index.g].g,
+                             xe_gamma.entries[index.b].b) * (1.0 / 255.0);
+    imageStore(xe_scanout, texel, vec4(mapped, source.a));
+}

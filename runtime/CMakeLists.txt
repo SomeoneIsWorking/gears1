@@ -142,6 +142,7 @@ add_executable(gears1
     pm4_trace.cpp
     vd_null_gpu.cpp
     gpu_present.cpp
+    gpu_present_stage.cpp
     debug_http.cpp
     graphics_probe.cpp
     graphics_probe_render.cpp
@@ -230,10 +231,13 @@ add_library(gears_draw STATIC
     gpu_instance.cpp
     gpu_queue_family.cpp
     gpu_renderer_capacity.cpp
+    gpu_scanout.cpp
+    gpu_scanout_gamma.cpp
     gpu_shared_device.cpp
     guest_texture_hash.cpp
     native_pass.cpp
     render_ab.cpp
+    scanout_gamma.cpp
     spirv_clamp.cpp)
 target_include_directories(gears_draw PUBLIC . PRIVATE "${THIRDPARTY_ROOT}/xxHash")
 target_link_libraries(gears_draw PRIVATE lucent::lucent)

@@ -9,12 +9,12 @@ from pathlib import Path
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp", ".py", ".sh"}
 DEFAULT_MAX_LINES = 1000
 LEGACY_LIMITS = {
-    "runtime/gpu_draw.cpp": 3913,
+    "runtime/gpu_draw.cpp": 3909,
     "runtime/vd_null_gpu.cpp": 3450,
     "runtime/guest_probes.cpp": 2182,
     "runtime/gpu_draw_probe.cpp": 1513,
     "runtime/gpu_draw_xlate.cpp": 1468,
-    "runtime/gpu_present.cpp": 1456,
+    "runtime/gpu_present.cpp": 1414,
     "tools/layer_compare.py": 1085,
     "tools/gfr_to_xtr.py": 988,
 }

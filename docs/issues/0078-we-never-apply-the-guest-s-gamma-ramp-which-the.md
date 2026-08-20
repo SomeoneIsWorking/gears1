@@ -1,11 +1,11 @@
 ---
 id: 78
 title: We never apply the guest's gamma ramp, which the hardware and the oracle both do
-status: open
+status: resolved
 symptom: our presented frame is flatter than the reference: a third of the distinct colours, and brightness that does not match
 tags: render,colour,present,oracle
 created: 2026-08-05
-updated: 2026-08-06
+updated: 2026-08-20
 ---
 
 Found by walking the oracle comparison (#77) inward with the frame-step probe,
@@ -119,3 +119,6 @@ rendered image straight to the swapchain without going through these host
 pixels. Headless runs, screenshots and the census all get the ramp; a window can
 still look brighter. The renderer says so in its per-frame report rather than
 leaving the two paths silently different.
+
+### Resolution (2026-08-20)
+The shared-device gap is closed. GpuScanout now applies the guest 256-entry LUT in place on the alternating RGBA8 scan-out images before publishing them, while the CPU path uses the same BuildScanoutGammaLut conversion and skips a second transform when GPU gamma already ran. A live validation run observed 256 writes with 254 non-linear entries, built the scan-out gamma pipeline, raised no Vulkan validation messages, and captured the presented title frame at mean channel brightness 17.4, matching the previously measured CPU-gamma path. Focused LUT and source-structure tests plus clang-tidy pass.
