@@ -142,6 +142,9 @@ add_executable(gears1
     pm4_trace.cpp
     vd_null_gpu.cpp
     gpu_present.cpp
+    debug_http.cpp
+    graphics_probe.cpp
+    graphics_probe_render.cpp
     input.cpp
     hle_d3d.cpp
     kernel_rtl.cpp

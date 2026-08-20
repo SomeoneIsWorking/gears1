@@ -153,6 +153,19 @@ target_include_directories(test_xam_user PRIVATE
 target_link_libraries(test_xam_user PRIVATE lucent::lucent)
 add_test(NAME xam_user COMMAND test_xam_user)
 
+add_executable(test_remote_input
+    test_remote_input.cpp
+    ../runtime/input.cpp)
+target_include_directories(test_remote_input PRIVATE ../runtime)
+target_link_libraries(test_remote_input PRIVATE lucent::lucent)
+add_test(NAME remote_input COMMAND test_remote_input)
+
+add_executable(test_graphics_probe
+    test_graphics_probe.cpp
+    ../runtime/graphics_probe.cpp)
+target_include_directories(test_graphics_probe PRIVATE ../runtime)
+add_test(NAME graphics_probe COMMAND test_graphics_probe)
+
 # Xam system-UI notifications are part of the storage-selector protocol, not
 # decorative events: Gears keeps its own modal open until it receives the close
 # notification. Exercise the real queue through the imported guest seams.
@@ -260,6 +273,9 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_SOURCE_DIR}/tools/ui_state_check.py" --selftest)
 endif()
+
+add_test(NAME cpp_quality
+    COMMAND "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.sh" "${CMAKE_BINARY_DIR}")
 
 # RtlTimeToTimeFields / RtlTimeFieldsToTime. Verified until now only by "the
 # title reached the campaign after these landed", which shows they do not trap,

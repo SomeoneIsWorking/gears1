@@ -3324,9 +3324,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs& in)
     // this is where it would go stale.
     if (needHostPixels)
     {
-        g_frame.resize(rbBytes);
-        std::memcpy(g_frame.data(), P.readbackMapped, rbBytes);
-
+        // The readback allocation may include MSAA rows; the host contract is W x H RGBA.
+        g_frame.resize(size_t(W) * H * 4);
+        std::memcpy(g_frame.data(), P.readbackMapped, g_frame.size());
         // Scan-out gamma. The console puts every presented pixel through the
         // guest's DC_LUT ramp; without it the image is brighter than the
         // console's, and this title's ramp is markedly non-linear (measured: 254

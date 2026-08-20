@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string_view>
 
 // Controller input, from the host to the guest's XamInput* imports.
 //
@@ -46,7 +47,15 @@ struct PadState
     uint8_t rightTrigger = 0;
     int16_t thumbLX = 0, thumbLY = 0, thumbRX = 0, thumbRY = 0;
 
-    bool operator==(const PadState&) const = default;
+    bool operator==(const PadState &) const = default;
+};
+
+enum class InputSource
+{
+    kNone,
+    kHost,
+    kScript,
+    kRemote,
 };
 
 // Opens the script source if GEARS_INPUT_SCRIPT is set, and reports whether any
@@ -58,7 +67,22 @@ bool PadConnected();
 
 // The current state, and the packet number that increments whenever it changes
 // (the console's contract: an unchanged packet number means nothing happened).
-PadState CurrentPad(uint32_t& packetNumber);
+PadState CurrentPad(uint32_t &packetNumber);
+
+// One authoritative spelling table for script and HTTP button names. Returns
+// false without logging so each caller can report the correct input source.
+bool PadButtonByName(std::string_view name, uint16_t &button);
+
+// The interactive control plane replaces the entire pad snapshot atomically.
+// A startup script has priority because accepting remote input into a scripted
+// measurement would make the run non-reproducible; SetRemotePad returns false
+// in that case. Release keeps the remote pad connected and neutral. Disconnect
+// hands ownership back to the window/gamepad source.
+bool SetRemotePad(const PadState &state);
+void ReleaseRemotePad();
+void DisconnectRemotePad();
+InputSource CurrentInputSource();
+const char *InputSourceName(InputSource source);
 
 // Called from the presenter thread on every event pump: reads SDL's gamepad and
 // keyboard. A no-op in a headless run.
@@ -75,5 +99,9 @@ void UpdateScriptedInput();
 // fires and says so once -- silently treating the counter as 0 would fire every
 // such step immediately, which looks like a script that ran correctly.
 void SetGuestFrameSource(uint64_t (*source)());
+
+// The registered guest-present clock, also exposed to live diagnostics. Zero
+// before the GPU layer registers its source.
+uint64_t CurrentGuestFrame();
 
 } // namespace gears
