@@ -19,6 +19,9 @@ subsystems rather than copying platform-specific implementations.
 - `runtime/graphics_probe.cpp` owns on-demand readback state and publication;
   `runtime/graphics_probe_render.cpp` is the narrow renderer adapter. Shipping
   render passes do not depend on HTTP.
+- `runtime/frame_probe_capture.h` owns the diagnostic-frame re-arm and the
+  report/probe distinction. A probe may bypass a held capture selector, but it
+  must not open that selector, consume its quota, or emit its artifacts.
 - `runtime/gpu_scanout.cpp` owns finished-frame staging and scan-out transforms;
   `runtime/gpu_scanout_gamma.cpp` owns the Vulkan guest-LUT pass, while
   `runtime/scanout_gamma.cpp` owns the shared pure LUT conversion.

@@ -12,13 +12,13 @@
 #include "gpu_draw.h"
 #include "frame_ab.h"
 #include "frame_artifact_policy.h"
+#include "frame_probe_capture.h"
 #include "gpu_device_features.h"
 #include "guest_texture_hash.h"
 #include "native_pass.h"
 #include "spirv_clamp.h"
 #include "gpu_shared_device.h"
 #include "gpu_queue_family.h"
-
 #include <lucent/config.h>
 #include <lucent/log.h>
 
@@ -2735,7 +2735,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // cannot blit from an image on a different device and falls back to the host
     // upload, which reads exactly these pixels. Dropping the readback in that case
     // would present nothing at all, so the condition is deliberately generous.
-    const bool needHostPixels = in.report || ownsDevice;
+    const bool needHostPixels = FrameNeedsHostPixels(in.report, in.probe) || ownsDevice;
 
     SurfaceTarget *presentTarget = nullptr;
     if (havePresent)
@@ -3738,9 +3738,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
                  DB.msUpdate, DB.msWrite - TB.msUpload - DB.msUpdate, msPrepare, msCensus,
                  msRecordOwn, msLoopOther);
 
-    // The draw loop rather than the whole frame, and NOT on report frames: a
-    // report frame reads the image back and writes a PPM, which costs more than
-    // anything being compared and would land on whichever arm it fell on.
+    // The draw loop rather than the whole frame, and not on report frames: their
+    // readback and PPM cost would land on whichever arm they happened to use.
     //
     // AND NOT THE WARM-UP EITHER, which frame_ab.h says are "simply not recorded"
     // -- but that is the CALLER's job and this call site was not doing it. The
@@ -3753,7 +3752,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     static uint64_t renderedFrames = 0;
     ++renderedFrames;
     constexpr uint64_t kAbWarmupFrames = 12;
-    const bool recordable = !in.report && renderedFrames > kAbWarmupFrames;
+    const bool recordable =
+        FrameMayRecordMeasurement(in.report, in.probe) && renderedFrames > kAbWarmupFrames;
     if (abUntile.Enabled() && recordable)
         abUntile.RecordFrame(msDrawLoop);
     if (ab.Enabled() && recordable)

@@ -7,7 +7,7 @@ instances need distinct ports.
 
 This is a runtime control plane, not a second emulator path. Controller writes
 replace the same `PadState` snapshot read by `XamInputGetState`, and frame probes
-arm the renderer's existing report/readback path for the next accepted frame.
+request one renderer readback independently of its capture/report path.
 The normal shared-device path therefore keeps pixels on the GPU until a probe is
 requested; a probe causes one deliberate hitch rather than a permanent readback
 tax.
@@ -54,7 +54,10 @@ render-thread submitted/dropped/rendered counters, and metadata for the latest
 probe: guest frame, draw and shader-pair counts, non-black pixels, mean RGB, and
 an FNV-1a identity hash of the exact RGBA bytes.
 
-`/api/frame.ppm` waits up to ten seconds for the next frame the renderer accepts.
+`/api/frame.ppm` waits up to ten seconds for the next complete guest frame. An
+explicit probe bypasses a held `DRAW_FRAME_AT`, content, or camera selector for
+that diagnostic frame only. It does not open the selector, increment
+`DRAW_FRAME_COUNT`, write capture artifacts, or turn a diagnostic into a report.
 It returns that renderer readback as binary PPM. A timeout is HTTP 504; a frame
 that could not render or did not yield correctly sized RGBA is HTTP 503. Neither
 case is returned as an empty or black image, because absence and black output are

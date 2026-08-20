@@ -166,11 +166,19 @@ add_executable(test_graphics_probe
 target_include_directories(test_graphics_probe PRIVATE ../runtime)
 add_test(NAME graphics_probe COMMAND test_graphics_probe)
 
+add_executable(test_frame_probe_capture test_frame_probe_capture.cpp)
+target_include_directories(test_frame_probe_capture PRIVATE ../runtime)
+add_test(NAME frame_probe_capture COMMAND test_frame_probe_capture)
+
 add_executable(test_scanout_gamma
     test_scanout_gamma.cpp
     ../runtime/scanout_gamma.cpp)
 target_include_directories(test_scanout_gamma PRIVATE ../runtime)
 add_test(NAME scanout_gamma COMMAND test_scanout_gamma)
+
+add_executable(test_depth_alias_shader_format test_depth_alias_shader_format.cpp)
+target_include_directories(test_depth_alias_shader_format PRIVATE ../runtime)
+add_test(NAME depth_alias_shader_format COMMAND test_depth_alias_shader_format)
 
 # Xam system-UI notifications are part of the storage-selector protocol, not
 # decorative events: Gears keeps its own modal open until it receives the close
@@ -203,7 +211,7 @@ add_test(NAME xam_notify COMMAND test_xam_notify)
 # feeds it a case which MUST produce a positive.
 #
 # A self-test nobody runs is the same failure one level up, so they run here.
-find_package(Python3 COMPONENTS Interpreter QUIET)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 if(Python3_Interpreter_FOUND)
     add_test(NAME source_structure
         COMMAND ${Python3_EXECUTABLE}
@@ -281,7 +289,11 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 add_test(NAME cpp_quality
-    COMMAND "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.sh" "${CMAKE_BINARY_DIR}")
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.py"
+            "${CMAKE_BINARY_DIR}")
+add_test(NAME cpp_quality_selftest
+    COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.py"
+            --selftest)
 
 # RtlTimeToTimeFields / RtlTimeFieldsToTime. Verified until now only by "the
 # title reached the campaign after these landed", which shows they do not trap,

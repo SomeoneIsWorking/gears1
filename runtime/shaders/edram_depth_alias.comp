@@ -41,8 +41,9 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(binding = 0) uniform sampler2D xe_depth;
 layout(binding = 1) uniform usampler2D xe_stencil;
 // The colour surface that shares this EDRAM. Written, never read: what was
-// there is exactly what the console's depth write destroys.
-layout(binding = 2, rgba16f) uniform writeonly image2D xe_surface;
+// there is exactly what the console's depth write destroys. Its host view may
+// be RGBA8 or RGBA16F, so the module must not declare either format.
+layout(binding = 2) uniform writeonly image2D xe_surface;
 
 layout(push_constant) uniform XeDepthAliasConstants {
     ivec2 extent;
