@@ -1298,10 +1298,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         // device without depthClamp renders as this one did before -- with the
         // primitives whose Z is a hair outside [0,1] clipped away.
         om.depthClamp = hasDepthClamp && ((R[0x2204] >> 16) & 1) != 0;
-        // Rectangle lists go through the geometry shader that builds the fourth
-        // vertex. Everything else runs with no geometry stage at all.
         VkShaderModule gsMod = VK_NULL_HANDLE;
-        if (d.primType == 8 /*kRectangleList*/)
+        if (d.primType == 1 /*kPointList*/)
+            PC.GetPointGeomShader(vsModification, psModification, gsMod);
+        else if (d.primType == 8 /*kRectangleList*/)
         {
             ++PC.rectDraws;
             if (PC.GetRectGeomShader(vsModification, gsMod))

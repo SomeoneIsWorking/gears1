@@ -17,7 +17,9 @@ tidy=${CLANG_TIDY:-$(command -v clang-tidy || true)}
 
 formatted=(
     runtime/debug_http.cpp runtime/debug_http.h
-    runtime/gpu_draw.cpp runtime/gpu_draw_renderer.h runtime/gpu_draw_vertexfetch.cpp
+    runtime/gpu_draw.cpp runtime/gpu_draw_pipelines.cpp runtime/gpu_draw_pipelines.h
+    runtime/gpu_draw_point_geometry.cpp runtime/gpu_draw_renderer.h
+    runtime/gpu_draw_vertexfetch.cpp runtime/gpu_draw_xlate.cpp runtime/gpu_draw_xlate.h
     runtime/gpu_present.cpp runtime/gpu_present_stage.cpp runtime/gpu_present_stage.h
     runtime/gpu_scanout.cpp runtime/gpu_scanout.h
     runtime/gpu_scanout_gamma.cpp runtime/gpu_scanout_gamma.h
@@ -38,7 +40,9 @@ formatted=(
 resource_dir=$(clang++ -print-resource-dir)
 "$tidy" -p "$build_dir" \
     runtime/debug_http.cpp runtime/graphics_probe.cpp runtime/graphics_probe_render.cpp \
-    runtime/gpu_draw.cpp runtime/gpu_draw_vertexfetch.cpp \
+    runtime/gpu_draw.cpp runtime/gpu_draw_pipelines.cpp \
+    runtime/gpu_draw_point_geometry.cpp runtime/gpu_draw_vertexfetch.cpp \
+    runtime/gpu_draw_xlate.cpp \
     runtime/gpu_present.cpp runtime/gpu_present_stage.cpp \
     runtime/gpu_scanout.cpp runtime/gpu_scanout_gamma.cpp runtime/input.cpp \
     runtime/render_thread.cpp \

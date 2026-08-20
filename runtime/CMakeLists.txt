@@ -276,6 +276,7 @@ if(Vulkan_FOUND AND GEARS_HAVE_XENOS_TRANSLATOR)
     # none of its header world.
     add_library(gears_draw_xlate STATIC
         gpu_draw_depth_bias.cpp
+        gpu_draw_point_geometry.cpp
         gpu_draw_texture_decode.cpp
         gpu_draw_xlate.cpp)
     target_compile_definitions(gears_draw_xlate PRIVATE GEARS_HAVE_GUEST_DRAW)

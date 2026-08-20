@@ -26,16 +26,18 @@ namespace gears::draw
 
 struct PipelineCache
 {
-    PipelineCache(Renderer& r, RendererPersistent& p)
+    PipelineCache(Renderer &r, RendererPersistent &p)
         : R(r), P(p), texLayouts(p.texLayouts), pipeLayouts(p.pipeLayouts),
-          geomShaders(p.geomShaders), pipelines(p.pipelines) {}
+          geomShaders(p.geomShaders), pipelines(p.pipelines)
+    {
+    }
 
-    Renderer& R;
-    RendererPersistent& P;
-    std::map<std::string, VkDescriptorSetLayout>& texLayouts;
-    std::map<std::pair<std::string, std::string>, VkPipelineLayout>& pipeLayouts;
-    std::map<RectangleGeometryShaderKey, VkShaderModule>& geomShaders;
-    decltype(RendererPersistent::pipelines)& pipelines;
+    Renderer &R;
+    RendererPersistent &P;
+    std::map<std::string, VkDescriptorSetLayout> &texLayouts;
+    std::map<std::pair<std::string, std::string>, VkPipelineLayout> &pipeLayouts;
+    std::map<GeometryShaderKey, VkShaderModule> &geomShaders;
+    decltype(RendererPersistent::pipelines) &pipelines;
 
     // Rectangle-list draws seen, and how many were expanded by a geometry
     // shader. Reported by the frame census: a rectangle drawn as a bare triangle
@@ -56,30 +58,24 @@ struct PipelineCache
     // if either could not be created -- there is no drawing without them.
     bool Build();
 
+    bool MakeSetLayout(const std::vector<VkDescriptorSetLayoutBinding> &b,
+                       VkDescriptorSetLayout &l);
 
-    bool MakeSetLayout(const std::vector<VkDescriptorSetLayoutBinding>& b,
-                       VkDescriptorSetLayout& l);
+    std::string TexSignature(const ShaderXlate &x, VkShaderStageFlags stage);
 
+    bool GetTexLayout(const ShaderXlate &x, VkShaderStageFlags stage, VkDescriptorSetLayout &out);
 
-    std::string TexSignature(const ShaderXlate& x, VkShaderStageFlags stage);
+    bool GetPipeLayout(const ShaderXlate &vsX, const ShaderXlate &psX,
+                       VkDescriptorSetLayout &outVsTex, VkDescriptorSetLayout &outPsTex,
+                       VkPipelineLayout &out);
 
+    bool GetRectGeomShader(uint64_t vsModification, VkShaderModule &out);
 
-    bool GetTexLayout(const ShaderXlate& x, VkShaderStageFlags stage,
-                      VkDescriptorSetLayout& out);
+    bool GetPointGeomShader(uint64_t vsModification, uint64_t psModification, VkShaderModule &out);
 
-
-    bool GetPipeLayout(const ShaderXlate& vsX, const ShaderXlate& psX,
-                       VkDescriptorSetLayout& outVsTex,
-                       VkDescriptorSetLayout& outPsTex, VkPipelineLayout& out);
-
-
-    bool GetRectGeomShader(uint64_t vsModification, VkShaderModule& out);
-
-
-    bool GetPipeline(VkShaderModule vsMod, VkShaderModule psMod,
-                     VkShaderModule gsMod, uint32_t primType,
-                     const OutputMergerState& om, VkRenderPass renderPass,
-                     VkPipelineLayout pipeLayout, VkPipeline& out);
+    bool GetPipeline(VkShaderModule vsMod, VkShaderModule psMod, VkShaderModule gsMod,
+                     uint32_t primType, const OutputMergerState &om, VkRenderPass renderPass,
+                     VkPipelineLayout pipeLayout, VkPipeline &out);
 };
 
 } // namespace gears::draw

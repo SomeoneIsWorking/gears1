@@ -67,15 +67,14 @@ struct VertexShaderShape
     uint32_t floatCount = 0;             // float4 constants the shader reads
 };
 
-VertexShaderShape AnalyzeVertexShaderShape(const uint8_t* ucode, size_t size,
-                                           uint64_t hash);
+VertexShaderShape AnalyzeVertexShaderShape(const uint8_t *ucode, size_t size, uint64_t hash);
 
 struct ShaderXlate
 {
     bool ok = false;
-    std::vector<uint8_t> spirv;      // translated SPIR-V module
+    std::vector<uint8_t> spirv;             // translated SPIR-V module
     uint64_t floatBitmap[4] = {0, 0, 0, 0}; // ConstantRegisterMap::float_bitmap
-    uint32_t floatCount = 0;         // number of float4 constants the UBO holds
+    uint32_t floatCount = 0;                // number of float4 constants the UBO holds
     // Whether the stage reads its float constants through the address register
     // rather than at fixed indices -- a bone-palette lookup, i.e. GPU skinning.
     // Carried here as well as in VertexShaderShape because it decides whether a
@@ -85,10 +84,10 @@ struct ShaderXlate
     // produces confident nonsense. The dump states it so the consumer does not
     // have to guess.
     bool floatDynamicAddressing = false;
-    std::vector<ShaderTextureBinding> textures; // binding index == vector index
-    std::vector<ShaderSamplerBinding> samplers; // binding textures.size() + index
+    std::vector<ShaderTextureBinding> textures;      // binding index == vector index
+    std::vector<ShaderSamplerBinding> samplers;      // binding textures.size() + index
     std::vector<ShaderVertexBinding> vertexBindings; // vertex stage only
-    uint32_t samplerCount = 0;       // == samplers.size(); bindings [textures.size(), +samplerCount)
+    uint32_t samplerCount = 0; // == samplers.size(); bindings [textures.size(), +samplerCount)
 };
 
 // A shader's translation is NOT a function of its microcode alone. Xenia's
@@ -104,30 +103,37 @@ struct ShaderXlate
 // So the modification must be derived per draw from the pair plus the registers,
 // exactly as VulkanPipelineCache::GetCurrentVertex/PixelShaderModification does,
 // and the caller must cache translations by (hash, modification), not by hash.
-bool DeriveShaderModifications(const uint32_t* registerFile,
-                               const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
-                               const uint8_t* psUcode, size_t psSize, uint64_t psHash,
-                               uint64_t& vsModification, uint64_t& psModification);
+bool DeriveShaderModifications(const uint32_t *registerFile, const uint8_t *vsUcode, size_t vsSize,
+                               uint64_t vsHash, const uint8_t *psUcode, size_t psSize,
+                               uint64_t psHash, uint64_t &vsModification, uint64_t &psModification);
 
 // Translates the bound hot pair's microcode (big-endian bytes) via Xenia's
 // front end + SPIR-V back end -- the same path that produced the verified .spv.
 // Returns the SPIR-V plus each stage's float-constant map (which real constants
 // the packed float UBO holds, and in what order). false if either stage fails.
-bool TranslateHotPair(const uint32_t* registerFile,
-                      const uint8_t* vsUcode, size_t vsSize, uint64_t vsHash,
-                      const uint8_t* psUcode, size_t psSize, uint64_t psHash,
-                      ShaderXlate& outVs, ShaderXlate& outPs);
+bool TranslateHotPair(const uint32_t *registerFile, const uint8_t *vsUcode, size_t vsSize,
+                      uint64_t vsHash, const uint8_t *psUcode, size_t psSize, uint64_t psHash,
+                      ShaderXlate &outVs, ShaderXlate &outPs);
 
 // The rectangle-list geometry shader's shape. Everything in it is derived from
 // the draw's own vertex-shader modification, so it is exactly as cacheable as
 // the pipeline is.
-struct RectangleGeometryShaderKey
+enum class GeometryShaderType : uint32_t
 {
-    uint32_t interpolatorCount = 0;  // how many vec4s the VS/PS pair exchanges
-    uint32_t clipDistanceCount = 0;  // gl_ClipDistance array size, 0 if unused
-    uint32_t cullDistanceCount = 0;  // gl_CullDistance array size, 0 if unused
+    PointList,
+    RectangleList,
+};
 
-    auto operator<=>(const RectangleGeometryShaderKey&) const = default;
+struct GeometryShaderKey
+{
+    GeometryShaderType type = GeometryShaderType::RectangleList;
+    uint32_t interpolatorCount = 0; // how many vec4s the VS/PS pair exchanges
+    uint32_t clipDistanceCount = 0; // gl_ClipDistance array size, 0 if unused
+    uint32_t cullDistanceCount = 0; // gl_CullDistance array size, 0 if unused
+    bool hasPointSize = false;
+    bool hasPointCoordinates = false;
+
+    auto operator<=>(const GeometryShaderKey &) const = default;
 };
 
 // A rectangle list gives three vertices per rectangle and the hardware infers
@@ -139,21 +145,23 @@ struct RectangleGeometryShaderKey
 // translator), and this is a port of that shader:
 // VulkanPipelineCache::GetGeometryShader, kRectangleList branch.
 //
-// Not ported: the point-list and quad-list branches, the point system-constants
-// UBO, gl_PointSize input and the point-coordinates output. All three of the
-// point-related key fields are gated in Xenia on the draw's prim_type being
-// kPointList, so they are unreachable for a rectangle list rather than being
-// left out for convenience.
-//
 // Deviation from Xenia, deliberate: the clip/cull distance arrays are sized by
 // the modification's ACTUAL user_clip_plane_count, not rounded up to 6. Xenia
 // rounds up "to reduce variants", but the vertex shader it pairs with declares
 // the real count (spirv_shader_translator.cc), so rounding up makes the two
 // stages disagree about a built-in array's size.
-bool DeriveRectangleGeometryShaderKey(uint64_t vsModification,
-                                      RectangleGeometryShaderKey& out);
-bool BuildRectangleGeometryShader(const RectangleGeometryShaderKey& key,
-                                  std::vector<uint32_t>& spirv);
+bool DeriveRectangleGeometryShaderKey(uint64_t vsModification, GeometryShaderKey &out);
+bool BuildRectangleGeometryShader(const GeometryShaderKey &key, std::vector<uint32_t> &spirv);
+
+// Xenos points are rectangles whose width and height come from PA_SU_POINT_SIZE
+// (or a scalar diameter exported by the vertex shader). Vulkan point primitives
+// cannot represent a rectangular size, so Xenia expands each point to a
+// four-vertex triangle strip in a geometry shader. Point coordinates, when the
+// pixel shader requests PsParamGen, are carried in the location immediately
+// following the interpolators.
+bool DerivePointGeometryShaderKey(uint64_t vsModification, uint64_t psModification,
+                                  GeometryShaderKey &out);
+bool BuildPointGeometryShader(const GeometryShaderKey &key, std::vector<uint32_t> &spirv);
 
 // The compute shader that performs a RESOLVE: copies a rectangle from an EDRAM
 // surface's host image into a destination texture's host image, applying the
@@ -171,19 +179,19 @@ bool BuildRectangleGeometryShader(const RectangleGeometryShaderKey& key,
 // one pipeline serves every resolve in a frame.
 struct ResolvePushConstants
 {
-    int32_t srcOffset[2];   // @0,  in SOURCE units: samples
-    int32_t dstOffset[2];   // @8,  in destination pixels
-    int32_t extent[2];      // @16, the DESTINATION extent, in pixels
-    float scale;            // @24, 2^copy_dest_exp_bias
-    uint32_t swapRB;        // @28, copy_dest_swap
+    int32_t srcOffset[2]; // @0,  in SOURCE units: samples
+    int32_t dstOffset[2]; // @8,  in destination pixels
+    int32_t extent[2];    // @16, the DESTINATION extent, in pixels
+    float scale;          // @24, 2^copy_dest_exp_bias
+    uint32_t swapRB;      // @28, copy_dest_swap
     // --- EDRAM is addressed in SAMPLES, the copy's rectangle in PIXELS ------
     // The destination steps one pixel per invocation; the source steps this
     // many samples, which is the surface's own msaa scale (1X 1,1; 2X 1,2;
     // 4X 2,2). Both 1 leaves the copy exactly as it was.
-    int32_t srcScale[2];    // @32
+    int32_t srcScale[2]; // @32
     // Which sample within that pixel the copy starts at
     // (RB_COPY_CONTROL.copy_sample_select).
-    int32_t sampleOffset[2];// @40
+    int32_t sampleOffset[2]; // @40
     // The span the copy averages over, as an offset from the first sample:
     // (0,0) for a single-sample pick, (0,1) for the vertical pair a 2X k01
     // resolve averages, (1,1) for a 4X k0123. The shader always reads FOUR taps
@@ -192,10 +200,10 @@ struct ResolvePushConstants
     // and 4x * 0.25 is exactly x, with one axis set the pair appears twice and
     // 2(a+b) * 0.25 is exactly (a+b)/2. So one code path serves every selector
     // and a single-sample copy is bit-for-bit what it was.
-    int32_t tapDelta[2];    // @48
-    float tapWeight;        // @56, always 0.25 -- see tapDelta
+    int32_t tapDelta[2]; // @48
+    float tapWeight;     // @56, always 0.25 -- see tapDelta
 };
-bool BuildResolveComputeShader(std::vector<uint32_t>& spirv);
+bool BuildResolveComputeShader(std::vector<uint32_t> &spirv);
 
 // EDRAM format reinterpretation, laid out to match the push-constant block in
 // runtime/shaders/edram_reinterpret.comp exactly. The formats are the STORAGE
@@ -213,7 +221,7 @@ struct ReinterpretPushConstants
 // the guest's 24-bit format (float24 20e4 for kD24FS8, unorm24 for kD24S8),
 // packs it with stencil into a dword and writes the bytes as normalised
 // components. `swapRB` in the push constants selects the format: 1 = float24.
-bool BuildDepthResolveComputeShader(std::vector<uint32_t>& spirv);
+bool BuildDepthResolveComputeShader(std::vector<uint32_t> &spirv);
 
 // EDRAM colour/depth aliasing, laid out to match the push-constant block in
 // runtime/shaders/edram_depth_alias.comp exactly.
@@ -227,7 +235,7 @@ struct DepthAliasPushConstants
 // Whether this draw's primitive is POLYGONAL -- Xenia's
 // draw_util::IsPrimitivePolygonal. Culling and faceness apply only to polygons;
 // applying them to points or lines would drop geometry the hardware keeps.
-bool IsPrimitivePolygonal(const uint32_t* registerFile);
+bool IsPrimitivePolygonal(const uint32_t *registerFile);
 
 // WHETHER THIS DRAW RASTERISES AT ALL, AND WHETHER IT NEEDS ITS PIXEL SHADER.
 //
@@ -259,20 +267,20 @@ struct DrawClassification
     bool rasterisationDone = false;
     bool pixelShaderNeeded = false;
 };
-bool ClassifyDraw(const uint32_t* registerFile, const uint8_t* psUcode,
-                  size_t psSize, uint64_t psHash, DrawClassification& out);
+bool ClassifyDraw(const uint32_t *registerFile, const uint8_t *psUcode, size_t psSize,
+                  uint64_t psHash, DrawClassification &out);
 
 // Translates a single stage (vertex or pixel) under the given modification --
 // the value DeriveShaderModifications produced for the draw's pair. Lets the
 // whole-frame backend translate and cache each distinct (shader, modification)
 // once.
-bool TranslateShader(bool isVertex, const uint8_t* ucode, size_t size,
-                     uint64_t hash, uint64_t modification, ShaderXlate& out);
+bool TranslateShader(bool isVertex, const uint8_t *ucode, size_t size, uint64_t hash,
+                     uint64_t modification, ShaderXlate &out);
 
 // Derives the system-constants UBO (Xenia's SpirvShaderTranslator::
 // SystemConstants) from our tracked register file, returned as raw bytes.
 // Ports UpdateSystemConstantValues (non-FSI host-render-targets path).
-std::vector<uint8_t> DeriveSystemConstants(const uint32_t* registerFile);
+std::vector<uint8_t> DeriveSystemConstants(const uint32_t *registerFile);
 
 // The draw's own viewport and scissor, in render-target pixels, derived from
 // the guest's PA_CL_VPORT_*/PA_SC_* registers by Xenia's draw_util
@@ -284,14 +292,14 @@ struct GuestViewport
     float zMin = 0.0f, zMax = 1.0f;
     uint32_t scissorX = 0, scissorY = 0, scissorW = 0, scissorH = 0;
 };
-bool DeriveViewport(const uint32_t* registerFile, GuestViewport& out);
+bool DeriveViewport(const uint32_t *registerFile, GuestViewport &out);
 
 // Sampler state for one shader sampler binding, resolved against the texture
 // fetch constant it names (Xenia texture_util::GetClampModesForDimension plus
 // the kUseFetchConst filter fallbacks).
 struct GuestSamplerState
 {
-    uint32_t magFilter = 0;  // xenos::TextureFilter: 0 point, 1 linear
+    uint32_t magFilter = 0; // xenos::TextureFilter: 0 point, 1 linear
     uint32_t minFilter = 0;
     uint32_t mipFilter = 0;
     uint32_t clamp[3] = {0, 0, 0}; // xenos::ClampMode per axis
@@ -299,7 +307,7 @@ struct GuestSamplerState
 };
 
 // Resolves one shader sampler binding against the fetch constant it names.
-bool DeriveSamplerState(const uint32_t* fetch6, const ShaderSamplerBinding& sb,
-                        GuestSamplerState& out);
+bool DeriveSamplerState(const uint32_t *fetch6, const ShaderSamplerBinding &sb,
+                        GuestSamplerState &out);
 
 } // namespace gears::draw
