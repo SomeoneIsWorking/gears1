@@ -6,4 +6,3 @@ NamespaceIndentation: None
 SortIncludes: Never
 AllowShortFunctionsOnASingleLine: InlineOnly
 AllowShortIfStatementsOnASingleLine: Never
-
