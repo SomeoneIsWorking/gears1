@@ -45,11 +45,11 @@ struct SharedGpu
 
 // Publishes the objects for the other side to adopt. Called once, by whoever
 // created them. Publishing twice is a programming error and is reported.
-void PublishSharedGpu(const SharedGpu& gpu);
+void PublishSharedGpu(const SharedGpu &gpu);
 
 // Returns true and fills `out` when another side has already published. False means
 // nothing has, and the caller should create its own objects and publish them.
-bool AdoptSharedGpu(SharedGpu& out);
+bool AdoptSharedGpu(SharedGpu &out);
 
 // The last rendered frame AS AN IMAGE on the shared device, so the presenter can
 // blit it into the swapchain instead of receiving it through host memory. Only
@@ -69,8 +69,8 @@ struct SharedFrameImage
     uint64_t sequence = 0;
 };
 
-void PublishSharedFrameImage(const SharedFrameImage& frame);
-bool AcquireSharedFrameImage(SharedFrameImage& out);
+void PublishSharedFrameImage(const SharedFrameImage &frame);
+bool AcquireSharedFrameImage(SharedFrameImage &out);
 
 // Whether anything has been published yet, without taking a copy. Used by the
 // teardown paths, which must destroy the device exactly once -- whoever adopted it

@@ -56,6 +56,7 @@
 #include "gpu_draw_probe.h"
 #include "gpu_draw_resolve_decode.h"
 #include "gpu_draw_resolve_plan.h"
+#include "gpu_resolve_extent.h"
 #include "gpu_draw_indices.h"
 #include "gpu_draw_uniforms.h"
 #include "gpu_draw_vertexfetch.h"
@@ -1931,11 +1932,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // a frame against an accidental multi-frame corpus.
     const bool dumpEachResolve = gears::ShouldCaptureFrameArtifact(
         in.report, lucent::config::flag("DRAW_RESOLVE_DUMP_EACH"));
-    // The PPM snapshots below intentionally clamp HDR to [0,1]. That makes a
-    // useful visual artefact, but it cannot answer whether the input to the
-    // bloom threshold actually crossed 1.0. Keep the exact host half-floats
-    // alongside it when explicitly requested; the file is an instrument
-    // payload, not an image to be guessed at.
+    // PPM snapshots clamp HDR to [0,1] and cannot answer whether bloom crossed
+    // 1.0. The opt-in exact half-floats are the instrument payload for that.
     const bool dumpResolveFloat = lucent::config::flag("DRAW_RESOLVE_DUMP_FLOAT");
     uint32_t resolveOrdinal = 0;
     // Records a copy of `r`'s image into a fresh readback buffer. Returns false
@@ -2990,11 +2988,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
                                          rd.destPitch, rd.destHeight, rd.guestFormat, rd.base,
                                          rd.drawIndex);
             };
-            // This raw file is exactly the mapped VkImage copy: little-endian
-            // Raw colour is RGBA16F; its geometry and draw are in the stem.
             if (dumpResolveFloat && !rd.isDepth)
             {
-                const std::filesystem::path raw = dumpDir / (dumpStem() + ".rgba16f");
+                const std::filesystem::path raw =
+                    dumpDir / (dumpStem() +
+                               ResolveSampleExtentSuffix(rd.w, rd.h, rd.destPitch, rd.destHeight) +
+                               ".rgba16f");
                 std::ofstream out;
                 if (EnsureParentDirectory(raw))
                     out.open(raw, std::ios::binary | std::ios::trunc);

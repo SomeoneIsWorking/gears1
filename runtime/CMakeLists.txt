@@ -231,6 +231,7 @@ add_library(gears_draw STATIC
     gpu_instance.cpp
     gpu_queue_family.cpp
     gpu_renderer_capacity.cpp
+    gpu_resolve_extent.cpp
     gpu_scanout.cpp
     gpu_scanout_gamma.cpp
     gpu_shared_device.cpp

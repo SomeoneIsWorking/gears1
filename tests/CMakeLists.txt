@@ -413,6 +413,12 @@ target_include_directories(test_guest_texture_hash PRIVATE ../runtime
     "${THIRDPARTY_ROOT}/xxHash")
 add_test(NAME guest_texture_hash COMMAND test_guest_texture_hash)
 
+add_executable(test_gpu_resolve_extent
+    test_gpu_resolve_extent.cpp
+    ../runtime/gpu_resolve_extent.cpp)
+target_include_directories(test_gpu_resolve_extent PRIVATE ../runtime)
+add_test(NAME gpu_resolve_extent COMMAND test_gpu_resolve_extent)
+
 if(TARGET gears_draw_xlate)
     add_executable(test_guest_texture_decode test_guest_texture_decode.cpp)
     target_include_directories(test_guest_texture_decode PRIVATE
@@ -434,6 +440,7 @@ if(Vulkan_FOUND)
     add_executable(test_swapchain_format test_swapchain_format.cpp)
     target_include_directories(test_swapchain_format PRIVATE ../runtime ${Vulkan_INCLUDE_DIRS})
     add_test(NAME swapchain_format COMMAND test_swapchain_format)
+
 endif()
 
 # The audio pump's pacing policy. What a pump does with slots it MISSED decides

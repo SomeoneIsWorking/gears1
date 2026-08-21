@@ -17,7 +17,7 @@
 namespace gears::draw
 {
 
-bool RenderTargetCache::MakeRenderPass(VkFormat colorFormat, bool load, VkRenderPass& out)
+bool RenderTargetCache::MakeRenderPass(VkFormat colorFormat, bool load, VkRenderPass &out)
 {
     VkAttachmentDescription att[2]{};
     att[0].format = colorFormat;
@@ -26,8 +26,7 @@ bool RenderTargetCache::MakeRenderPass(VkFormat colorFormat, bool load, VkRender
     att[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     att[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     att[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    att[0].initialLayout = load ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
-                                : VK_IMAGE_LAYOUT_UNDEFINED;
+    att[0].initialLayout = load ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
     att[0].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     att[1].format = depthFormat;
     att[1].samples = VK_SAMPLE_COUNT_1_BIT;
@@ -37,11 +36,10 @@ bool RenderTargetCache::MakeRenderPass(VkFormat colorFormat, bool load, VkRender
     // shadow pass just made, which is the same as having no stencil at all: the
     // pass that reads them runs a segment later, after the render pass has been
     // ended and re-begun for a resolve or a surface change (catalog #91).
-    att[1].stencilLoadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD
-                                : VK_ATTACHMENT_LOAD_OP_CLEAR;
+    att[1].stencilLoadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     att[1].stencilStoreOp = VK_ATTACHMENT_STORE_OP_STORE;
-    att[1].initialLayout = load ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-                                : VK_IMAGE_LAYOUT_UNDEFINED;
+    att[1].initialLayout =
+        load ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
     att[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     VkAttachmentReference cref{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference dref{1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL};
@@ -74,8 +72,7 @@ bool RenderTargetCache::MakeRenderPass(VkFormat colorFormat, bool load, VkRender
     return true;
 }
 
-bool RenderTargetCache::GetPasses(VkFormat colorFormat,
-                                  std::pair<VkRenderPass, VkRenderPass>*& out)
+bool RenderTargetCache::GetPasses(VkFormat colorFormat, std::pair<VkRenderPass, VkRenderPass> *&out)
 {
     auto it = P.passes.find(colorFormat);
     if (it == P.passes.end())
@@ -95,10 +92,14 @@ std::map<uint32_t, std::set<uint32_t>> formatsPerBase;
 // The render-target cache proper: a host colour target per EDRAM surface,
 // created the first time a frame renders into that (base, format) and kept
 // for the life of the run like every other persistent object here.
-bool RenderTargetCache::GetSurfaceTarget(uint32_t base, SurfaceTarget*& out)
+bool RenderTargetCache::GetSurfaceTarget(uint32_t base, SurfaceTarget *&out)
 {
     auto it = P.surfaceTargets.find(base);
-    if (it != P.surfaceTargets.end()) { out = &it->second; return true; }
+    if (it != P.surfaceTargets.end())
+    {
+        out = &it->second;
+        return true;
+    }
     auto fmts = formatsPerBase.find(base);
     if (fmts == formatsPerBase.end())
         return false;
@@ -106,7 +107,7 @@ bool RenderTargetCache::GetSurfaceTarget(uint32_t base, SurfaceTarget*& out)
     const VkFormat hostFormat = HostFormatFor(fmts->second, mixed);
     if (hostFormat == VK_FORMAT_UNDEFINED)
         return false;
-    std::pair<VkRenderPass, VkRenderPass>* rp = nullptr;
+    std::pair<VkRenderPass, VkRenderPass> *rp = nullptr;
     if (!GetPasses(hostFormat, rp))
         return false;
     SurfaceTarget s;
@@ -177,14 +178,14 @@ bool RenderTargetCache::GetSurfaceTarget(uint32_t base, SurfaceTarget*& out)
     // those formats also uses another, which widens the host format to float
     // and makes the question moot -- so it is UNTESTED rather than known
     // good, and a first occurrence must not look like a normal frame.
-    if (s.hostFormat == VK_FORMAT_R16G16_SNORM ||
-        s.hostFormat == VK_FORMAT_R16G16B16A16_SNORM)
-        lucent::warn("draw", "surface {:#x} has an SNORM host format: the"
-            " guest's -32..32 range is TRUNCATED to -1..1 and this renderer"
-            " does not apply the /32 remap that would preserve it (Xenia does,"
-            " via color_exp_bias -= 5). Anything this surface renders outside"
-            " -1..1 is wrong. This path has never been exercised before now",
-            base);
+    if (s.hostFormat == VK_FORMAT_R16G16_SNORM || s.hostFormat == VK_FORMAT_R16G16B16A16_SNORM)
+        lucent::warn("draw",
+                     "surface {:#x} has an SNORM host format: the"
+                     " guest's -32..32 range is TRUNCATED to -1..1 and this renderer"
+                     " does not apply the /32 remap that would preserve it (Xenia does,"
+                     " via color_exp_bias -= 5). Anything this surface renders outside"
+                     " -1..1 is wrong. This path has never been exercised before now",
+                     base);
     out = &P.surfaceTargets.emplace(base, s).first->second;
     return true;
 }
@@ -217,16 +218,18 @@ uint64_t resolveGeneration = 0;
 // first use. A framebuffer names its attachments, so a surface rendered against
 // two depth targets needs two of them -- and surface 0x2d0 of a gameplay frame
 // is rendered against both the scene's depth and the shadow atlas's.
-bool RenderTargetCache::GetFramebuffer(SurfaceTarget& s, uint32_t depthBase,
-                                       VkFramebuffer& out)
+bool RenderTargetCache::GetFramebuffer(SurfaceTarget &s, uint32_t depthBase, VkFramebuffer &out)
 {
     auto it = s.fbs.find(depthBase);
     if (it != s.fbs.end())
-    { out = it->second; return true; }
-    DepthTarget* d = nullptr;
+    {
+        out = it->second;
+        return true;
+    }
+    DepthTarget *d = nullptr;
     if (!GetDepthTarget(depthBase, d) || !d)
         return false;
-    std::pair<VkRenderPass, VkRenderPass>* rp = nullptr;
+    std::pair<VkRenderPass, VkRenderPass> *rp = nullptr;
     if (!GetPasses(s.hostFormat, rp))
         return false;
     VkImageView atts[2] = {s.colorView, d->attachView};
@@ -244,9 +247,10 @@ bool RenderTargetCache::GetFramebuffer(SurfaceTarget& s, uint32_t depthBase,
     return true;
 }
 
-bool RenderTargetCache::GetDepthTarget(uint32_t base, DepthTarget*& out)
+bool RenderTargetCache::GetDepthTarget(uint32_t base, DepthTarget *&out)
 {
-    auto bind = [&](DepthTarget& d) {
+    auto bind = [&](DepthTarget &d)
+    {
         P.depth = d.image;
         P.depthMem = d.mem;
         P.depthView = d.attachView;
@@ -257,7 +261,10 @@ bool RenderTargetCache::GetDepthTarget(uint32_t base, DepthTarget*& out)
     };
     auto it = P.depthTargets.find(base);
     if (it != P.depthTargets.end())
-    { bind(it->second); return true; }
+    {
+        bind(it->second);
+        return true;
+    }
 
     DepthTarget d;
     VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -271,14 +278,15 @@ bool RenderTargetCache::GetDepthTarget(uint32_t base, DepthTarget*& out)
     // SAMPLED: the depth resolve and the aliasing pass read it in compute, and a
     // depth image cannot be a storage image. TRANSFER_DST: the guest's own
     // mid-frame depth clear is a vkCmdClearDepthStencilImage, which requires it.
-    ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-               VK_IMAGE_USAGE_SAMPLED_BIT |
+    ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
                VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (vkCreateImage(R.device, &ci, nullptr, &d.image) != VK_SUCCESS)
     {
-        lucent::warn("draw", "render-target cache: could not create the depth"
-            " target for base {:#x}; draws against it will use the last one"
-            " bound, which is the shared-depth behaviour this replaced", base);
+        lucent::warn("draw",
+                     "render-target cache: could not create the depth"
+                     " target for base {:#x}; draws against it will use the last one"
+                     " bound, which is the shared-depth behaviour this replaced",
+                     base);
         return false;
     }
     VkMemoryRequirements req{};
@@ -298,8 +306,7 @@ bool RenderTargetCache::GetDepthTarget(uint32_t base, DepthTarget*& out)
     vi.format = depthFormat;
     // The ATTACHMENT view names both aspects; a sampled view may name only one,
     // which is why there are three.
-    vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
-                           0, 1, 0, 1};
+    vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
     if (vkCreateImageView(R.device, &vi, nullptr, &d.attachView) != VK_SUCCESS)
         return false;
     vi.subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
@@ -308,22 +315,26 @@ bool RenderTargetCache::GetDepthTarget(uint32_t base, DepthTarget*& out)
     vi.subresourceRange = {VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
     if (vkCreateImageView(R.device, &vi, nullptr, &d.stencilSampledView) != VK_SUCCESS)
         return false;
-    lucent::info("draw", "render-target cache: new DEPTH target for base {:#x}"
-        " ({}x{}), {} in this run so far", base, W, H,
-        P.depthTargets.size() + 1);
+    lucent::info("draw",
+                 "render-target cache: new DEPTH target for base {:#x}"
+                 " ({}x{}), {} in this run so far",
+                 base, W, H, P.depthTargets.size() + 1);
     bind(P.depthTargets.emplace(base, d).first->second);
     return true;
 }
 
-bool RenderTargetCache::GetResolveTarget(uint32_t destBase, uint32_t sourceBase,
-                                         uint32_t destPitch, uint32_t destHeight,
-                                         uint32_t destFormat, bool isDepth,
-                                         ResolveTarget*& out,
-                                         uint32_t& rowOffsetOut)
+bool RenderTargetCache::GetResolveTarget(uint32_t destBase, uint32_t sourceBase, uint32_t destPitch,
+                                         uint32_t destHeight, uint32_t logicalWidth,
+                                         uint32_t logicalHeight, uint32_t destFormat, bool isDepth,
+                                         ResolveTarget *&out, uint32_t &rowOffsetOut)
 {
     rowOffsetOut = 0;
     auto it = P.resolveTargets.find(destBase);
-    if (it != P.resolveTargets.end()) { out = &it->second; return true; }
+    if (it != P.resolveTargets.end())
+    {
+        out = &it->second;
+        return true;
+    }
     ++resolveGeneration; // a view that did not exist for earlier draws
     // Does this base fall INSIDE a texture we already have? That is the
     // predicated-tile case: the guest folds the tile's row offset into
@@ -333,7 +344,7 @@ bool RenderTargetCache::GetResolveTarget(uint32_t destBase, uint32_t sourceBase,
     const uint32_t bpp = ColorFormatBytesPerPixel(destFormat);
     if (bpp != 0 && destPitch != 0)
     {
-        for (auto& [k, r] : P.resolveTargets)
+        for (auto &[k, r] : P.resolveTargets)
         {
             if (r.pitch != destPitch || r.bpp != bpp || destBase <= r.base)
                 continue;
@@ -346,10 +357,11 @@ bool RenderTargetCache::GetResolveTarget(uint32_t destBase, uint32_t sourceBase,
                 continue;
             rowOffsetOut = uint32_t(row);
             out = &r;
-            lucent::info("draw", "render-target cache: resolve destination"
-                " {:#x} is row {} of the texture at {:#x} ({}x{}), not a"
-                " target of its own", destBase, rowOffsetOut, r.base,
-                r.pitch, r.height);
+            lucent::info("draw",
+                         "render-target cache: resolve destination"
+                         " {:#x} is row {} of the texture at {:#x} ({}x{}), not a"
+                         " target of its own",
+                         destBase, rowOffsetOut, r.base, r.pitch, r.height);
             return true;
         }
     }
@@ -357,8 +369,7 @@ bool RenderTargetCache::GetResolveTarget(uint32_t destBase, uint32_t sourceBase,
         ++resolveNoFormat;
     // A depth destination holds a float depth in .x, so it gets full
     // 32-bit precision; a colour one gets the wide float container.
-    const VkFormat hostFormat = isDepth ? VK_FORMAT_R32_SFLOAT
-                                        : VK_FORMAT_R16G16B16A16_SFLOAT;
+    const VkFormat hostFormat = isDepth ? VK_FORMAT_R32_SFLOAT : VK_FORMAT_R16G16B16A16_SFLOAT;
     ResolveTarget r;
     r.isDepth = isDepth;
     r.hostFormat = hostFormat;
@@ -371,18 +382,26 @@ bool RenderTargetCache::GetResolveTarget(uint32_t destBase, uint32_t sourceBase,
     VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ci.imageType = VK_IMAGE_TYPE_2D;
     ci.format = hostFormat;
-    // The texture's OWN size, as the guest declared it -- not the frame's.
-    // A tile resolve declares the full destination height (720) even though
-    // it writes only its own rows, which is exactly what makes the whole
-    // texture addressable for the tile that follows.
-    r.width = destPitch ? std::min<uint32_t>(destPitch, 8192) : W;
-    r.imageHeight = destHeight ? std::min<uint32_t>(destHeight, 8192) : H;
+    // RB_COPY_DEST_PITCH is the guest-memory ROW STRIDE, not the sampled
+    // texture width. UE3's bloom target is logically 322x182 at pitch 352.
+    // A Vulkan sampled image made 352 pixels wide changes every normalized
+    // texture coordinate and makes the first blur lose the upper-right glow.
+    // Use the unique consumer fetch extent when the frame supplies one; keep
+    // pitch/height separately above for routing and pass identity.
+    const uint32_t fallbackWidth = destPitch ? destPitch : W;
+    const uint32_t fallbackHeight = destHeight ? destHeight : H;
+    r.width = std::min<uint32_t>(logicalWidth ? logicalWidth : fallbackWidth, 8192);
+    r.imageHeight = std::min<uint32_t>(logicalHeight ? logicalHeight : fallbackHeight, 8192);
     ci.extent = {r.width, r.imageHeight, 1};
     ci.mipLevels = 1;
     ci.arrayLayers = 1;
     ci.samples = VK_SAMPLE_COUNT_1_BIT;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
-    ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    // TRANSFER_SRC is required by the per-resolve readback instrument. Keep it
+    // on every destination because the image's usage is fixed at creation and
+    // dumping is a runtime control, not a different cache type.
+    ci.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+               VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     const bool canStore = FormatSupportsStorage(R.physical, ci.format);
     if (canStore)
         ci.usage |= VK_IMAGE_USAGE_STORAGE_BIT; // the resolve writes it
@@ -416,9 +435,11 @@ bool RenderTargetCache::GetResolveTarget(uint32_t destBase, uint32_t sourceBase,
         if (vkCreateImageView(R.device, &vi, nullptr, &r.storageView) != VK_SUCCESS)
             return false;
     }
-    lucent::info("draw", "render-target cache: resolve destination {:#x} <- surface"
-        " {:#x} ({}x{} px, {} bytes/px, host image {}x{})", destBase, sourceBase,
-        destPitch, destHeight, bpp, r.width, r.imageHeight);
+    lucent::info("draw",
+                 "render-target cache: resolve destination {:#x} <- surface"
+                 " {:#x} (guest pitch/height {}x{}, logical sampled extent {}x{},"
+                 " {} bytes/px)",
+                 destBase, sourceBase, destPitch, destHeight, r.width, r.imageHeight, bpp);
     out = &P.resolveTargets.emplace(destBase, r).first->second;
     return true;
 }
@@ -444,10 +465,10 @@ void RenderTargetCache::BuildResolvePipeline()
                 VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
             sli.bindingCount = 2;
             sli.pBindings = binds;
-            VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                                    sizeof(ResolvePushConstants)};
+            VkPushConstantRange pcr{VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(ResolvePushConstants)};
             if (vkCreateShaderModule(R.device, &smi, nullptr, &P.resolveModule) == VK_SUCCESS &&
-                vkCreateDescriptorSetLayout(R.device, &sli, nullptr, &P.resolveSetLayout) == VK_SUCCESS)
+                vkCreateDescriptorSetLayout(R.device, &sli, nullptr, &P.resolveSetLayout) ==
+                    VK_SUCCESS)
             {
                 VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
                 pli.setLayoutCount = 1;
@@ -456,15 +477,14 @@ void RenderTargetCache::BuildResolvePipeline()
                 pli.pPushConstantRanges = &pcr;
                 if (vkCreatePipelineLayout(R.device, &pli, nullptr, &P.resolveLayout) == VK_SUCCESS)
                 {
-                    VkComputePipelineCreateInfo cpi{
-                        VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+                    VkComputePipelineCreateInfo cpi{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
                     cpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
                     cpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
                     cpi.stage.module = P.resolveModule;
                     cpi.stage.pName = "main";
                     cpi.layout = P.resolveLayout;
-                    if (vkCreateComputePipelines(R.device, VK_NULL_HANDLE, 1, &cpi,
-                            nullptr, &P.resolvePipeline) != VK_SUCCESS)
+                    if (vkCreateComputePipelines(R.device, VK_NULL_HANDLE, 1, &cpi, nullptr,
+                                                 &P.resolvePipeline) != VK_SUCCESS)
                         P.resolvePipeline = VK_NULL_HANDLE;
                 }
             }
@@ -489,15 +509,18 @@ void RenderTargetCache::BuildResolvePipeline()
                 dsli.pBindings = dbinds;
                 VkPushConstantRange dpcr{VK_SHADER_STAGE_COMPUTE_BIT, 0,
                                          sizeof(ResolvePushConstants)};
-                if (vkCreateShaderModule(R.device, &smi, nullptr, &P.resolveDepthModule) == VK_SUCCESS &&
-                    vkCreateDescriptorSetLayout(R.device, &dsli, nullptr, &P.resolveDepthSetLayout) == VK_SUCCESS)
+                if (vkCreateShaderModule(R.device, &smi, nullptr, &P.resolveDepthModule) ==
+                        VK_SUCCESS &&
+                    vkCreateDescriptorSetLayout(R.device, &dsli, nullptr,
+                                                &P.resolveDepthSetLayout) == VK_SUCCESS)
                 {
                     VkPipelineLayoutCreateInfo dpli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
                     dpli.setLayoutCount = 1;
                     dpli.pSetLayouts = &P.resolveDepthSetLayout;
                     dpli.pushConstantRangeCount = 1;
                     dpli.pPushConstantRanges = &dpcr;
-                    if (vkCreatePipelineLayout(R.device, &dpli, nullptr, &P.resolveDepthLayout) == VK_SUCCESS)
+                    if (vkCreatePipelineLayout(R.device, &dpli, nullptr, &P.resolveDepthLayout) ==
+                        VK_SUCCESS)
                     {
                         VkComputePipelineCreateInfo dcpi{
                             VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
@@ -506,8 +529,8 @@ void RenderTargetCache::BuildResolvePipeline()
                         dcpi.stage.module = P.resolveDepthModule;
                         dcpi.stage.pName = "main";
                         dcpi.layout = P.resolveDepthLayout;
-                        if (vkCreateComputePipelines(R.device, VK_NULL_HANDLE, 1, &dcpi,
-                                nullptr, &P.resolveDepthPipeline) != VK_SUCCESS)
+                        if (vkCreateComputePipelines(R.device, VK_NULL_HANDLE, 1, &dcpi, nullptr,
+                                                     &P.resolveDepthPipeline) != VK_SUCCESS)
                             P.resolveDepthPipeline = VK_NULL_HANDLE;
                     }
                 }
@@ -516,13 +539,13 @@ void RenderTargetCache::BuildResolvePipeline()
                 lucent::info("draw", "depth resolve compute pipeline built");
             else
                 lucent::error("draw", "depth resolve compute pipeline unavailable --"
-                    " passes that sample resolved depth will keep reading stale"
-                    " guest memory");
+                                      " passes that sample resolved depth will keep reading stale"
+                                      " guest memory");
         }
 
         if (P.resolvePipeline == VK_NULL_HANDLE)
             lucent::error("draw", "resolve compute pipeline unavailable -- resolves"
-                " will copy without the guest's exponent bias or red/blue swap");
+                                  " will copy without the guest's exponent bias or red/blue swap");
         else
             lucent::info("draw", "resolve compute pipeline built");
     }

@@ -18,7 +18,9 @@ import re
 import sys
 
 
-NAME = re.compile(r"_(\d+)x(\d+)_f\d+_[0-9a-fA-F]+_draw\d+\.rgba16f$")
+NAME = re.compile(
+    r"_(\d+)x(\d+)_f\d+_[0-9a-fA-F]+_draw\d+"
+    r"(?:_sample(\d+)x(\d+))?\.rgba16f$")
 
 
 def decode(path):
@@ -27,7 +29,9 @@ def decode(path):
     if not m:
         raise ValueError(f"REFUSING: {p.name} does not carry WIDTHxHEIGHT in the"
                          " required resolve-dump name. NOTHING was decoded.")
-    w, h = map(int, m.groups())
+    guest_w, guest_h, sampled_w, sampled_h = m.groups()
+    w = int(sampled_w or guest_w)
+    h = int(sampled_h or guest_h)
     raw = p.read_bytes()
     want = w * h * 4 * 2
     if len(raw) != want:
@@ -62,14 +66,31 @@ def report(a, label):
 def selftest():
     import numpy as np
     # Positive: genuine HDR must remain distinguishable from a dim result after
-    # half-float conversion. Negative: malformed byte count must refuse.
+    # half-float conversion. The filename path also proves guest pitch and
+    # logical sampled width stay distinct. Negative: malformed byte count must
+    # refuse.
     a = np.array([[[0.0, 0.25, 1.5, 1.0], [2.0, 0.0, 0.0, 1.0]]], np.float16)
     b = a.astype(np.float32)
     good = int(((b[..., :3] > 1.0).any(axis=-1)).sum()) == 2
-    bad = len(a.tobytes()) != 3 * 1 * 4 * 2
+    work = pathlib.Path("scratch/resolve_float_stats_selftest")
+    work.mkdir(parents=True, exist_ok=True)
+    sample = work / "resolve_00_srcC5A0_32x1_f32_00000000_draw0_sample2x1.rgba16f"
+    sample.write_bytes(a.tobytes())
+    decoded, width, height = decode(sample)
+    extent_good = decoded.shape == (1, 2, 4) and width == 2 and height == 1
+    malformed = work / "resolve_01_srcC5A0_32x1_f32_00000000_draw1_sample3x1.rgba16f"
+    malformed.write_bytes(a.tobytes())
+    try:
+        decode(malformed)
+        bad = False
+    except ValueError:
+        bad = True
     print(f"HDR positive: two pixels above 1.0 -> {'PASS' if good else 'FAIL'}")
-    print(f"wrong-length negative: 16 bytes for 3x1 -> {'PASS' if bad else 'FAIL'}")
-    return 0 if good and bad else 1
+    print(f"logical extent: 32-pixel pitch / 2 sampled pixels -> "
+          f"{'PASS' if extent_good else 'FAIL'}")
+    print(f"wrong-length negative: 16 bytes for sampled 3x1 -> "
+          f"{'PASS' if bad else 'FAIL'}")
+    return 0 if good and extent_good and bad else 1
 
 
 def main():

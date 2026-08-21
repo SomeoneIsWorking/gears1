@@ -1,11 +1,11 @@
 ---
 id: 81
 title: The bloom chain renders entirely black, so the tonemap composites with no highlights
-status: open
+status: resolved
 symptom: surface 0x5a0 has 0 non-black pixels after every one of its draws, and its resolve target is 0 of 192192 components non-zero
 tags: gpu,draw,bloom,post,tonemap,colour,act1
 created: 2026-08-06
-updated: 2026-08-13
+updated: 2026-08-21
 ---
 
 Found while chasing #62's narrow output range, on `scratch/frames/act1.gfr`
@@ -244,3 +244,6 @@ THE FIRST HDR RETRY WAS ALSO NOT A MEASUREMENT: `camera_pair.sh` supplied no nat
 
 ### Note (2026-08-13)
 THE 2026-08-13 FRESH-PAIR BLOOM CONCLUSION IS RETRACTED: scratch/camerapair_current is provenance-matched and camera-close, but it is not UI-state matched. The native log says `[input] no input source (headless, no GEARS_INPUT_SCRIPT); the pad reports disconnected`, and its final resolve visibly contains the NO STORAGE DEVICE modal. Native draws 1193-1200 are eight blended dialog draws (VS 5363d0746b3ef666 / PS 501ac5d8692bf7b6) after motion blur; oracle frame 873 has the same bright-pass, two blur, composite, and motion-blur shader suffix but no equivalent dialog draws before its final resolve. Therefore the drop at native draw 1201 and the zero-versus-nonzero bloom observation come from a pair with different guest/UI state and are not renderer evidence. The deeper harness cause was asymmetric input policy: the oracle was explicitly launched with an empty schedule while native was supposed to use a millisecond walk, so even commit 698050b only repaired one half. `camera_pair.sh` now generates the oracle and native syntaxes from the same frame-indexed `GEARS_WALK_TABLE` and refuses unless both runtimes log that they accepted their schedule. Existing `layercap3` logs prove the passing class on both sides; `camerapair_current` proves the refusing class. The nearby raw-HDR run remains native-only and unpaired. The acceptance gate is unchanged: a new provenance-stamped HDR pair made with the shared walk, and its images must be inspected for matching overlays before pixel/pass conclusions are accepted. No new GPU run was made in this session.
+
+### Note (2026-08-21)
+2026-08-21: The current exact-state chapter-45 bloom chain is non-black, and its bright-pass output already matched the synchronous oracle. A separate first-blur defect was found and resolved as #114: guest pitch 352 had been used as the normalized sampled width instead of the fetch constant logical width 322. All three current C5A0 passes now have 0.00% of pixels differ by more than 0.1. This closes the remaining bloom-path defect; earlier notes that generalized a black capture were already retracted.

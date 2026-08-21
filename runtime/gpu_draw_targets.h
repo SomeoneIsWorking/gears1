@@ -30,18 +30,19 @@ namespace gears::draw
 
 struct RenderTargetCache
 {
-    RenderTargetCache(Renderer& r, RendererPersistent& p, const FrameDrawInputs& inputs,
-                      uint32_t w, uint32_t h, VkFormat depthFmt)
-        : R(r), P(p), in(inputs), W(w), H(h), depthFormat(depthFmt) {}
+    RenderTargetCache(Renderer &r, RendererPersistent &p, const FrameDrawInputs &inputs, uint32_t w,
+                      uint32_t h, VkFormat depthFmt)
+        : R(r), P(p), in(inputs), W(w), H(h), depthFormat(depthFmt)
+    {
+    }
 
-    Renderer& R;
-    RendererPersistent& P;
-    const FrameDrawInputs& in;
+    Renderer &R;
+    RendererPersistent &P;
+    const FrameDrawInputs &in;
     const uint32_t W, H;
     const VkFormat depthFormat;
 
-
-        std::map<uint32_t, std::set<uint32_t>> formatsPerBase;
+    std::map<uint32_t, std::set<uint32_t>> formatsPerBase;
 
     std::vector<VkDescriptorSet> resolveSets;
     uint32_t resolveSetsUsed = 0;
@@ -73,7 +74,7 @@ struct RenderTargetCache
     // to fall in with the not-read case and silently relabel the surface
     // (catalog #91).
     uint32_t reinterpretsNoWrite = 0;
-    std::set<uint64_t> reinterpretPairs;        // (from << 32) | to
+    std::set<uint64_t> reinterpretPairs; // (from << 32) | to
     std::set<uint64_t> reinterpretRefusedPairs;
     std::set<uint64_t> reinterpretNotReadPairs;
     // GEARS_DRAW_NOCONVERT: conversions this run was told to skip, so a control
@@ -95,44 +96,44 @@ struct RenderTargetCache
     // that point resolved the same binding to a stub or to guest memory.
     uint64_t resolveGeneration = 0;
 
+    // Two variants of the same pass per host colour format: one that CLEARS the
+    // surface (its first use in a frame) and one that LOADS it (every use
+    // after, so the console's predicated tiles accumulate). The frame is also
+    // split at every surface change and at every resolve, because a surface can
+    // only be blitted out while no pass is open on it.
+    bool MakeRenderPass(VkFormat colorFormat, bool load, VkRenderPass &out);
 
-// Two variants of the same pass per host colour format: one that CLEARS the
-// surface (its first use in a frame) and one that LOADS it (every use
-// after, so the console's predicated tiles accumulate). The frame is also
-// split at every surface change and at every resolve, because a surface can
-// only be blitted out while no pass is open on it.
-    bool MakeRenderPass(VkFormat colorFormat, bool load, VkRenderPass& out);
+    // One (clear, load) pair per host colour format, created on first use.
+    bool GetPasses(VkFormat colorFormat, std::pair<VkRenderPass, VkRenderPass> *&out);
 
-// One (clear, load) pair per host colour format, created on first use.
-    bool GetPasses(VkFormat colorFormat, std::pair<VkRenderPass, VkRenderPass>*& out);
+    // Every RB_COLOR_INFO.color_format the frame renders each EDRAM base with,
+    // filled by the pre-pass further down and read by getSurfaceTarget, which
+    // sizes one host image per base wide enough to hold all of them.
+    bool GetSurfaceTarget(uint32_t base, SurfaceTarget *&out);
 
-// Every RB_COLOR_INFO.color_format the frame renders each EDRAM base with,
-// filled by the pre-pass further down and read by getSurfaceTarget, which
-// sizes one host image per base wide enough to hold all of them.
-    bool GetSurfaceTarget(uint32_t base, SurfaceTarget*& out);
+    // The depth+stencil image an RB_DEPTH_INFO.depth_base owns, created on demand
+    // and BOUND as a side effect (see the comment on the definition): P.depth and
+    // its three views become this target's, so every user of them works on the base
+    // last asked for.
+    bool GetDepthTarget(uint32_t base, DepthTarget *&out);
 
-// The depth+stencil image an RB_DEPTH_INFO.depth_base owns, created on demand
-// and BOUND as a side effect (see the comment on the definition): P.depth and
-// its three views become this target's, so every user of them works on the base
-// last asked for.
-    bool GetDepthTarget(uint32_t base, DepthTarget*& out);
+    // The framebuffer pairing a colour surface with a depth base, created on demand.
+    bool GetFramebuffer(SurfaceTarget &s, uint32_t depthBase, VkFramebuffer &out);
 
-// The framebuffer pairing a colour surface with a depth base, created on demand.
-    bool GetFramebuffer(SurfaceTarget& s, uint32_t depthBase, VkFramebuffer& out);
-
-// The host image a resolve destination owns.
-//
-// It is always R16G16B16A16_SFLOAT, whatever its source surface's format
-// is, and the resolve is a BLIT rather than a copy. That is not laziness:
-// measured on an Act 1 frame, destination 0xbde0000 receives resolves from
-// BOTH the 8888 tonemap surface at 0x2d0 and the 7e3 HDR surface at 0x400,
-// so no single source format describes it. A wide float destination holds
-// an 8888 UNORM value (0..1) exactly and a 7e3 HDR value (0..32) without
-// clamping, and vkCmdBlitImage does the conversion; an 8888 destination
-// would clamp every HDR highlight the tonemap pass exists to read.
+    // The host image a resolve destination owns.
+    //
+    // It is always R16G16B16A16_SFLOAT, whatever its source surface's format
+    // is, and the resolve is a BLIT rather than a copy. That is not laziness:
+    // measured on an Act 1 frame, destination 0xbde0000 receives resolves from
+    // BOTH the 8888 tonemap surface at 0x2d0 and the 7e3 HDR surface at 0x400,
+    // so no single source format describes it. A wide float destination holds
+    // an 8888 UNORM value (0..1) exactly and a 7e3 HDR value (0..32) without
+    // clamping, and vkCmdBlitImage does the conversion; an 8888 destination
+    // would clamp every HDR highlight the tonemap pass exists to read.
     bool GetResolveTarget(uint32_t destBase, uint32_t sourceBase, uint32_t destPitch,
-                          uint32_t destHeight, uint32_t destFormat, bool isDepth,
-                          ResolveTarget*& out, uint32_t& rowOffsetOut);
+                          uint32_t destHeight, uint32_t logicalWidth, uint32_t logicalHeight,
+                          uint32_t destFormat, bool isDepth, ResolveTarget *&out,
+                          uint32_t &rowOffsetOut);
 
     // --- EDRAM format reinterpretation, in gpu_draw_reinterpret.cpp ---------
     // Built once. Returns false, having said why, when the device or the
@@ -142,8 +143,8 @@ struct RenderTargetCache
     // Convert a surface's contents from one guest colour format to another, in
     // place, through the bits the console's EDRAM would hold. Recorded with no
     // render pass open. Returns false when the pair is one this pass refuses.
-    bool ReinterpretSurface(VkCommandBuffer cmd, SurfaceTarget& t,
-                            uint32_t fromFormat, uint32_t toFormat);
+    bool ReinterpretSurface(VkCommandBuffer cmd, SurfaceTarget &t, uint32_t fromFormat,
+                            uint32_t toFormat);
     // --- EDRAM colour/depth aliasing, in gpu_draw_reinterpret.cpp -----------
     // Built once, like the reinterpretation pipeline. Returns false having said
     // why; a frame that then aliases is reported as unserved rather than
@@ -153,8 +154,7 @@ struct RenderTargetCache
     // base, as the console's single memory does. `isFloat24` is
     // RB_DEPTH_INFO.depth_format at the draw; the surface's own storage format
     // decides how those bits read back. Recorded with no render pass open.
-    bool AliasDepthIntoSurface(VkCommandBuffer cmd, SurfaceTarget& t,
-                               bool isFloat24);
+    bool AliasDepthIntoSurface(VkCommandBuffer cmd, SurfaceTarget &t, bool isFloat24);
     // Aliasing draws served, and the two ways one can fail, kept apart because
     // they mean different things: no descriptor set left is this renderer's
     // budget, a refused surface format is a gap in the shader. Reported at zero
@@ -191,17 +191,15 @@ struct RenderTargetCache
     // frame: the scene depth is kD24FS8 and the shadow maps kD24S8.
     // `srcRect` is in the copy's PIXELS; `smp` says how those map onto the
     // source surface's samples, and is the identity for a 1X source.
-    void ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
-                        const VkRect2D& srcRect, int32_t dstX, int32_t dstY,
-                        bool isFloat24, const ResolveSampling& smp);
+    void ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget &dst, const VkRect2D &srcRect,
+                        int32_t dstX, int32_t dstY, bool isFloat24, const ResolveSampling &smp);
 
     // Colour. `scale` is the guest's copy_dest_exp_bias applied as a multiplier
     // and `swapRB` its copy_dest_swap -- neither of which the blit control arm
     // (GEARS_DRAW_RESOLVE_BLIT=1) can do.
-    void ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarget& srcTarget,
-                          ResolveTarget& dst, const VkRect2D& srcRect,
-                          int32_t dstX, int32_t dstY, float scale, bool swapRB,
-                          const ResolveSampling& smp);
+    void ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarget &srcTarget, ResolveTarget &dst,
+                          const VkRect2D &srcRect, int32_t dstX, int32_t dstY, float scale,
+                          bool swapRB, const ResolveSampling &smp);
 };
 
 } // namespace gears::draw
