@@ -15,8 +15,8 @@ renderer difference:
   theirs  GEARS_ORACLE_RESOLVE_DUMP=<dir> on the Xenia fork. RAW GUEST BYTES of
           the resolve destination, read back off the GPU right after the copy
           and before anything else can touch them -- tiled, in the guest's own
-          format. Named oracle_f<frame>_copy<n>_src<C|D><base>_<w>x<h>_
-          <ADDR>_<LEN>.bin.
+          format. Current names include `_b<TEXTURE_BASE>_<RANGE_ADDR>_<LEN>`
+          so an arbitrary partial tiled range can be located without guessing.
   ours    GEARS_DRAW_RESOLVE_DUMP_EACH=1. Our renderer resolves into HOST images
           keyed by destination address; it never writes guest memory, so there
           are no guest bytes on our side to compare byte-for-byte. Ours arrive
@@ -62,6 +62,8 @@ import re
 import sys
 from pathlib import Path
 
+from xenos_tiled import stored_rows, tiled_offset_2d, untile, untile_range
+
 OURS_RE = re.compile(
     r"resolve_(\d+)_src([CD])([0-9A-F]{3})_(\d+)x(\d+)_f(\d+)_([0-9a-f]{8})"
     r"_draw(\d+)\.ppm$", re.I)
@@ -71,7 +73,7 @@ OURS_RE = re.compile(
 # assuming it is exactly what produced a retracted finding (catalog #96).
 THEIRS_RE = re.compile(
     r"oracle_f(\d+)_copy(\d+)_src([CD])([0-9A-F]{3})_(\d+)x(\d+)_f(\d+)"
-    r"(?:_e(\d+))?_([0-9A-F]{8})_(\d+)\.bin$", re.I)
+    r"(?:_e(\d+))?(?:_b([0-9A-F]{8}))?_([0-9A-F]{8})_(\d+)\.bin$", re.I)
 
 # RB_COPY_DEST_INFO.copy_dest_format values this tool can DECODE, as
 # (name, bytes per pixel). Anything not here is REFUSED per pass rather than
@@ -89,26 +91,6 @@ DECODABLE_FORMATS = {
     25: ("k_16_16", 4),
     32: ("k_16_16_16_16_FLOAT", 8),
 }
-
-def stored_rows(nbytes, width, bpp):
-    """How many rows the guest's buffer actually holds, or None.
-
-    A resolve destination is NOT w*h*bpp. Read out of the dumps' own lengths,
-    which is data the tool used to discard with its refusal:
-
-        1280x720 f32   7,536,640 B / 8 = 942,080 px = 1280 x 736
-         352x182 f32     540,672 B / 8 =  67,584 px =  352 x 192
-        1280x720 f32   5,242,880 B / 8 = 655,360 px = 1280 x 512
-
-    The first two are the height rounded UP to a multiple of 32, which is the
-    tile alignment; the third is SHORT of its 720 rows, because that copy is one
-    predicated 512-row band. Both cases are decodable and the difference matters
-    -- padding is cropped away, a short buffer means the pass only ever held
-    that many rows and saying otherwise would compare our rows against nothing.
-    """
-    if not width or not bpp or nbytes % (width * bpp):
-        return None
-    return nbytes // (width * bpp)
 
 def depth24_to_float(d24, is_float24, np):
     """The guest's 24-bit depth field -> float, both encodings.
@@ -253,7 +235,7 @@ def merge_bands(dumps, np):
     while changed:                       # a surface could be split in 3+ bands
         changed = False
         for k in sorted(dumps):
-            path, dest, length, endian, extra = dumps[k]
+            path, dest, length, endian, base, extra = dumps[k]
             bpp = 4 if k[0] == "D" else DECODABLE_FORMATS.get(k[4], (None, 4))[1]
             rows = stored_rows(length, k[2], bpp)
             if not rows:
@@ -267,9 +249,9 @@ def merge_bands(dumps, np):
                         and dumps[k2][1] == want), None)
             if nxt is None:
                 continue
-            p2, _, l2, e2, x2 = dumps.pop(nxt)
-            dumps[k] = (path, dest, length + l2, endian,
-                        extra + [(p2, l2, e2)] + x2)
+            p2, d2, l2, e2, b2, x2 = dumps.pop(nxt)
+            dumps[k] = (path, dest, length + l2, endian, base,
+                        extra + [(p2, d2, l2, e2, b2)] + x2)
             merged.append((k, nxt))
             changed = True
             break
@@ -279,55 +261,6 @@ def merge_bands(dumps, np):
 def key_str(k):
     src, base, w, h, fmt, nth = k
     return f"src{src}{base:03X} {w}x{h} f{fmt} #{nth}"
-
-
-def tiled_offset_2d(x, y, width, log2_bpp):
-    """Xenos 2D tile address, as Xenia's texture_util computes it.
-
-    Ported rather than approximated: an "almost right" swizzle produces an image
-    that is recognisable but wrong, which is the single most misleading artefact
-    this tool could emit.
-    """
-    macro_y = ((y // 32) * (width // 32)) << (log2_bpp + 7)
-    micro_y = ((y & 6) << 2) << log2_bpp
-    base = (macro_y + ((micro_y & ~15) << 1) + (micro_y & 15)
-            + ((y & 8) << (3 + log2_bpp)) + ((y & 1) << 4))
-    macro_x = (x // 32) << (log2_bpp + 7)
-    micro_x = (x & 7) << log2_bpp
-    offset = base + macro_x + ((micro_x & ~15) << 1) + (micro_x & 15)
-    return (((offset & ~511) << 3) + ((offset & 448) << 2) + (offset & 63)
-            + ((y & 16) << 7) + (((((y & 8) >> 2) + (x >> 3)) & 3) << 6))
-
-
-def untile(raw, width, height, np, bpp=4):
-    """Tiled guest surface -> HxWxbpp uint8. None when the buffer is short.
-
-    `bpp` is the destination format's bytes per pixel: the Xenos tile address
-    is parameterised by log2 of it, and an 8-byte format tiles on a different
-    stride rather than merely reading twice as much.
-    """
-    need = width * height * bpp
-    if len(raw) < need:
-        return None
-    src = np.frombuffer(raw, dtype=np.uint8)
-    ys, xs = np.meshgrid(np.arange(height), np.arange(width), indexing="ij")
-    # Vectorised form of tiled_offset_2d; kept beside the scalar version above
-    # so the two can be checked against each other.
-    y, x = ys.astype(np.int64), xs.astype(np.int64)
-    lb = {4: 2, 8: 3}[bpp]
-    macro_y = ((y // 32) * (width // 32)) << (lb + 7)
-    micro_y = ((y & 6) << 2) << lb
-    base = (macro_y + ((micro_y & ~15) << 1) + (micro_y & 15)
-            + ((y & 8) << (3 + lb)) + ((y & 1) << 4))
-    macro_x = (x // 32) << (lb + 7)
-    micro_x = (x & 7) << lb
-    off = base + macro_x + ((micro_x & ~15) << 1) + (micro_x & 15)
-    off = ((((off & ~511) << 3) + ((off & 448) << 2) + (off & 63)
-            + ((y & 16) << 7) + (((((y & 8) >> 2) + (x >> 3)) & 3) << 6)))
-    if off.max() + bpp > len(src):
-        return None
-    idx = off[..., None] + np.arange(bpp)
-    return src[idx]
 
 
 def selftest(work, np, Image):
@@ -465,6 +398,18 @@ def selftest(work, np, Image):
                     .astype(np.uint8)).save(
         ours_dir / f"resolve_08_srcD001_{kw}x{kh}_f22_00000000_draw8.ppm")
 
+    # The oracle probes the exact contiguous memory range Xenia says a resolve
+    # may modify. A rectangle in a tiled texture is not necessarily a whole
+    # number of linear rows. Base + range address metadata must locate those
+    # bytes and compare only the complete texels actually present.
+    partial_start, partial_end = 512, 3073
+    partial = raw24[partial_start:partial_end]
+    (theirs_dir / f"oracle_f1_copy31_srcD002_{kw}x{kh}_f22_e2_b00001000_"
+                  f"{0x1000 + partial_start:08X}_{len(partial)}.bin").write_bytes(partial)
+    Image.fromarray((np.repeat(ramp[..., None], 3, axis=-1) * 255)
+                    .astype(np.uint8)).save(
+        ours_dir / f"resolve_31_srcD002_{kw}x{kh}_f22_00001000_draw31.ppm")
+
     # FOURTH CASE: a SECOND console frame that agrees BETTER and is structurally
     # WRONG. The window the oracle now dumps exists because equal frame indices
     # are not equal game time, and the frame is chosen on pass STRUCTURE -- so
@@ -572,13 +517,17 @@ def selftest(work, np, Image):
          .split("\n\n")[0]),
         ("the depth pass is reported as not value-compared",
          "values NOT compared" in out),
-        ("both depth passes are counted, and the summary separates the one it"
+        ("all depth passes are counted, and the summary separates those it"
          " compared from the one it could not",
-         "2 DEPTH pass(es) paired on both sides, 1 of them value-compared"
+         "3 DEPTH pass(es) paired on both sides, 2 of them value-compared"
          " and 1 not" in out),
         ("a k_24_8 DEPTH pass is decoded and COMPARED, and matches",
          "srcD001" in out and "match" in
          [ln for ln in out.splitlines() if "srcD001" in ln][0]),
+        ("an arbitrary partial tiled range is located from texture base"
+         " metadata and compared only over available texels",
+         any("srcD002" in ln and "match" in ln and
+             "% of tiled texels" in ln for ln in out.splitlines())),
         ("the colour difference still fires alongside it",
          "DIFFER" in out),
         ("the console frame is chosen on STRUCTURE, not on agreement: the"
@@ -685,10 +634,11 @@ def main(argv):
         d = by_frame.setdefault(frame, ({}, {}))
         nth = d[1].get(k, 0)
         d[1][k] = nth + 1
-        # group(8) is the optional endian; the address and length shift by one.
+        # Base metadata is optional only for older complete-range captures.
         endian = int(m.group(8)) if m.group(8) is not None else None
-        d[0][k + (nth,)] = (p, int(m.group(9), 16), int(m.group(10)), endian,
-                            [])
+        base = int(m.group(9), 16) if m.group(9) is not None else None
+        d[0][k + (nth,)] = (p, int(m.group(10), 16), int(m.group(11)), endian,
+                            base, [])
 
     # THE CONSOLE RESOLVES A FULL-SCREEN SURFACE IN BANDS, because 1280x720 of
     # colour plus depth does not fit in 10 MiB of EDRAM. Rejoined here, per
@@ -797,7 +747,8 @@ def main(argv):
           f"{'mean ours':>10} {'mean theirs':>11}  note")
     for k in shared:
         our_path, our_dest = ours[k]
-        their_path, their_dest, their_len, their_endian, their_extra = theirs[k]
+        (their_path, their_dest, their_len, their_endian, their_base,
+         their_extra) = theirs[k]
         oi = np.asarray(Image.open(our_path).convert("RGB")).astype(np.float32) / 255.0
         h, w = oi.shape[:2]
         # Untile at the key's guest pitch, then crop to the native image's
@@ -810,22 +761,38 @@ def main(argv):
         # separately and stacked -- concatenating the raw bytes and untiling
         # once would swizzle across the seam and produce a plausible image of
         # the wrong thing.
+        def decode_range(data, address, base, height, bpp):
+            rows = stored_rows(len(data), guest_w, bpp)
+            if base is not None and (address != base or rows is None):
+                try:
+                    pixels, valid = untile_range(
+                        data, guest_w, height, address - base, np, bpp)
+                except ValueError:
+                    return None, 0, None
+                return pixels, height, valid
+            pixels = untile(data, guest_w, rows, np, bpp) if rows else None
+            valid = np.ones((rows, guest_w), dtype=bool) if pixels is not None else None
+            return pixels, rows or 0, valid
+
         def their_image(bpp, _raw=raw, _extra=their_extra):
-            rows = stored_rows(len(_raw), guest_w, bpp)
-            first = untile(_raw, guest_w, rows, np, bpp) if rows else None
+            first, rows, first_valid = decode_range(
+                _raw, their_dest, their_base, h, bpp)
             if first is None:
-                return None, 0
-            bands, total = [first], rows
-            for p2, _l2, _e2 in _extra:
+                return None, 0, None
+            bands, masks, total = [first], [first_valid], rows
+            for p2, d2, _l2, _e2, b2 in _extra:
                 b = p2.read_bytes()
-                r2 = stored_rows(len(b), guest_w, bpp)
-                t2 = untile(b, guest_w, r2, np, bpp) if r2 else None
+                t2, r2, v2 = decode_range(b, d2, b2, h - total, bpp)
                 if t2 is None:
-                    return None, 0
+                    return None, 0, None
                 bands.append(t2)
+                masks.append(v2)
                 total += r2
-            return (bands[0] if len(bands) == 1
-                    else np.concatenate(bands, axis=0)), total
+            pixels = (bands[0] if len(bands) == 1
+                      else np.concatenate(bands, axis=0))
+            valid = (masks[0] if len(masks) == 1
+                     else np.concatenate(masks, axis=0))
+            return pixels, total, valid
         # A DEPTH destination is present on both sides but NOT comparable here,
         # and saying "DIFFER" for one would be the tool's own defect reported as
         # the renderer's. The two sides hold different things: ours is the host
@@ -853,16 +820,18 @@ def main(argv):
                          if fmt not in (22, 23)
                          else "this capture does not record copy_dest_endian"))
                 continue
-            ti, rows = their_image(4)
+            ti, rows, available = their_image(4)
             if ti is None:
                 print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
                       f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
-                      f"{their_len} bytes is not a whole number of {w}-wide "
-                      f"rows at 4 B/px")
+                      f"{their_len} bytes does not describe whole rows and the"
+                      f" capture has no texture-base metadata for locating its"
+                      f" partial tiled range")
                 continue
             dshort = ""
             if rows > h:
                 ti = ti[:h]           # padding to the tile alignment
+                available = available[:h]
             elif rows < h:
                 # SHORT, exactly as a colour destination can be: the shadow-map
                 # copies hold 672 of their 864 rows. Compare the rows that
@@ -872,6 +841,14 @@ def main(argv):
                           f" buffer; compared over those]")
                 oi = oi[:rows]
                 h = rows
+            if not available.any():
+                print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
+                      f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: the"
+                      f" dumped byte range contains no complete texels")
+                continue
+            if not available.all():
+                dshort += (f" [{100 * available.mean():.1f}% of tiled texels"
+                           f" are present in this byte range]")
             # 8in32: the dword's bytes are reversed on the way out.
             word = (ti[..., 3].astype(np.uint32)
                     | (ti[..., 2].astype(np.uint32) << 8)
@@ -886,7 +863,8 @@ def main(argv):
             # OUR SIDE IS 8-BIT, so this is a coarse comparison and says so: it
             # answers "is this the same depth buffer", not "is it exact".
             od = oi[..., 0]           # our depth target is written out as grey
-            d = float(np.abs(np.clip(td, 0.0, 1.0) - od).mean())
+            delta = np.abs(np.clip(td, 0.0, 1.0) - od)
+            d = float(delta[available].mean())
             # A DESTINATION IS NOT ALL WRITTEN. A copy writes a RECTANGLE into a
             # texture -- the shadow atlas takes a 448x448 region of an 864-wide
             # one -- and the rest is whatever the guest's memory held, which is
@@ -895,11 +873,12 @@ def main(argv):
             # row carries BOTH numbers. When they disagree it is the second that
             # means something: the shadow maps report 0.196 over the whole
             # destination and 0.0084 over the part the console actually wrote.
-            wrote = td >= 0.01
+            wrote = available & (td >= 0.01)
             note = ("match" if d < 0.02 else f"DIFFER, mean |d| {d:.3f}")
-            if wrote.any() and not wrote.all():
-                dw = float(np.abs(np.clip(td, 0.0, 1.0) - od)[wrote].mean())
-                note += (f"; over the {100 * wrote.mean():.1f}% the console did"
+            if wrote.any() and not np.array_equal(wrote, available):
+                dw = float(delta[wrote].mean())
+                note += (f"; over the {100 * wrote.sum() / available.sum():.1f}%"
+                         f" of available texels the console did"
                          f" NOT leave at zero, mean |d| {dw:.4f}"
                          + (" -- they agree where both wrote" if dw < 0.02
                             else ""))
@@ -926,15 +905,21 @@ def main(argv):
                     continue
                 ta = od[ty:ty + th, tx:tx + tw]
                 tb = np.clip(td, 0.0, 1.0)[ty:ty + th, tx:tx + tw]
-                tw_wrote = tb >= 0.01
+                tv = available[ty:ty + th, tx:tx + tw]
+                if not tv.any():
+                    tile_lines.append(
+                        f"       tile x{tx} y{ty} {tw}x{th}: no texels in the"
+                        f" dumped byte range, NOT compared")
+                    continue
+                tw_wrote = tv & (tb >= 0.01)
                 td_ = (float(np.abs(tb - ta)[tw_wrote].mean())
                        if tw_wrote.any() else float("nan"))
                 empty = " -- UNWRITTEN ON OURS at the cleared value" if (
                     float(ta.min()) > 0.999) else ""
                 tile_lines.append(
                     f"       tile x{tx:>4} y{ty:>4} {tw}x{th} ({n} draw(s)):"
-                    f" console wrote {100 * tw_wrote.mean():5.1f}%,"
-                    f" ours {ta.mean():.4f} theirs {tb.mean():.4f},"
+                    f" console wrote {100 * tw_wrote.sum() / tv.sum():5.1f}%,"
+                    f" ours {ta[tv].mean():.4f} theirs {tb[tv].mean():.4f},"
                     f" |d| {td_:.4f}{empty}")
             if d >= 0.02:
                 side = np.concatenate([np.repeat(od[..., None], 3, axis=-1),
@@ -944,7 +929,7 @@ def main(argv):
                                 .astype(np.uint8)
                                 ).save(out_dir / ("pass_%s%03X_%dx%d_f%d_%d.png" % k))
             print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} {w}x{h} "
-                  f"{od.mean():>10.4f} {td.mean():>11.4f}  {note}")
+                  f"{od[available].mean():>10.4f} {td[available].mean():>11.4f}  {note}")
             for line in tile_lines:
                 print(line)
             continue
@@ -986,20 +971,20 @@ def main(argv):
                   f" read without it. Re-capture with the current oracle")
             continue
         # DECODE AT THE HEIGHT THE BUFFER ACTUALLY HAS, then crop or refuse.
-        ti, rows = their_image(bpp)
-        rows = rows or stored_rows(len(raw), guest_w, bpp)
+        ti, rows, available = their_image(bpp)
         short = ""
-        if rows is None:
+        if ti is None:
             undecoded += 1
             print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
                   f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
-                      f"{their_len} bytes over {guest_w} pitch px at {bpp} B/px"
-                      f" is not a whole"
-                  f" number of rows, so the layout is not what this assumes")
+                  f"{their_len} bytes does not describe whole rows and the"
+                  f" capture has no texture-base metadata for locating its"
+                  f" partial tiled range")
             continue
-        if ti is not None and rows != h:
+        if rows != h:
             if rows > h:
                 ti = ti[:h]           # padding to the tile alignment
+                available = available[:h]
             else:
                 # SHORT: the guest's buffer holds fewer rows than the copy's
                 # rectangle. Compare the rows that exist and say how many, so a
@@ -1008,17 +993,18 @@ def main(argv):
                          f" buffer; compared over those]")
                 oi = oi[:rows]
                 h = rows
-        if ti is None:
-            # REFUSE THIS ROW, loudly, rather than skip it: a pass that could not
-            # be decoded is not a pass that matched.
+        if not available.any():
             undecoded += 1
             print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
                   f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
-                      f"{their_len} bytes is not pitch {guest_w}x{h}x{bpp}"
-                      f" tiled {fmt_name}")
+                  f"the dumped byte range contains no complete texels")
             continue
         # Pitch padding is not sampled content and may hold old EDRAM bits.
         ti = ti[:, :w]
+        available = available[:, :w]
+        if not available.all():
+            short += (f" [{100 * available.mean():.1f}% of tiled texels are"
+                      f" present in this byte range]")
         t = unpack_dest(ti, fmt, np, their_endian or 0)
         # OUR SIDE IS AN 8-BIT PPM, so it is already clamped to 0..1. A float
         # destination on the console is not, and this frame's scene colour
@@ -1031,44 +1017,46 @@ def main(argv):
         # "DIFFER, mean |d| nan" and read as a finding. Counted, reported, and
         # if they dominate, the row is REFUSED rather than averaged around.
         finite = np.isfinite(t).all(axis=-1)
-        bad = int((~finite).sum())
+        bad = int((available & ~finite).sum())
         if bad:
-            frac = bad / float(finite.size)
+            frac = bad / float(available.sum())
             if frac > 0.01:
                 undecoded += 1
                 print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
                       f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
-                      f"{bad} of {finite.size} decoded pixels are NOT FINITE"
+                      f"{bad} of {available.sum()} available pixels are NOT FINITE"
                       f" [{100 * frac:.1f}%], so this is a decode that failed,"
                       f" not a difference")
                 continue
             t = np.where(finite[..., None], t, 0.0)
         clamped = f" [{bad} non-finite pixel(s) zeroed]" if bad else ""
-        if float(t.max()) > 1.0:
+        if float(t[available].max()) > 1.0:
             clamped = (f" [both clamped to 0..1 for the comparison; theirs"
-                       f" reaches {float(t.max()):.2f} and our side is an"
+                       f" reaches {float(t[available].max()):.2f} and our side is an"
                        f" 8-bit PPM]")
             t = np.clip(t, 0.0, 1.0)
         note = ""
         diff = np.abs(t - oi)
-        d = float(diff.mean())
+        d = float(diff[available].mean())
         # A MEAN HIDES THE INTERESTING CASE. The presented buffer differs by a
         # mean of 0.025 and reads as a small difference -- and half its pixels
         # agree to 0.008 while 4.6% of them are off by more than 0.1, which is a
         # localised defect, not a global one. Both numbers, on every row: the
         # share of BADLY differing pixels is what says whether a difference is
         # a wash over the frame or a shape in one part of it.
-        bad = float((diff.max(axis=-1) > 0.1).mean())
-        spread = f"; {100 * bad:.2f}% of pixels differ by more than 0.1"
+        bad_mask = available & (diff.max(axis=-1) > 0.1)
+        bad = float(bad_mask.sum() / available.sum())
+        spread = f"; {100 * bad:.2f}% of available pixels differ by more than 0.1"
         if d < 0.02:
             note = "match" + spread + clamped + short
         else:
             note = f"DIFFER, mean |d| {d:.3f}{spread}{clamped}{short}"
+        if d >= 0.02 or bad > 0.001:
             side = np.concatenate([oi, t], axis=1)
             Image.fromarray((np.clip(side, 0, 1) ** 0.45 * 255).astype(np.uint8)
                             ).save(out_dir / ("pass_%s%03X_%dx%d_f%d_%d.png" % k))
         print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} {w}x{h} "
-              f"{oi.mean():>10.4f} {t.mean():>11.4f}  {note}")
+              f"{oi[available].mean():>10.4f} {t[available].mean():>11.4f}  {note}")
 
     print(f"\n{undecoded} pass(es) were REFUSED (format not decoded here) and are "
           f"NOT counted as matching.\n{depth_pairs} DEPTH pass(es) paired on both "

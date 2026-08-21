@@ -15,8 +15,8 @@ LEGACY_LIMITS = {
     "runtime/gpu_draw_probe.cpp": 1513,
     "runtime/gpu_draw_xlate.cpp": 1444,
     "runtime/gpu_present.cpp": 1414,
-    "tools/layer_compare.py": 1085,
-    "tools/gfr_to_xtr.py": 988,
+    "tools/layer_compare.py": 1073,
+    "tools/gfr_to_xtr.py": 974,
 }
 
 
