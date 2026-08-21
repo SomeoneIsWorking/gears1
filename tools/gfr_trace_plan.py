@@ -70,6 +70,33 @@ def parse_checkpoint(text, resolves, draw_count):
         resolve_index, prefix_count, resolve_draw, selected["depth"])
 
 
+def parse_probe(text, resolves, draw_count):
+    """Parse RESOLVE:PREFIX for a live-state probe copy.
+
+    Unlike a checkpoint, a probe may reuse a resolve whose recorded draw is
+    earlier than the prefix. The prefix establishes the live EDRAM state; the
+    appended resolve contributes only a known-good copy command for observing
+    that state. Keeping this separate from parse_checkpoint prevents an
+    after-the-fact probe from being mislabeled as an earlier checkpoint.
+    """
+    try:
+        resolve_text, prefix_text = text.split(":", 1)
+        resolve_index = int(resolve_text, 0)
+        prefix_count = int(prefix_text, 0)
+    except (AttributeError, TypeError, ValueError):
+        raise ValueError("probe copy must be RESOLVE:PREFIX")
+    if not 0 <= resolve_index < len(resolves):
+        raise ValueError(
+            f"resolve {resolve_index} is absent; capture has {len(resolves)} resolve(s)")
+    if not 0 <= prefix_count <= draw_count:
+        raise ValueError(
+            f"prefix {prefix_count} must be between 0 and the capture's "
+            f"{draw_count} draws")
+    selected = resolves[resolve_index]
+    return CheckpointPlan(
+        resolve_index, prefix_count, selected["draw"], selected["depth"])
+
+
 REGISTER_RUN_GAP = 6
 
 
@@ -104,6 +131,7 @@ def selftest_cases():
         {"draw": 9, "depth": True},
     ]
     checkpoint = parse_checkpoint("0:5", resolves, 10)
+    probe = parse_probe("0:9", resolves, 10)
 
     def refuses(specification):
         try:
@@ -134,4 +162,8 @@ def selftest_cases():
         ("synthetic resolve installs state without callbacks",
          checkpoint.execute_register_callbacks(5), False),
         ("checkpoint refuses work after its resolve", refuses("0:9"), True),
+        ("probe may reuse an earlier resolve after a later prefix",
+         probe.draw_indices, (0, 1, 2, 3, 4, 5, 6, 7, 8, 8)),
+        ("probe installs the reused resolve without callbacks",
+         probe.execute_register_callbacks(9), False),
     ]

@@ -13,7 +13,7 @@ import re
 import sys
 from pathlib import Path
 
-from layer_compare import stored_rows, tiled_offset_2d, untile
+from xenos_tiled import stored_rows, tiled_offset_2d, untile
 
 
 NATIVE_RE = re.compile(
