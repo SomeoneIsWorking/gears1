@@ -12,10 +12,25 @@
 
 #include "gpu_draw_formats.h"
 #include "gpu_draw_pixels.h"
+#include "gpu_surface_format_capacity.h"
 #include "gpu_draw_xlate.h"
 
 namespace gears::draw
 {
+
+void ReleaseSurfaceTarget(VkDevice device, SurfaceTarget &surface)
+{
+    for (auto &[depthBase, framebuffer] : surface.fbs)
+        vkDestroyFramebuffer(device, framebuffer, nullptr);
+    vkDestroyImageView(device, surface.resolvedStorageView, nullptr);
+    vkDestroyImage(device, surface.resolvedColor, nullptr);
+    vkFreeMemory(device, surface.resolvedColorMem, nullptr);
+    vkDestroyImageView(device, surface.storageView, nullptr);
+    vkDestroyImageView(device, surface.colorView, nullptr);
+    vkDestroyImage(device, surface.color, nullptr);
+    vkFreeMemory(device, surface.colorMem, nullptr);
+    surface = {};
+}
 
 bool RenderTargetCache::MakeRenderPass(VkFormat colorFormat, VkSampleCountFlagBits samples,
                                        bool load, VkRenderPass &out)
@@ -90,26 +105,45 @@ bool RenderTargetCache::GetPasses(VkFormat colorFormat, VkSampleCountFlagBits sa
     return true;
 }
 
-std::map<uint32_t, std::set<uint32_t>> formatsPerBase;
-
 // The render-target cache proper: a host colour target per EDRAM surface,
 // created the first time a frame renders into that (base, format) and kept
-// for the life of the run like every other persistent object here.
+// for the life of the run like every other persistent object here. The image
+// is promoted when a later frame needs a wider host container: the first boot
+// frame only uses k_8_8_8_8 on base 0x2d0, while gameplay later reinterprets
+// that same base as HDR and fixed-point formats. Returning the first image
+// forever would force those later draws through an RGBA8 container.
 bool RenderTargetCache::GetSurfaceTarget(uint32_t base, const DrawSampleLayout &layout,
                                          SurfaceTarget *&out)
 {
     auto &targets = layout.IsNativeMultisample() ? P.surfaceTargets2x : P.surfaceTargets;
-    auto it = targets.find(base);
-    if (it != targets.end())
-    {
-        out = &it->second;
-        return true;
-    }
     auto fmts = formatsPerBase.find(base);
     if (fmts == formatsPerBase.end())
         return false;
+    std::set<uint32_t> requiredFormats = fmts->second;
+    auto it = targets.find(base);
+    if (it != targets.end())
+    {
+        AccumulateSurfaceFormats(requiredFormats, it->second.guestFormats);
+        bool mixed = false;
+        const VkFormat requiredHostFormat = HostFormatFor(requiredFormats, mixed);
+        if (requiredHostFormat == VK_FORMAT_UNDEFINED)
+            return false;
+        if (requiredHostFormat == it->second.hostFormat)
+        {
+            it->second.guestFormats = std::move(requiredFormats);
+            out = &it->second;
+            return true;
+        }
+
+        lucent::info("draw",
+                     "render-target cache: promoting persistent surface {:#x} from host"
+                     " format {} to {} because a later frame added guest format capacity",
+                     base, int(it->second.hostFormat), int(requiredHostFormat));
+        ReleaseSurfaceTarget(R.device, it->second);
+        targets.erase(it);
+    }
     bool mixed = false;
-    const VkFormat hostFormat = HostFormatFor(fmts->second, mixed);
+    const VkFormat hostFormat = HostFormatFor(requiredFormats, mixed);
     if (hostFormat == VK_FORMAT_UNDEFINED)
         return false;
     std::pair<VkRenderPass, VkRenderPass> *rp = nullptr;
@@ -117,6 +151,7 @@ bool RenderTargetCache::GetSurfaceTarget(uint32_t base, const DrawSampleLayout &
     if (!GetPasses(hostFormat, samples, rp))
         return false;
     SurfaceTarget s;
+    s.guestFormats = std::move(requiredFormats);
     s.hostFormat = hostFormat;
     s.samples = samples;
     s.width = layout.imageWidth;

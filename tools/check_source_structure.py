@@ -9,7 +9,7 @@ from pathlib import Path
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp", ".py", ".sh"}
 DEFAULT_MAX_LINES = 1000
 LEGACY_LIMITS = {
-    "runtime/gpu_draw.cpp": 3843,
+    "runtime/gpu_draw.cpp": 3841,
     "runtime/vd_null_gpu.cpp": 3436,
     "runtime/guest_probes.cpp": 2182,
     "runtime/gpu_draw_probe.cpp": 1513,

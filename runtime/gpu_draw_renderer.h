@@ -91,6 +91,10 @@ struct StubTex
 // after, which is what `begunThisFrame` tracks.
 struct SurfaceTarget
 {
+    // Union of every guest colour format this persistent image has served.
+    // Vulkan image formats cannot change in place, so GetSurfaceTarget grows
+    // the image when this set demands a wider HostFormatFor container.
+    std::set<uint32_t> guestFormats;
     VkFormat hostFormat = VK_FORMAT_UNDEFINED;
     VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
     uint32_t width = 0, height = 0;

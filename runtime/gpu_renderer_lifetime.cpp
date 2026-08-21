@@ -1,5 +1,7 @@
 #include "gpu_draw_renderer.h"
 
+#include "gpu_draw_targets.h"
+
 namespace gears::draw
 {
 
@@ -39,17 +41,7 @@ void Renderer::ReleasePersistent()
     auto releaseSurfaceTargets = [&](auto &targets)
     {
         for (auto &[k, s] : targets)
-        {
-            for (auto &[db, fb] : s.fbs)
-                vkDestroyFramebuffer(device, fb, nullptr);
-            vkDestroyImageView(device, s.resolvedStorageView, nullptr);
-            vkDestroyImage(device, s.resolvedColor, nullptr);
-            vkFreeMemory(device, s.resolvedColorMem, nullptr);
-            vkDestroyImageView(device, s.storageView, nullptr);
-            vkDestroyImageView(device, s.colorView, nullptr);
-            vkDestroyImage(device, s.color, nullptr);
-            vkFreeMemory(device, s.colorMem, nullptr);
-        }
+            ReleaseSurfaceTarget(device, s);
     };
     releaseSurfaceTargets(P.surfaceTargets);
     releaseSurfaceTargets(P.surfaceTargets2x);
