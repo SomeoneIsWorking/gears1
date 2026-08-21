@@ -389,6 +389,10 @@ add_executable(test_gpu_extent_capacity test_gpu_extent_capacity.cpp)
 target_include_directories(test_gpu_extent_capacity PRIVATE ../runtime)
 add_test(NAME gpu_extent_capacity COMMAND test_gpu_extent_capacity)
 
+add_executable(test_gpu_draw_sample_layout test_gpu_draw_sample_layout.cpp)
+target_include_directories(test_gpu_draw_sample_layout PRIVATE ../runtime)
+add_test(NAME gpu_draw_sample_layout COMMAND test_gpu_draw_sample_layout)
+
 # The shared-VkInstance extension bookkeeping. Two devices cost a readback and a
 # staging upload of every frame; unifying them starts with the instance, since a
 # surface from one instance cannot be used with a device from another. The guarded

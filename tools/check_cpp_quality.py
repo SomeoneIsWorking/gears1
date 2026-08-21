@@ -18,8 +18,15 @@ FORMATTED = [
     "runtime/gpu_draw_pipelines.cpp",
     "runtime/gpu_draw_pipelines.h",
     "runtime/gpu_draw_point_geometry.cpp",
+    "runtime/gpu_draw_prepared.h",
     "runtime/gpu_draw_reinterpret.cpp",
     "runtime/gpu_draw_renderer.h",
+    "runtime/gpu_draw_resolve.cpp",
+    "runtime/gpu_draw_resolve_decode.cpp",
+    "runtime/gpu_draw_resolve_decode.h",
+    "runtime/gpu_draw_sample_layout.h",
+    "runtime/gpu_draw_targets.cpp",
+    "runtime/gpu_draw_targets.h",
     "runtime/gpu_draw_vertexfetch.cpp",
     "runtime/gpu_draw_xlate.cpp",
     "runtime/gpu_draw_xlate.h",
@@ -30,6 +37,7 @@ FORMATTED = [
     "runtime/gpu_scanout.h",
     "runtime/gpu_scanout_gamma.cpp",
     "runtime/gpu_scanout_gamma.h",
+    "runtime/gpu_renderer_lifetime.cpp",
     "runtime/graphics_probe.cpp",
     "runtime/graphics_probe.h",
     "runtime/graphics_probe_render.cpp",
@@ -43,6 +51,7 @@ FORMATTED = [
     "tests/test_depth_alias_shader_format.cpp",
     "tests/test_frame_probe_capture.cpp",
     "tests/test_graphics_probe.cpp",
+    "tests/test_gpu_draw_sample_layout.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_scanout_gamma.cpp",
     "tests/test_swapchain_format.cpp",
@@ -56,18 +65,23 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/gpu_draw_pipelines.cpp",
     "runtime/gpu_draw_point_geometry.cpp",
     "runtime/gpu_draw_reinterpret.cpp",
+    "runtime/gpu_draw_resolve.cpp",
+    "runtime/gpu_draw_resolve_decode.cpp",
+    "runtime/gpu_draw_targets.cpp",
     "runtime/gpu_draw_vertexfetch.cpp",
     "runtime/gpu_draw_xlate.cpp",
     "runtime/gpu_present.cpp",
     "runtime/gpu_present_stage.cpp",
     "runtime/gpu_scanout.cpp",
     "runtime/gpu_scanout_gamma.cpp",
+    "runtime/gpu_renderer_lifetime.cpp",
     "runtime/input.cpp",
     "runtime/render_thread.cpp",
     "runtime/scanout_gamma.cpp",
     "tests/test_depth_alias_shader_format.cpp",
     "tests/test_frame_probe_capture.cpp",
     "tests/test_graphics_probe.cpp",
+    "tests/test_gpu_draw_sample_layout.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_scanout_gamma.cpp",
     "tests/test_swapchain_format.cpp",
@@ -121,6 +135,8 @@ def selftest():
     else:
         raise AssertionError("missing tools must be refused")
     assert "runtime/gpu_draw_reinterpret.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_draw_targets.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_gpu_draw_sample_layout.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_frame_probe_capture.cpp" in TIDY_TRANSLATION_UNITS
     assert VD_TIDY_RANGES and all(first <= last for first, last in VD_TIDY_RANGES)
     print("C++ quality checker selftest passed: positive tool lookup, missing-tool refusal, "

@@ -22,7 +22,7 @@ NATIVE_RE = re.compile(
     r"(?:_sample(\d+)x(\d+))?\.rgba16f$")
 ORACLE_RE = re.compile(
     r"srcC([0-9A-Fa-f]{3})_(\d+)x(\d+)_f(\d+)_e(\d+)_"
-    r"([0-9A-Fa-f]{8})_(\d+)\.bin$")
+    r"(?:b[0-9A-Fa-f]{8}_)?([0-9A-Fa-f]{8})_(\d+)\.bin$")
 
 
 def parse_native(path):
@@ -131,8 +131,11 @@ def selftest(np):
                 offset = tiled_offset_2d(x, y, width, 3)
                 raw[offset:offset + 8] = guest[y, x].tobytes()
         declared_height = height if index == 0 else rows
+        # Exercise both the legacy name and the current one, which carries the
+        # full texture base before the dumped range's destination address.
+        base_field = f"b{0x10000000:08X}_" if index else ""
         path = work / (f"oracle_f0_copy{index}_srcC400_{width}x{declared_height}_"
-                       f"f32_e1_{dest:08X}_{len(raw)}.bin")
+                       f"f32_e1_{base_field}{dest:08X}_{len(raw)}.bin")
         path.write_bytes(raw)
         oracle_paths.append(path)
         dest += len(raw)

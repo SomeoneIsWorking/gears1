@@ -141,6 +141,11 @@ bool Renderer::Init()
                 std::max<VkDeviceSize>(adoptedProps.limits.minUniformBufferOffsetAlignment, 4);
             maxViewportDim[0] = adoptedProps.limits.maxViewportDimensions[0];
             maxViewportDim[1] = adoptedProps.limits.maxViewportDimensions[1];
+            hasStandardSampleLocations = adoptedProps.limits.standardSampleLocations == VK_TRUE;
+            has2xFramebufferSamples =
+                (adoptedProps.limits.framebufferColorSampleCounts & VK_SAMPLE_COUNT_2_BIT) != 0 &&
+                (adoptedProps.limits.framebufferDepthSampleCounts & VK_SAMPLE_COUNT_2_BIT) != 0 &&
+                (adoptedProps.limits.framebufferStencilSampleCounts & VK_SAMPLE_COUNT_2_BIT) != 0;
 
             VkPhysicalDeviceFeatures adoptedFeats{};
             gears::DeviceCapabilities adoptedCaps{};
@@ -247,6 +252,11 @@ bool Renderer::Init()
     uniformOffsetAlignment = std::max<VkDeviceSize>(p.limits.minUniformBufferOffsetAlignment, 4);
     maxViewportDim[0] = p.limits.maxViewportDimensions[0];
     maxViewportDim[1] = p.limits.maxViewportDimensions[1];
+    hasStandardSampleLocations = p.limits.standardSampleLocations == VK_TRUE;
+    has2xFramebufferSamples =
+        (p.limits.framebufferColorSampleCounts & VK_SAMPLE_COUNT_2_BIT) != 0 &&
+        (p.limits.framebufferDepthSampleCounts & VK_SAMPLE_COUNT_2_BIT) != 0 &&
+        (p.limits.framebufferStencilSampleCounts & VK_SAMPLE_COUNT_2_BIT) != 0;
 
     const float prio = 1.0f;
     VkDeviceQueueCreateInfo qi{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};
@@ -361,115 +371,6 @@ bool Renderer::MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer 
     VK_CHECK(vkAllocateMemory(device, &ai, nullptr, &mem));
     VK_CHECK(vkBindBufferMemory(device, buf, mem, 0));
     return true;
-}
-
-void Renderer::ReleasePersistent()
-{
-    if (!persistent)
-        return;
-    RendererPersistent &P = *persistent;
-    for (auto &[k, p] : P.pipelines)
-        vkDestroyPipeline(device, p, nullptr);
-    for (auto &[k, l] : P.pipeLayouts)
-        vkDestroyPipelineLayout(device, l, nullptr);
-    for (auto &[k, l] : P.texLayouts)
-        vkDestroyDescriptorSetLayout(device, l, nullptr);
-    for (auto &[k, m] : P.modules)
-        vkDestroyShaderModule(device, m, nullptr);
-    for (auto &[k, m] : P.geomShaders)
-        if (m != VK_NULL_HANDLE)
-            vkDestroyShaderModule(device, m, nullptr);
-    for (auto &[k, sm] : P.samplerCache)
-        vkDestroySampler(device, sm, nullptr);
-    vkDestroyDescriptorSetLayout(device, P.set0, nullptr);
-    vkDestroyDescriptorSetLayout(device, P.set1, nullptr);
-    for (auto &[k, t] : P.guestTextures)
-    {
-        vkDestroyImageView(device, t.view, nullptr);
-        vkDestroyImage(device, t.image, nullptr);
-        vkFreeMemory(device, t.mem, nullptr);
-    }
-    for (StubTex *t : {&P.stub2D, &P.stub3D, &P.stubCube})
-    {
-        vkDestroyImageView(device, t->view, nullptr);
-        vkDestroyImage(device, t->image, nullptr);
-        vkFreeMemory(device, t->mem, nullptr);
-    }
-    vkDestroySampler(device, P.stubSampler, nullptr);
-    for (auto &[k, s] : P.surfaceTargets)
-    {
-        for (auto &[db, fb] : s.fbs)
-            vkDestroyFramebuffer(device, fb, nullptr);
-        vkDestroyImageView(device, s.storageView, nullptr);
-        vkDestroyImageView(device, s.colorView, nullptr);
-        vkDestroyImage(device, s.color, nullptr);
-        vkFreeMemory(device, s.colorMem, nullptr);
-    }
-    for (auto &[k, r] : P.resolveTargets)
-    {
-        vkDestroyImageView(device, r.view, nullptr);
-        for (auto &[swz, v] : r.swizzleViews)
-            vkDestroyImageView(device, v, nullptr);
-        vkDestroyImageView(device, r.storageView, nullptr);
-        vkDestroyImage(device, r.image, nullptr);
-        vkFreeMemory(device, r.mem, nullptr);
-    }
-    for (auto &[k, rp] : P.passes)
-    {
-        vkDestroyRenderPass(device, rp.first, nullptr);
-        vkDestroyRenderPass(device, rp.second, nullptr);
-    }
-    vkDestroyPipeline(device, P.resolveDepthPipeline, nullptr);
-    vkDestroyPipelineLayout(device, P.resolveDepthLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, P.resolveDepthSetLayout, nullptr);
-    vkDestroyShaderModule(device, P.resolveDepthModule, nullptr);
-    // The bound views are ALIASES of one of the targets below, so they are not
-    // destroyed here -- doing so would destroy the same handle twice.
-
-    vkDestroySampler(device, P.depthAliasSampler, nullptr);
-    vkDestroyDescriptorPool(device, P.depthAliasDescPool, nullptr);
-    vkDestroyPipeline(device, P.depthAliasPipeline, nullptr);
-    vkDestroyPipelineLayout(device, P.depthAliasLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, P.depthAliasSetLayout, nullptr);
-    vkDestroyShaderModule(device, P.depthAliasModule, nullptr);
-    vkDestroyPipeline(device, P.resolvePipeline, nullptr);
-    vkDestroyPipelineLayout(device, P.resolveLayout, nullptr);
-    vkDestroyDescriptorSetLayout(device, P.resolveSetLayout, nullptr);
-    vkDestroyShaderModule(device, P.resolveModule, nullptr);
-    vkDestroyDescriptorPool(device, P.resolveDescPool, nullptr);
-    for (auto &[db, d] : P.depthTargets)
-    {
-        vkDestroyImageView(device, d.stencilSampledView, nullptr);
-        vkDestroyImageView(device, d.depthSampledView, nullptr);
-        vkDestroyImageView(device, d.attachView, nullptr);
-        vkDestroyImage(device, d.image, nullptr);
-        vkFreeMemory(device, d.mem, nullptr);
-    }
-    P.depthTargets.clear();
-    P.depth = VK_NULL_HANDLE;
-    P.depthMem = VK_NULL_HANDLE;
-    P.depthView = VK_NULL_HANDLE;
-    P.depthSampledView = VK_NULL_HANDLE;
-    P.stencilSampledView = VK_NULL_HANDLE;
-    P.boundDepthBase = UINT32_MAX;
-    P.scanout.Release(*this);
-    if (P.ssboMapped)
-        vkUnmapMemory(device, P.ssboMem);
-    vkDestroyBuffer(device, P.ssbo, nullptr);
-    vkFreeMemory(device, P.ssboMem, nullptr);
-    if (P.arenaMapped)
-        vkUnmapMemory(device, P.arenaMem);
-    vkDestroyBuffer(device, P.arena, nullptr);
-    vkFreeMemory(device, P.arenaMem, nullptr);
-    if (P.readbackMapped)
-        vkUnmapMemory(device, P.readbackMem);
-    vkDestroyBuffer(device, P.readback, nullptr);
-    vkFreeMemory(device, P.readbackMem, nullptr);
-    vkDestroyDescriptorPool(device, P.descriptorPool, nullptr);
-    vkDestroyFence(device, P.fence, nullptr);
-    vkDestroyCommandPool(device, P.cmdPool, nullptr);
-    delete persistent;
-    persistent = nullptr;
 }
 
 // ---------------------------------------------------------------------------
@@ -1186,7 +1087,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         {
             // A kCopy draw is decoded in gpu_draw_resolve_decode.{h,cpp}: it is
             // a resolve, not geometry, and it needs no shaders at all.
-            draw::PrepareResolveDraw(R, d, in, W, H, plan.routing, RT, CN, prepared);
+            draw::PrepareResolveDraw(R, d, in, W, H, plan.routing, msaaModel, RT, CN, prepared);
             continue;
         }
         if (!d.vsUcode || !d.psUcode)
@@ -1274,14 +1175,26 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         }
         // This draw's own host render target, and the render pass its pipeline
         // must be built against.
+        const draw::DrawSampleLayout sampleLayout = draw::DeriveDrawSampleLayout(
+            msaaModel ? ((R[0x2000] >> 16) & 3) : 0, P.width, P.height);
+        if (sampleLayout.IsNativeMultisample() &&
+            (!hasStandardSampleLocations || !has2xFramebufferSamples))
+        {
+            lucent::error("draw",
+                          "the selected Vulkan device lacks {} required for faithful Xenos"
+                          " 2X coverage",
+                          !has2xFramebufferSamples ? "2X colour/depth framebuffer samples"
+                                                   : "standard sample locations");
+            return false;
+        }
         SurfaceTarget *target = nullptr;
-        if (!RT.GetSurfaceTarget(surfaceBase, target))
+        if (!RT.GetSurfaceTarget(surfaceBase, sampleLayout, target))
         {
             CN.Skip(8);
             continue;
         }
         std::pair<VkRenderPass, VkRenderPass> *rp = nullptr;
-        if (!RT.GetPasses(target->hostFormat, rp))
+        if (!RT.GetPasses(target->hostFormat, target->samples, rp))
         {
             CN.Skip(8);
             continue;
@@ -1356,7 +1269,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             ++CN.drawsNoPixelShader;
         VkPipeline pipe = VK_NULL_HANDLE;
         if (!PC.GetPipeline(vsMod, pixelShaderUsed ? psMod : VK_NULL_HANDLE, gsMod, d.primType, om,
-                            rp->first, pipeLayout, pipe))
+                            rp->first, target->samples, pipeLayout, pipe))
         {
             CN.Skip(3);
             continue;
@@ -1481,6 +1394,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         pd.vteCntl = R[0x2206];
         pd.windowOffset = R[0x2080];
         pd.surfaceInfo = R[0x2000];
+        pd.sampleLayout = sampleLayout;
         std::memcpy(&pd.vportXScale, &R[0x210F], 4);
         std::memcpy(&pd.vportXOffset, &R[0x2110], 4);
         std::memcpy(&pd.vportYScale, &R[0x2111], 4);
@@ -1564,8 +1478,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             // fill and a 1X 1280x720 composite cover the same 1280x720 samples
             // -- the same bytes the console gives them. Both scales are 1 with
             // the model off, so this line is the identity there.
-            const uint32_t sx = msaaModel ? draw::MsaaScaleX((pd.surfaceInfo >> 16) & 3) : 1u;
-            const uint32_t sy = msaaModel ? draw::MsaaScaleY((pd.surfaceInfo >> 16) & 3) : 1u;
+            const uint32_t sx = msaaModel ? pd.sampleLayout.viewportScaleX : 1u;
+            const uint32_t sy = msaaModel ? pd.sampleLayout.viewportScaleY : 1u;
             pd.viewport.x = float(gv.x * sx);
             pd.viewport.y = float(gv.y * sy);
             pd.viewport.width = float(std::min(gv.w * sx, vpMaxW));
@@ -1574,9 +1488,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             pd.viewport.maxDepth = gv.zMax;
             const uint32_t scx = gv.scissorX * sx, scy = gv.scissorY * sy;
 
-            pd.scissor.offset = {int32_t(std::min(scx, SW)), int32_t(std::min(scy, SH))};
-            pd.scissor.extent = {std::min(gv.scissorW * sx, SW - std::min(scx, SW)),
-                                 std::min(gv.scissorH * sy, SH - std::min(scy, SH))};
+            const uint32_t targetW = msaaModel ? pd.sampleLayout.imageWidth : SW;
+            const uint32_t targetH = msaaModel ? pd.sampleLayout.imageHeight : SH;
+            pd.scissor.offset = {int32_t(std::min(scx, targetW)), int32_t(std::min(scy, targetH))};
+            pd.scissor.extent = {std::min(gv.scissorW * sx, targetW - std::min(scx, targetW)),
+                                 std::min(gv.scissorH * sy, targetH - std::min(scy, targetH))};
         }
         draw::DumpVertices(R, in, d, *vsX, *psX, issued, pd.diagIndex, pd.vsHash, d.indexCount,
                            &UC.sysc, &UC.fVs);
@@ -1887,11 +1803,19 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         s.drawsThisFrame = 0;
         s.storageFormat = UINT32_MAX;
     }
+    for (auto &[k, s] : P.surfaceTargets2x)
+    {
+        s.begunThisFrame = false;
+        s.drawsThisFrame = 0;
+        s.storageFormat = UINT32_MAX;
+    }
     for (auto &[k, r] : P.resolveTargets)
         r.copies = 0;
     // Same rule for the depth targets: the frame's first use of each one
     // clears it, as the frame's first pass on a surface clears the colour.
     for (auto &[k, d] : P.depthTargets)
+        d.usedThisFrame = false;
+    for (auto &[k, d] : P.depthTargets2x)
         d.usedThisFrame = false;
 
     // WHERE A RESOLVE'S PIXELS GO, PER RESOLVE RATHER THAN PER DESTINATION.
@@ -2034,6 +1958,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // as well as on the colour surface: they are two attachments of one
     // framebuffer, and the guest changes them independently.
     uint32_t openDepthBase = UINT32_MAX;
+    VkSampleCountFlagBits openSamples = VK_SAMPLE_COUNT_1_BIT;
     SurfaceTarget *openTarget = nullptr;
     // The last surface a pass was opened on, which -- unlike openTarget -- SURVIVES
     // endPass(). A checkpoint asked for immediately after a resolve has no pass
@@ -2054,13 +1979,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     };
     // Opens a pass on `key`'s target, clearing it if this frame has not touched
     // it yet and loading it otherwise.
-    auto beginPassOn = [&](uint32_t base, uint32_t depthBase) -> bool
+    auto beginPassOn = [&](uint32_t base, uint32_t depthBase,
+                           const draw::DrawSampleLayout &layout) -> bool
     {
         SurfaceTarget *t = nullptr;
-        if (!RT.GetSurfaceTarget(base, t))
+        if (!RT.GetSurfaceTarget(base, layout, t))
             return false;
         std::pair<VkRenderPass, VkRenderPass> *rp = nullptr;
-        if (!RT.GetPasses(t->hostFormat, rp))
+        if (!RT.GetPasses(t->hostFormat, t->samples, rp))
             return false;
         // Binds the depth target for this base as well as naming it, so the
         // mid-frame clear, the resolves and the probes all work on the depth
@@ -2077,7 +2003,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         // same values that pass would have used, which keeps the single-base
         // case exactly as it was.
         DepthTarget *dt = nullptr;
-        if (RT.GetDepthTarget(depthBase, dt) && dt && !dt->usedThisFrame && t->begunThisFrame)
+        if (RT.GetDepthTarget(depthBase, layout, dt) && dt && !dt->usedThisFrame &&
+            t->begunThisFrame)
         {
             VkImageSubresourceRange dr{kDepthAspects, 0, 1, 0, 1};
             VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -2107,7 +2034,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         VkRenderPassBeginInfo bi{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
         bi.renderPass = t->begunThisFrame ? rp->second : rp->first;
         bi.framebuffer = fb;
-        bi.renderArea = {{0, 0}, {SW, SH}};
+        bi.renderArea = {{0, 0}, {t->width, t->height}};
         bi.clearValueCount = t->begunThisFrame ? 0u : 2u;
         bi.pClearValues = t->begunThisFrame ? nullptr : clears;
         // GEARS_DRAW_PASS_LOG=1: every pass begin, with what it was begun ON.
@@ -2128,6 +2055,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         inPass = true;
         openSurface = base;
         openDepthBase = depthBase;
+        openSamples = t->samples;
         openTarget = t;
         lastSurface = base;
         lastTarget = t;
@@ -2154,7 +2082,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
                 // scene's depth is the same class of bug as the stencil one
                 // this split exists to fix (catalog #91).
                 DepthTarget *cdt = nullptr;
-                if (!RT.GetDepthTarget(pd.depthTargetBase, cdt) || !cdt)
+                if (!RT.GetDepthTarget(pd.depthTargetBase, pd.sampleLayout, cdt) || !cdt)
                     return;
                 cdt->usedThisFrame = true;
                 VkImageSubresourceRange dr{kDepthAspects, 0, 1, 0, 1};
@@ -2193,9 +2121,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
                 // depth (base 0x0) and the shadow atlas's (0x5a0), and reading
                 // the wrong one copies out a different pass's picture.
                 DepthTarget *rdt = nullptr;
-                RT.GetDepthTarget(pd.depthTargetBase, rdt);
+                RT.GetDepthTarget(pd.depthTargetBase, pd.sampleLayout, rdt);
                 auto dst = P.resolveTargets.find(pd.resolveDest);
-                if (dst != P.resolveTargets.end() && P.resolveDepthPipeline != VK_NULL_HANDLE &&
+                const VkPipeline depthResolvePipeline = rdt && rdt->samples == VK_SAMPLE_COUNT_2_BIT
+                                                            ? P.resolveDepth2xPipeline
+                                                            : P.resolveDepthPipeline;
+                if (dst != P.resolveTargets.end() && depthResolvePipeline != VK_NULL_HANDLE &&
                     dst->second.storageView != VK_NULL_HANDLE &&
                     RT.resolveDepthSetsUsed < RT.resolveDepthSets.size())
                 {
@@ -2237,10 +2168,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             }
             // The source surface must be outside a render pass to be blitted,
             // and it is left in TRANSFER_SRC_OPTIMAL by whichever pass wrote it.
-            auto src = P.surfaceTargets.find(pd.surfaceBase);
+            SurfaceTarget *src = nullptr;
+            RT.GetSurfaceTarget(pd.surfaceBase, pd.sampleLayout, src);
             auto dst = P.resolveTargets.find(pd.resolveDest);
-            if (src == P.surfaceTargets.end() || dst == P.resolveTargets.end() ||
-                !src->second.begunThisFrame)
+            if (!src || dst == P.resolveTargets.end() || !src->begunThisFrame)
                 continue; // nothing has been rendered into it yet this frame
             endPass();
             // A RESOLVE IS A READ, and it reads EDRAM under RB_COLOR_INFO's
@@ -2254,21 +2185,21 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             // draw was copied out lifted: catalog #83's wall pixel (640,350)
             // goes to (2.547, 4.031, 11.125) at draw 650 and the resolves at
             // 657 and 659 carried that away before anything restored it.
-            if (reinterpretEnabled && src->second.storageFormat != UINT32_MAX)
+            if (reinterpretEnabled && src->storageFormat != UINT32_MAX)
             {
                 const uint32_t want = draw::StorageColorFormat(pd.resolveSrcFormat);
-                if (src->second.storageFormat != want)
+                if (src->storageFormat != want)
                 {
                     // A REFUSED CONVERSION MUST NOT RELABEL -- see the same
                     // rule at the geometry-draw site below. The bits were not
                     // touched, and a surface that claims a format its contents
                     // are not in makes the NEXT conversion convert from a
                     // format the data was never in.
-                    if (RT.ReinterpretSurface(cmd, src->second, src->second.storageFormat, want))
-                        src->second.storageFormat = want;
+                    if (RT.ReinterpretSurface(cmd, *src, src->storageFormat, want))
+                        src->storageFormat = want;
                 }
             }
-            RT.ResolveSurfaceTo(cmd, src->second, dst->second, pd.resolveSrcRect, pd.resolveDstX,
+            RT.ResolveSurfaceTo(cmd, *src, dst->second, pd.resolveSrcRect, pd.resolveDstX,
                                 pd.resolveDstY, pd.resolveScale, pd.resolveSwapRB,
                                 msaaModel ? draw::DeriveResolveSampling(
                                                 pd.surfaceInfo, pd.resolveSampleSelect, false)
@@ -2318,7 +2249,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             {
                 SurfaceTarget *pinned = nullptr;
                 const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
-                if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
+                if (RT.GetSurfaceTarget(pinnedBase, pd.sampleLayout, pinned) && pinned)
                 {
                     t = pinned;
                     base = pinnedBase;
@@ -2340,7 +2271,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             {
                 SurfaceTarget *pinned = nullptr;
                 const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
-                if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
+                if (RT.GetSurfaceTarget(pinnedBase, pd.sampleLayout, pinned) && pinned)
                 {
                     t = pinned;
                     base = pinnedBase;
@@ -2370,7 +2301,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             {
                 SurfaceTarget *pinned = nullptr;
                 const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
-                if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
+                if (RT.GetSurfaceTarget(pinnedBase, pd.sampleLayout, pinned) && pinned)
                 {
                     t = pinned;
                     base = pinnedBase;
@@ -2413,7 +2344,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         {
             SurfaceTarget *t = nullptr;
             const uint32_t want = draw::StorageColorFormat(pd.colorFormat);
-            if (RT.GetSurfaceTarget(pd.surfaceBase, t) && t && t->begunThisFrame &&
+            if (RT.GetSurfaceTarget(pd.surfaceBase, pd.sampleLayout, t) && t && t->begunThisFrame &&
                 t->storageFormat != UINT32_MAX && t->storageFormat != want)
             {
                 // A DRAW THAT WRITES NO COLOUR DECIDES NOTHING. It neither
@@ -2493,14 +2424,16 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         }
         // Open a pass if there is none, or re-open on a different surface OR a
         // different depth base -- both are attachments of the framebuffer.
-        if (!inPass || openSurface != pd.surfaceBase || openDepthBase != pd.depthTargetBase)
+        const auto drawSamples = VkSampleCountFlagBits(pd.sampleLayout.rasterSamples);
+        if (!inPass || openSurface != pd.surfaceBase || openDepthBase != pd.depthTargetBase ||
+            openSamples != drawSamples)
         {
             if (inPass)
             {
                 endPass();
                 ++surfaceSwitches;
             }
-            if (!beginPassOn(pd.surfaceBase, pd.depthTargetBase))
+            if (!beginPassOn(pd.surfaceBase, pd.depthTargetBase, pd.sampleLayout))
                 continue;
         }
         if (openTarget && openTarget->storageFormat == UINT32_MAX)
@@ -2541,14 +2474,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         if (reinterpretEnabled && !noAlias && pd.depthBase == pd.surfaceBase)
         {
             draw::SurfaceTarget *at = nullptr;
-            if (RT.GetSurfaceTarget(pd.surfaceBase, at) && at && at->begunThisFrame)
+            if (RT.GetSurfaceTarget(pd.surfaceBase, pd.sampleLayout, at) && at &&
+                at->begunThisFrame)
             {
                 endPass();
                 {
                     // Same rule as the depth resolve: alias the depth buffer
                     // this draw actually rendered against.
                     DepthTarget *adt = nullptr;
-                    RT.GetDepthTarget(pd.depthTargetBase, adt);
+                    RT.GetDepthTarget(pd.depthTargetBase, pd.sampleLayout, adt);
                 }
                 RT.AliasDepthIntoSurface(cmd, *at, pd.resolveDepthIsFloat24);
             }
@@ -2568,7 +2502,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         {
             SurfaceTarget *pinned = nullptr;
             const uint32_t pinnedBase = uint32_t(PB.PinnedSurface());
-            if (RT.GetSurfaceTarget(pinnedBase, pinned) && pinned)
+            if (RT.GetSurfaceTarget(pinnedBase, prepared[lastIssuedPrep].sampleLayout, pinned) &&
+                pinned)
             {
                 t = pinned;
                 base = pinnedBase;

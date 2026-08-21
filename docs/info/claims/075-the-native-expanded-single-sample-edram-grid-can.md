@@ -4,7 +4,9 @@ kind: claim
 status: holds
 created: 2026-08-21
 tags:
-depends: runtime/gpu_draw.cpp
+depends: runtime/gpu_draw_sample_layout.h, runtime/gpu_draw.cpp
+reconfirmed: 2026-08-21
+verified_at: 2026-08-21 12:25:41
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ walk_gameplay.gfr: native draw 650 has 0 fragment invocations versus Xenia 79,25
 ## What would falsify it
 
 A reference capture disproves the Xenos 2X diagonal sample positions, or a replay using true per-sample positions still produces the same draw-650 depth-test loss.
+
+## Re-confirmed 2026-08-21
+
+Final three-repeat Vulkan-validation run of walk_gameplay.gfr keeps draw 650 at exactly 79,253 fragments with the native diagonal 2X path; the expanded-grid quarter-pixel workaround remains absent.

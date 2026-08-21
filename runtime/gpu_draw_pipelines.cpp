@@ -185,8 +185,8 @@ bool PipelineCache::GetPointGeomShader(uint64_t vsModification, uint64_t psModif
 
 bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod, VkShaderModule gsMod,
                                 uint32_t primType, const OutputMergerState &om,
-                                VkRenderPass renderPass, VkPipelineLayout pipeLayout,
-                                VkPipeline &out)
+                                VkRenderPass renderPass, VkSampleCountFlagBits samples,
+                                VkPipelineLayout pipeLayout, VkPipeline &out)
 {
     auto key = std::make_tuple(vsMod, psMod, gsMod, primType, om, renderPass);
     auto it = pipelines.find(key);
@@ -274,7 +274,7 @@ bool PipelineCache::GetPipeline(VkShaderModule vsMod, VkShaderModule psMod, VkSh
     rs.lineWidth = 1.0f;
     VkPipelineMultisampleStateCreateInfo ms{
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = samples;
     VkPipelineDepthStencilStateCreateInfo ds{
         VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     // Depth from RB_DEPTHCONTROL: z_enable +1, z_write_enable +2, zfunc +4.

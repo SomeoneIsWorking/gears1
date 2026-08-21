@@ -27,19 +27,18 @@ namespace gears::draw
 // same window offset as the colour resolve of its tile. A rectangle that cannot
 // be read from vf0 leaves the full target extent and counts RT.resolveNoRect,
 // because a silently full-screen resolve looks exactly like a correct one.
-void DeriveResolveRect(const uint32_t* R, const FrameDrawInputs& in,
-                       uint32_t W, uint32_t H, RenderTargetCache& RT,
-                       int32_t& x0, int32_t& y0, int32_t& x1, int32_t& y1);
+void DeriveResolveRect(const uint32_t *R, const FrameDrawInputs &in, uint32_t W, uint32_t H,
+                       RenderTargetCache &RT, int32_t &x0, int32_t &y0, int32_t &x1, int32_t &y1);
 
 // Decodes one kCopy draw and appends whatever PreparedDraws it implies -- a
 // colour resolve, a depth resolve, a depth clear, or nothing but a census
 // entry. `routing` maps a destination base to (texture base, row offset): the
 // guest folds a tile's row offset into RB_COPY_DEST_BASE, so two destinations
 // can be two regions of ONE texture.
-void PrepareResolveDraw(const uint32_t* R, const FrameDrawItem& d,
-                        const FrameDrawInputs& in, uint32_t W, uint32_t H,
-                        const std::map<uint32_t, std::pair<uint32_t, uint32_t>>& routing,
-                        RenderTargetCache& RT, FrameCensus& CN,
-                        std::vector<PreparedDraw>& prepared);
+void PrepareResolveDraw(const uint32_t *R, const FrameDrawItem &d, const FrameDrawInputs &in,
+                        uint32_t W, uint32_t H,
+                        const std::map<uint32_t, std::pair<uint32_t, uint32_t>> &routing,
+                        bool sampleModel, RenderTargetCache &RT, FrameCensus &CN,
+                        std::vector<PreparedDraw> &prepared);
 
 } // namespace gears::draw

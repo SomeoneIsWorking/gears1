@@ -24,6 +24,7 @@
 
 #include "gpu_draw.h"
 #include "gpu_draw_renderer.h"
+#include "gpu_draw_sample_layout.h"
 
 namespace gears::draw
 {
@@ -101,21 +102,23 @@ struct RenderTargetCache
     // after, so the console's predicated tiles accumulate). The frame is also
     // split at every surface change and at every resolve, because a surface can
     // only be blitted out while no pass is open on it.
-    bool MakeRenderPass(VkFormat colorFormat, bool load, VkRenderPass &out);
+    bool MakeRenderPass(VkFormat colorFormat, VkSampleCountFlagBits samples, bool load,
+                        VkRenderPass &out);
 
     // One (clear, load) pair per host colour format, created on first use.
-    bool GetPasses(VkFormat colorFormat, std::pair<VkRenderPass, VkRenderPass> *&out);
+    bool GetPasses(VkFormat colorFormat, VkSampleCountFlagBits samples,
+                   std::pair<VkRenderPass, VkRenderPass> *&out);
 
     // Every RB_COLOR_INFO.color_format the frame renders each EDRAM base with,
     // filled by the pre-pass further down and read by getSurfaceTarget, which
     // sizes one host image per base wide enough to hold all of them.
-    bool GetSurfaceTarget(uint32_t base, SurfaceTarget *&out);
+    bool GetSurfaceTarget(uint32_t base, const DrawSampleLayout &layout, SurfaceTarget *&out);
 
     // The depth+stencil image an RB_DEPTH_INFO.depth_base owns, created on demand
     // and BOUND as a side effect (see the comment on the definition): P.depth and
     // its three views become this target's, so every user of them works on the base
     // last asked for.
-    bool GetDepthTarget(uint32_t base, DepthTarget *&out);
+    bool GetDepthTarget(uint32_t base, const DrawSampleLayout &layout, DepthTarget *&out);
 
     // The framebuffer pairing a colour surface with a depth base, created on demand.
     bool GetFramebuffer(SurfaceTarget &s, uint32_t depthBase, VkFramebuffer &out);
@@ -197,7 +200,7 @@ struct RenderTargetCache
     // Colour. `scale` is the guest's copy_dest_exp_bias applied as a multiplier
     // and `swapRB` its copy_dest_swap -- neither of which the blit control arm
     // (GEARS_DRAW_RESOLVE_BLIT=1) can do.
-    void ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarget &srcTarget, ResolveTarget &dst,
+    void ResolveSurfaceTo(VkCommandBuffer cmd, SurfaceTarget &srcTarget, ResolveTarget &dst,
                           const VkRect2D &srcRect, int32_t dstX, int32_t dstY, float scale,
                           bool swapRB, const ResolveSampling &smp);
 };
