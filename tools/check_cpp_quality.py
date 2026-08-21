@@ -30,6 +30,7 @@ FORMATTED = [
     "runtime/gpu_draw_vertexfetch.cpp",
     "runtime/gpu_draw_xlate.cpp",
     "runtime/gpu_draw_xlate.h",
+    "runtime/gpu_surface_format_capacity.h",
     "runtime/gpu_present.cpp",
     "runtime/gpu_present_stage.cpp",
     "runtime/gpu_present_stage.h",
@@ -45,6 +46,7 @@ FORMATTED = [
     "runtime/input.cpp",
     "runtime/input.h",
     "runtime/render_thread.cpp",
+    "runtime/render_thread.h",
     "runtime/scanout_gamma.cpp",
     "runtime/scanout_gamma.h",
     "runtime/swapchain_format.h",
@@ -52,6 +54,7 @@ FORMATTED = [
     "tests/test_frame_probe_capture.cpp",
     "tests/test_graphics_probe.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
+    "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_scanout_gamma.cpp",
     "tests/test_swapchain_format.cpp",
@@ -82,6 +85,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_frame_probe_capture.cpp",
     "tests/test_graphics_probe.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
+    "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_scanout_gamma.cpp",
     "tests/test_swapchain_format.cpp",
@@ -101,6 +105,7 @@ VD_FORMAT_RANGES = [
     (1961, 1961),
     (2012, 2022),
     (2065, 2066),
+    (2345, 2354),
 ]
 
 VD_TIDY_RANGES = [[first, last] for first, last in VD_FORMAT_RANGES]
@@ -137,6 +142,7 @@ def selftest():
     assert "runtime/gpu_draw_reinterpret.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_targets.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_draw_sample_layout.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_gpu_surface_format_capacity.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_frame_probe_capture.cpp" in TIDY_TRANSLATION_UNITS
     assert VD_TIDY_RANGES and all(first <= last for first, last in VD_TIDY_RANGES)
     print("C++ quality checker selftest passed: positive tool lookup, missing-tool refusal, "

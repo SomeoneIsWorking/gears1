@@ -1096,6 +1096,41 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             continue;
         }
 
+        // Resolve the persistent target before translating this draw's pixel
+        // shader. A later frame may promote the target from the narrow format
+        // established at boot to a mixed HDR container, and the shader's
+        // guest-format clamp must be selected against the promoted image.
+        static const long onlyBase = lucent::config::number("DRAW_ONLY_BASE", -1);
+        if (onlyBase >= 0 && surfaceBase != uint32_t(onlyBase))
+        {
+            CN.Skip(0);
+            continue;
+        }
+        const draw::DrawSampleLayout sampleLayout = draw::DeriveDrawSampleLayout(
+            msaaModel ? ((R[0x2000] >> 16) & 3) : 0, P.width, P.height);
+        if (sampleLayout.IsNativeMultisample() &&
+            (!hasStandardSampleLocations || !has2xFramebufferSamples))
+        {
+            lucent::error("draw",
+                          "the selected Vulkan device lacks {} required for faithful Xenos"
+                          " 2X coverage",
+                          !has2xFramebufferSamples ? "2X colour/depth framebuffer samples"
+                                                   : "standard sample locations");
+            return false;
+        }
+        SurfaceTarget *target = nullptr;
+        if (!RT.GetSurfaceTarget(surfaceBase, sampleLayout, target))
+        {
+            CN.Skip(8);
+            continue;
+        }
+        std::pair<VkRenderPass, VkRenderPass> *rp = nullptr;
+        if (!RT.GetPasses(target->hostFormat, target->samples, rp))
+        {
+            CN.Skip(8);
+            continue;
+        }
+
         draw::ShaderXlate *vsX = nullptr, *psX = nullptr;
         VkShaderModule vsMod = VK_NULL_HANDLE, psMod = VK_NULL_HANDLE;
         // The interpolator mask (and the rest of the modification) is a property
@@ -1138,11 +1173,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             bool clampPs = false;
             {
                 const GuestClamp want = GuestColorFormatClamp((R[0x2001] >> 16) & 0xF);
-                auto sit = P.surfaceTargets.find(R[0x2001] & 0xFFF);
-                const bool hostIsFloat = sit != P.surfaceTargets.end() &&
-                                         (sit->second.hostFormat == VK_FORMAT_R16G16B16A16_SFLOAT ||
-                                          sit->second.hostFormat == VK_FORMAT_R32G32_SFLOAT ||
-                                          sit->second.hostFormat == VK_FORMAT_R16G16_SFLOAT);
+                const bool hostIsFloat = target->hostFormat == VK_FORMAT_R16G16B16A16_SFLOAT ||
+                                         target->hostFormat == VK_FORMAT_R32G32_SFLOAT ||
+                                         target->hostFormat == VK_FORMAT_R16G16_SFLOAT;
                 if (hostIsFloat && want != GuestClamp::kNone)
                 {
                     clampPs = true;
@@ -1163,41 +1196,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
                 CN.Skip(3);
                 continue;
             }
-        }
-        // GEARS_DRAW_ONLY_BASE=<hex>: render only draws targeting one EDRAM
-        // surface. A DIAGNOSTIC control arm -- it isolates one surface's
-        // contribution -- never a fix.
-        static const long onlyBase = lucent::config::number("DRAW_ONLY_BASE", -1);
-        if (onlyBase >= 0 && surfaceBase != uint32_t(onlyBase))
-        {
-            CN.Skip(0);
-            continue;
-        }
-        // This draw's own host render target, and the render pass its pipeline
-        // must be built against.
-        const draw::DrawSampleLayout sampleLayout = draw::DeriveDrawSampleLayout(
-            msaaModel ? ((R[0x2000] >> 16) & 3) : 0, P.width, P.height);
-        if (sampleLayout.IsNativeMultisample() &&
-            (!hasStandardSampleLocations || !has2xFramebufferSamples))
-        {
-            lucent::error("draw",
-                          "the selected Vulkan device lacks {} required for faithful Xenos"
-                          " 2X coverage",
-                          !has2xFramebufferSamples ? "2X colour/depth framebuffer samples"
-                                                   : "standard sample locations");
-            return false;
-        }
-        SurfaceTarget *target = nullptr;
-        if (!RT.GetSurfaceTarget(surfaceBase, sampleLayout, target))
-        {
-            CN.Skip(8);
-            continue;
-        }
-        std::pair<VkRenderPass, VkRenderPass> *rp = nullptr;
-        if (!RT.GetPasses(target->hostFormat, target->samples, rp))
-        {
-            CN.Skip(8);
-            continue;
         }
         OutputMergerState om;
         om.colorMask = R[0x2104];

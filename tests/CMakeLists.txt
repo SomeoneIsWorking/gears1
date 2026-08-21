@@ -389,6 +389,11 @@ add_executable(test_gpu_extent_capacity test_gpu_extent_capacity.cpp)
 target_include_directories(test_gpu_extent_capacity PRIVATE ../runtime)
 add_test(NAME gpu_extent_capacity COMMAND test_gpu_extent_capacity)
 
+add_executable(test_gpu_surface_format_capacity test_gpu_surface_format_capacity.cpp)
+target_include_directories(test_gpu_surface_format_capacity PRIVATE ../runtime)
+target_link_libraries(test_gpu_surface_format_capacity PRIVATE gears_draw lucent::lucent)
+add_test(NAME gpu_surface_format_capacity COMMAND test_gpu_surface_format_capacity)
+
 add_executable(test_gpu_draw_sample_layout test_gpu_draw_sample_layout.cpp)
 target_include_directories(test_gpu_draw_sample_layout PRIVATE ../runtime)
 add_test(NAME gpu_draw_sample_layout COMMAND test_gpu_draw_sample_layout)

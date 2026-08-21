@@ -29,6 +29,11 @@
 namespace gears::draw
 {
 
+// One authority for a surface target's Vulkan lifetime. Cache promotion and
+// whole-renderer teardown both use it, so adding another owned image cannot
+// leave one destruction path stale.
+void ReleaseSurfaceTarget(VkDevice device, SurfaceTarget &surface);
+
 struct RenderTargetCache
 {
     RenderTargetCache(Renderer &r, RendererPersistent &p, const FrameDrawInputs &inputs, uint32_t w,
