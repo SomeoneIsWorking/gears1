@@ -5,7 +5,7 @@ status: resolved
 symptom: 5 of 8 captures fail validation with VUID-VkShaderModuleCreateInfo-pCode-08740/08742, SPV_EXT_demote_to_helper_invocation declared but not enabled
 tags: gpu,vulkan,validation,spirv,shaders,translator
 created: 2026-08-05
-updated: 2026-08-05
+updated: 2026-08-21
 ---
 
 ## Root cause
@@ -29,3 +29,6 @@ The first pass ran the validator on ONE capture (act1_v2), which happens to cont
 ## Denominator for the fix
 
 5 of courtyard's 71 translated pixel-shader modules contain a kill; they carry OpKill now, and all 8 captures hash identically to before the change.
+
+### Note (2026-08-21)
+The better-fix hypothesis was implemented and tested as part of the #114 investigation, but its A/B was byte-identical on the target frame. It was removed from that graphics milestone rather than expanding the already oversized device-creation paths for a change that did not address the observed defect. The valid `OpKill` fallback remains, and the full chapter-45 replay is Vulkan-validation clean. Enabling demote truthfully is still future portability work, not the cause of #114.

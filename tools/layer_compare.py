@@ -39,11 +39,8 @@ Getting this wrong does not misreport a value -- it makes the depth passes fail
 to pair at all, and a pass with no counterpart reads as one the other side never
 executed (catalog #90).
 
-DEPTH PASSES ARE PAIRED BUT NOT VALUE-COMPARED. Our destination holds the
-DECODED float depth (our resolves never go through guest memory); the console's
-holds the packed guest bytes, whose layout is the open question in catalog #35.
-The rows say so rather than printing a difference that would be this tool's
-defect reported as the renderer's.
+Depth f22/f23 passes are decoded and coarsely compared; every other depth format
+is paired but explicitly left value-uncompared rather than guessed.
 
 NOT the destination ADDRESS, which was the first key tried and pairs NOTHING:
 the title's physical allocations land in different places in the two emulators.
@@ -93,7 +90,6 @@ DECODABLE_FORMATS = {
     32: ("k_16_16_16_16_FLOAT", 8),
 }
 
-
 def stored_rows(nbytes, width, bpp):
     """How many rows the guest's buffer actually holds, or None.
 
@@ -113,36 +109,6 @@ def stored_rows(nbytes, width, bpp):
     if not width or not bpp or nbytes % (width * bpp):
         return None
     return nbytes // (width * bpp)
-
-# 32 (k_16_16_16_16_FLOAT) IS NOT HERE, and that is a measurement rather than an
-# omission. The unpack and the 8-byte tiler both round-trip synthetic data in
-# --selftest, including a value above 1.0 -- and on the console's actual buffers
-# they produce NaN for the three 352x182 passes and a maximum of 34432.0 for the
-# 1280x720 ones, while a fourth (srcC400 1280x720) is 5,242,880 bytes where
-# 1280x720x8 is 7,372,800. So the destinations are not laid out the way this
-# decode assumes; the length alone proves it for one of them. A decoder that
-# passes its self-test and fails on real data is precisely the instrument this
-# file exists to refuse, so it is refused until the layout is read out. The
-# tiler and its self-test stay: they are correct, and they are what the next
-# attempt starts from.
-#
-# MEASURED SINCE, so the next attempt does not repeat it. On the 352x182 dumps
-# the NaN is NOT confined to the alignment padding and is NOT an endian choice:
-#   * rows 0..181 (the real image) are 1.41% non-finite; the 10 rows of padding
-#     past the declared height are 10.6%. So the padding IS dirtier -- it is
-#     guest memory neither side wrote -- but the image rows are dirty too, at a
-#     level no cropping can remove.
-#   * sweeping endian over all four modes gives 1.41% (mode 1, which is what the
-#     dump's own filename declares) and 0.4719% for modes 0, 2 and 3, which are
-#     IDENTICAL to each other because unpack_dest only special-cases 1 and 2 for
-#     this width. No mode reaches zero.
-# Choosing mode 0 because it has the fewest NaN would be fitting the layout to
-# the output, which is the thing this comment block exists to refuse. The finite
-# values under mode 0 max at 6.09e4 -- just under the half-float ceiling of
-# 65504 -- which is itself a hint that whole components are landing on the
-# exponent field of a neighbouring value, i.e. a stride or interleave error
-# rather than a byte-order one. That is where to start.
-
 
 def depth24_to_float(d24, is_float24, np):
     """The guest's 24-bit depth field -> float, both encodings.
@@ -569,6 +535,27 @@ def selftest(work, np, Image):
           f" {differs} (expected True)")
     ok = ok and same and differs
 
+    # Pitch padding must be untiled for row addressing and then ignored.
+    pitch_w, logical_w, logical_h = 64, 48, 32
+    logical = np.stack([
+        (np.arange(logical_w)[None, :] * 5 + np.zeros((logical_h, 1))) % 256,
+        (np.arange(logical_h)[:, None] * 7 + np.zeros((1, logical_w))) % 256,
+        np.full((logical_h, logical_w), 91),
+        np.full((logical_h, logical_w), 255),
+    ], axis=-1).astype(np.uint8)
+    stored = np.full((logical_h, pitch_w, 4), 237, dtype=np.uint8)
+    stored[:, :logical_w] = logical
+    pitched_raw = bytearray(pitch_w * logical_h * 4)
+    for y in range(logical_h):
+        for x in range(pitch_w):
+            off = tiled_offset_2d(x, y, pitch_w, 2)
+            pitched_raw[off:off + 4] = bytes(stored[y, x])
+    oracle_name = (f"oracle_f1_copy30_srcC333_{pitch_w}x{logical_h}_f6_e0_"
+                   f"03000000_{len(pitched_raw)}.bin")
+    (theirs_dir / oracle_name).write_bytes(pitched_raw)
+    native_name = f"resolve_30_srcC333_{pitch_w}x{logical_h}_f6_03000000_draw30.ppm"
+    Image.fromarray(logical[..., :3]).save(ours_dir / native_name)
+
     # Run the REAL comparison over these three pairs and read what it printed --
     # checking the filename patterns alone would leave the depth branch itself
     # unexercised, which is the branch being proven.
@@ -612,6 +599,12 @@ def selftest(work, np, Image):
          " would have hidden",
          "srcC000" in out and any("srcC000" in ln and "DIFFER" in ln
                                   for ln in out.splitlines())),
+        ("guest pitch padding is untiled but excluded from the sampled logical"
+         " image comparison",
+         any("srcC333" in ln and "48x32" in ln and "match" in ln
+             for ln in out.splitlines())
+         and not any("srcC333" in ln and ("UNDECODED" in ln or "DIFFER" in ln)
+                     for ln in out.splitlines())),
     ]
     for note, passed in checks:
         print(f"selftest: {note}: {passed} (expected True)")
@@ -807,6 +800,9 @@ def main(argv):
         their_path, their_dest, their_len, their_endian, their_extra = theirs[k]
         oi = np.asarray(Image.open(our_path).convert("RGB")).astype(np.float32) / 255.0
         h, w = oi.shape[:2]
+        # Untile at the key's guest pitch, then crop to the native image's
+        # logical sampled width (322 pixels at pitch 352 for UE3 bloom).
+        guest_w = k[2]
         fmt = k[4]
         raw = their_path.read_bytes()
 
@@ -815,15 +811,15 @@ def main(argv):
         # once would swizzle across the seam and produce a plausible image of
         # the wrong thing.
         def their_image(bpp, _raw=raw, _extra=their_extra):
-            rows = stored_rows(len(_raw), w, bpp)
-            first = untile(_raw, w, rows, np, bpp) if rows else None
+            rows = stored_rows(len(_raw), guest_w, bpp)
+            first = untile(_raw, guest_w, rows, np, bpp) if rows else None
             if first is None:
                 return None, 0
             bands, total = [first], rows
             for p2, _l2, _e2 in _extra:
                 b = p2.read_bytes()
-                r2 = stored_rows(len(b), w, bpp)
-                t2 = untile(b, w, r2, np, bpp) if r2 else None
+                r2 = stored_rows(len(b), guest_w, bpp)
+                t2 = untile(b, guest_w, r2, np, bpp) if r2 else None
                 if t2 is None:
                     return None, 0
                 bands.append(t2)
@@ -991,13 +987,14 @@ def main(argv):
             continue
         # DECODE AT THE HEIGHT THE BUFFER ACTUALLY HAS, then crop or refuse.
         ti, rows = their_image(bpp)
-        rows = rows or stored_rows(len(raw), w, bpp)
+        rows = rows or stored_rows(len(raw), guest_w, bpp)
         short = ""
         if rows is None:
             undecoded += 1
             print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
                   f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
-                  f"{their_len} bytes over {w} px at {bpp} B/px is not a whole"
+                      f"{their_len} bytes over {guest_w} pitch px at {bpp} B/px"
+                      f" is not a whole"
                   f" number of rows, so the layout is not what this assumes")
             continue
         if ti is not None and rows != h:
@@ -1017,8 +1014,11 @@ def main(argv):
             undecoded += 1
             print(f"  {key_str(k):>26} {our_dest:>10x} {their_dest:>11x} "
                   f"{w}x{h} {oi.mean():>10.4f} {'--':>11}  UNDECODED: "
-                  f"{their_len} bytes is not {w}x{h}x{bpp} tiled {fmt_name}")
+                      f"{their_len} bytes is not pitch {guest_w}x{h}x{bpp}"
+                      f" tiled {fmt_name}")
             continue
+        # Pitch padding is not sampled content and may hold old EDRAM bits.
+        ti = ti[:, :w]
         t = unpack_dest(ti, fmt, np, their_endian or 0)
         # OUR SIDE IS AN 8-BIT PPM, so it is already clamped to 0..1. A float
         # destination on the console is not, and this frame's scene colour

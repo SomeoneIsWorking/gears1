@@ -3,9 +3,8 @@
 namespace gears
 {
 
-void SelectDeviceFeatures(VkPhysicalDevice physical,
-                          VkPhysicalDeviceFeatures& enable,
-                          DeviceCapabilities& caps)
+void SelectDeviceFeatures(VkPhysicalDevice physical, VkPhysicalDeviceFeatures &enable,
+                          DeviceCapabilities &caps)
 {
     VkPhysicalDeviceFeatures available{};
     vkGetPhysicalDeviceFeatures(physical, &available);
@@ -31,13 +30,10 @@ void SelectDeviceFeatures(VkPhysicalDevice physical,
     enable.samplerAnisotropy = available.samplerAnisotropy;
     caps.samplerAnisotropy = available.samplerAnisotropy != VK_FALSE;
 
-    enable.shaderStorageImageReadWithoutFormat =
-        available.shaderStorageImageReadWithoutFormat;
-    enable.shaderStorageImageWriteWithoutFormat =
-        available.shaderStorageImageWriteWithoutFormat;
-    caps.storageImageWithoutFormat =
-        available.shaderStorageImageReadWithoutFormat != VK_FALSE &&
-        available.shaderStorageImageWriteWithoutFormat != VK_FALSE;
+    enable.shaderStorageImageReadWithoutFormat = available.shaderStorageImageReadWithoutFormat;
+    enable.shaderStorageImageWriteWithoutFormat = available.shaderStorageImageWriteWithoutFormat;
+    caps.storageImageWithoutFormat = available.shaderStorageImageReadWithoutFormat != VK_FALSE &&
+                                     available.shaderStorageImageWriteWithoutFormat != VK_FALSE;
 }
 
 } // namespace gears

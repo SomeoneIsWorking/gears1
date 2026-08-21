@@ -7,10 +7,12 @@
 
 #include <lucent/log.h>
 
+#include "gpu_resolve_extent.h"
+
 namespace gears::draw
 {
 
-ResolvePlan PlanResolves(const FrameDrawInputs& in, RenderTargetCache& RT)
+ResolvePlan PlanResolves(const FrameDrawInputs &in, RenderTargetCache &RT)
 {
     ResolvePlan plan;
     // the destination set was both too large and unattributed to a source.
@@ -23,16 +25,47 @@ ResolvePlan PlanResolves(const FrameDrawInputs& in, RenderTargetCache& RT)
     // the same EDRAM bytes, not a different surface, so a resolve's source is
     // looked up by BASE against the surfaces the frame renders, not by the
     // (base, format) pair its own registers happen to carry.
-    for (const FrameDrawItem& d : in.draws)
+    for (const FrameDrawItem &d : in.draws)
     {
-        const uint32_t* R = d.registers();
-            if (!R)
-                continue;
+        const uint32_t *R = d.registers();
+        if (!R)
+            continue;
         const uint32_t mode = R[0x2208] & 0x7;
         if (mode != 4 /*kColorDepth*/ && mode != 5 /*kDepthOnly*/)
             continue;
         RT.formatsPerBase[R[0x2001] & 0xFFF].insert((R[0x2001] >> 16) & 0xF);
     }
+
+    // Resolve bases first, so texture fetch constants can tell us the logical
+    // sampled extent of each destination before any Vulkan image is created.
+    std::set<uint32_t> rawDestinations;
+    for (const FrameDrawItem &draw : in.draws)
+    {
+        const uint32_t *registers = draw.registers();
+        if (registers && (registers[0x2208] & 0x7) == 6)
+        {
+            const uint32_t base = registers[0x2319] & ~0xFFFu;
+            if (base)
+                rawDestinations.insert(base);
+        }
+    }
+    const ResolveConsumerExtents consumerExtents = FindResolveConsumerExtents(in, rawDestinations);
+    for (const auto &[base, extents] : consumerExtents.conflicts)
+    {
+        lucent::Line line;
+        line.add("resolve destination {:#x} is sampled through conflicting logical extents:", base);
+        for (const auto &[width, height] : extents)
+            line.add(" {}x{}", width, height);
+        line.add("; retaining its pitch-sized image because one Vulkan extent cannot represent"
+                 " both aliases");
+        line.flush(lucent::Level::Warn, "draw");
+    }
+    const auto extentFor = [&](uint32_t base)
+    {
+        const auto found = consumerExtents.unique.find(base);
+        return found == consumerExtents.unique.end() ? std::pair<uint32_t, uint32_t>{0, 0}
+                                                     : found->second;
+    };
 
     // Pass two: the frame's resolves, each given its destination's host image.
     // RB_COPY_DEST_BASE -> (destination texture base, row offset within it).
@@ -48,11 +81,11 @@ ResolvePlan PlanResolves(const FrameDrawInputs& in, RenderTargetCache& RT)
     // Which SHADER samples a depth destination is still the evidence needed to
     // settle how the packed depth is laid out across the destination's four
     // components (catalog #35).
-    for (const FrameDrawItem& d : in.draws)
+    for (const FrameDrawItem &d : in.draws)
     {
-        const uint32_t* R = d.registers();
-            if (!R)
-                continue;
+        const uint32_t *R = d.registers();
+        if (!R)
+            continue;
         if ((R[0x2208] & 0x7) != 6 /*kCopy*/)
             continue;
         const uint32_t srcSelect = R[0x2318] & 0x7;
@@ -65,7 +98,7 @@ ResolvePlan PlanResolves(const FrameDrawInputs& in, RenderTargetCache& RT)
                 continue;
             }
             plan.depthDests.insert(dd);
-            ResolveTarget* drt = nullptr;
+            ResolveTarget *drt = nullptr;
             uint32_t drow = 0;
             // THE SOURCE IS RB_DEPTH_INFO (0x2002), exactly as copy_src_select
             // >= 4 means on the console: the sentinel 0xFFFFFFFF that used to
@@ -85,9 +118,11 @@ ResolvePlan PlanResolves(const FrameDrawInputs& in, RenderTargetCache& RT)
             // depth) and f22 (k_24_8, the shadow maps). Taking the register at
             // face value keyed our depth passes f6 and they paired with
             // nothing.
+            const auto [logicalWidth, logicalHeight] = extentFor(dd);
             if (!RT.GetResolveTarget(dd, R[0x2002] & 0xFFF, R[0x231A] & 0x3FFF,
-                    (R[0x231A] >> 16) & 0x3FFF, DepthDestFormat(R[0x2002]),
-                    /*isDepth=*/true, drt, drow))
+                                     (R[0x231A] >> 16) & 0x3FFF, logicalWidth, logicalHeight,
+                                     DepthDestFormat(R[0x2002]),
+                                     /*isDepth=*/true, drt, drow))
             {
                 ++plan.depthUnrouted;
                 continue;
@@ -105,12 +140,16 @@ ResolvePlan PlanResolves(const FrameDrawInputs& in, RenderTargetCache& RT)
         const uint32_t info = R[kColorInfo[srcSelect & 3]];
         const uint32_t srcBase = info & 0xFFF;
         if (!RT.formatsPerBase.count(srcBase))
-        { ++plan.unmatched; continue; }
-        ResolveTarget* rt = nullptr;
+        {
+            ++plan.unmatched;
+            continue;
+        }
+        ResolveTarget *rt = nullptr;
         uint32_t rowOffset = 0;
-        if (!RT.GetResolveTarget(destBase, srcBase, R[0x231A] & 0x3FFF,
-                (R[0x231A] >> 16) & 0x3FFF, (R[0x231B] >> 7) & 0x3F,
-                /*isDepth=*/false, rt, rowOffset))
+        const auto [logicalWidth, logicalHeight] = extentFor(destBase);
+        if (!RT.GetResolveTarget(destBase, srcBase, R[0x231A] & 0x3FFF, (R[0x231A] >> 16) & 0x3FFF,
+                                 logicalWidth, logicalHeight, (R[0x231B] >> 7) & 0x3F,
+                                 /*isDepth=*/false, rt, rowOffset))
             continue;
         // Where this destination base writes: which texture, and how many rows
         // into it. A tile's base is the texture's base plus whole rows.
@@ -122,25 +161,26 @@ ResolvePlan PlanResolves(const FrameDrawInputs& in, RenderTargetCache& RT)
     return plan;
 }
 
-void ReportResolvePlan(const ResolvePlan& plan)
+void ReportResolvePlan(const ResolvePlan &plan)
 {
     // Printed at zero as well: "no depth copy went unrouted" and "nobody
     // counted" must not read the same.
-    lucent::info("draw", "frame depth copies routed to a host destination: {};"
-        " NOT routed: {} (no destination base, or no host image for it)",
-        plan.depthRouted, plan.depthUnrouted);
+    lucent::info("draw",
+                 "frame depth copies routed to a host destination: {};"
+                 " NOT routed: {} (no destination base, or no host image for it)",
+                 plan.depthRouted, plan.depthUnrouted);
     if (plan.unmatched)
-        lucent::info("draw", "frame resolves not served: {} from an EDRAM base"
-            " this frame never rendered", plan.unmatched);
+        lucent::info("draw",
+                     "frame resolves not served: {} from an EDRAM base"
+                     " this frame never rendered",
+                     plan.unmatched);
     {
         lucent::Line rd;
-        rd.add("frame: {} resolve destinations (from kCopy draws):",
-               plan.dests.size());
+        rd.add("frame: {} resolve destinations (from kCopy draws):", plan.dests.size());
         for (uint32_t b : plan.dests)
             rd.add(" {:#x}", b);
         rd.flush(lucent::Level::Info, "draw");
     }
-
 }
 
 } // namespace gears::draw

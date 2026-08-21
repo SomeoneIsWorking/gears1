@@ -1,11 +1,11 @@
 ---
 id: 79
 title: The trace dump's black frame is upstream of the presenter: the front buffer is empty in shared memory
-status: investigating
+status: resolved
 symptom: xenia-gpu-vulkan-trace-dump writes a uniformly black PNG (exit 0) for a trace of a frame that rendered correctly
 tags: oracle,trace,xenia,instrument,present,black
 created: 2026-08-06
-updated: 2026-08-06
+updated: 2026-08-21
 ---
 
 Continues I013's distrust record. The tool renders a trace XENIA ITSELF captured
@@ -427,3 +427,6 @@ collapses the pair using draws from both. Cutting at 462, the end of tile 1,
 flips 49 draws from `shaded` to `rasterised_no_fragment`. The truncated arm was
 built, used, and RETRACTED on this control; anything measured with a cut inside
 a tile group is comparing two different renderers. The tool now says so.
+
+### Resolution (2026-08-21)
+2026-08-21: Root cause was asynchronous Vulkan pipeline creation in a single-pass evidence tool. First-use trace draws ran Xenia placeholder pixel shaders while real pipelines compiled; completion cannot retroactively repair their render-target writes, so black or divergent dumps depended on cache warmth. xenia-gpu-vulkan-trace-dump now forces vulkan_pipeline_creation_threads=0 before graphics setup. Without any command-line override it emitted 27/27 chapter-45 raw destinations byte-identical to the previously explicit synchronous control. The diagnostic forced-white/color-test/dump-white controls remain as positive controls.

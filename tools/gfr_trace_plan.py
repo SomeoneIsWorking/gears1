@@ -29,6 +29,16 @@ class CheckpointPlan:
         # diagnostic readbacks; the checkpoint evidence is the raw copy bytes.
         return "frame" if self.depth else f"resolve:{self.resolve_index}"
 
+    def execute_register_callbacks(self, draw_position):
+        """Keep the live target while installing the synthetic copy state.
+
+        The prefix replays normal draw transitions with callbacks. The appended
+        resolve jumps over later draws, so firing callbacks for its snapshot can
+        reload the host target from stale EDRAM before copying the checkpoint.
+        IssueCopy reads the installed registers directly.
+        """
+        return draw_position < self.prefix_count
+
 
 def parse_checkpoint(text, resolves, draw_count):
     """Parse RESOLVE:PREFIX and validate that it is a true intermediate copy.
@@ -119,5 +129,9 @@ def selftest_cases():
          checkpoint.present, "resolve:0"),
         ("depth checkpoint uses a non-depth presentation",
          parse_checkpoint("1:5", resolves, 10).present, "frame"),
+        ("checkpoint prefix executes register callbacks",
+         checkpoint.execute_register_callbacks(4), True),
+        ("synthetic resolve installs state without callbacks",
+         checkpoint.execute_register_callbacks(5), False),
         ("checkpoint refuses work after its resolve", refuses("0:9"), True),
     ]

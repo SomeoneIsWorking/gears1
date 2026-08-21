@@ -17,7 +17,9 @@ from layer_compare import stored_rows, tiled_offset_2d, untile
 
 
 NATIVE_RE = re.compile(
-    r"srcC([0-9A-Fa-f]{3})_(\d+)x(\d+)_f(\d+)_.*\.rgba16f$")
+    r"srcC([0-9A-Fa-f]{3})_(\d+)x(\d+)_f(\d+)_"
+    r"[0-9A-Fa-f]+_draw\d+"
+    r"(?:_sample(\d+)x(\d+))?\.rgba16f$")
 ORACLE_RE = re.compile(
     r"srcC([0-9A-Fa-f]{3})_(\d+)x(\d+)_f(\d+)_e(\d+)_"
     r"([0-9A-Fa-f]{8})_(\d+)\.bin$")
@@ -27,8 +29,9 @@ def parse_native(path):
     match = NATIVE_RE.search(path.name)
     if not match:
         raise ValueError(f"native filename does not describe a colour resolve: {path}")
-    base, width, height, fmt = match.groups()
-    return int(base, 16), int(width), int(height), int(fmt)
+    base, width, height, fmt, sampled_width, sampled_height = match.groups()
+    return (int(base, 16), int(width), int(height), int(fmt),
+            int(sampled_width or width), int(sampled_height or height))
 
 
 def parse_oracle(path):
@@ -44,7 +47,7 @@ def parse_oracle(path):
 
 
 def oracle_half_bits(paths, expected, np):
-    base, width, height, fmt = expected
+    base, width, height, fmt, sampled_width, sampled_height = expected
     bands = []
     next_dest = None
     for path in paths:
@@ -71,19 +74,20 @@ def oracle_half_bits(paths, expected, np):
     if joined.shape[0] < height:
         raise ValueError(
             f"oracle bands hold {joined.shape[0]} rows, need {height}")
-    return joined[:height]
+    return joined[:sampled_height, :sampled_width]
 
 
 def compare(native_path, oracle_paths, np):
     expected = parse_native(native_path)
-    _, width, height, fmt = expected
+    _, width, height, fmt, sampled_width, sampled_height = expected
     if fmt != 32:
         raise ValueError(f"native format is f{fmt}; exact RGBA16F comparison needs f32")
     native = np.fromfile(native_path, dtype="<u2")
-    if native.size != width * height * 4:
+    if native.size != sampled_width * sampled_height * 4:
         raise ValueError(
-            f"{native_path}: {native.size * 2} bytes is not {width}x{height} RGBA16F")
-    native = native.reshape(height, width, 4)
+            f"{native_path}: {native.size * 2} bytes is not "
+            f"{sampled_width}x{sampled_height} RGBA16F")
+    native = native.reshape(sampled_height, sampled_width, 4)
     oracle = oracle_half_bits(oracle_paths, expected, np)
     different = native != oracle
     rgb = different[..., :3]
@@ -91,7 +95,8 @@ def compare(native_path, oracle_paths, np):
     print(f"pass srcC{expected[0]:03X} {width}x{height} f{fmt}: "
           f"{len(oracle_paths)} oracle band(s), exact half-float bits")
     print(f"RGB differing components: {int(rgb.sum())} of {rgb.size}")
-    print(f"RGB differing pixels: {len(differing_pixels)} of {width * height}")
+    print(f"RGB differing pixels: {len(differing_pixels)} of "
+          f"{sampled_width * sampled_height}")
     if not len(differing_pixels):
         print("IDENTICAL: no RGB component differs")
         return False
@@ -134,13 +139,19 @@ def selftest(np):
     if compare(native, oracle_paths, np):
         print("SELFTEST FAIL: identical bands differed")
         return 1
+    sampled = work / "resolve_01_srcC400_32x64_f32_00000000_draw1_sample24x64.rgba16f"
+    bits[:, :24].astype("<u2").tofile(sampled)
+    if compare(sampled, oracle_paths, np):
+        print("SELFTEST FAIL: logical-width crop included pitch padding")
+        return 1
     changed = bits.copy()
     changed[40, 7, 1] ^= 1
     changed.astype("<u2").tofile(native)
     if not compare(native, oracle_paths, np):
         print("SELFTEST FAIL: changed pixel was not detected")
         return 1
-    print("SELFTEST PASS: identical composition and a one-bit difference were distinguished")
+    print("SELFTEST PASS: identical composition, logical-width cropping, and a one-bit"
+          " difference were distinguished")
     return 0
 
 
