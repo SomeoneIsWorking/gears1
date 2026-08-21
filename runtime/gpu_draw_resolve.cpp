@@ -25,10 +25,9 @@
 namespace gears::draw
 {
 
-void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
-                                       const VkRect2D& srcRect, int32_t dstX,
-                                       int32_t dstY, bool isFloat24,
-                                       const ResolveSampling& smp)
+void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget &dst,
+                                       const VkRect2D &srcRect, int32_t dstX, int32_t dstY,
+                                       bool isFloat24, const ResolveSampling &smp)
 {
     // THE RECTANGLE IS IN PIXELS, THE IMAGE IN SAMPLES. W and H are the sample
     // grid, so the rectangle is clamped to the PIXEL extent this source has
@@ -38,10 +37,8 @@ void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
     const int32_t ph = int32_t(H / std::max(1u, smp.scaleY));
     const int32_t sx0 = std::clamp<int32_t>(srcRect.offset.x, 0, pw);
     const int32_t sy0 = std::clamp<int32_t>(srcRect.offset.y, 0, ph);
-    int32_t sx1 = std::clamp<int32_t>(srcRect.offset.x + int32_t(srcRect.extent.width),
-                                      sx0, pw);
-    int32_t sy1 = std::clamp<int32_t>(srcRect.offset.y + int32_t(srcRect.extent.height),
-                                      sy0, ph);
+    int32_t sx1 = std::clamp<int32_t>(srcRect.offset.x + int32_t(srcRect.extent.width), sx0, pw);
+    int32_t sy1 = std::clamp<int32_t>(srcRect.offset.y + int32_t(srcRect.extent.height), sy0, ph);
     const int32_t dw = int32_t(dst.width), dh = int32_t(dst.imageHeight);
     if (dstX >= dw || dstY >= dh)
         return;
@@ -60,29 +57,29 @@ void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
     pre[0].image = P.depth;
     // BOTH aspects: the image is D32_SFLOAT_S8_UINT, and a layout transition
     // must name every aspect the image has.
-    pre[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT |
-                               VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
+    pre[0].subresourceRange = {VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 0, 1, 0, 1};
     pre[1] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     pre[1].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     pre[1].dstAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    pre[1].oldLayout = dst.everWritten ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                       : VK_IMAGE_LAYOUT_UNDEFINED;
+    pre[1].oldLayout =
+        dst.everWritten ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
     pre[1].newLayout = VK_IMAGE_LAYOUT_GENERAL;
     pre[1].srcQueueFamilyIndex = pre[1].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     pre[1].image = dst.image;
     pre[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+    vkCmdPipelineBarrier(
+        cmd, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, pre);
 
     VkDescriptorSet set = resolveDepthSets[resolveDepthSetsUsed++];
     VkDescriptorImageInfo srcInfo{VK_NULL_HANDLE, P.depthSampledView,
                                   VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
-    VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, dst.storageView,
-                                  VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, dst.storageView, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet w[2]{};
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[0].dstSet = set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
+    w[0].dstSet = set;
+    w[0].dstBinding = 0;
+    w[0].descriptorCount = 1;
     w[0].descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
     w[0].pImageInfo = &srcInfo;
     w[1] = w[0];
@@ -92,17 +89,27 @@ void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
     vkUpdateDescriptorSets(R.device, 2, w, 0, nullptr);
 
     draw::ResolvePushConstants pc{};
-    // srcOffset is in SAMPLES, extent in destination PIXELS.
-    pc.srcOffset[0] = sx0 * int32_t(smp.scaleX);
-    pc.srcOffset[1] = sy0 * int32_t(smp.scaleY);
-    pc.dstOffset[0] = dstX; pc.dstOffset[1] = dstY;
-    pc.extent[0] = sx1 - sx0; pc.extent[1] = sy1 - sy0;
-    pc.srcScale[0] = int32_t(smp.scaleX); pc.srcScale[1] = int32_t(smp.scaleY);
-    pc.sampleOffset[0] = smp.offsetX; pc.sampleOffset[1] = smp.offsetY;
+    const bool native2x = P.boundDepthSamples == VK_SAMPLE_COUNT_2_BIT;
+    // Expanded targets address samples as neighbouring texels. A native 2X
+    // image addresses the pixel directly and supplies the sample separately.
+    pc.srcOffset[0] = native2x ? sx0 : sx0 * int32_t(smp.scaleX);
+    pc.srcOffset[1] = native2x ? sy0 : sy0 * int32_t(smp.scaleY);
+    pc.dstOffset[0] = dstX;
+    pc.dstOffset[1] = dstY;
+    pc.extent[0] = sx1 - sx0;
+    pc.extent[1] = sy1 - sy0;
+    pc.srcScale[0] = native2x ? 1 : int32_t(smp.scaleX);
+    pc.srcScale[1] = native2x ? 1 : int32_t(smp.scaleY);
+    pc.sampleOffset[0] = native2x ? 0 : smp.offsetX;
+    // Xenos sample 0 is the top-left sample. Vulkan's standard 2X pattern
+    // numbers top-left as 1 and bottom-right as 0, so the guest index is
+    // inverted (the same mapping Xenia applies in its native-2X path).
+    pc.sampleOffset[1] = native2x ? 1 - smp.offsetY : smp.offsetY;
     // Depth is never averaged (DeriveResolveSampling collapses an averaging
     // selector on depth to its first sample), so these are always the identity
     // here -- set anyway so the block that is pushed is fully initialised.
-    pc.tapDelta[0] = 0; pc.tapDelta[1] = 0;
+    pc.tapDelta[0] = 0;
+    pc.tapDelta[1] = 0;
     pc.tapWeight = 0.25f;
     pc.scale = 1.0f;
     // Reused field: 1 = float24 (kD24FS8), 0 = unorm24 (kD24S8). It was pinned
@@ -117,13 +124,12 @@ void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
     // byte-identical before and after. What this fixes is a selector that was
     // silently wrong, so it cannot be believed if the encode is ever used.
     pc.swapRB = isFloat24 ? 1u : 0u;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, P.resolveDepthPipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-        P.resolveDepthLayout, 0, 1, &set, 0, nullptr);
-    vkCmdPushConstants(cmd, P.resolveDepthLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-        sizeof(pc), &pc);
-    vkCmdDispatch(cmd, (uint32_t(pc.extent[0]) + 7) / 8,
-                       (uint32_t(pc.extent[1]) + 7) / 8, 1);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                      native2x ? P.resolveDepth2xPipeline : P.resolveDepthPipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, P.resolveDepthLayout, 0, 1, &set,
+                            0, nullptr);
+    vkCmdPushConstants(cmd, P.resolveDepthLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cmd, (uint32_t(pc.extent[0]) + 7) / 8, (uint32_t(pc.extent[1]) + 7) / 8, 1);
 
     VkImageMemoryBarrier post[2]{};
     post[0] = pre[0];
@@ -137,28 +143,96 @@ void RenderTargetCache::ResolveDepthTo(VkCommandBuffer cmd, ResolveTarget& dst,
     post[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     post[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 2, post);
+                         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, nullptr, 0, nullptr, 2, post);
     ++dst.copies;
     dst.everWritten = true;
 }
 
-void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarget& srcTarget,
-                                         ResolveTarget& dst, const VkRect2D& srcRect,
-                                         int32_t dstX, int32_t dstY, float scale,
-                                         bool swapRB, const ResolveSampling& smp)
+void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, SurfaceTarget &srcTarget,
+                                         ResolveTarget &dst, const VkRect2D &srcRect, int32_t dstX,
+                                         int32_t dstY, float scale, bool swapRB,
+                                         const ResolveSampling &smp)
 {
+    if (srcTarget.samples != VK_SAMPLE_COUNT_1_BIT)
+    {
+        // A Vulkan colour resolve averages every sample. That is exactly
+        // Xenos k01 for a 2X surface, but not a single-sample selector. Refuse
+        // the latter instead of quietly turning it into antialiasing.
+        const bool is2xAverage = srcTarget.samples == VK_SAMPLE_COUNT_2_BIT && smp.scaleX == 1 &&
+                                 smp.scaleY == 2 && smp.offsetX == 0 && smp.offsetY == 0 &&
+                                 smp.spanX == 0 && smp.spanY == 1;
+        if (!is2xAverage || srcTarget.resolvedColor == VK_NULL_HANDLE ||
+            srcTarget.resolvedStorageView == VK_NULL_HANDLE)
+        {
+            ++resolvesUnstorable;
+            lucent::error("draw",
+                          "native multisample colour resolve refused: {} samples,"
+                          " step ({},{}), first ({},{}), span ({},{})",
+                          int(srcTarget.samples), smp.scaleX, smp.scaleY, smp.offsetX, smp.offsetY,
+                          smp.spanX, smp.spanY);
+            return;
+        }
+
+        VkImageMemoryBarrier toResolve{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        toResolve.srcAccessMask = srcTarget.resolvedColorReady ? VK_ACCESS_TRANSFER_READ_BIT : 0;
+        toResolve.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toResolve.oldLayout = srcTarget.resolvedColorReady ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL
+                                                           : VK_IMAGE_LAYOUT_UNDEFINED;
+        toResolve.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toResolve.srcQueueFamilyIndex = toResolve.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        toResolve.image = srcTarget.resolvedColor;
+        toResolve.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &toResolve);
+
+        VkImageResolve region{};
+        region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+        region.extent = {srcTarget.width, srcTarget.height, 1};
+        vkCmdResolveImage(cmd, srcTarget.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                          srcTarget.resolvedColor, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                          &region);
+
+        VkImageMemoryBarrier resolvedReady{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        resolvedReady.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        resolvedReady.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+        resolvedReady.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        resolvedReady.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+        resolvedReady.srcQueueFamilyIndex = resolvedReady.dstQueueFamilyIndex =
+            VK_QUEUE_FAMILY_IGNORED;
+        resolvedReady.image = srcTarget.resolvedColor;
+        resolvedReady.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                             0, nullptr, 0, nullptr, 1, &resolvedReady);
+        srcTarget.resolvedColorReady = true;
+
+        // Re-enter the one authoritative Xenos colour-copy conversion with a
+        // single-sample source. It still owns rectangle routing, exponent bias,
+        // channel swapping, descriptor lifetime and destination preservation.
+        SurfaceTarget resolvedSource;
+        resolvedSource.hostFormat = srcTarget.hostFormat;
+        resolvedSource.samples = VK_SAMPLE_COUNT_1_BIT;
+        resolvedSource.width = srcTarget.width;
+        resolvedSource.height = srcTarget.height;
+        resolvedSource.color = srcTarget.resolvedColor;
+        resolvedSource.storageView = srcTarget.resolvedStorageView;
+        resolvedSource.resolveIntermediate = true;
+        ResolveSurfaceTo(cmd, resolvedSource, dst, srcRect, dstX, dstY, scale, swapRB,
+                         ResolveSampling{});
+        return;
+    }
+
     // Clamp the rectangle to both images. A rectangle larger than either
     // cannot make the dispatch write out of bounds. In PIXELS -- see the note
     // in ResolveDepthTo: W and H are the sample grid.
-    const int32_t pw = int32_t(W / std::max(1u, smp.scaleX));
-    const int32_t ph = int32_t(H / std::max(1u, smp.scaleY));
+    const int32_t pw = int32_t(srcTarget.width / std::max(1u, smp.scaleX));
+    const int32_t ph = int32_t(srcTarget.height / std::max(1u, smp.scaleY));
     const int32_t sx0 = std::clamp<int32_t>(srcRect.offset.x, 0, pw);
     const int32_t sy0 = std::clamp<int32_t>(srcRect.offset.y, 0, ph);
-    int32_t sx1 = std::clamp<int32_t>(srcRect.offset.x + int32_t(srcRect.extent.width),
-                                      sx0, pw);
-    int32_t sy1 = std::clamp<int32_t>(srcRect.offset.y + int32_t(srcRect.extent.height),
-                                      sy0, ph);
+    int32_t sx1 = std::clamp<int32_t>(srcRect.offset.x + int32_t(srcRect.extent.width), sx0, pw);
+    int32_t sy1 = std::clamp<int32_t>(srcRect.offset.y + int32_t(srcRect.extent.height), sy0, ph);
     const int32_t dw = int32_t(dst.width), dh = int32_t(dst.imageHeight);
     if (dstX >= dw || dstY >= dh)
         return;
@@ -172,13 +246,11 @@ void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarge
     // identical to the blit it replaces -- it reproduces it byte for byte
     // (0 of 2764816 differ). GEARS_DRAW_RESOLVE_BLIT=1 goes back to the
     // blit, as a control arm.
-    static const bool blitResolve =
-        lucent::config::flag("DRAW_RESOLVE_BLIT");
+    static const bool blitResolve = lucent::config::flag("DRAW_RESOLVE_BLIT");
     const bool computeResolve = !blitResolve;
-    const bool canCompute = computeResolve &&
-        P.resolvePipeline != VK_NULL_HANDLE && !resolveSets.empty() &&
-        srcTarget.storageView != VK_NULL_HANDLE &&
-        dst.storageView != VK_NULL_HANDLE;
+    const bool canCompute = computeResolve && P.resolvePipeline != VK_NULL_HANDLE &&
+                            !resolveSets.empty() && srcTarget.storageView != VK_NULL_HANDLE &&
+                            dst.storageView != VK_NULL_HANDLE;
     if (!canCompute)
     {
         if (computeResolve)
@@ -190,14 +262,14 @@ void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarge
         VkImageMemoryBarrier tb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         tb.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
         tb.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-        tb.oldLayout = dst.everWritten ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                       : VK_IMAGE_LAYOUT_UNDEFINED;
+        tb.oldLayout =
+            dst.everWritten ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
         tb.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
         tb.srcQueueFamilyIndex = tb.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         tb.image = dst.image;
         tb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-            VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &tb);
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &tb);
         VkImageBlit bl{};
         bl.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
         bl.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
@@ -205,9 +277,8 @@ void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarge
         bl.srcOffsets[1] = {sx1, sy1, 1};
         bl.dstOffsets[0] = {dstX, dstY, 0};
         bl.dstOffsets[1] = {dstX + (sx1 - sx0), dstY + (sy1 - sy0), 1};
-        vkCmdBlitImage(cmd, srcTarget.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-            dst.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl,
-            VK_FILTER_NEAREST);
+        vkCmdBlitImage(cmd, srcTarget.color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst.image,
+                       VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &bl, VK_FILTER_NEAREST);
         VkImageMemoryBarrier rb{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
         rb.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
         rb.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
@@ -217,7 +288,8 @@ void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarge
         rb.image = dst.image;
         rb.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &rb);
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                             &rb);
         ++dst.copies;
         dst.everWritten = true;
         return;
@@ -230,12 +302,13 @@ void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarge
     VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     VkImageMemoryBarrier toGeneral[2]{};
     toGeneral[0] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-    toGeneral[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    toGeneral[0].srcAccessMask = srcTarget.resolveIntermediate
+                                     ? VK_ACCESS_TRANSFER_READ_BIT
+                                     : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     toGeneral[0].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     toGeneral[0].oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     toGeneral[0].newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    toGeneral[0].srcQueueFamilyIndex = toGeneral[0].dstQueueFamilyIndex =
-        VK_QUEUE_FAMILY_IGNORED;
+    toGeneral[0].srcQueueFamilyIndex = toGeneral[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     toGeneral[0].image = srcTarget.color;
     toGeneral[0].subresourceRange = range;
     toGeneral[1] = toGeneral[0];
@@ -244,12 +317,15 @@ void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarge
     // PRESERVE: SHADER_READ_ONLY_OPTIMAL is where the previous resolve left
     // it, and it is the layout the sampling descriptors declare. UNDEFINED
     // only the first time, when there is nothing to preserve.
-    toGeneral[1].oldLayout = dst.everWritten
-        ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
+    toGeneral[1].oldLayout =
+        dst.everWritten ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
     toGeneral[1].image = dst.image;
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 2, toGeneral);
+    const VkPipelineStageFlags sourceStage =
+        (srcTarget.resolveIntermediate ? VK_PIPELINE_STAGE_TRANSFER_BIT
+                                       : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT) |
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    vkCmdPipelineBarrier(cmd, sourceStage, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0,
+                         nullptr, 2, toGeneral);
 
     if (resolveSetsUsed >= resolveSets.size())
     {
@@ -260,13 +336,13 @@ void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarge
         return;
     }
     VkDescriptorSet set = resolveSets[resolveSetsUsed++];
-    VkDescriptorImageInfo srcInfo{VK_NULL_HANDLE, srcTarget.storageView,
-                                  VK_IMAGE_LAYOUT_GENERAL};
-    VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, dst.storageView,
-                                  VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo srcInfo{VK_NULL_HANDLE, srcTarget.storageView, VK_IMAGE_LAYOUT_GENERAL};
+    VkDescriptorImageInfo dstInfo{VK_NULL_HANDLE, dst.storageView, VK_IMAGE_LAYOUT_GENERAL};
     VkWriteDescriptorSet w[2]{};
     w[0] = {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    w[0].dstSet = set; w[0].dstBinding = 0; w[0].descriptorCount = 1;
+    w[0].dstSet = set;
+    w[0].dstBinding = 0;
+    w[0].descriptorCount = 1;
     w[0].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     w[0].pImageInfo = &srcInfo;
     w[1] = w[0];
@@ -279,21 +355,24 @@ void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarge
     // one invocation per destination pixel and the source steps srcScale.
     pc.srcOffset[0] = sx0 * int32_t(smp.scaleX);
     pc.srcOffset[1] = sy0 * int32_t(smp.scaleY);
-    pc.dstOffset[0] = dstX; pc.dstOffset[1] = dstY;
-    pc.extent[0] = sx1 - sx0; pc.extent[1] = sy1 - sy0;
-    pc.srcScale[0] = int32_t(smp.scaleX); pc.srcScale[1] = int32_t(smp.scaleY);
-    pc.sampleOffset[0] = smp.offsetX; pc.sampleOffset[1] = smp.offsetY;
-    pc.tapDelta[0] = smp.spanX; pc.tapDelta[1] = smp.spanY;
+    pc.dstOffset[0] = dstX;
+    pc.dstOffset[1] = dstY;
+    pc.extent[0] = sx1 - sx0;
+    pc.extent[1] = sy1 - sy0;
+    pc.srcScale[0] = int32_t(smp.scaleX);
+    pc.srcScale[1] = int32_t(smp.scaleY);
+    pc.sampleOffset[0] = smp.offsetX;
+    pc.sampleOffset[1] = smp.offsetY;
+    pc.tapDelta[0] = smp.spanX;
+    pc.tapDelta[1] = smp.spanY;
     pc.tapWeight = 0.25f;
     pc.scale = scale;
     pc.swapRB = swapRB ? 1u : 0u;
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, P.resolvePipeline);
-    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, P.resolveLayout,
-        0, 1, &set, 0, nullptr);
-    vkCmdPushConstants(cmd, P.resolveLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0,
-        sizeof(pc), &pc);
-    vkCmdDispatch(cmd, (uint32_t(pc.extent[0]) + 7) / 8,
-                       (uint32_t(pc.extent[1]) + 7) / 8, 1);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, P.resolveLayout, 0, 1, &set, 0,
+                            nullptr);
+    vkCmdPushConstants(cmd, P.resolveLayout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(pc), &pc);
+    vkCmdDispatch(cmd, (uint32_t(pc.extent[0]) + 7) / 8, (uint32_t(pc.extent[1]) + 7) / 8, 1);
 
     // The source goes back to TRANSFER_SRC_OPTIMAL, which is the layout its
     // render pass expects to resume from; the destination stays in GENERAL
@@ -301,7 +380,8 @@ void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarge
     VkImageMemoryBarrier back[2]{};
     back[0] = {VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     back[0].srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    back[0].dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    back[0].dstAccessMask = srcTarget.resolveIntermediate ? VK_ACCESS_TRANSFER_READ_BIT
+                                                          : VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     back[0].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     back[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     back[0].srcQueueFamilyIndex = back[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -313,9 +393,12 @@ void RenderTargetCache::ResolveSurfaceTo(VkCommandBuffer cmd, const SurfaceTarge
     back[1].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     back[1].newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     back[1].image = dst.image;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-        0, 0, nullptr, 0, nullptr, 2, back);
+    const VkPipelineStageFlags resumeStage =
+        (srcTarget.resolveIntermediate ? VK_PIPELINE_STAGE_TRANSFER_BIT
+                                       : VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT) |
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, resumeStage, 0, 0, nullptr, 0,
+                         nullptr, 2, back);
     ++dst.copies;
     dst.everWritten = true;
 }

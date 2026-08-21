@@ -17,11 +17,12 @@
 namespace gears::draw
 {
 
-bool RenderTargetCache::MakeRenderPass(VkFormat colorFormat, bool load, VkRenderPass &out)
+bool RenderTargetCache::MakeRenderPass(VkFormat colorFormat, VkSampleCountFlagBits samples,
+                                       bool load, VkRenderPass &out)
 {
     VkAttachmentDescription att[2]{};
     att[0].format = colorFormat;
-    att[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    att[0].samples = samples;
     att[0].loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     att[0].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     att[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -29,7 +30,7 @@ bool RenderTargetCache::MakeRenderPass(VkFormat colorFormat, bool load, VkRender
     att[0].initialLayout = load ? VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
     att[0].finalLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
     att[1].format = depthFormat;
-    att[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    att[1].samples = samples;
     att[1].loadOp = load ? VK_ATTACHMENT_LOAD_OP_LOAD : VK_ATTACHMENT_LOAD_OP_CLEAR;
     att[1].storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     // STENCIL IS CARRIED, not discarded. DONT_CARE here throws away the marks a
@@ -72,16 +73,18 @@ bool RenderTargetCache::MakeRenderPass(VkFormat colorFormat, bool load, VkRender
     return true;
 }
 
-bool RenderTargetCache::GetPasses(VkFormat colorFormat, std::pair<VkRenderPass, VkRenderPass> *&out)
+bool RenderTargetCache::GetPasses(VkFormat colorFormat, VkSampleCountFlagBits samples,
+                                  std::pair<VkRenderPass, VkRenderPass> *&out)
 {
-    auto it = P.passes.find(colorFormat);
+    const auto key = std::make_pair(colorFormat, samples);
+    auto it = P.passes.find(key);
     if (it == P.passes.end())
     {
         std::pair<VkRenderPass, VkRenderPass> rp{VK_NULL_HANDLE, VK_NULL_HANDLE};
-        if (!MakeRenderPass(colorFormat, false, rp.first) ||
-            !MakeRenderPass(colorFormat, true, rp.second))
+        if (!MakeRenderPass(colorFormat, samples, false, rp.first) ||
+            !MakeRenderPass(colorFormat, samples, true, rp.second))
             return false;
-        it = P.passes.emplace(colorFormat, rp).first;
+        it = P.passes.emplace(key, rp).first;
     }
     out = &it->second;
     return true;
@@ -92,10 +95,12 @@ std::map<uint32_t, std::set<uint32_t>> formatsPerBase;
 // The render-target cache proper: a host colour target per EDRAM surface,
 // created the first time a frame renders into that (base, format) and kept
 // for the life of the run like every other persistent object here.
-bool RenderTargetCache::GetSurfaceTarget(uint32_t base, SurfaceTarget *&out)
+bool RenderTargetCache::GetSurfaceTarget(uint32_t base, const DrawSampleLayout &layout,
+                                         SurfaceTarget *&out)
 {
-    auto it = P.surfaceTargets.find(base);
-    if (it != P.surfaceTargets.end())
+    auto &targets = layout.IsNativeMultisample() ? P.surfaceTargets2x : P.surfaceTargets;
+    auto it = targets.find(base);
+    if (it != targets.end())
     {
         out = &it->second;
         return true;
@@ -108,24 +113,29 @@ bool RenderTargetCache::GetSurfaceTarget(uint32_t base, SurfaceTarget *&out)
     if (hostFormat == VK_FORMAT_UNDEFINED)
         return false;
     std::pair<VkRenderPass, VkRenderPass> *rp = nullptr;
-    if (!GetPasses(hostFormat, rp))
+    const auto samples = VkSampleCountFlagBits(layout.rasterSamples);
+    if (!GetPasses(hostFormat, samples, rp))
         return false;
     SurfaceTarget s;
     s.hostFormat = hostFormat;
+    s.samples = samples;
+    s.width = layout.imageWidth;
+    s.height = layout.imageHeight;
     VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ci.imageType = VK_IMAGE_TYPE_2D;
     ci.format = hostFormat;
-    ci.extent = {W, H, 1};
+    ci.extent = {s.width, s.height, 1};
     ci.mipLevels = 1;
     ci.arrayLayers = 1;
-    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.samples = samples;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
     // TRANSFER_SRC so a resolve can copy it out and the presented surface
     // can be read back.
     ci.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     // STORAGE: the resolve reads the surface in a compute pass. Only when
     // the host can store this format -- see FormatSupportsStorage.
-    const bool canStore = FormatSupportsStorage(R.physical, ci.format);
+    const bool formatCanStore = FormatSupportsStorage(R.physical, ci.format);
+    const bool canStore = samples == VK_SAMPLE_COUNT_1_BIT && formatCanStore;
     if (canStore)
         ci.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
     if (vkCreateImage(R.device, &ci, nullptr, &s.color) != VK_SUCCESS)
@@ -156,6 +166,44 @@ bool RenderTargetCache::GetSurfaceTarget(uint32_t base, SurfaceTarget *&out)
         if (vkCreateImageView(R.device, &si, nullptr, &s.storageView) != VK_SUCCESS)
             return false;
     }
+    if (samples != VK_SAMPLE_COUNT_1_BIT)
+    {
+        // Vulkan resolves the two diagonal coverage samples into this ordinary
+        // image first. The existing compute resolve remains the sole owner of
+        // Xenos exponent bias and channel swapping, so this is representation
+        // conversion rather than a second copy implementation.
+        if (!formatCanStore)
+        {
+            lucent::error("draw",
+                          "render-target cache: native {}X surface {:#x} uses host format {}"
+                          " without storage-image support; its resolved values cannot be"
+                          " passed through the Xenos colour-copy conversion",
+                          layout.rasterSamples, base, int(hostFormat));
+            return false;
+        }
+        VkImageCreateInfo ri = ci;
+        ri.samples = VK_SAMPLE_COUNT_1_BIT;
+        ri.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                   VK_IMAGE_USAGE_STORAGE_BIT;
+        if (vkCreateImage(R.device, &ri, nullptr, &s.resolvedColor) != VK_SUCCESS)
+            return false;
+        VkMemoryRequirements resolvedReq{};
+        vkGetImageMemoryRequirements(R.device, s.resolvedColor, &resolvedReq);
+        uint32_t resolvedType = 0;
+        if (!R.FindMemory(resolvedReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                          resolvedType))
+            R.FindMemory(resolvedReq.memoryTypeBits, 0, resolvedType);
+        VkMemoryAllocateInfo resolvedAi{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        resolvedAi.allocationSize = resolvedReq.size;
+        resolvedAi.memoryTypeIndex = resolvedType;
+        if (vkAllocateMemory(R.device, &resolvedAi, nullptr, &s.resolvedColorMem) != VK_SUCCESS ||
+            vkBindImageMemory(R.device, s.resolvedColor, s.resolvedColorMem, 0) != VK_SUCCESS)
+            return false;
+        VkImageViewCreateInfo resolvedVi = vi;
+        resolvedVi.image = s.resolvedColor;
+        if (vkCreateImageView(R.device, &resolvedVi, nullptr, &s.resolvedStorageView) != VK_SUCCESS)
+            return false;
+    }
     // The framebuffers come later, one per DEPTH BASE this surface is drawn
     // with: a framebuffer names its attachments, and this surface is rendered
     // against more than one depth target in a frame.
@@ -164,7 +212,8 @@ bool RenderTargetCache::GetSurfaceTarget(uint32_t base, SurfaceTarget *&out)
         nl.add("render-target cache: new surface {:#x} ->", base);
         for (uint32_t f : fmts->second)
             nl.add(" {}", ColorFormatName(f));
-        nl.add(" in one host target {}x{}{}", W, H,
+        nl.add(" in one host target {}x{} at {} sample(s){}", s.width, s.height,
+               layout.rasterSamples,
                mixed ? " (reinterpreted mid-frame; widened host format)" : "");
         nl.flush(lucent::Level::Info, "draw");
     }
@@ -186,7 +235,7 @@ bool RenderTargetCache::GetSurfaceTarget(uint32_t base, SurfaceTarget *&out)
                      " via color_exp_bias -= 5). Anything this surface renders outside"
                      " -1..1 is wrong. This path has never been exercised before now",
                      base);
-    out = &P.surfaceTargets.emplace(base, s).first->second;
+    out = &targets.emplace(base, s).first->second;
     return true;
 }
 
@@ -227,18 +276,19 @@ bool RenderTargetCache::GetFramebuffer(SurfaceTarget &s, uint32_t depthBase, VkF
         return true;
     }
     DepthTarget *d = nullptr;
-    if (!GetDepthTarget(depthBase, d) || !d)
+    DrawSampleLayout layout{s.width, s.height, uint32_t(s.samples), 1, 1};
+    if (!GetDepthTarget(depthBase, layout, d) || !d)
         return false;
     std::pair<VkRenderPass, VkRenderPass> *rp = nullptr;
-    if (!GetPasses(s.hostFormat, rp))
+    if (!GetPasses(s.hostFormat, s.samples, rp))
         return false;
     VkImageView atts[2] = {s.colorView, d->attachView};
     VkFramebufferCreateInfo fi{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
     fi.renderPass = rp->first;
     fi.attachmentCount = 2;
     fi.pAttachments = atts;
-    fi.width = W;
-    fi.height = H;
+    fi.width = s.width;
+    fi.height = s.height;
     fi.layers = 1;
     VkFramebuffer fb = VK_NULL_HANDLE;
     if (vkCreateFramebuffer(R.device, &fi, nullptr, &fb) != VK_SUCCESS)
@@ -247,7 +297,8 @@ bool RenderTargetCache::GetFramebuffer(SurfaceTarget &s, uint32_t depthBase, VkF
     return true;
 }
 
-bool RenderTargetCache::GetDepthTarget(uint32_t base, DepthTarget *&out)
+bool RenderTargetCache::GetDepthTarget(uint32_t base, const DrawSampleLayout &layout,
+                                       DepthTarget *&out)
 {
     auto bind = [&](DepthTarget &d)
     {
@@ -257,29 +308,37 @@ bool RenderTargetCache::GetDepthTarget(uint32_t base, DepthTarget *&out)
         P.depthSampledView = d.depthSampledView;
         P.stencilSampledView = d.stencilSampledView;
         P.boundDepthBase = base;
+        P.boundDepthSamples = d.samples;
         out = &d;
     };
-    auto it = P.depthTargets.find(base);
-    if (it != P.depthTargets.end())
+    auto &targets = layout.IsNativeMultisample() ? P.depthTargets2x : P.depthTargets;
+    auto it = targets.find(base);
+    if (it != targets.end())
     {
         bind(it->second);
         return true;
     }
 
     DepthTarget d;
+    d.samples = VkSampleCountFlagBits(layout.rasterSamples);
+    d.width = layout.imageWidth;
+    d.height = layout.imageHeight;
     VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ci.imageType = VK_IMAGE_TYPE_2D;
     ci.format = depthFormat;
-    ci.extent = {W, H, 1};
+    ci.extent = {d.width, d.height, 1};
     ci.mipLevels = 1;
     ci.arrayLayers = 1;
-    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.samples = d.samples;
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
     // SAMPLED: the depth resolve and the aliasing pass read it in compute, and a
     // depth image cannot be a storage image. TRANSFER_DST: the guest's own
-    // mid-frame depth clear is a vkCmdClearDepthStencilImage, which requires it.
+    // mid-frame depth clear is a vkCmdClearDepthStencilImage, which requires
+    // TRANSFER_DST. TRANSFER_SRC is the shipping depth/stencil probe's direct
+    // readback path; omitting it made every GEARS_DRAW_DEPTH_DUMP recording
+    // invalid even though the copied bytes could look plausible.
     ci.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
-               VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+               VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
     if (vkCreateImage(R.device, &ci, nullptr, &d.image) != VK_SUCCESS)
     {
         lucent::warn("draw",
@@ -317,9 +376,9 @@ bool RenderTargetCache::GetDepthTarget(uint32_t base, DepthTarget *&out)
         return false;
     lucent::info("draw",
                  "render-target cache: new DEPTH target for base {:#x}"
-                 " ({}x{}), {} in this run so far",
-                 base, W, H, P.depthTargets.size() + 1);
-    bind(P.depthTargets.emplace(base, d).first->second);
+                 " ({}x{}, {} sample(s)), {} in this view so far",
+                 base, d.width, d.height, layout.rasterSamples, targets.size() + 1);
+    bind(targets.emplace(base, d).first->second);
     return true;
 }
 
@@ -541,6 +600,40 @@ void RenderTargetCache::BuildResolvePipeline()
                 lucent::error("draw", "depth resolve compute pipeline unavailable --"
                                       " passes that sample resolved depth will keep reading stale"
                                       " guest memory");
+
+            // Same descriptor and push-constant ABI, but the source image's
+            // SPIR-V type is multisampled and OpImageFetch takes a sample
+            // operand. Vulkan requires that distinction in the shader type;
+            // binding the 2X image to the single-sample module is invalid.
+            if (P.resolveDepthLayout != VK_NULL_HANDLE &&
+                P.resolveDepth2xPipeline == VK_NULL_HANDLE)
+            {
+                std::vector<uint32_t> d2xSpirv;
+                if (BuildDepthResolveComputeShader(d2xSpirv, true))
+                {
+                    VkShaderModuleCreateInfo d2xSmi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+                    d2xSmi.codeSize = d2xSpirv.size() * sizeof(uint32_t);
+                    d2xSmi.pCode = d2xSpirv.data();
+                    if (vkCreateShaderModule(R.device, &d2xSmi, nullptr, &P.resolveDepth2xModule) ==
+                        VK_SUCCESS)
+                    {
+                        VkComputePipelineCreateInfo d2xCpi{
+                            VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};
+                        d2xCpi.stage = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+                        d2xCpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+                        d2xCpi.stage.module = P.resolveDepth2xModule;
+                        d2xCpi.stage.pName = "main";
+                        d2xCpi.layout = P.resolveDepthLayout;
+                        if (vkCreateComputePipelines(R.device, VK_NULL_HANDLE, 1, &d2xCpi, nullptr,
+                                                     &P.resolveDepth2xPipeline) != VK_SUCCESS)
+                            P.resolveDepth2xPipeline = VK_NULL_HANDLE;
+                    }
+                }
+                if (P.resolveDepth2xPipeline != VK_NULL_HANDLE)
+                    lucent::info("draw", "2X depth resolve compute pipeline built");
+                else
+                    lucent::error("draw", "2X depth resolve compute pipeline unavailable");
+            }
         }
 
         if (P.resolvePipeline == VK_NULL_HANDLE)

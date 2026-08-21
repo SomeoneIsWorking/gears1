@@ -75,7 +75,7 @@ struct PipelineCache
 
     bool GetPipeline(VkShaderModule vsMod, VkShaderModule psMod, VkShaderModule gsMod,
                      uint32_t primType, const OutputMergerState &om, VkRenderPass renderPass,
-                     VkPipelineLayout pipeLayout, VkPipeline &out);
+                     VkSampleCountFlagBits samples, VkPipelineLayout pipeLayout, VkPipeline &out);
 };
 
 } // namespace gears::draw

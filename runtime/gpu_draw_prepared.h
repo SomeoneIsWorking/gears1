@@ -11,6 +11,8 @@
 
 #include <vulkan/vulkan.h>
 
+#include "gpu_draw_sample_layout.h"
+
 namespace gears::draw
 {
 
@@ -19,12 +21,13 @@ struct PreparedDraw
     VkPipeline pipeline;
     VkPipelineLayout layout;
     VkDescriptorSet sets[4];
-    VkBuffer ibuf;       // VK_NULL_HANDLE for a non-indexed (auto) draw
+    VkBuffer ibuf;           // VK_NULL_HANDLE for a non-indexed (auto) draw
     VkDeviceSize ibufOffset; // where in the arena this draw's indices live
-    uint32_t count;      // index count, or vertex count when !indexed
+    uint32_t count;          // index count, or vertex count when !indexed
     bool indexed;
     VkViewport viewport; // the guest's own, per draw
     VkRect2D scissor;
+    DrawSampleLayout sampleLayout;
     // Dynamic Vulkan depth bias translated from PA_SU_POLY_OFFSET_* using
     // Xenia's host-render-target conversion. These are per draw: UE3 toggles
     // and changes shadow-map bias without changing the shader.
@@ -78,7 +81,7 @@ struct PreparedDraw
     // leaving stencil at zero is what made every stencil-marked pass behave as
     // though nothing was marked.
     uint32_t stencilClearValue = 0;
-    bool copyIsServed = true;   // false: this entry only clears
+    bool copyIsServed = true;    // false: this entry only clears
     bool resolveIsDepth = false; // a depth resolve, not a colour copy
     // RB_DEPTH_INFO.depth_format at THIS copy: true = kD24FS8 (float24 20e4),
     // false = kD24S8 (unorm24). The encoding the resolve has to write, and it
@@ -110,7 +113,7 @@ struct PreparedDraw
     // the draw that did nothing. A summary cannot answer "which stage did
     // this surface's draws die at" -- only the join of per-draw state with
     // per-draw pipeline statistics can, and that join is this table.
-    uint32_t diagIndex = 0;      // index in the frame's submission order
+    uint32_t diagIndex = 0; // index in the frame's submission order
     uint32_t edramMode = 0;
     uint32_t primType = 0;
     uint64_t vsHash = 0, psHash = 0;
@@ -126,7 +129,7 @@ struct PreparedDraw
     // out of the sample grid was invisible. Catalog #86 narrowed an inset
     // presented frame to exactly this number and could go no further without it.
     int32_t copyX0 = 0, copyY0 = 0, copyX1 = 0, copyY1 = 0;
-    uint32_t colorFormat = 0;    // RB_COLOR_INFO color_format
+    uint32_t colorFormat = 0; // RB_COLOR_INFO color_format
     // RB_COLOR_INFO color_exp_bias, a SIGNED 6-bit exponent the shader's colour
     // output is multiplied by (2^bias) on the way into EDRAM. It scales what a
     // draw writes, so a frame that is uniformly too dim or too bright is a
@@ -135,10 +138,10 @@ struct PreparedDraw
     // The state that decides whether a primitive survives to rasterisation,
     // which is where this frame's world geometry dies. Raw, so the table
     // shows what the guest programmed rather than our interpretation of it.
-    uint32_t clipCntl = 0;       // PA_CL_CLIP_CNTL   0x2204
-    uint32_t suScModeCntl = 0;   // PA_SU_SC_MODE_CNTL 0x2205
-    uint32_t vteCntl = 0;        // PA_CL_VTE_CNTL    0x206C
-    uint32_t windowOffset = 0;   // PA_SC_WINDOW_OFFSET 0x2080
+    uint32_t clipCntl = 0;     // PA_CL_CLIP_CNTL   0x2204
+    uint32_t suScModeCntl = 0; // PA_SU_SC_MODE_CNTL 0x2205
+    uint32_t vteCntl = 0;      // PA_CL_VTE_CNTL    0x206C
+    uint32_t windowOffset = 0; // PA_SC_WINDOW_OFFSET 0x2080
     // RB_SURFACE_INFO 0x2000: the EDRAM surface's pitch in the low 14 bits and
     // msaa_samples in bits 16-17. This renderer sizes every host target at the
     // presented resolution and ignores both, so they belong in the table that

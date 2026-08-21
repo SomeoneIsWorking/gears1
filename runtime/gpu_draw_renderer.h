@@ -92,6 +92,8 @@ struct StubTex
 struct SurfaceTarget
 {
     VkFormat hostFormat = VK_FORMAT_UNDEFINED;
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    uint32_t width = 0, height = 0;
     VkImage color = VK_NULL_HANDLE;
     VkDeviceMemory colorMem = VK_NULL_HANDLE;
     VkImageView colorView = VK_NULL_HANDLE;
@@ -99,6 +101,17 @@ struct SurfaceTarget
     // attachment view cannot serve: a storage image binding must be 2D, and
     // colorView is what the framebuffer holds.
     VkImageView storageView = VK_NULL_HANDLE;
+    // A native multisampled attachment cannot be read by the existing
+    // single-sample resolve compute shader. 2X targets therefore own a
+    // single-sample image that vkCmdResolveImage fills first; the normal
+    // exponent-bias/channel-swap dispatch then reads this view. Keeping this
+    // beside the attachment makes the representation and its lifetime one
+    // coherent target rather than a frame-local side cache.
+    VkImage resolvedColor = VK_NULL_HANDLE;
+    VkDeviceMemory resolvedColorMem = VK_NULL_HANDLE;
+    VkImageView resolvedStorageView = VK_NULL_HANDLE;
+    bool resolvedColorReady = false;
+    bool resolveIntermediate = false;
     // ONE FRAMEBUFFER PER DEPTH BASE this surface is drawn with. A framebuffer
     // names its attachments, so a surface rendered against two different depth
     // targets needs two -- and this title renders surface 0x2d0 against both
@@ -118,6 +131,8 @@ struct SurfaceTarget
 // memories, which is what the console's EDRAM bases are.
 struct DepthTarget
 {
+    VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+    uint32_t width = 0, height = 0;
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory mem = VK_NULL_HANDLE;
     // The attachment view (both aspects), and the two single-aspect views the
@@ -235,9 +250,11 @@ struct RendererPersistent
     // The render-target cache: one host target per EDRAM colour surface, one
     // host image per resolve destination, and a pair of render passes (clear
     // and load) per host colour format.
-    std::map<uint32_t, SurfaceTarget> surfaceTargets;                 // EDRAM color_base -> target
-    std::map<uint32_t, ResolveTarget> resolveTargets;                 // RB_COPY_DEST_BASE -> image
-    std::map<VkFormat, std::pair<VkRenderPass, VkRenderPass>> passes; // clear, load
+    std::map<uint32_t, SurfaceTarget> surfaceTargets;   // expanded 1X/4X EDRAM view
+    std::map<uint32_t, SurfaceTarget> surfaceTargets2x; // native diagonal 2X view
+    std::map<uint32_t, ResolveTarget> resolveTargets;   // RB_COPY_DEST_BASE -> image
+    std::map<std::pair<VkFormat, VkSampleCountFlagBits>, std::pair<VkRenderPass, VkRenderPass>>
+        passes; // (format, samples) -> (clear, load)
 
     // The resolve compute pipeline. A resolve is not a blit: it applies the
     // guest's copy_dest_exp_bias and copy_dest_swap, which a blit cannot do.
@@ -273,6 +290,8 @@ struct RendererPersistent
     VkDescriptorSetLayout resolveDepthSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout resolveDepthLayout = VK_NULL_HANDLE;
     VkPipeline resolveDepthPipeline = VK_NULL_HANDLE;
+    VkShaderModule resolveDepth2xModule = VK_NULL_HANDLE;
+    VkPipeline resolveDepth2xPipeline = VK_NULL_HANDLE;
     // The bound depth target's sampled views (see depthTargets below).
     VkImageView depthSampledView = VK_NULL_HANDLE;
     // The STENCIL aspect of the same depth image. A Vulkan image view carries
@@ -298,7 +317,9 @@ struct RendererPersistent
     // every existing user (the mid-frame clear, the depth resolve, the aliasing
     // pass, the probes) keeps reading one place and gets the right image.
     std::map<uint32_t, DepthTarget> depthTargets; // depth_base -> target
+    std::map<uint32_t, DepthTarget> depthTargets2x;
     uint32_t boundDepthBase = UINT32_MAX;
+    VkSampleCountFlagBits boundDepthSamples = VK_SAMPLE_COUNT_1_BIT;
     VkImage depth = VK_NULL_HANDLE;
     VkDeviceMemory depthMem = VK_NULL_HANDLE;
     VkImageView depthView = VK_NULL_HANDLE;
@@ -364,6 +385,8 @@ struct Renderer
     // VkPhysicalDeviceFeatures.depthClamp -- see DeviceCapabilities::depthClamp
     // for what a device without it costs.
     bool hasDepthClamp = false;
+    bool hasStandardSampleLocations = false;
+    bool has2xFramebufferSamples = false;
     bool hasSamplerAnisotropy = false;
     float maxSamplerAnisotropy = 1.0f;
     VkDeviceSize uniformOffsetAlignment = 256;

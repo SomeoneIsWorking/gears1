@@ -1,7 +1,7 @@
 ---
 id: 115
 title: Expanded single-sample grid loses Xenos 2X horizontal sample positions
-status: investigating
+status: resolved
 symptom: An in-game light-volume draw shades zero fragments natively but 79,253 in Xenia, leaving the lower-right wall unlit
 tags: render,msaa,depth,raster,gameplay-scene
 created: 2026-08-21
@@ -48,9 +48,16 @@ other depth sample and the colour average wrong; it is a falsifier, not a fix.
 
 ## Resolution
 
-Open. The correct fix is real multisample render-target ownership (or an
-equivalent representation that preserves per-sample raster positions), with
-explicit pack/unpack when EDRAM ownership moves between 1X, 2X and 4X views.
-The existing vertically expanded single-sample image cannot represent the two
-diagonal 2X positions with one viewport transform. Do not reintroduce a global
-quarter-pixel shift as a workaround.
+The 2X view now uses native Vulkan two-sample colour/depth attachments with
+standard diagonal locations. Render passes, framebuffers and pipelines are
+sample-count keyed; k01 colour resolves use `vkCmdResolveImage` before the
+existing Xenos colour conversion; depth resolves fetch the selected sample and
+map guest indices 0/1 to Vulkan's 1/0.
+
+On `walk_gameplay.gfr`, draw 650 changed from zero to exactly Xenia's 79,253
+fragments and the lower-right wall light returned. All 16 resolve passes pair
+without a coarse mismatch; initial 2X scene-colour MAE fell
+`0.000990 -> 0.000072` and the later scene f32 pass
+`0.001505 -> 0.000000823`. A three-repeat headless replay is Vulkan-validation
+clean. The quarter-pixel diagnostic shift remains removed. Cross-count content
+preservation for a future load-after-switch case is tracked separately as #117.

@@ -221,7 +221,7 @@ struct ReinterpretPushConstants
 // the guest's 24-bit format (float24 20e4 for kD24FS8, unorm24 for kD24S8),
 // packs it with stencil into a dword and writes the bytes as normalised
 // components. `swapRB` in the push constants selects the format: 1 = float24.
-bool BuildDepthResolveComputeShader(std::vector<uint32_t> &spirv);
+bool BuildDepthResolveComputeShader(std::vector<uint32_t> &spirv, bool multisampled = false);
 
 // EDRAM colour/depth aliasing, laid out to match the push-constant block in
 // runtime/shaders/edram_depth_alias.comp exactly.
