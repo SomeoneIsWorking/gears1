@@ -11,11 +11,16 @@ from pathlib import Path
 
 FORMATTED = [
     "native/ue3/core_platform_probe.cpp",
+    "native/ue3/platform/HostFileSystem.cpp",
+    "native/ue3/platform/HostFileSystem.h",
     "native/ue3/platform/Linux.h",
     "native/ue3/platform/LinuxDiagnostics.cpp",
     "native/ue3/platform/LinuxDiagnostics.h",
+    "native/ue3/platform/LinuxFileManager.cpp",
+    "native/ue3/platform/LinuxFileManager.h",
     "native/ue3/platform/LinuxThreading.h",
     "native/ue3/test_linux_diagnostics.cpp",
+    "native/ue3/test_host_file_system.cpp",
     "runtime/debug_http.cpp",
     "runtime/debug_http.h",
     "runtime/frame_probe_capture.h",
@@ -114,8 +119,11 @@ TIDY_TRANSLATION_UNITS = [
 
 OPTIONAL_TIDY_TRANSLATION_UNITS = [
     "native/ue3/core_platform_probe.cpp",
+    "native/ue3/platform/HostFileSystem.cpp",
     "native/ue3/platform/LinuxDiagnostics.cpp",
+    "native/ue3/platform/LinuxFileManager.cpp",
     "native/ue3/test_linux_diagnostics.cpp",
+    "native/ue3/test_host_file_system.cpp",
 ]
 
 VD_FORMAT_RANGES = [
@@ -195,6 +203,8 @@ def selftest():
     assert "tests/test_render_retirement.cpp" in TIDY_TRANSLATION_UNITS
     native_probe = "native/ue3/core_platform_probe.cpp"
     assert native_probe in OPTIONAL_TIDY_TRANSLATION_UNITS
+    assert "native/ue3/platform/HostFileSystem.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
+    assert "native/ue3/platform/LinuxFileManager.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
     assert "native/ue3/platform/Linux.h" in FORMATTED
     assert "native/ue3/platform/LinuxDiagnostics.cpp" in FORMATTED
     assert "native/ue3/platform/LinuxDiagnostics.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
