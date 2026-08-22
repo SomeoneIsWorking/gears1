@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-22
 tags: performance,renderer,indices
 depends: runtime/gpu_draw_indices.cpp#IndexPreparer::Prepare, runtime/gpu_draw.cpp#Renderer::RenderFrameImpl
+reconfirmed: 2026-08-22
+verified_at: 2026-08-22 19:02:12
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ Interleaved same-process A/B on chapter45_recovered.gfr: old 25.09 ms over 44 fr
 ## What would falsify it
 
 a full index-key mutation returns a hit, a reused arena range expires before the frame fence, or a representative paired replay does not resolve reuse faster
+
+## Re-confirmed 2026-08-22
+
+Committed implementation 54ec7b1; interleaved chapter45 replay old 25.09 ms over 44 frames versus reuse 21.54 ms over 43 frames, 0.81 ms resolution, 1276/1614 hits; 61/61 CTests and two-capture zero-VUID validation pass
