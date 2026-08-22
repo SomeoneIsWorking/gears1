@@ -318,11 +318,11 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 
 ### title-60hz-enhancement — Produce title simulation and frames at 60 Hz
 - status: todo
-- deps: title-revision-boundary
+- deps: multi-title-conformance, renderer-60hz-budget
 - evidence: With rendering effectively disabled, Gears 1 remains near 30 fps. The host vblank source is already 60 Hz, so renderer removal and vblank frequency do not by themselves remove the title-side frame-production limit.
 - where: title/revision timing bindings; runtime guest timing services; headless timing A/B reports
 - gap: Identify the semantic limiter in each exact executable revision, then implement a runtime faithful/enhanced A/B seam. No verified limiter or 60 Hz title enhancement exists yet.
-- notes: Do not speed the general guest clock, alter vblank to hide the cap, or patch an unexplained constant. Catalog #126 records two rejected shortcuts: forcing live D3D sync mode 2 to mode 1 remained near 30 presents/s, and the only exact 1/30 fixed-step branch was disabled at runtime. The semantic limiter is still behind the indirect game-thread/render-command producer chain upstream of Present. Gears 1 evidence cannot establish the Gears 2, Gears 3, or Judgment timing policy.
+- notes: This is the last-priority per-game enhancement after Gears 1 is stable and performant at its faithful cadence and the engine compatibility work is established. Do not speed the general guest clock, alter vblank to hide the cap, or patch an unexplained constant. Catalog #126 records two rejected shortcuts: forcing live D3D sync mode 2 to mode 1 remained near 30 presents/s, and the only exact 1/30 fixed-step branch was disabled at runtime. The semantic limiter is still behind the indirect game-thread/render-command producer chain upstream of Present. Gears 1 evidence cannot establish the Gears 2, Gears 3, or Judgment timing policy.
 
 ### native-rhi-observation — Mirror semantic D3D/RHI operations while super-calling recomp bodies
 - status: todo
@@ -351,7 +351,7 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 ### multi-title-conformance — Verify each Gears UE3 title independently
 - status: in-progress
 - deps: rom-only-provisioning, native-rhi-bypass
-- evidence: `tools/title_conformance.py` and its synthetic self-test distinguish Gears 1, Gears 2, Gears 3, and Judgment; require exact manifest/result identity and digest-bound relative artifacts, including sustained 60 fps gameplay; fail missing or incompatible gates; and reject Xenia-sourced evidence for every non-Gears-1 title. Only Gears 1 currently has real headless boot, menu, gameplay, compatibility-renderer, and narrowly validated oracle evidence.
+- evidence: `tools/title_conformance.py` and its synthetic self-test distinguish Gears 1, Gears 2, Gears 3, and Judgment; require exact manifest/result identity and digest-bound relative artifacts; report sustained 60 fps gameplay as a separate enhancement rather than a compatibility prerequisite; fail missing or incompatible evidence; and reject Xenia-sourced evidence for every non-Gears-1 title. Only Gears 1 currently has real headless boot, menu, gameplay, compatibility-renderer, and narrowly validated oracle evidence.
 - where: tools/title_conformance.py; tests/CMakeLists.txt; docs/gearsue3-engine.md; local title manifests and headless conformance reports
-- gap: No real exact-build report has passed all gates. Gears 2, Gears 3, and Judgment have no local revision identity, recompiler coverage, package corpus, headless content/menu/gameplay evidence, renderer compatibility/native parity, or 60 fps evidence.
+- gap: No real exact-build compatibility report has passed. Gears 2, Gears 3, and Judgment have no local revision identity, recompiler coverage, package corpus, headless content/menu/gameplay evidence, or renderer compatibility/native parity. No title has separate 60 fps enhancement evidence.
 - notes: The reporter is implemented; compatibility is not. Shared engine code is a design target, and support remains per exact revision and per gate. Xenia is not an accepted oracle for Gears 2, Gears 3, or Judgment.
