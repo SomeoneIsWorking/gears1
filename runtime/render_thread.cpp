@@ -18,6 +18,8 @@
 
 #include <lucent/log.h>
 
+#include "render_retirement.h"
+
 namespace gears
 {
 
@@ -27,7 +29,13 @@ namespace
 std::mutex g_mutex;
 std::condition_variable g_wake; // renderer waits for work
 std::condition_variable g_idle; // WaitForRenderIdle waits for the renderer
-std::optional<FrameDrawInputs> g_pending;
+struct PendingFrame
+{
+    FrameDrawInputs inputs;
+    uint64_t generation = 0;
+};
+std::optional<PendingFrame> g_pending;
+RenderRetirement g_retirement;
 bool g_rendering = false;
 bool g_stop = false;
 bool g_started = false;
@@ -67,11 +75,11 @@ uint64_t ThreadRunqueueNanos()
 void RenderThreadMain()
 {
     // NICED DOWN, deliberately. This thread is the only one in the process whose
-    // work is allowed to be skipped: a frame it cannot render in time is dropped
-    // and the next one is more current anyway. The guest's threads have no such
-    // freedom -- the audio mixer is a hand-off at 187.5 Hz and every slot it
-    // misses is heard -- so when the machine is short of cores, the renderer is
-    // the one that should wait. Measured with the renderer at normal priority:
+    // work is allowed to be skipped: at most one newer frame waits, and further
+    // arrivals are dropped. The guest's threads have no such freedom -- the
+    // audio mixer is a hand-off at 187.5 Hz and every slot it misses is heard --
+    // so when the machine is short of cores, the renderer is the one that should
+    // wait. Measured with the renderer at normal priority:
     // the guest's frame loop recovered to 28 fps but the audio pump fell to
     // 57-67 Hz against 187.5.
     //
@@ -87,6 +95,7 @@ void RenderThreadMain()
     for (;;)
     {
         FrameDrawInputs work;
+        uint64_t workGeneration = 0;
         {
             std::unique_lock<std::mutex> lock(g_mutex);
             g_wake.wait(lock, [] { return g_pending.has_value() || g_stop; });
@@ -99,7 +108,8 @@ void RenderThreadMain()
                     return;
                 continue;
             }
-            work = std::move(g_pending.value());
+            work = std::move(g_pending->inputs);
+            workGeneration = g_pending->generation;
             g_pending.reset();
             g_rendering = true;
         }
@@ -115,9 +125,24 @@ void RenderThreadMain()
         g_runqueueMillis.fetch_add((ThreadRunqueueNanos() - rq0) / 1000000ull);
         g_rendered.fetch_add(1);
 
+        // A retirement belongs to the accepted frame that preceded it, not to
+        // global renderer idleness. A one-frame pending queue may already hold
+        // newer work here; publishing that newer generation now would let the
+        // guest recycle its inputs before they have been read.
+        for (;;)
         {
-            std::lock_guard<std::mutex> lock(g_mutex);
-            g_rendering = false;
+            RenderRetirement::FinishBatch batch;
+            {
+                std::lock_guard<std::mutex> lock(g_mutex);
+                batch = g_retirement.Finish(workGeneration);
+                if (batch.generationComplete)
+                {
+                    g_rendering = false;
+                    break;
+                }
+            }
+            for (RenderRetirement::Completion &completion : batch.completions)
+                completion();
         }
         g_idle.notify_all();
     }
@@ -133,19 +158,23 @@ bool SubmitFrameForRender(FrameDrawInputs &&in)
         g_started = true;
         g_thread = std::thread(RenderThreadMain);
         lucent::info("draw", "render thread started: the command processor hands over"
-                             " each frame's draw list and returns, so the guest's VdSwap no longer"
-                             " waits for the render");
+                             " each frame's draw list and returns; one newer frame may wait while"
+                             " rendering, and further stale arrivals are dropped");
     }
     g_submitted.fetch_add(1);
-    // BUSY MEANS DROP, not queue. A queued frame is already stale by the time it
-    // would be drawn, and queueing hides the deficit; dropping shows it in the
-    // counter and keeps latency at one frame.
-    if (g_rendering || g_pending.has_value())
+    // Keep the renderer saturated with at most one waiting frame. With a 53 ms
+    // renderer and a 30 Hz guest, dropping every arrival while busy renders at
+    // only ~11 fps: each 33 ms arrival misses the completion boundary and the
+    // renderer then sits idle until the following one. One pending frame raises
+    // that to the renderer's real ~19 fps capacity while bounding latency. A
+    // second waiting frame is stale, so that one is counted and dropped.
+    if (g_pending.has_value())
     {
         g_dropped.fetch_add(1);
         return false;
     }
-    g_pending = std::move(in);
+    const uint64_t generation = g_retirement.AcceptFrame();
+    g_pending = PendingFrame{std::move(in), generation};
     lock.unlock();
     g_wake.notify_one();
     return true;
@@ -161,6 +190,16 @@ RenderThreadStats RenderThreadCounters()
     out.cpuMillis = g_cpuMillis.load();
     out.runqueueMillis = g_runqueueMillis.load();
     return out;
+}
+
+void DeferUntilAcceptedRenderRetires(std::function<void()> completion)
+{
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (g_retirement.Defer(completion))
+            return;
+    }
+    completion();
 }
 
 void WaitForRenderIdle()

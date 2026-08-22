@@ -170,6 +170,10 @@ add_executable(test_frame_probe_capture test_frame_probe_capture.cpp)
 target_include_directories(test_frame_probe_capture PRIVATE ../runtime)
 add_test(NAME frame_probe_capture COMMAND test_frame_probe_capture)
 
+add_executable(test_render_retirement test_render_retirement.cpp)
+target_include_directories(test_render_retirement PRIVATE ../runtime)
+add_test(NAME render_retirement COMMAND test_render_retirement)
+
 add_executable(test_scanout_gamma
     test_scanout_gamma.cpp
     ../runtime/scanout_gamma.cpp)

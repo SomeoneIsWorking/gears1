@@ -161,6 +161,7 @@ add_executable(gears1
     gpu_queue_family.cpp
     gpu_instance.cpp
     gpu_device_features.cpp
+    gpu_packet_memory.cpp
     render_thread.cpp
     native_pass.cpp
     guest_texture_hash.cpp

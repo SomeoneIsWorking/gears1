@@ -19,11 +19,9 @@
 //     exists and titles handle it with fences; here it means a frame can show a
 //     mix of two frames' data. It cannot fault: every read is bounds-checked
 //     against the guest window.
-//   - A frame that arrives while the renderer is still busy is DROPPED, not
-//     queued. Queueing would trade latency for nothing -- the dropped frame's
-//     successor is already more current -- but a silent drop would make a
-//     renderer running at half rate look like one keeping up, so drops are
-//     counted and reported.
+//   - One newer frame may wait while the renderer is busy, keeping the renderer
+//     saturated without an unbounded latency queue. Further arrivals are stale
+//     and are dropped, counted, and reported.
 //   - The register snapshots the draw list points at are shared_ptr copies, and
 //     the microcode pointers are into the shader-capture map, whose entries are
 //     never erased. Those are safe to read from this thread; the guest's PIXEL
@@ -31,18 +29,19 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 
 #include "gpu_draw.h"
 
 namespace gears
 {
 
-// Hand one frame's draw list to the render thread. Returns true if it was taken,
-// false if the renderer was still busy with the previous one (the frame is
-// dropped). Starts the thread on first use.
+// Hand one frame's draw list to the render thread. One frame may wait behind the
+// one being rendered; returns false only when that bounded queue is already full
+// and this arrival is dropped. Starts the thread on first use.
 bool SubmitFrameForRender(FrameDrawInputs &&in);
 
-// Frames handed over, and frames dropped because the renderer was busy.
+// Frames handed over, and frames dropped because the bounded queue was full.
 struct RenderThreadStats
 {
     uint64_t submitted = 0;
@@ -54,11 +53,18 @@ struct RenderThreadStats
 };
 RenderThreadStats RenderThreadCounters();
 
-// Wait for any in-flight frame to finish. EVENT_WRITE_SHD calls this before it
-// publishes GPU retirement; captures also use it before reading renderer output.
+// Publish a completion only after the frame currently owned by the renderer
+// has retired. Runs the completion immediately when no frame is in flight.
+// Unlike WaitForRenderIdle, this never blocks the caller: GPU retirement
+// packets delay their memory write, not the command processor consuming them.
+void DeferUntilAcceptedRenderRetires(std::function<void()> completion);
+
+// Wait for any in-flight frame to finish. Capture/report paths use this before
+// reading renderer output; live GPU retirement uses
+// DeferUntilAcceptedRenderRetires so the command processor remains asynchronous.
 void WaitForRenderIdle();
 
-// Stop the thread after the current frame. Idempotent.
+// Stop after the in-flight frame and its already accepted waiting frame. Idempotent.
 void StopRenderThread();
 
 } // namespace gears

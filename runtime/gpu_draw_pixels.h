@@ -19,7 +19,7 @@
 namespace gears::draw
 {
 
-const char* VkStr(VkResult r);
+const char *VkStr(VkResult r);
 
 // Packs the float-constant UBO exactly as Xenia's UpdateBindings does: the used
 // float constants, in ascending storage index, from the vertex half (0x4000) or
@@ -28,8 +28,8 @@ const char* VkStr(VkResult r);
 // ASCENDING STORAGE INDEX, NOT REGISTER NUMBER. A shader that uses c0..c8 and
 // c255 gets a TEN-entry block with c255 at index 9; indexing it by register
 // number reads 4 KiB past the end.
-std::vector<uint8_t> PackFloatConstants(const uint32_t* regDwords,
-    const uint64_t bitmap[4], uint32_t floatCount, uint32_t regBase);
+void PackFloatConstants(const uint32_t *regDwords, const uint64_t bitmap[4], uint32_t floatCount,
+                        uint32_t regBase, std::vector<uint8_t> &out);
 
 // Whether the host can use a format as a STORAGE image, which the resolve
 // compute pass requires of both the surface it reads and the texture it writes.
@@ -58,12 +58,11 @@ float HalfToFloat(uint16_t h);
 // Create the containing directory for a diagnostic artifact. All writers use
 // this owner so a new GEARS_DRAW_DIR works for the first artifact, not only
 // after another writer happened to create it.
-bool EnsureParentDirectory(const std::filesystem::path& path);
+bool EnsureParentDirectory(const std::filesystem::path &path);
 
 // RGBA8 -> binary PPM. Returns false rather than throwing, and the caller is
 // expected to say so: a diagnostic image that failed to write must not be
 // reported as an image that showed nothing.
-bool WritePpm(const std::filesystem::path& path, const uint8_t* rgba,
-              uint32_t w, uint32_t h);
+bool WritePpm(const std::filesystem::path &path, const uint8_t *rgba, uint32_t w, uint32_t h);
 
 } // namespace gears::draw
