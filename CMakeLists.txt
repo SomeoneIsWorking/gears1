@@ -16,6 +16,12 @@ endif()
 # from the user's own copy of the game and never enters the repository.
 set(GEARS_PPC_DIR "${CMAKE_SOURCE_DIR}/scratch/ppc"
     CACHE PATH "Directory containing XenonRecomp's generated ppc_recomp.*.cpp")
+set(GEARS_GAME_DIR "$ENV{GEARS_GAME_DIR}"
+    CACHE PATH "Extracted Gears game directory used by required content gates")
+if(NOT GEARS_GAME_DIR)
+    set(GEARS_GAME_DIR "${CMAKE_SOURCE_DIR}/scratch/game"
+        CACHE PATH "Extracted Gears game directory used by required content gates" FORCE)
+endif()
 
 include(FetchContent)
 FetchContent_Declare(lucent

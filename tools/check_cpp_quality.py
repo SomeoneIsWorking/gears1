@@ -13,6 +13,8 @@ FORMATTED = [
     "native/ue3/core_platform_probe.cpp",
     "native/ue3/platform/HostFileSystem.cpp",
     "native/ue3/platform/HostFileSystem.h",
+    "native/ue3/platform/HostLzo.cpp",
+    "native/ue3/platform/HostLzo.h",
     "native/ue3/platform/Linux.h",
     "native/ue3/platform/LinuxDiagnostics.cpp",
     "native/ue3/platform/LinuxDiagnostics.h",
@@ -21,6 +23,7 @@ FORMATTED = [
     "native/ue3/platform/LinuxThreading.h",
     "native/ue3/test_linux_diagnostics.cpp",
     "native/ue3/test_host_file_system.cpp",
+    "native/ue3/test_host_lzo.cpp",
     "runtime/debug_http.cpp",
     "runtime/debug_http.h",
     "runtime/frame_probe_capture.h",
@@ -120,10 +123,12 @@ TIDY_TRANSLATION_UNITS = [
 OPTIONAL_TIDY_TRANSLATION_UNITS = [
     "native/ue3/core_platform_probe.cpp",
     "native/ue3/platform/HostFileSystem.cpp",
+    "native/ue3/platform/HostLzo.cpp",
     "native/ue3/platform/LinuxDiagnostics.cpp",
     "native/ue3/platform/LinuxFileManager.cpp",
     "native/ue3/test_linux_diagnostics.cpp",
     "native/ue3/test_host_file_system.cpp",
+    "native/ue3/test_host_lzo.cpp",
 ]
 
 VD_FORMAT_RANGES = [
@@ -204,11 +209,14 @@ def selftest():
     native_probe = "native/ue3/core_platform_probe.cpp"
     assert native_probe in OPTIONAL_TIDY_TRANSLATION_UNITS
     assert "native/ue3/platform/HostFileSystem.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
+    assert "native/ue3/platform/HostLzo.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
+    assert "native/ue3/platform/HostLzo.h" in FORMATTED
     assert "native/ue3/platform/LinuxFileManager.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
     assert "native/ue3/platform/Linux.h" in FORMATTED
     assert "native/ue3/platform/LinuxDiagnostics.cpp" in FORMATTED
     assert "native/ue3/platform/LinuxDiagnostics.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
     assert "native/ue3/test_linux_diagnostics.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
+    assert "native/ue3/test_host_lzo.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
     fake_root = Path("/repo")
     assert native_probe not in selected_tidy_units(fake_root, set())
     assert native_probe in selected_tidy_units(
