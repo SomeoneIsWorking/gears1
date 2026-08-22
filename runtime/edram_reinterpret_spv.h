@@ -1,5 +1,5 @@
-// GENERATED from runtime/shaders/edram_reinterpret.comp by tools/gen_native_spv.sh -- do not edit.
-// Regenerate: tools/gen_native_spv.sh runtime/shaders/edram_reinterpret.comp runtime/edram_reinterpret_spv.h EdramReinterpretSpirv
+// GENERATED from runtime/shaders/edram_reinterpret.comp by tools/gen_native_spv.py -- do not edit.
+// Regenerate: tools/gen_native_spv.py runtime/shaders/edram_reinterpret.comp runtime/edram_reinterpret_spv.h EdramReinterpretSpirv
 #pragma once
 #include <cstdint>
 #include <vector>

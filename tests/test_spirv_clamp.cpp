@@ -13,14 +13,14 @@
 #include <vector>
 
 #include "spirv_clamp.h"
-#include "native_pass_movie_spv.h"
+#include "test_fragment_spv.h"
 
 namespace
 {
 
 int g_failures = 0;
 
-void Check(bool ok, const char* what)
+void Check(bool ok, const char *what)
 {
     if (!ok)
     {
@@ -34,12 +34,18 @@ constexpr uint16_t kOpExtInst = 12;
 constexpr uint16_t kOpStore = 62;
 constexpr uint32_t kNClamp = 81;
 
-uint16_t Opcode(uint32_t w) { return uint16_t(w & 0xFFFFu); }
-uint16_t Len(uint32_t w) { return uint16_t(w >> 16); }
+uint16_t Opcode(uint32_t w)
+{
+    return uint16_t(w & 0xFFFFu);
+}
+uint16_t Len(uint32_t w)
+{
+    return uint16_t(w >> 16);
+}
 
 // Walks the module and returns false if any instruction length is impossible --
 // the cheapest structural check that a rebuild did not corrupt the stream.
-bool WellFormed(const std::vector<uint32_t>& m)
+bool WellFormed(const std::vector<uint32_t> &m)
 {
     if (m.size() < 5 || m[0] != kMagic)
         return false;
@@ -53,7 +59,7 @@ bool WellFormed(const std::vector<uint32_t>& m)
     return true;
 }
 
-size_t CountNClamps(const std::vector<uint32_t>& m)
+size_t CountNClamps(const std::vector<uint32_t> &m)
 {
     size_t n = 0;
     for (size_t i = 5; i < m.size();)
@@ -68,7 +74,7 @@ size_t CountNClamps(const std::vector<uint32_t>& m)
     return n;
 }
 
-size_t CountStores(const std::vector<uint32_t>& m)
+size_t CountStores(const std::vector<uint32_t> &m)
 {
     size_t n = 0;
     for (size_t i = 5; i < m.size();)
@@ -83,12 +89,12 @@ size_t CountStores(const std::vector<uint32_t>& m)
     return n;
 }
 
-// A real translated-shape module: our own movie pass, which has one vec4 colour
-// output and is built by glslangValidator, so it exercises the actual layout
-// rather than a hand-made toy.
+// A clean test-owned fragment module with one vec4 colour output. It is built by
+// glslangValidator from tests/shaders/spirv_clamp.frag, so it exercises the real
+// module layout without embedding a title-derived shader.
 void TestClampsARealModule()
 {
-    std::vector<uint32_t> m = gears::native::MovieYuvSpirv();
+    std::vector<uint32_t> m = gears::native::TestFragmentSpirv();
     const size_t storesBefore = CountStores(m);
     const uint32_t boundBefore = m[3];
 
@@ -97,7 +103,7 @@ void TestClampsARealModule()
     Check(WellFormed(m), "the rebuilt module is structurally well-formed");
     Check(CountNClamps(m) == 1, "exactly one clamp is inserted (one colour output)");
     Check(CountStores(m) == storesBefore,
-        "no store is added or lost -- the clamp rewrites the stored VALUE");
+          "no store is added or lost -- the clamp rewrites the stored VALUE");
     Check(m[3] > boundBefore, "the id bound grew to cover the new ids");
 }
 
@@ -106,15 +112,14 @@ void TestClampsARealModule()
 // refusal has to be reliable, and it must not leave the input modified.
 void TestRefusesWhatItCannotHandle()
 {
-    const std::vector<uint32_t> good = gears::native::MovieYuvSpirv();
+    const std::vector<uint32_t> &good = gears::native::TestFragmentSpirv();
 
     std::vector<uint32_t> empty;
     Check(!gears::draw::ClampFragmentOutputs(empty), "an empty module is refused");
 
     std::vector<uint32_t> notSpirv{1, 2, 3, 4, 5, 6};
     const std::vector<uint32_t> notSpirvCopy = notSpirv;
-    Check(!gears::draw::ClampFragmentOutputs(notSpirv),
-        "a blob with the wrong magic is refused");
+    Check(!gears::draw::ClampFragmentOutputs(notSpirv), "a blob with the wrong magic is refused");
     Check(notSpirv == notSpirvCopy, "and is left exactly as it was");
 
     // A truncated instruction: the length field runs past the end.
@@ -122,22 +127,22 @@ void TestRefusesWhatItCannotHandle()
     truncated.resize(12);
     const std::vector<uint32_t> truncatedCopy = truncated;
     Check(!gears::draw::ClampFragmentOutputs(truncated),
-        "a module whose last instruction runs past the end is refused");
+          "a module whose last instruction runs past the end is refused");
     Check(truncated == truncatedCopy,
-        "and is NOT left half-transformed -- the caller can still use it as it was");
+          "and is NOT left half-transformed -- the caller can still use it as it was");
 
     // A header with no instructions at all: nothing to clamp is a refusal, not a
     // silent success, because "clamped" would then be a claim about nothing.
     std::vector<uint32_t> headerOnly(good.begin(), good.begin() + 5);
     Check(!gears::draw::ClampFragmentOutputs(headerOnly),
-        "a module with no fragment output is refused rather than reported clamped");
+          "a module with no fragment output is refused rather than reported clamped");
 }
 
 // Applying it twice must still produce a valid module -- the renderer caches per
 // (shader, clamped), but a cache bug must degrade to redundant work, not corruption.
 void TestSecondApplicationStaysValid()
 {
-    std::vector<uint32_t> m = gears::native::MovieYuvSpirv();
+    std::vector<uint32_t> m = gears::native::TestFragmentSpirv();
     Check(gears::draw::ClampFragmentOutputs(m), "first application succeeds");
     Check(gears::draw::ClampFragmentOutputs(m), "second application succeeds");
     Check(WellFormed(m), "and the module is still well-formed");
@@ -149,23 +154,26 @@ void TestSecondApplicationStaysValid()
 // instruction sequence, so it gets its own check rather than riding on the other.
 void TestAlphaOnlyModeTouchesOnlyAlpha()
 {
-    std::vector<uint32_t> m = gears::native::MovieYuvSpirv();
+    std::vector<uint32_t> m = gears::native::TestFragmentSpirv();
     const size_t storesBefore = CountStores(m);
     Check(gears::draw::ClampFragmentOutputs(m, gears::draw::ClampMode::kAlphaOnly),
-        "alpha-only mode handles a real fragment module");
+          "alpha-only mode handles a real fragment module");
     Check(WellFormed(m), "and the rebuilt module is well-formed");
     Check(CountNClamps(m) == 1, "one clamp, on the alpha component");
     Check(CountStores(m) == storesBefore, "no store added or lost");
 
     // The distinguishing structural fact: alpha-only extracts and re-inserts a
     // component, the RGBA mode does not touch composites at all.
-    auto countOp = [](const std::vector<uint32_t>& mod, uint16_t want) {
+    auto countOp = [](const std::vector<uint32_t> &mod, uint16_t want)
+    {
         size_t n = 0;
         for (size_t i = 5; i < mod.size();)
         {
             const uint16_t len = Len(mod[i]);
-            if (len == 0 || i + len > mod.size()) break;
-            if (Opcode(mod[i]) == want) ++n;
+            if (len == 0 || i + len > mod.size())
+                break;
+            if (Opcode(mod[i]) == want)
+                ++n;
             i += len;
         }
         return n;
@@ -173,12 +181,12 @@ void TestAlphaOnlyModeTouchesOnlyAlpha()
     const size_t inserts = countOp(m, 82 /*OpCompositeInsert*/);
     Check(inserts >= 1, "alpha-only re-inserts the clamped component");
 
-    std::vector<uint32_t> rgba = gears::native::MovieYuvSpirv();
+    std::vector<uint32_t> rgba = gears::native::TestFragmentSpirv();
     const size_t insertsBefore = countOp(rgba, 82);
     Check(gears::draw::ClampFragmentOutputs(rgba, gears::draw::ClampMode::kRgba),
-        "rgba mode still handled");
+          "rgba mode still handled");
     Check(countOp(rgba, 82) == insertsBefore,
-        "and rgba mode adds no composite insert -- the two modes really differ");
+          "and rgba mode adds no composite insert -- the two modes really differ");
 }
 
 } // namespace

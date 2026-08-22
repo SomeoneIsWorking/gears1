@@ -1,5 +1,5 @@
-// GENERATED from runtime/shaders/scanout_gamma.comp by tools/gen_native_spv.sh -- do not edit.
-// Regenerate: tools/gen_native_spv.sh runtime/shaders/scanout_gamma.comp runtime/scanout_gamma_spv.h ScanoutGammaSpirv
+// GENERATED from runtime/shaders/scanout_gamma.comp by tools/gen_native_spv.py -- do not edit.
+// Regenerate: tools/gen_native_spv.py runtime/shaders/scanout_gamma.comp runtime/scanout_gamma_spv.h ScanoutGammaSpirv
 #pragma once
 #include <cstdint>
 #include <vector>

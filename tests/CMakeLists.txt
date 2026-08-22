@@ -223,9 +223,12 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME source_structure_selftest
         COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py" --selftest)
-    add_test(NAME prepare_ue3_core
+    add_test(NAME clean_distribution
         COMMAND ${Python3_EXECUTABLE}
-                "${CMAKE_CURRENT_SOURCE_DIR}/test_prepare_ue3_core.py")
+                "${CMAKE_SOURCE_DIR}/tools/check_distribution_clean.py")
+    add_test(NAME clean_distribution_selftest
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tools/check_distribution_clean.py" --selftest)
     add_test(NAME instrument_find_addr_refs
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/find_addr_refs.py" --selftest)
     add_test(NAME instrument_atomic_audit
