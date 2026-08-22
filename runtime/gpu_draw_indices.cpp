@@ -7,6 +7,8 @@
 #include <cstring>
 #include <vector>
 
+#include <lucent/log.h>
+
 namespace gears::draw
 {
 
@@ -77,8 +79,8 @@ void ReadGuestIndices(const FrameDrawInputs &in, const FrameDrawItem &d, uint32_
 
 } // namespace
 
-IndexResult PrepareIndices(FrameArena &arena, const FrameDrawInputs &in, const FrameDrawItem &d,
-                           PreparedIndices &out)
+static IndexResult ConvertIndices(FrameArena &arena, const FrameDrawInputs &in,
+                                  const FrameDrawItem &d, PreparedIndices &out)
 {
     out = PreparedIndices{};
     out.count = d.indexCount;
@@ -131,6 +133,68 @@ IndexResult PrepareIndices(FrameArena &arena, const FrameDrawInputs &in, const F
             return IndexResult::kArenaFull;
     }
     return IndexResult::kOk;
+}
+
+IndexReuseTable::Key IndexReuseTable::MakeKey(const FrameDrawItem &draw)
+{
+    return {draw.indexGuestBase, draw.indexCount, draw.indexEndian,
+            draw.primType,       draw.indexed,    draw.indexIs32};
+}
+
+size_t IndexReuseTable::Hash::operator()(const Key &key) const
+{
+    size_t hash = key.guestBase;
+    auto mix = [&hash](uint32_t value)
+    { hash ^= size_t(value) + 0x9E3779B9u + (hash << 6) + (hash >> 2); };
+    mix(key.count);
+    mix(key.endian);
+    mix(key.primitive);
+    mix(key.indexed);
+    mix(key.is32);
+    return hash;
+}
+
+bool IndexReuseTable::Find(const FrameDrawItem &draw, PreparedIndices &out)
+{
+    const auto found = entries_.find(MakeKey(draw));
+    if (found == entries_.end())
+        return false;
+    out = found->second;
+    return true;
+}
+
+void IndexReuseTable::Store(const FrameDrawItem &draw, const PreparedIndices &indices)
+{
+    entries_.emplace(MakeKey(draw), indices);
+}
+
+IndexResult IndexPreparer::Prepare(FrameArena &arena, const FrameDrawInputs &in,
+                                   const FrameDrawItem &draw, PreparedIndices &out)
+{
+    const bool cacheable = draw.indexed || draw.primType == 13 /*kQuadList*/;
+    if (!cacheable)
+        return ConvertIndices(arena, in, draw, out);
+
+    ++lookups;
+    if (reuse_.Find(draw, out))
+    {
+        ++hits;
+        return IndexResult::kOk;
+    }
+
+    ++builds;
+    const IndexResult result = ConvertIndices(arena, in, draw, out);
+    if (result == IndexResult::kOk)
+        reuse_.Store(draw, out);
+    return result;
+}
+
+void IndexPreparer::Report() const
+{
+    lucent::info("draw",
+                 "index conversion: {} of {} reusable draw(s) hit an exact"
+                 " frame-local entry; {} built, {} distinct entries",
+                 hits, lookups, builds, CacheSize());
 }
 
 } // namespace gears::draw

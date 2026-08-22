@@ -940,8 +940,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // The guest's resolve rectangle and the kCopy decode are in
     // gpu_draw_resolve_decode.{h,cpp}.
 
-    // The constant blocks and their cache; see gpu_draw_uniforms.h.
     draw::UniformCache UC(AR, options.applyTextureSigns);
+    draw::IndexPreparer IP;
     // THE DESCRIPTOR SETS RIDE THE SAME INPUTS. A draw's texture sets are
     // determined by the shader pair, the fetch constants behind every binding
     // and the resolve generation -- see gpu_draw_descriptors.h for why that is
@@ -1290,10 +1290,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         msUniforms += sinceStartMs() - uniformsBegin;
         const double indexBegin = sinceStartMs();
 
-        // The index buffer -- guest read, byte swap, widening to 32-bit and the
-        // quad-list expansion -- is in gpu_draw_indices.{h,cpp}.
+        // Guest index conversion and quad expansion live in gpu_draw_indices.
         draw::PreparedIndices idx;
-        switch (draw::PrepareIndices(AR, in, d, idx))
+        switch (IP.Prepare(AR, in, d, idx))
         {
         case draw::IndexResult::kEmptyQuad:
             CN.Skip(7);
@@ -3316,6 +3315,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
                      " texture and sampler binding, so a reuse skips resolving those"
                      " bindings entirely; the uniform sets are always the draw's own",
                      DB.hits, DB.builds, DB.CacheSize());
+        IP.Report();
         lucent::info(
             "draw",
             "texture cache: slowest single hash {:.2f} ms for"

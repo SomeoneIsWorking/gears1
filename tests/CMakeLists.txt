@@ -191,6 +191,11 @@ target_include_directories(test_gpu_draw_options PRIVATE ../runtime)
 target_link_libraries(test_gpu_draw_options PRIVATE lucent::lucent)
 add_test(NAME gpu_draw_options COMMAND test_gpu_draw_options)
 
+add_executable(test_gpu_draw_indices test_gpu_draw_indices.cpp)
+target_include_directories(test_gpu_draw_indices PRIVATE ../runtime)
+target_link_libraries(test_gpu_draw_indices PRIVATE gears_draw lucent::lucent)
+add_test(NAME gpu_draw_indices COMMAND test_gpu_draw_indices)
+
 add_executable(test_title_profile test_title_profile.cpp)
 target_link_libraries(test_title_profile PRIVATE gears_title_profile)
 add_test(NAME title_profile COMMAND test_title_profile)
