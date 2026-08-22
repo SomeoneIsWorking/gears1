@@ -59,7 +59,7 @@ UniformCache::Result UniformCache::Update(const uint32_t *regs, const FrameDrawI
         prevFetch = fetch;
     }
 
-    DeriveSystemConstants(regs, sysc);
+    DeriveSystemConstants(regs, applyTextureSigns, sysc);
     PackFloatConstants(regs, vsX.floatBitmap, vsX.floatCount, 0x4000, fVs);
     PackFloatConstants(regs, psX.floatBitmap, psX.floatCount, 0x4400, fPs);
     // Look at the VALUES, not just pack them. See gpu_draw_uniforms.h.

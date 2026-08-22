@@ -59,6 +59,7 @@
 #include "gpu_draw_resolve_plan.h"
 #include "gpu_resolve_extent.h"
 #include "gpu_draw_indices.h"
+#include "gpu_draw_options.h"
 #include "gpu_draw_uniforms.h"
 #include "gpu_draw_vertexfetch.h"
 #include "gpu_draw_shaders.h"
@@ -384,11 +385,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
 {
     const uint32_t W = in.width ? in.width : kWidth;
     const uint32_t H = in.height ? in.height : kHeight;
+    const draw::FrameOptions options = draw::ReadFrameOptions();
 
-    // Phase timing. A whole-frame render costs ~390 ms today, which is two
-    // orders of magnitude away from presenting live; before any of this is made
-    // persistent it has to be clear WHICH phase the time is in, rather than
-    // assuming it is the caches.
+    // Phase timing names the owner of the cost instead of assuming it is the
+    // caches.
     using Clock = std::chrono::steady_clock;
     const auto tStart = Clock::now();
     auto sinceStartMs = [&]
@@ -923,7 +923,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
 
     // Which image serves each texture binding, and the census of what the
     // frame's bindings named, live on TextureBinder in gpu_draw_textures.
-    draw::TextureBinder TB(P, TX, plan.dests, plan.depthDests);
+    draw::TextureBinder TB(P, TX, plan.dests, plan.depthDests, options.textureBindingsPsHash);
     TB.rtLinkEnabled = !lucent::config::flag("DRAW_NORT");
     TB.texUploadEnabled = texUploadEnabled;
     const bool listDraws = lucent::config::flag("DRAW_FRAME_LIST");
@@ -941,7 +941,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // gpu_draw_resolve_decode.{h,cpp}.
 
     // The constant blocks and their cache; see gpu_draw_uniforms.h.
-    draw::UniformCache UC(AR);
+    draw::UniformCache UC(AR, options.applyTextureSigns);
     // THE DESCRIPTOR SETS RIDE THE SAME INPUTS. A draw's texture sets are
     // determined by the shader pair, the fetch constants behind every binding
     // and the resolve generation -- see gpu_draw_descriptors.h for why that is
@@ -1356,7 +1356,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         // GEARS_DRAW_NODEPTHBIAS=1 is the control arm for the formerly missing
         // state. It is never a fallback or fix: zeroing guest bias should make
         // a shadow-map regression reappear if this mechanism matters.
-        if (lucent::config::flag("DRAW_NODEPTHBIAS"))
+        if (!options.applyDepthBias)
             pd.depthBiasConstant = pd.depthBiasSlope = 0.0f;
         pd.depthBase = R[0x2002] & 0xFFF;
         // WHICH HOST DEPTH IMAGE THIS DRAW RENDERS INTO -- a separate question

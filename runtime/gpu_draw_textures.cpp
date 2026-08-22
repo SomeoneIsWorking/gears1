@@ -22,48 +22,64 @@ namespace
 
 using Clock = std::chrono::steady_clock;
 
-uint64_t HashTextureStorage(const GuestTexture& texture,
-                            const FrameDrawInputs& inputs)
+uint64_t HashTextureStorage(const GuestTexture &texture, const FrameDrawInputs &inputs)
 {
-    const uint8_t* base = texture.baseGuestExtentBytes
-        ? inputs.guestBase + texture.baseAddress : nullptr;
-    const uint8_t* mips = texture.mipGuestExtentBytes
-        ? inputs.guestBase + texture.mipAddress : nullptr;
-    return gears::HashGuestTextureParts(
-        base, texture.baseGuestExtentBytes, mips, texture.mipGuestExtentBytes);
+    const uint8_t *base =
+        texture.baseGuestExtentBytes ? inputs.guestBase + texture.baseAddress : nullptr;
+    const uint8_t *mips =
+        texture.mipGuestExtentBytes ? inputs.guestBase + texture.mipAddress : nullptr;
+    return gears::HashGuestTextureParts(base, texture.baseGuestExtentBytes, mips,
+                                        texture.mipGuestExtentBytes);
 }
-
 
 VkFormat hostVkFormat(TexHostFormat f)
 {
     switch (f)
     {
-        case TexHostFormat::kR8Unorm: return VK_FORMAT_R8_UNORM;
-        case TexHostFormat::kR8G8Unorm: return VK_FORMAT_R8G8_UNORM;
-        case TexHostFormat::kR8G8B8A8Unorm: return VK_FORMAT_R8G8B8A8_UNORM;
-        case TexHostFormat::kR5G6B5Pack16: return VK_FORMAT_B5G6R5_UNORM_PACK16;
-        case TexHostFormat::kA1R5G5B5Pack16: return VK_FORMAT_A1R5G5B5_UNORM_PACK16;
-        case TexHostFormat::kB4G4R4A4Pack16: return VK_FORMAT_B4G4R4A4_UNORM_PACK16;
-        case TexHostFormat::kA2B10G10R10Pack32:
-            return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
-        case TexHostFormat::kR16Sfloat: return VK_FORMAT_R16_SFLOAT;
-        case TexHostFormat::kR16G16Sfloat: return VK_FORMAT_R16G16_SFLOAT;
-        case TexHostFormat::kR16G16B16A16Sfloat:
-            return VK_FORMAT_R16G16B16A16_SFLOAT;
-        case TexHostFormat::kR16Unorm: return VK_FORMAT_R16_UNORM;
-        case TexHostFormat::kR16G16Unorm: return VK_FORMAT_R16G16_UNORM;
-        case TexHostFormat::kR16G16B16A16Unorm:
-            return VK_FORMAT_R16G16B16A16_UNORM;
-        case TexHostFormat::kR32Sfloat: return VK_FORMAT_R32_SFLOAT;
-        case TexHostFormat::kR32G32Sfloat: return VK_FORMAT_R32G32_SFLOAT;
-        case TexHostFormat::kR32G32B32A32Sfloat:
-            return VK_FORMAT_R32G32B32A32_SFLOAT;
-        case TexHostFormat::kBc1RgbaUnorm: return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
-        case TexHostFormat::kBc2Unorm: return VK_FORMAT_BC2_UNORM_BLOCK;
-        case TexHostFormat::kBc3Unorm: return VK_FORMAT_BC3_UNORM_BLOCK;
-        case TexHostFormat::kBc4Unorm: return VK_FORMAT_BC4_UNORM_BLOCK;
-        case TexHostFormat::kBc5Unorm: return VK_FORMAT_BC5_UNORM_BLOCK;
-        default: return VK_FORMAT_UNDEFINED;
+    case TexHostFormat::kR8Unorm:
+        return VK_FORMAT_R8_UNORM;
+    case TexHostFormat::kR8G8Unorm:
+        return VK_FORMAT_R8G8_UNORM;
+    case TexHostFormat::kR8G8B8A8Unorm:
+        return VK_FORMAT_R8G8B8A8_UNORM;
+    case TexHostFormat::kR5G6B5Pack16:
+        return VK_FORMAT_B5G6R5_UNORM_PACK16;
+    case TexHostFormat::kA1R5G5B5Pack16:
+        return VK_FORMAT_A1R5G5B5_UNORM_PACK16;
+    case TexHostFormat::kB4G4R4A4Pack16:
+        return VK_FORMAT_B4G4R4A4_UNORM_PACK16;
+    case TexHostFormat::kA2B10G10R10Pack32:
+        return VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+    case TexHostFormat::kR16Sfloat:
+        return VK_FORMAT_R16_SFLOAT;
+    case TexHostFormat::kR16G16Sfloat:
+        return VK_FORMAT_R16G16_SFLOAT;
+    case TexHostFormat::kR16G16B16A16Sfloat:
+        return VK_FORMAT_R16G16B16A16_SFLOAT;
+    case TexHostFormat::kR16Unorm:
+        return VK_FORMAT_R16_UNORM;
+    case TexHostFormat::kR16G16Unorm:
+        return VK_FORMAT_R16G16_UNORM;
+    case TexHostFormat::kR16G16B16A16Unorm:
+        return VK_FORMAT_R16G16B16A16_UNORM;
+    case TexHostFormat::kR32Sfloat:
+        return VK_FORMAT_R32_SFLOAT;
+    case TexHostFormat::kR32G32Sfloat:
+        return VK_FORMAT_R32G32_SFLOAT;
+    case TexHostFormat::kR32G32B32A32Sfloat:
+        return VK_FORMAT_R32G32B32A32_SFLOAT;
+    case TexHostFormat::kBc1RgbaUnorm:
+        return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+    case TexHostFormat::kBc2Unorm:
+        return VK_FORMAT_BC2_UNORM_BLOCK;
+    case TexHostFormat::kBc3Unorm:
+        return VK_FORMAT_BC3_UNORM_BLOCK;
+    case TexHostFormat::kBc4Unorm:
+        return VK_FORMAT_BC4_UNORM_BLOCK;
+    case TexHostFormat::kBc5Unorm:
+        return VK_FORMAT_BC5_UNORM_BLOCK;
+    default:
+        return VK_FORMAT_UNDEFINED;
     }
 }
 
@@ -71,12 +87,18 @@ VkComponentSwizzle compSwizzle(uint8_t s)
 {
     switch (s)
     {
-        case 0: return VK_COMPONENT_SWIZZLE_R;
-        case 1: return VK_COMPONENT_SWIZZLE_G;
-        case 2: return VK_COMPONENT_SWIZZLE_B;
-        case 3: return VK_COMPONENT_SWIZZLE_A;
-        case 4: return VK_COMPONENT_SWIZZLE_ZERO;
-        default: return VK_COMPONENT_SWIZZLE_ONE;
+    case 0:
+        return VK_COMPONENT_SWIZZLE_R;
+    case 1:
+        return VK_COMPONENT_SWIZZLE_G;
+    case 2:
+        return VK_COMPONENT_SWIZZLE_B;
+    case 3:
+        return VK_COMPONENT_SWIZZLE_A;
+    case 4:
+        return VK_COMPONENT_SWIZZLE_ZERO;
+    default:
+        return VK_COMPONENT_SWIZZLE_ONE;
     }
 }
 
@@ -84,32 +106,39 @@ VkSamplerAddressMode vkAddressMode(uint32_t clamp)
 {
     switch (clamp)
     {
-        case 0: return VK_SAMPLER_ADDRESS_MODE_REPEAT;
-        case 1: return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
-        case 2: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        case 3: return VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;
-        // Half-way clamps have no host equivalent; edge is the closest and
-        // is recorded as such rather than silently pretended to be exact.
-        case 4: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-        case 5: return VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;
-        case 6: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-        default: return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    case 0:
+        return VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    case 1:
+        return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
+    case 2:
+        return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    case 3:
+        return VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;
+    // Half-way clamps have no host equivalent; edge is the closest and
+    // is recorded as such rather than silently pretended to be exact.
+    case 4:
+        return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    case 5:
+        return VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;
+    case 6:
+        return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
+    default:
+        return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     }
 }
 
 } // namespace
 
-
 // Builds (once per distinct fetch) the host image for one texture fetch
 // constant, or returns VK_NULL_HANDLE with the reason counted.
-VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
+VkImageView TextureUploader::Upload(const uint32_t *fetch6, uint32_t wantDim)
 {
     ++texBindingCalls;
     // The mip address/range and packed-tail flag live in dwords 4 and 5. A
     // partial descriptor key aliases different authored mip chains and keeps
     // sampling the first image uploaded for the shared base level.
-    const RendererPersistent::GuestTextureKey key{
-        fetch6[0], fetch6[1], fetch6[2], fetch6[3], fetch6[4], fetch6[5]};
+    const RendererPersistent::GuestTextureKey key{fetch6[0], fetch6[1], fetch6[2],
+                                                  fetch6[3], fetch6[4], fetch6[5]};
     auto it = texCache.find(key);
     if (it != texCache.end())
     {
@@ -125,10 +154,9 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
         // constant, no data copied -- so the guest byte extent is known, then
         // hash those bytes and compare with what this entry was built from.
         GuestTexture header;
-        if (it->second != VK_NULL_HANDLE &&
-            texCheckedThisFrame.insert(key).second &&
-            DecodeGuestTexture(fetch6, in.guestBase,
-                uint64_t(in.guestWindowBytes), /*wantData=*/false, header) &&
+        if (it->second != VK_NULL_HANDLE && texCheckedThisFrame.insert(key).second &&
+            DecodeGuestTexture(fetch6, in.guestBase, uint64_t(in.guestWindowBytes),
+                               /*wantData=*/false, header) &&
             header.skipReason == nullptr && header.baseGuestExtentBytes != 0)
         {
             const auto tHash = Clock::now();
@@ -136,8 +164,8 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
             const double thisHashMs =
                 std::chrono::duration<double, std::milli>(Clock::now() - tHash).count();
             msTexHash += thisHashMs;
-            const uint64_t hashBytes = uint64_t(header.baseGuestExtentBytes) +
-                                       header.mipGuestExtentBytes;
+            const uint64_t hashBytes =
+                uint64_t(header.baseGuestExtentBytes) + header.mipGuestExtentBytes;
             texHashBytes += hashBytes;
             if (thisHashMs > texHashWorstMs)
             {
@@ -147,8 +175,7 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
             }
             ++texContentChecked;
             const auto known = texContentHash.find(key);
-            if (known != texContentHash.end() &&
-                !gears::GuestTextureUnchanged(known->second, now))
+            if (known != texContentHash.end() && !gears::GuestTextureUnchanged(known->second, now))
             {
                 // EVICT: retire the stale image and fall through to a fresh
                 // upload of the bytes that are there now. The old image is not
@@ -178,8 +205,8 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
     texDistinct.insert(key);
 
     GuestTexture gt;
-    if (!DecodeGuestTexture(fetch6, in.guestBase,
-            uint64_t(in.guestWindowBytes), /*wantData=*/true, gt))
+    if (!DecodeGuestTexture(fetch6, in.guestBase, uint64_t(in.guestWindowBytes), /*wantData=*/true,
+                            gt))
     {
         ++texSkips["not a texture fetch constant"];
         texCache[key] = VK_NULL_HANDLE;
@@ -187,12 +214,11 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
     }
     ++texFormatBindings[gt.formatName];
     {
-        std::string s = std::format(
-            "{:#x} {} {}x{}x{} dim{} {} endian{} swizzle{:#05x} mips{}-{}{}",
-            gt.baseAddress, gt.formatName, gt.width, gt.height,
-            gt.depthOrArraySize, gt.dimension, gt.tiled ? "tiled" : "linear",
-            gt.endian, gt.guestSwizzle, gt.mipMin, gt.mipMax,
-            gt.packedMips ? " packed" : "");
+        std::string s =
+            std::format("{:#x} {} {}x{}x{} dim{} {} endian{} swizzle{:#05x} mips{}-{}{}",
+                        gt.baseAddress, gt.formatName, gt.width, gt.height, gt.depthOrArraySize,
+                        gt.dimension, gt.tiled ? "tiled" : "linear", gt.endian, gt.guestSwizzle,
+                        gt.mipMin, gt.mipMax, gt.packedMips ? " packed" : "");
         ++texFormatCensus[s];
     }
     if (gt.skipReason)
@@ -269,16 +295,15 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
     }
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vi.image = tex.image;
-    vi.viewType = is3D ? VK_IMAGE_VIEW_TYPE_3D
-               : isCube ? VK_IMAGE_VIEW_TYPE_CUBE
-                        : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
+    vi.viewType = is3D     ? VK_IMAGE_VIEW_TYPE_3D
+                  : isCube ? VK_IMAGE_VIEW_TYPE_CUBE
+                           : VK_IMAGE_VIEW_TYPE_2D_ARRAY;
     vi.format = vf;
     vi.components.r = compSwizzle(gt.hostSwizzle[0]);
     vi.components.g = compSwizzle(gt.hostSwizzle[1]);
     vi.components.b = compSwizzle(gt.hostSwizzle[2]);
     vi.components.a = compSwizzle(gt.hostSwizzle[3]);
-    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0,
-                           uint32_t(gt.levels.size()), 0, gt.layers};
+    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, uint32_t(gt.levels.size()), 0, gt.layers};
     if (vkCreateImageView(R.device, &vi, nullptr, &tex.view) != VK_SUCCESS)
     {
         vkDestroyImage(R.device, tex.image, nullptr);
@@ -288,9 +313,9 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
         return VK_NULL_HANDLE;
     }
 
-    VkBuffer staging = 0; VkDeviceMemory stagingMem = 0;
-    if (!R.MakeBuffer(gt.data.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-                    staging, stagingMem))
+    VkBuffer staging = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+    if (!R.MakeBuffer(gt.data.size(), VK_BUFFER_USAGE_TRANSFER_SRC_BIT, staging, stagingMem))
     {
         vkDestroyImageView(R.device, tex.view, nullptr);
         vkDestroyImage(R.device, tex.image, nullptr);
@@ -300,7 +325,7 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
         return VK_NULL_HANDLE;
     }
     {
-        void* p = nullptr;
+        void *p = nullptr;
         vkMapMemory(R.device, stagingMem, 0, gt.data.size(), 0, &p);
         std::memcpy(p, gt.data.data(), gt.data.size());
         vkUnmapMemory(R.device, stagingMem);
@@ -311,11 +336,10 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
     if (lucent::config::flag("DRAW_TEX_DUMP"))
     {
         std::filesystem::create_directories("scratch/raw/textures");
-        const std::string fn = std::format(
-            "scratch/raw/textures/{:08x}_{}_{}x{}x{}_{}.bin", gt.baseAddress,
-            gt.formatName, gt.width, gt.height, gt.layers * gt.depth3D,
-            gt.tiled ? "tiled" : "linear");
-        if (FILE* f = std::fopen(fn.c_str(), "wb"))
+        const std::string fn = std::format("scratch/raw/textures/{:08x}_{}_{}x{}x{}_{}.bin",
+                                           gt.baseAddress, gt.formatName, gt.width, gt.height,
+                                           gt.layers * gt.depth3D, gt.tiled ? "tiled" : "linear");
+        if (FILE *f = std::fopen(fn.c_str(), "wb"))
         {
             std::fwrite(gt.data.data(), 1, gt.data.size(), f);
             std::fclose(f);
@@ -328,11 +352,10 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
     upload.regions.reserve(gt.levels.size());
     for (uint32_t level = 0; level < gt.levels.size(); ++level)
     {
-        const GuestTextureLevel& decoded = gt.levels[level];
+        const GuestTextureLevel &decoded = gt.levels[level];
         VkBufferImageCopy region{};
         region.bufferOffset = decoded.dataOffset;
-        region.imageSubresource = {
-            VK_IMAGE_ASPECT_COLOR_BIT, level, 0, gt.layers};
+        region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, level, 0, gt.layers};
         region.imageExtent = {decoded.width, decoded.height, decoded.depth};
         upload.regions.push_back(region);
     }
@@ -345,8 +368,8 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
     // and the entry would then look unchanged forever.
     {
         GuestTexture header;
-        if (DecodeGuestTexture(fetch6, in.guestBase,
-                uint64_t(in.guestWindowBytes), /*wantData=*/false, header) &&
+        if (DecodeGuestTexture(fetch6, in.guestBase, uint64_t(in.guestWindowBytes),
+                               /*wantData=*/false, header) &&
             header.skipReason == nullptr && header.baseGuestExtentBytes != 0)
         {
             texContentHash[key] = HashTextureStorage(header, in);
@@ -355,20 +378,20 @@ VkImageView TextureUploader::Upload(const uint32_t* fetch6, uint32_t wantDim)
     return tex.view;
 }
 
-VkSampler TextureUploader::GetSampler(const GuestSamplerState& gs)
+VkSampler TextureUploader::GetSampler(const GuestSamplerState &gs)
 {
     const uint64_t k = uint64_t(gs.magFilter) | (uint64_t(gs.minFilter) << 4) |
-                       (uint64_t(gs.mipFilter) << 8) |
-                       (uint64_t(gs.clamp[0]) << 12) | (uint64_t(gs.clamp[1]) << 16) |
-                       (uint64_t(gs.clamp[2]) << 20) | (uint64_t(gs.anisoMax) << 24);
+                       (uint64_t(gs.mipFilter) << 8) | (uint64_t(gs.clamp[0]) << 12) |
+                       (uint64_t(gs.clamp[1]) << 16) | (uint64_t(gs.clamp[2]) << 20) |
+                       (uint64_t(gs.anisoMax) << 24);
     auto it = samplerCache.find(k);
     if (it != samplerCache.end())
         return it->second;
     VkSamplerCreateInfo si{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     si.magFilter = gs.magFilter == 1 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
     si.minFilter = gs.minFilter == 1 ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
-    si.mipmapMode = gs.mipFilter == 1 ? VK_SAMPLER_MIPMAP_MODE_LINEAR
-                                      : VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    si.mipmapMode =
+        gs.mipFilter == 1 ? VK_SAMPLER_MIPMAP_MODE_LINEAR : VK_SAMPLER_MIPMAP_MODE_NEAREST;
     si.addressModeU = vkAddressMode(gs.clamp[0]);
     si.addressModeV = vkAddressMode(gs.clamp[1]);
     si.addressModeW = vkAddressMode(gs.clamp[2]);
@@ -377,8 +400,7 @@ VkSampler TextureUploader::GetSampler(const GuestSamplerState& gs)
     if (gs.anisoMax && R.hasSamplerAnisotropy)
     {
         si.anisotropyEnable = VK_TRUE;
-        si.maxAnisotropy = std::min(float(gs.anisoMax),
-                                    R.maxSamplerAnisotropy);
+        si.maxAnisotropy = std::min(float(gs.anisoMax), R.maxSamplerAnisotropy);
     }
     VkSampler s = VK_NULL_HANDLE;
     if (vkCreateSampler(R.device, &si, nullptr, &s) != VK_SUCCESS)
@@ -387,15 +409,13 @@ VkSampler TextureUploader::GetSampler(const GuestSamplerState& gs)
     return s;
 }
 
-
-VkImageView TextureUploader::ResolveTargetView(ResolveTarget& rt,
-                                               uint32_t guestSwizzle)
+VkImageView TextureUploader::ResolveTargetView(ResolveTarget &rt, uint32_t guestSwizzle)
 {
     // XYZW is what an unmapped view already is, so it costs nothing and, more
     // usefully, keeps the identity case on the SAME code path as the swizzled
     // one -- a bug that only appears once a mapping is applied would otherwise
     // hide behind the common case.
-    static constexpr uint32_t kIdentity = 0x688u;  // X,Y,Z,W at 3 bits each
+    static constexpr uint32_t kIdentity = 0x688u; // X,Y,Z,W at 3 bits each
     if (guestSwizzle == kIdentity)
         return rt.view;
 
@@ -409,11 +429,12 @@ VkImageView TextureUploader::ResolveTargetView(ResolveTarget& rt,
     {
         static std::set<uint32_t> reported;
         if (reported.insert(guestSwizzle).second)
-            lucent::warn("draw", "resolve destination {:#x} is DEPTH (R32) and a"
-                " binding asks for swizzle {:#05x}, which is not XYZW. Serving"
-                " the unmapped view: a single-component image has nothing to"
-                " route. If a depth pass reads the wrong channel, this is why",
-                rt.base, guestSwizzle);
+            lucent::warn("draw",
+                         "resolve destination {:#x} is DEPTH (R32) and a"
+                         " binding asks for swizzle {:#05x}, which is not XYZW. Serving"
+                         " the unmapped view: a single-component image has nothing to"
+                         " route. If a depth pass reads the wrong channel, this is why",
+                         rt.base, guestSwizzle);
         return rt.view;
     }
 
@@ -423,7 +444,7 @@ VkImageView TextureUploader::ResolveTargetView(ResolveTarget& rt,
 
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vi.image = rt.image;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY;  // as the unmapped view is
+    vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY; // as the unmapped view is
     vi.format = rt.hostFormat;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     // The host image is canonical RGBA (R16G16B16A16_SFLOAT), so unlike a guest
@@ -438,17 +459,18 @@ VkImageView TextureUploader::ResolveTargetView(ResolveTarget& rt,
     {
         // Falling back to the unmapped view would reintroduce the exact defect
         // this function exists to fix, and silently. Say which target.
-        lucent::warn("draw", "could not create a swizzled view of resolve"
-            " destination {:#x} for swizzle {:#05x}; serving the UNMAPPED view,"
-            " so this binding reads the channels as stored", rt.base, guestSwizzle);
+        lucent::warn("draw",
+                     "could not create a swizzled view of resolve"
+                     " destination {:#x} for swizzle {:#05x}; serving the UNMAPPED view,"
+                     " so this binding reads the channels as stored",
+                     rt.base, guestSwizzle);
         return rt.view;
     }
     rt.swizzleViews[guestSwizzle] = v;
     return v;
 }
 
-
-VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureBinding& tb)
+VkImageView TextureBinder::SelectView(const uint32_t *regs, const ShaderTextureBinding &tb)
 {
     const uint32_t fc = tb.fetchConstant & 31;
     const uint32_t dword1 = regs[0x4800 + fc * 6 + 1];
@@ -464,11 +486,9 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
     //
     // A base of 0 is reported too: a fetch constant that names nothing is a
     // real answer and is invisible in every count.
-    const bool logBinds =
-        currentPsHash != 0 &&
-        currentPsHash == std::strtoull(
-            lucent::config::text("DRAW_TEX_BINDS").c_str(), nullptr, 16);
-    const auto say = [&](const char* how, VkImageView v) {
+    const bool logBinds = currentPsHash != 0 && currentPsHash == textureBindingsPsHash;
+    const auto say = [&](const char *how, VkImageView v)
+    {
         if (logBinds)
         {
             // exp_adjust, fetch constant word 3 bits 13:18, 6-bit SIGNED. This
@@ -492,25 +512,25 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
             static const char kSwz[8] = {'X', 'Y', 'Z', 'W', '0', '1', '?', '?'};
             const uint32_t swizzle = (w3 >> 1) & 0xFFFu;
             const char swz[5] = {kSwz[swizzle & 7], kSwz[(swizzle >> 3) & 7],
-                                 kSwz[(swizzle >> 6) & 7],
-                                 kSwz[(swizzle >> 9) & 7], '\0'};
+                                 kSwz[(swizzle >> 6) & 7], kSwz[(swizzle >> 9) & 7], '\0'};
             // The ADDRESS MODE, per axis. It belongs here for the same
             // reason the swizzle does: a shader that samples outside [0,1]
             // reads the edge under CLAMP and wraps under REPEAT, and those
             // differ by the whole texture. Catalog #77's character material
             // biases its lookup coordinate by +1, so which of the two applies
             // decides whether it reads real data or the edge texel.
-            static const char* kClamp[8] = {
-                "repeat", "mirror", "clamp-edge", "mirror-clamp-edge",
-                "clamp-half", "mirror-clamp-half", "clamp-border", "?7"};
+            static const char *kClamp[8] = {"repeat",       "mirror",
+                                            "clamp-edge",   "mirror-clamp-edge",
+                                            "clamp-half",   "mirror-clamp-half",
+                                            "clamp-border", "?7"};
             const uint32_t d0 = regs[0x4800 + fc * 6];
             const uint32_t cx = (d0 >> 10) & 7, cy = (d0 >> 13) & 7;
-            lucent::info("draw", "  tex bind ps {:#x}: fc{} base {:#x} dim {}"
-                " exp_adjust {:+d} (x{}) swizzle {} ({:#05x}) clamp x={} y={}"
-                " -> {}",
-                currentPsHash, fc, base, tb.dimension, expAdjust,
-                std::ldexp(1.0, expAdjust), swz, swizzle,
-                kClamp[cx], kClamp[cy], how);
+            lucent::info("draw",
+                         "  tex bind ps {:#x}: fc{} base {:#x} dim {}"
+                         " exp_adjust {:+d} (x{}) swizzle {} ({:#05x}) clamp x={} y={}"
+                         " -> {}",
+                         currentPsHash, fc, base, tb.dimension, expAdjust,
+                         std::ldexp(1.0, expAdjust), swz, swizzle, kClamp[cx], kClamp[cy], how);
         }
         return v;
     };
@@ -525,7 +545,7 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
     // necessary because kSigned additionally needs a signed host image view.
     {
         const uint32_t d0 = regs[0x4800 + fc * 6];
-        const uint32_t signs = (d0 >> 2) & 0xFF;   // sign_x/y/z/w, 2 bits each
+        const uint32_t signs = (d0 >> 2) & 0xFF; // sign_x/y/z/w, 2 bits each
         if (signs != 0)
         {
             ++fetchesWithSigns[signs];
@@ -533,8 +553,8 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
             // cannot serve properly (kSigned needs the signed view, and only
             // the unsigned one is bound) has to name the texture it affects,
             // or the count is a number nobody can act on.
-            if (((signs >> 0) & 3) == 1 || ((signs >> 2) & 3) == 1 ||
-                ((signs >> 4) & 3) == 1 || ((signs >> 6) & 3) == 1)
+            if (((signs >> 0) & 3) == 1 || ((signs >> 2) & 3) == 1 || ((signs >> 4) & 3) == 1 ||
+                ((signs >> 6) & 3) == 1)
                 ++signedBases[base];
         }
     }
@@ -549,8 +569,7 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
         {
             ++bindsRt;
             return say("this frame's RESOLVE TARGET",
-                       TX.ResolveTargetView(rt->second,
-                                            (regs[0x4800 + fc * 6 + 3] >> 1) & 0xFFFu));
+                       TX.ResolveTargetView(rt->second, (regs[0x4800 + fc * 6 + 3] >> 1) & 0xFFFu));
         }
     }
     // The guest's own texture, decoded from this fetch constant. The stub
@@ -559,8 +578,8 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
     {
         const auto t0 = std::chrono::steady_clock::now();
         VkImageView v = TX.Upload(&regs[0x4800 + fc * 6], tb.dimension);
-        msUpload += std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - t0).count();
+        msUpload += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0)
+                        .count();
         if (v != VK_NULL_HANDLE)
         {
             ++bindsGuest;
@@ -570,9 +589,12 @@ VkImageView TextureBinder::SelectView(const uint32_t* regs, const ShaderTextureB
     ++bindsStub;
     switch (tb.dimension)
     {
-        case 2: return say("a STUB (decode refused)", P.stub3D.view);
-        case 3: return say("a STUB (decode refused)", P.stubCube.view);
-        default: return say("a STUB (decode refused)", P.stub2D.view);
+    case 2:
+        return say("a STUB (decode refused)", P.stub3D.view);
+    case 3:
+        return say("a STUB (decode refused)", P.stubCube.view);
+    default:
+        return say("a STUB (decode refused)", P.stub2D.view);
     }
 }
 

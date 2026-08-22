@@ -223,6 +223,7 @@ add_library(gears_draw STATIC
     gpu_draw_descriptors.cpp
     gpu_draw_formats.cpp
     gpu_draw_indices.cpp
+    gpu_draw_options.cpp
     gpu_draw_pipelines.cpp
     gpu_draw_pixels.cpp
     gpu_draw_probe.cpp
