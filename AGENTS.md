@@ -20,6 +20,15 @@ Xenos shaders or removing one console GPU behavior inside a PM4-driven renderer
 does not satisfy this target. Keep the licensed UE3 checkout external through
 `RETIRED_PRIVATE_SOURCE_INPUT`; never vendor it or game content into this repository.
 
+## Verification runs
+
+USER 2026-08-22: "don't do windowed runs please always run headless"
+
+Every run started by an agent for verification, profiling, capture, or
+diagnosis must use `./run.sh --headless` or a purpose-built headless tool. Do
+not open a game window for a smoke test, including when checking the launcher;
+exercise the launcher with its headless option instead.
+
 ## Host architecture
 
 Use `${DUSKLIGHT_REPO}` when set, otherwise the sibling checkout at
