@@ -1,0 +1,1439 @@
+// Xenos->SPIR-V translation and system-constants derivation for the guest-draw
+// backend. Compiled against Xenia's headers ONLY (no system Vulkan headers --
+// they conflict with Xenia's bundled Vulkan-Headers). See gpu_draw_xlate.h.
+#include "gpu_draw_xlate.h"
+
+#include <lucent/config.h>
+#include <lucent/log.h>
+#ifdef GEARS_HAVE_GUEST_DRAW
+
+#include <algorithm>
+#include <bit>
+#include <cstring>
+#include <cstddef>
+#include <type_traits>
+#include <memory>
+#include <string>
+#include <unordered_map>
+
+#include "xenia/base/string_buffer.h"
+#include "xenia/gpu/draw_util.h"
+#include "xenia/gpu/register_file.h"
+#include "xenia/gpu/registers.h"
+#include "xenia/gpu/shader.h"
+#include "xenia/gpu/spirv_builder.h"
+#include "third_party/glslang/SPIRV/GLSL.std.450.h"
+// Maps glslang's scoped SPIR-V enums back onto the flat spv::CapabilityFoo
+// names; every one of Xenia's own SPIR-V translation units includes it.
+#include "xenia/gpu/spirv_compatibility.h"
+#include "xenia/gpu/spirv_shader.h"
+#include "xenia/gpu/spirv_shader_translator.h"
+#include "xenia/gpu/texture_util.h"
+#include "xenia/gpu/xenos.h"
+
+namespace gears::draw
+{
+namespace
+{
+
+using namespace xe::gpu; // XE_GPU_REG_* register-index enumerators
+using xe::gpu::RegisterFile;
+using xe::gpu::SpirvShaderTranslator;
+namespace draw_util = xe::gpu::draw_util;
+namespace reg = xe::gpu::reg;
+namespace xenos = xe::gpu::xenos;
+
+// Analysed shaders, keyed by microcode hash. One Shader object per microcode is
+// how Xenia works too: ucode analysis is what answers "which interpolators does
+// this stage write / read", which the modification derivation needs BEFORE any
+// translation happens, and the object then holds one translation per
+// modification.
+xe::gpu::SpirvShader *GetAnalyzedShader(xenos::ShaderType type, const uint8_t *ucode, size_t size,
+                                        uint64_t hash)
+{
+    static std::unordered_map<uint64_t, std::unique_ptr<xe::gpu::SpirvShader>> cache;
+    auto it = cache.find(hash);
+    if (it != cache.end())
+        return it->second.get();
+    if (size == 0 || size % 4 != 0)
+    {
+        lucent::warn("draw", "microcode size {} not a dword multiple", size);
+        return nullptr;
+    }
+    auto shader = std::make_unique<xe::gpu::SpirvShader>(
+        type, hash, reinterpret_cast<const uint32_t *>(ucode), size / 4, std::endian::big);
+    xe::StringBuffer disasm;
+    shader->AnalyzeUcode(disasm);
+    // GEARS_SHADER_DISASM=<16-hex hash>[,<hash>...] prints that shader's
+    // microcode disassembly once, when it is first analyzed. A constant that
+    // differs from the console's is only worth chasing if the shader READS the
+    // component that differs, and the bitmap the translator hands back is per
+    // vec4 -- it cannot answer that. A hash that never appears is reported as
+    // such below rather than being silently absent.
+    {
+        const std::string &want = lucent::config::text("SHADER_DISASM");
+        if (!want.empty() && want.find(std::format("{:016x}", hash)) != std::string::npos)
+            lucent::info("draw", "microcode disassembly of {:#018x} ({}):\n{}", hash,
+                         type == xenos::ShaderType::kPixel ? "pixel" : "vertex",
+                         disasm.to_string());
+    }
+    if (!shader->is_ucode_analyzed())
+    {
+        lucent::warn("draw", "ucode analyze failed for {:#018x}", hash);
+        return nullptr;
+    }
+    return cache.emplace(hash, std::move(shader)).first->second.get();
+}
+
+bool TranslateOne(SpirvShaderTranslator &translator, xenos::ShaderType type, const uint8_t *ucode,
+                  size_t size, uint64_t hash, uint64_t modification, ShaderXlate &out)
+{
+    xe::gpu::SpirvShader *shaderPtr = GetAnalyzedShader(type, ucode, size, hash);
+    if (!shaderPtr)
+        return false;
+    xe::gpu::SpirvShader &shader = *shaderPtr;
+    xe::gpu::Shader::Translation *translation = shader.GetOrCreateTranslation(modification);
+    if (!translator.TranslateAnalyzedShader(*translation) || !translation->is_valid())
+    {
+        lucent::warn("draw", "translate failed for {:#018x}", hash);
+        return false;
+    }
+    const std::vector<uint8_t> &spirv = translation->translated_binary();
+    if (spirv.empty())
+        return false;
+    out.spirv = spirv;
+    const auto &map = shader.constant_register_map();
+    for (int i = 0; i < 4; ++i)
+        out.floatBitmap[i] = map.float_bitmap[i];
+    out.floatCount = map.float_count;
+    out.floatDynamicAddressing = map.float_dynamic_addressing;
+    // The stage's texture descriptor set layout is decided by the shader, not
+    // by us: binding i is texture_bindings_[i] (with its own image dimension),
+    // and sampler j lands at binding texture_count + j. Carry that out so the
+    // host builds a matching VkDescriptorSetLayout per shader.
+    out.textures.clear();
+    for (const auto &tb : shader.GetTextureBindingsAfterTranslation())
+    {
+        ShaderTextureBinding b;
+        b.fetchConstant = tb.fetch_constant;
+        b.dimension = uint32_t(tb.dimension);
+        out.textures.push_back(b);
+    }
+    out.samplers.clear();
+    for (const auto &sb : shader.GetSamplerBindingsAfterTranslation())
+    {
+        ShaderSamplerBinding s;
+        s.fetchConstant = sb.fetch_constant;
+        s.magFilter = uint32_t(sb.mag_filter);
+        s.minFilter = uint32_t(sb.min_filter);
+        s.mipFilter = uint32_t(sb.mip_filter);
+        s.anisoFilter = uint32_t(sb.aniso_filter);
+        out.samplers.push_back(s);
+    }
+    out.samplerCount = uint32_t(out.samplers.size());
+    // Which vertex fetch constants this stage's geometry comes from. The shader
+    // decides these, exactly as it decides its texture bindings.
+    out.vertexBindings.clear();
+    for (const auto &vb : shader.vertex_bindings())
+    {
+        ShaderVertexBinding v;
+        v.fetchConstant = vb.fetch_constant;
+        v.strideWords = vb.stride_words;
+        out.vertexBindings.push_back(v);
+    }
+    out.ok = true;
+    lucent::info("draw",
+                 "translated {} {:#018x}: {} bytes SPIR-V, {} float constants,"
+                 " {} textures, {} samplers",
+                 type == xenos::ShaderType::kVertex ? "VS" : "PS", hash, spirv.size(),
+                 out.floatCount, out.textures.size(), out.samplerCount);
+    return true;
+}
+
+// The widest translator path (non-FSI host render targets) -- the configuration
+// tools/xenos_translate uses and the one the verified .spv were built for.
+SpirvShaderTranslator MakeTranslator()
+{
+    // Features(all=true) claims every optional feature. Demotion requires a
+    // logical-device feature we do not enable, so use the valid OpKill fallback.
+    SpirvShaderTranslator::Features features(/*all=*/true);
+    features.demote_to_helper_invocation = false;
+    return SpirvShaderTranslator(features,
+                                 /*native_2x_msaa_with_attachments=*/true,
+                                 /*native_2x_msaa_no_attachments=*/true,
+                                 /*edram_fragment_shader_interlock=*/false);
+}
+
+} // namespace
+
+// THE REGISTER FILE IS ALIASED, NOT COPIED.
+//
+// Every one of the four Derive* entry points below used to do
+//
+//     RegisterFile regs;
+//     std::memcpy(regs.values, registerFile, kRegisterCount * sizeof(uint32_t));
+//
+// to read about ten registers. kRegisterCount is 0x5003, so that is 80 KiB per
+// call; all four are called PER DRAW, and an Act 1 frame issues ~810 draws. That
+// is a quarter of a gigabyte of memcpy per frame, and it measured as 8-9 ms of
+// "modification derivation" plus most of "uniforms" and "prepare" in the draw
+// loop -- on a 24 ms loop that was dropping 6-12 frames a second.
+//
+// RegisterFile is standard-layout with `values` as its only data member, so the
+// caller's array IS a RegisterFile; the asserts below fail the build if that ever
+// stops being true rather than letting it become a silent aliasing bug.
+const RegisterFile &AsRegisterFile(const uint32_t *registerFile)
+{
+    static_assert(std::is_standard_layout_v<RegisterFile>,
+                  "RegisterFile must be standard-layout to alias a raw array");
+    static_assert(sizeof(RegisterFile) == RegisterFile::kRegisterCount * sizeof(uint32_t),
+                  "RegisterFile must be exactly its values array");
+    static_assert(offsetof(RegisterFile, values) == 0, "RegisterFile::values must be at offset 0");
+    return *reinterpret_cast<const RegisterFile *>(registerFile);
+}
+
+bool DeriveShaderModifications(const uint32_t *registerFile, const uint8_t *vsUcode, size_t vsSize,
+                               uint64_t vsHash, const uint8_t *psUcode, size_t psSize,
+                               uint64_t psHash, uint64_t &vsModification, uint64_t &psModification)
+{
+    vsModification = 0;
+    psModification = 0;
+    xe::gpu::SpirvShader *vs =
+        GetAnalyzedShader(xenos::ShaderType::kVertex, vsUcode, vsSize, vsHash);
+    xe::gpu::SpirvShader *ps =
+        GetAnalyzedShader(xenos::ShaderType::kPixel, psUcode, psSize, psHash);
+    if (!vs || !ps)
+        return false;
+
+    const RegisterFile &regs = AsRegisterFile(registerFile);
+    auto sq_program_cntl = regs.Get<reg::SQ_PROGRAM_CNTL>();
+    auto sq_context_misc = regs.Get<reg::SQ_CONTEXT_MISC>();
+
+    // The set of interpolators the pair actually exchanges: written by the
+    // vertex shader AND read by the pixel shader. This is Xenia's
+    // VulkanCommandProcessor::IssueDraw computation verbatim.
+    uint32_t param_gen_pos = UINT32_MAX;
+    const uint32_t interpolator_mask =
+        vs->writes_interpolators() &
+        ps->GetInterpolatorInputMask(sq_program_cntl, sq_context_misc, param_gen_pos);
+
+    // Feature-independent: only the modification key is derived here.
+    SpirvShaderTranslator translator = MakeTranslator();
+
+    // --- vertex stage (VulkanPipelineCache::GetCurrentVertexShaderModification)
+    {
+        SpirvShaderTranslator::Modification m(translator.GetDefaultVertexShaderModification(
+            vs->GetDynamicAddressableRegisterCount(sq_program_cntl.vs_num_reg),
+            xe::gpu::Shader::HostVertexShaderType::kVertex));
+        m.vertex.interpolator_mask = interpolator_mask;
+        auto pa_cl_clip_cntl = regs.Get<reg::PA_CL_CLIP_CNTL>();
+        const uint32_t user_clip_planes =
+            pa_cl_clip_cntl.clip_disable ? 0 : pa_cl_clip_cntl.ucp_ena;
+        m.vertex.user_clip_plane_count = xe::bit_count(user_clip_planes);
+        m.vertex.user_clip_plane_cull =
+            uint32_t(user_clip_planes && pa_cl_clip_cntl.ucp_cull_only_ena);
+        m.vertex.output_point_parameters = uint32_t(
+            (vs->writes_point_size_edge_flag_kill_vertex() & 0b001) &&
+            regs.Get<reg::VGT_DRAW_INITIATOR>().prim_type == xenos::PrimitiveType::kPointList);
+        vsModification = m.value;
+    }
+
+    // --- pixel stage (VulkanPipelineCache::GetCurrentPixelShaderModification)
+    {
+        SpirvShaderTranslator::Modification m(translator.GetDefaultPixelShaderModification(
+            ps->GetDynamicAddressableRegisterCount(sq_program_cntl.ps_num_reg)));
+        m.pixel.interpolator_mask = interpolator_mask;
+        m.pixel.interpolators_centroid =
+            interpolator_mask & ~xenos::GetInterpolatorSamplingPattern(
+                                    regs.Get<reg::RB_SURFACE_INFO>().msaa_samples,
+                                    sq_context_misc.sc_sample_cntl,
+                                    regs.Get<reg::SQ_INTERPOLATOR_CNTL>().sampling_pattern);
+        if (param_gen_pos < xenos::kMaxInterpolators)
+        {
+            m.pixel.param_gen_enable = 1;
+            m.pixel.param_gen_interpolator = param_gen_pos;
+            m.pixel.param_gen_point = uint32_t(regs.Get<reg::VGT_DRAW_INITIATOR>().prim_type ==
+                                               xenos::PrimitiveType::kPointList);
+        }
+        // Host render targets (this backend never takes the FSI path).
+        using DepthStencilMode = SpirvShaderTranslator::Modification::DepthStencilMode;
+        m.pixel.depth_stencil_mode =
+            (ps->implicit_early_z_write_allowed() &&
+             (!ps->writes_color_target(0) ||
+              !draw_util::DoesCoverageDependOnAlpha(regs.Get<reg::RB_COLORCONTROL>())))
+                ? DepthStencilMode::kEarlyHint
+                : DepthStencilMode::kNoModifiers;
+        // Vulkan's MIN/MAX blend ops ignore the blend factors; the Xenos applies
+        // them. When the destination factor is ONE the source factor can be
+        // folded into the shader output instead.
+        m.pixel.rt0_blend_rgb_factor_for_premult = xenos::BlendFactor::kOne;
+        m.pixel.rt0_blend_a_factor_for_premult = xenos::BlendFactor::kOne;
+        if (ps->writes_color_target(0))
+        {
+            auto blend_control =
+                regs.Get<reg::RB_BLENDCONTROL>(reg::RB_BLENDCONTROL::rt_register_indices[0]);
+            if ((blend_control.color_comb_fcn == xenos::BlendOp::kMin ||
+                 blend_control.color_comb_fcn == xenos::BlendOp::kMax) &&
+                blend_control.color_srcblend == xenos::BlendFactor::kSrcAlpha &&
+                blend_control.color_destblend == xenos::BlendFactor::kOne)
+                m.pixel.rt0_blend_rgb_factor_for_premult = xenos::BlendFactor::kSrcAlpha;
+            if ((blend_control.alpha_comb_fcn == xenos::BlendOp::kMin ||
+                 blend_control.alpha_comb_fcn == xenos::BlendOp::kMax) &&
+                blend_control.alpha_srcblend == xenos::BlendFactor::kSrcAlpha &&
+                blend_control.alpha_destblend == xenos::BlendFactor::kOne)
+                m.pixel.rt0_blend_a_factor_for_premult = xenos::BlendFactor::kSrcAlpha;
+        }
+        psModification = m.value;
+    }
+    return true;
+}
+
+VertexShaderShape AnalyzeVertexShaderShape(const uint8_t *ucode, size_t size, uint64_t hash)
+{
+    VertexShaderShape out;
+    xe::gpu::SpirvShader *shader = GetAnalyzedShader(xenos::ShaderType::kVertex, ucode, size, hash);
+    // ok stays false, which the caller must count as "could not see", never as
+    // "not skinned": a shader this cannot read is a BLIND SPOT in the census,
+    // and one reported as a negative would be a lie.
+    if (!shader)
+        return out;
+    const auto &map = shader->constant_register_map();
+    out.ok = true;
+    out.floatDynamicAddressing = map.float_dynamic_addressing;
+    out.floatCount = map.float_count;
+    return out;
+}
+
+bool TranslateHotPair(const uint32_t *registerFile, const uint8_t *vsUcode, size_t vsSize,
+                      uint64_t vsHash, const uint8_t *psUcode, size_t psSize, uint64_t psHash,
+                      ShaderXlate &outVs, ShaderXlate &outPs)
+{
+    uint64_t vsMod = 0, psMod = 0;
+    if (!DeriveShaderModifications(registerFile, vsUcode, vsSize, vsHash, psUcode, psSize, psHash,
+                                   vsMod, psMod))
+        return false;
+    SpirvShaderTranslator translator = MakeTranslator();
+    bool a =
+        TranslateOne(translator, xenos::ShaderType::kVertex, vsUcode, vsSize, vsHash, vsMod, outVs);
+    bool b =
+        TranslateOne(translator, xenos::ShaderType::kPixel, psUcode, psSize, psHash, psMod, outPs);
+    return a && b;
+}
+
+bool TranslateShader(bool isVertex, const uint8_t *ucode, size_t size, uint64_t hash,
+                     uint64_t modification, ShaderXlate &out)
+{
+    SpirvShaderTranslator translator = MakeTranslator();
+    return TranslateOne(translator,
+                        isVertex ? xenos::ShaderType::kVertex : xenos::ShaderType::kPixel, ucode,
+                        size, hash, modification, out);
+}
+
+bool DeriveRectangleGeometryShaderKey(uint64_t vsModification, GeometryShaderKey &out)
+{
+    const SpirvShaderTranslator::Modification m(vsModification);
+    // The VS-expansion fallback and the geometry shader are alternatives, never
+    // both; if the modification ever asks for the fallback, refusing here is
+    // better than silently emitting a shader whose input interface is wrong.
+    if (m.vertex.host_vertex_shader_type != xe::gpu::Shader::HostVertexShaderType::kVertex)
+    {
+        lucent::warn("draw", "rectangle list with host vertex shader type {}",
+                     uint32_t(m.vertex.host_vertex_shader_type));
+        return false;
+    }
+    out = {};
+    out.type = GeometryShaderType::RectangleList;
+    out.interpolatorCount = xe::bit_count(m.vertex.interpolator_mask);
+    if (m.vertex.user_clip_plane_cull)
+        out.cullDistanceCount = m.vertex.user_clip_plane_count;
+    else
+        out.clipDistanceCount = m.vertex.user_clip_plane_count;
+    return true;
+}
+
+bool BuildRectangleGeometryShader(const GeometryShaderKey &key, std::vector<uint32_t> &spirv)
+{
+    // A triangle in, a strip of two triangles out -- the guest's three vertices
+    // plus the mirrored fourth.
+    constexpr uint32_t kInputVertexCount = 3;
+    constexpr uint32_t kOutputMaxVertices = 4;
+
+    const uint32_t clipDistanceCount = key.clipDistanceCount;
+    const uint32_t cullDistanceCount = key.cullDistanceCount;
+
+    std::vector<spv::Id> ids;
+
+    xe::gpu::SpirvBuilder builder(spv::Spv_1_0,
+                                  (SpirvShaderTranslator::kSpirvMagicToolId << 16) | 1, nullptr);
+    builder.addCapability(spv::CapabilityGeometry);
+    if (clipDistanceCount)
+        builder.addCapability(spv::CapabilityClipDistance);
+    if (cullDistanceCount)
+        builder.addCapability(spv::CapabilityCullDistance);
+    builder.setMemoryModel(spv::AddressingModelLogical, spv::MemoryModelGLSL450);
+    builder.setSource(spv::SourceLanguageUnknown, 0);
+
+    const spv::Id typeVoid = builder.makeVoidType();
+    const spv::Id typeBool = builder.makeBoolType();
+    const spv::Id typeBool4 = builder.makeVectorType(typeBool, 4);
+    const spv::Id typeInt = builder.makeIntType(32);
+    const spv::Id typeFloat = builder.makeFloatType(32);
+    const spv::Id typeFloat4 = builder.makeVectorType(typeFloat, 4);
+    const spv::Id typeClipDistances =
+        clipDistanceCount
+            ? builder.makeArrayType(typeFloat, builder.makeUintConstant(clipDistanceCount), 0)
+            : spv::NoType;
+    const spv::Id typeCullDistances =
+        cullDistanceCount
+            ? builder.makeArrayType(typeFloat, builder.makeUintConstant(cullDistanceCount), 0)
+            : spv::NoType;
+
+    std::vector<spv::Id> mainInterface;
+    const spv::Id constInputVertexCount = builder.makeUintConstant(kInputVertexCount);
+
+    // in gl_PerVertex gl_in[3]. Member order must match the vertex shader's own
+    // block, which is position, then clip distances, then cull distances.
+    ids.clear();
+    const uint32_t memberInPosition = uint32_t(ids.size());
+    ids.push_back(typeFloat4);
+    const spv::Id constMemberInPosition = builder.makeIntConstant(int32_t(memberInPosition));
+    uint32_t memberInClipDistance = UINT32_MAX;
+    spv::Id constMemberInClipDistance = spv::NoResult;
+    if (clipDistanceCount)
+    {
+        memberInClipDistance = uint32_t(ids.size());
+        ids.push_back(typeClipDistances);
+        constMemberInClipDistance = builder.makeIntConstant(int32_t(memberInClipDistance));
+    }
+    uint32_t memberInCullDistance = UINT32_MAX;
+    if (cullDistanceCount)
+    {
+        memberInCullDistance = uint32_t(ids.size());
+        ids.push_back(typeCullDistances);
+    }
+    const spv::Id typeStructInPerVertex = builder.makeStructType(ids, "gl_PerVertex");
+    builder.addMemberName(typeStructInPerVertex, memberInPosition, "gl_Position");
+    builder.addMemberDecoration(typeStructInPerVertex, memberInPosition, spv::DecorationBuiltIn,
+                                int(spv::BuiltIn::Position));
+    if (clipDistanceCount)
+    {
+        builder.addMemberName(typeStructInPerVertex, memberInClipDistance, "gl_ClipDistance");
+        builder.addMemberDecoration(typeStructInPerVertex, memberInClipDistance,
+                                    spv::DecorationBuiltIn, int(spv::BuiltIn::ClipDistance));
+    }
+    if (cullDistanceCount)
+    {
+        builder.addMemberName(typeStructInPerVertex, memberInCullDistance, "gl_CullDistance");
+        builder.addMemberDecoration(typeStructInPerVertex, memberInCullDistance,
+                                    spv::DecorationBuiltIn, int(spv::BuiltIn::CullDistance));
+    }
+    builder.addDecoration(typeStructInPerVertex, spv::DecorationBlock);
+    const spv::Id inPerVertex = builder.createVariable(
+        spv::NoPrecision, spv::StorageClassInput,
+        builder.makeArrayType(typeStructInPerVertex, constInputVertexCount, 0), "gl_in");
+    mainInterface.push_back(inPerVertex);
+
+    // Interpolator outputs, then interpolator inputs -- glslang's declaration
+    // order, and the locations the translated vertex and pixel shaders use.
+    std::vector<spv::Id> outInterpolators(key.interpolatorCount);
+    for (uint32_t i = 0; i < key.interpolatorCount; ++i)
+    {
+        outInterpolators[i] =
+            builder.createVariable(spv::NoPrecision, spv::StorageClassOutput, typeFloat4,
+                                   ("xe_out_interpolator_" + std::to_string(i)).c_str());
+        builder.addDecoration(outInterpolators[i], spv::DecorationLocation, int(i));
+        builder.addDecoration(outInterpolators[i], spv::DecorationInvariant);
+        mainInterface.push_back(outInterpolators[i]);
+    }
+    std::vector<spv::Id> inInterpolators(key.interpolatorCount);
+    for (uint32_t i = 0; i < key.interpolatorCount; ++i)
+    {
+        inInterpolators[i] =
+            builder.createVariable(spv::NoPrecision, spv::StorageClassInput,
+                                   builder.makeArrayType(typeFloat4, constInputVertexCount, 0),
+                                   ("xe_in_interpolator_" + std::to_string(i)).c_str());
+        builder.addDecoration(inInterpolators[i], spv::DecorationLocation, int(i));
+        mainInterface.push_back(inInterpolators[i]);
+    }
+
+    // out gl_PerVertex. Cull distances are consumed here, not forwarded.
+    ids.clear();
+    const uint32_t memberOutPosition = uint32_t(ids.size());
+    ids.push_back(typeFloat4);
+    const spv::Id constMemberOutPosition = builder.makeIntConstant(int32_t(memberOutPosition));
+    uint32_t memberOutClipDistance = UINT32_MAX;
+    spv::Id constMemberOutClipDistance = spv::NoResult;
+    if (clipDistanceCount)
+    {
+        memberOutClipDistance = uint32_t(ids.size());
+        ids.push_back(typeClipDistances);
+        constMemberOutClipDistance = builder.makeIntConstant(int32_t(memberOutClipDistance));
+    }
+    const spv::Id typeStructOutPerVertex = builder.makeStructType(ids, "gl_PerVertex");
+    builder.addMemberName(typeStructOutPerVertex, memberOutPosition, "gl_Position");
+    builder.addMemberDecoration(typeStructOutPerVertex, memberOutPosition, spv::DecorationBuiltIn,
+                                int(spv::BuiltIn::Position));
+    if (clipDistanceCount)
+    {
+        builder.addMemberName(typeStructOutPerVertex, memberOutClipDistance, "gl_ClipDistance");
+        builder.addMemberDecoration(typeStructOutPerVertex, memberOutClipDistance,
+                                    spv::DecorationBuiltIn, int(spv::BuiltIn::ClipDistance));
+    }
+    builder.addDecoration(typeStructOutPerVertex, spv::DecorationBlock);
+    const spv::Id outPerVertex = builder.createVariable(spv::NoPrecision, spv::StorageClassOutput,
+                                                        typeStructOutPerVertex, "");
+    builder.addDecoration(outPerVertex, spv::DecorationInvariant);
+    mainInterface.push_back(outPerVertex);
+
+    std::vector<spv::Id> mainParamTypes;
+    std::vector<std::vector<spv::Decoration>> mainPrecisions;
+    spv::Block *mainEntry = nullptr;
+    spv::Function *mainFunction = builder.makeFunctionEntry(
+        spv::NoPrecision, typeVoid, "main", mainParamTypes, mainPrecisions, &mainEntry);
+    spv::Instruction *entryPoint =
+        builder.addEntryPoint(spv::ExecutionModelGeometry, mainFunction, "main");
+    for (spv::Id id : mainInterface)
+        entryPoint->addIdOperand(id);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeTriangles);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeInvocations, 1);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeOutputTriangleStrip);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeOutputVertices,
+                             int(kOutputMaxVertices));
+
+    // Returning early from a geometry shader emits nothing, which is how both
+    // the NaN and the cull tests below drop the whole primitive.
+    auto discardIf = [&](spv::Id condition)
+    {
+        spv::Block &predecessor = *builder.getBuildPoint();
+        spv::Block &thenBlock = builder.makeNewBlock();
+        spv::Block &mergeBlock = builder.makeNewBlock();
+        builder.createSelectionMerge(&mergeBlock, spv::SelectionControlDontFlattenMask);
+        {
+            auto branch = std::make_unique<spv::Instruction>(spv::OpBranchConditional);
+            branch->addIdOperand(condition);
+            branch->addIdOperand(thenBlock.getId());
+            branch->addIdOperand(mergeBlock.getId());
+            branch->addImmediateOperand(1);
+            branch->addImmediateOperand(2);
+            predecessor.addInstruction(std::move(branch));
+        }
+        thenBlock.addPredecessor(&predecessor);
+        mergeBlock.addPredecessor(&predecessor);
+        builder.setBuildPoint(&thenBlock);
+        builder.createNoResultOp(spv::OpReturn);
+        builder.setBuildPoint(&mergeBlock);
+    };
+
+    // A NaN position marks a killed vertex; the whole primitive goes.
+    for (uint32_t i = 0; i < kInputVertexCount; ++i)
+    {
+        ids.clear();
+        ids.push_back(builder.makeIntConstant(int32_t(i)));
+        ids.push_back(constMemberInPosition);
+        discardIf(builder.createUnaryOp(
+            spv::OpAny, typeBool,
+            builder.createUnaryOp(spv::OpIsNan, typeBool4,
+                                  builder.createLoad(builder.createAccessChain(
+                                                         spv::StorageClassInput, inPerVertex, ids),
+                                                     spv::NoPrecision))));
+    }
+
+    // Cull the primitive when a cull distance is negative at every vertex.
+    if (cullDistanceCount)
+    {
+        const spv::Id constMemberInCullDistance =
+            builder.makeIntConstant(int32_t(memberInCullDistance));
+        const spv::Id constFloat0 = builder.makeFloatConstant(0.0f);
+        spv::Id cullCondition = spv::NoResult;
+        for (uint32_t i = 0; i < cullDistanceCount; ++i)
+        {
+            for (uint32_t j = 0; j < kInputVertexCount; ++j)
+            {
+                ids.clear();
+                ids.push_back(builder.makeIntConstant(int32_t(j)));
+                ids.push_back(constMemberInCullDistance);
+                ids.push_back(builder.makeIntConstant(int32_t(i)));
+                const spv::Id negative = builder.createBinOp(
+                    spv::OpFOrdLessThan, typeBool,
+                    builder.createLoad(
+                        builder.createAccessChain(spv::StorageClassInput, inPerVertex, ids),
+                        spv::NoPrecision),
+                    constFloat0);
+                cullCondition =
+                    cullCondition == spv::NoResult
+                        ? negative
+                        : builder.createBinOp(spv::OpLogicalAnd, typeBool, cullCondition, negative);
+            }
+        }
+        discardIf(cullCondition);
+    }
+
+    // Which of the three edges is the longest decides where the fourth vertex
+    // goes -- it is the mirror of the first across the diagonal:
+    //
+    //   0---1
+    //   |  /|   12 longest -> strip 0 1 2 3, v3 = -v0 + v1 + v2
+    //   | / |   20 longest -> strip 1 2 0 3
+    //   |/  |   01 longest -> strip 2 0 1 3
+    //   2--[3]
+    //
+    // Edge lengths are compared squared and in screen X/Y only, as on Xenia.
+    const spv::Id constInt0 = builder.makeIntConstant(0);
+    const spv::Id constInt1 = builder.makeIntConstant(1);
+    const spv::Id constInt2 = builder.makeIntConstant(2);
+    const spv::Id constInt3 = builder.makeIntConstant(3);
+
+    spv::Id edgeLengths[3];
+    ids.resize(3);
+    ids[1] = constMemberInPosition;
+    auto loadPositionComponent = [&](uint32_t vertex, spv::Id component)
+    {
+        ids[0] = builder.makeIntConstant(int32_t(vertex));
+        ids[2] = component;
+        return builder.createLoad(
+            builder.createAccessChain(spv::StorageClassInput, inPerVertex, ids), spv::NoPrecision);
+    };
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        const spv::Id x0 = loadPositionComponent((1 + i) % 3, constInt0);
+        const spv::Id y0 = loadPositionComponent((1 + i) % 3, constInt1);
+        const spv::Id x1 = loadPositionComponent((2 + i) % 3, constInt0);
+        const spv::Id y1 = loadPositionComponent((2 + i) % 3, constInt1);
+        const spv::Id ex = builder.createBinOp(spv::OpFSub, typeFloat, x1, x0);
+        const spv::Id ey = builder.createBinOp(spv::OpFSub, typeFloat, y1, y0);
+        edgeLengths[i] = builder.createBinOp(spv::OpFAdd, typeFloat,
+                                             builder.createBinOp(spv::OpFMul, typeFloat, ex, ex),
+                                             builder.createBinOp(spv::OpFMul, typeFloat, ey, ey));
+    }
+
+    spv::Id vertexIndices[3];
+    vertexIndices[0] = builder.createTriOp(
+        spv::OpSelect, typeInt,
+        builder.createBinOp(
+            spv::OpLogicalAnd, typeBool,
+            builder.createBinOp(spv::OpFOrdGreaterThan, typeBool, edgeLengths[0], edgeLengths[1]),
+            builder.createBinOp(spv::OpFOrdGreaterThan, typeBool, edgeLengths[0], edgeLengths[2])),
+        constInt0,
+        builder.createTriOp(
+            spv::OpSelect, typeInt,
+            builder.createBinOp(spv::OpFOrdGreaterThan, typeBool, edgeLengths[1], edgeLengths[2]),
+            constInt1, constInt2));
+    for (uint32_t i = 1; i < 3; ++i)
+    {
+        const spv::Id unwrapped = builder.createBinOp(spv::OpIAdd, typeInt, vertexIndices[0],
+                                                      builder.makeIntConstant(int32_t(i)));
+        vertexIndices[i] = builder.createTriOp(
+            spv::OpSelect, typeInt,
+            builder.createBinOp(spv::OpSLessThan, typeBool, unwrapped, constInt3), unwrapped,
+            builder.createBinOp(spv::OpISub, typeInt, unwrapped, constInt3));
+    }
+
+    // The three guest vertices, in strip order.
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        const spv::Id vertexIndex = vertexIndices[i];
+        ids.clear();
+        ids.push_back(vertexIndex);
+        for (uint32_t j = 0; j < key.interpolatorCount; ++j)
+        {
+            builder.createStore(
+                builder.createLoad(
+                    builder.createAccessChain(spv::StorageClassInput, inInterpolators[j], ids),
+                    spv::NoPrecision),
+                outInterpolators[j]);
+        }
+        ids.clear();
+        ids.push_back(vertexIndex);
+        ids.push_back(constMemberInPosition);
+        const spv::Id position = builder.createLoad(
+            builder.createAccessChain(spv::StorageClassInput, inPerVertex, ids), spv::NoPrecision);
+        ids.clear();
+        ids.push_back(constMemberOutPosition);
+        builder.createStore(position,
+                            builder.createAccessChain(spv::StorageClassOutput, outPerVertex, ids));
+        if (clipDistanceCount)
+        {
+            ids.clear();
+            ids.push_back(vertexIndex);
+            ids.push_back(constMemberInClipDistance);
+            const spv::Id clip = builder.createLoad(
+                builder.createAccessChain(spv::StorageClassInput, inPerVertex, ids),
+                spv::NoPrecision);
+            ids.clear();
+            ids.push_back(constMemberOutClipDistance);
+            builder.createStore(
+                clip, builder.createAccessChain(spv::StorageClassOutput, outPerVertex, ids));
+        }
+        builder.createNoResultOp(spv::OpEmitVertex);
+    }
+
+    // The fourth: every attribute mirrored the same way the position is,
+    // v3 = v2 + (v1 - v0).
+    auto mirror = [&](spv::Id type, spv::Id variable, const spv::Id *member, size_t memberCount)
+    {
+        auto load = [&](spv::Id vertex)
+        {
+            ids.clear();
+            ids.push_back(vertex);
+            for (size_t i = 0; i < memberCount; ++i)
+                ids.push_back(member[i]);
+            return builder.createLoad(
+                builder.createAccessChain(spv::StorageClassInput, variable, ids), spv::NoPrecision);
+        };
+        const spv::Id v0 = load(vertexIndices[0]);
+        const spv::Id v01 =
+            builder.createNoContractionBinOp(spv::OpFSub, type, load(vertexIndices[1]), v0);
+        return builder.createNoContractionBinOp(spv::OpFAdd, type, v01, load(vertexIndices[2]));
+    };
+
+    for (uint32_t i = 0; i < key.interpolatorCount; ++i)
+    {
+        builder.createStore(mirror(typeFloat4, inInterpolators[i], nullptr, 0),
+                            outInterpolators[i]);
+    }
+    {
+        const spv::Id member[] = {constMemberInPosition};
+        const spv::Id position = mirror(typeFloat4, inPerVertex, member, 1);
+        ids.clear();
+        ids.push_back(constMemberOutPosition);
+        builder.createStore(position,
+                            builder.createAccessChain(spv::StorageClassOutput, outPerVertex, ids));
+    }
+    for (uint32_t i = 0; i < clipDistanceCount; ++i)
+    {
+        const spv::Id constI = builder.makeIntConstant(int32_t(i));
+        const spv::Id member[] = {constMemberInClipDistance, constI};
+        const spv::Id clip = mirror(typeFloat, inPerVertex, member, 2);
+        ids.clear();
+        ids.push_back(constMemberOutClipDistance);
+        ids.push_back(constI);
+        builder.createStore(clip,
+                            builder.createAccessChain(spv::StorageClassOutput, outPerVertex, ids));
+    }
+    builder.createNoResultOp(spv::OpEmitVertex);
+    builder.createNoResultOp(spv::OpEndPrimitive);
+
+    builder.leaveFunction();
+
+    std::vector<unsigned int> code;
+    builder.dump(code);
+    spirv.assign(code.begin(), code.end());
+    return !spirv.empty();
+}
+
+// The resolve compute shader. See gpu_draw_xlate.h for why a resolve cannot be
+// a blit.
+//
+// One invocation per destination pixel:
+//     vec4 c = imageLoad(src, srcOffset + id);
+//     c *= scale;                       // 2^copy_dest_exp_bias
+//     if (swapRB) c = c.bgra;           // copy_dest_swap
+//     imageStore(dst, dstOffset + id, c);
+//
+// The bias multiplies all four components, alpha included -- Xenia's resolve
+// shader does `pixel_0 *= exp_bias` on a float4 (shaders/resolve.xesli), and
+// alpha carries meaning through this title's post chain.
+bool BuildResolveComputeShader(std::vector<uint32_t> &spirv)
+{
+    constexpr uint32_t kGroupSize = 8;
+
+    xe::gpu::SpirvBuilder builder(spv::Spv_1_0,
+                                  (SpirvShaderTranslator::kSpirvMagicToolId << 16) | 1, nullptr);
+    builder.addCapability(spv::CapabilityShader);
+    // The images are declared with an UNKNOWN format, because one pipeline
+    // serves every resolve and the formats vary: a surface may be 8888, 7e3
+    // carried as half-float, or two-channel float, and the destination is
+    // whatever the guest asked for. Declaring rgba16f and binding an 8888 view
+    // is a mismatch that returns garbage rather than failing -- it did, and only
+    // a scale-1.0 control arm against the blit it replaces caught it.
+    builder.addCapability(spv::Capability::StorageImageReadWithoutFormat);
+    builder.addCapability(spv::Capability::StorageImageWriteWithoutFormat);
+    builder.setMemoryModel(spv::AddressingModelLogical, spv::MemoryModelGLSL450);
+    builder.setSource(spv::SourceLanguageUnknown, 0);
+
+    const spv::Id typeVoid = builder.makeVoidType();
+    const spv::Id typeBool = builder.makeBoolType();
+    const spv::Id typeInt = builder.makeIntType(32);
+    const spv::Id typeUint = builder.makeUintType(32);
+    const spv::Id typeFloat = builder.makeFloatType(32);
+    const spv::Id typeInt2 = builder.makeVectorType(typeInt, 2);
+    const spv::Id typeUint3 = builder.makeVectorType(typeUint, 3);
+    const spv::Id typeFloat4 = builder.makeVectorType(typeFloat, 4);
+
+    // Both images are rgba16f storage images: the surface targets and the
+    // resolve targets are all R16G16B16A16_SFLOAT host images.
+    const spv::Id typeImage = builder.makeImageType(
+        typeFloat, spv::Dim2D,
+        /*depth=*/false, /*arrayed=*/false, /*ms=*/false, /*sampled=*/2, spv::ImageFormat::Unknown);
+
+    std::vector<spv::Id> mainInterface;
+
+    const spv::Id imageSrc = builder.createVariable(
+        spv::NoPrecision, spv::StorageClassUniformConstant, typeImage, "xe_resolve_src");
+    builder.addDecoration(imageSrc, spv::DecorationDescriptorSet, 0);
+    builder.addDecoration(imageSrc, spv::DecorationBinding, 0);
+    builder.addDecoration(imageSrc, spv::DecorationNonWritable);
+    const spv::Id imageDst = builder.createVariable(
+        spv::NoPrecision, spv::StorageClassUniformConstant, typeImage, "xe_resolve_dst");
+    builder.addDecoration(imageDst, spv::DecorationDescriptorSet, 0);
+    builder.addDecoration(imageDst, spv::DecorationBinding, 1);
+    builder.addDecoration(imageDst, spv::DecorationNonReadable);
+    // NOT in mainInterface. In SPIR-V 1.3 and earlier -- and this builder emits
+    // Spv_1_0 -- an OpEntryPoint interface may only name Input and Output
+    // variables; listing a UniformConstant or PushConstant one is invalid
+    // (spirv-val: "OpEntryPoint interfaces must be OpVariables with Storage
+    // Class of Input(1) or Output(3)"). SPIR-V 1.4 widened it to every global,
+    // which is where the habit comes from. The variables are still declared and
+    // still used; the interface list is metadata.
+
+    // Push constants, laid out to match ResolvePushConstants exactly.
+    std::vector<spv::Id> pushMembers;
+    pushMembers.push_back(typeInt2);  // 0: srcOffset  @0
+    pushMembers.push_back(typeInt2);  // 1: dstOffset  @8
+    pushMembers.push_back(typeInt2);  // 2: extent     @16
+    pushMembers.push_back(typeFloat); // 3: scale      @24
+    pushMembers.push_back(typeUint);  // 4: swapRB     @28
+    pushMembers.push_back(typeInt2);  // 5: srcScale   @32
+    pushMembers.push_back(typeInt2);  // 6: sampleOffset @40
+    pushMembers.push_back(typeInt2);  // 7: tapDelta   @48
+    pushMembers.push_back(typeFloat); // 8: tapWeight  @56
+    const spv::Id typePush = builder.makeStructType(pushMembers, "XeResolveConstants");
+    builder.addDecoration(typePush, spv::DecorationBlock);
+    static const int kOffsets[9] = {0, 8, 16, 24, 28, 32, 40, 48, 56};
+    for (int i = 0; i < 9; ++i)
+        builder.addMemberDecoration(typePush, unsigned(i), spv::DecorationOffset, kOffsets[i]);
+    const spv::Id pushVar = builder.createVariable(spv::NoPrecision, spv::StorageClassPushConstant,
+                                                   typePush, "xe_resolve_constants");
+    // pushVar is PushConstant: same rule, see above.
+
+    const spv::Id inGlobalId = builder.createVariable(spv::NoPrecision, spv::StorageClassInput,
+                                                      typeUint3, "gl_GlobalInvocationID");
+    builder.addDecoration(inGlobalId, spv::DecorationBuiltIn,
+                          int(spv::BuiltIn::GlobalInvocationId));
+    mainInterface.push_back(inGlobalId);
+
+    std::vector<spv::Id> mainParamTypes;
+    std::vector<std::vector<spv::Decoration>> mainPrecisions;
+    spv::Block *mainEntry = nullptr;
+    spv::Function *mainFunction = builder.makeFunctionEntry(
+        spv::NoPrecision, typeVoid, "main", mainParamTypes, mainPrecisions, &mainEntry);
+    spv::Instruction *entryPoint =
+        builder.addEntryPoint(spv::ExecutionModelGLCompute, mainFunction, "main");
+    for (spv::Id id : mainInterface)
+        entryPoint->addIdOperand(id);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeLocalSize, int(kGroupSize),
+                             int(kGroupSize), 1);
+
+    auto pushMember = [&](int index, spv::Id type)
+    {
+        std::vector<spv::Id> chain{builder.makeIntConstant(index)};
+        return builder.createLoad(
+            builder.createAccessChain(spv::StorageClassPushConstant, pushVar, chain),
+            spv::NoPrecision);
+    };
+
+    // ivec2 id = ivec2(gl_GlobalInvocationID.xy)
+    const spv::Id globalId = builder.createLoad(inGlobalId, spv::NoPrecision);
+    const spv::Id idU2 = builder.createRvalueSwizzle(
+        spv::NoPrecision, builder.makeVectorType(typeUint, 2), globalId, {0, 1});
+    const spv::Id id2 = builder.createUnaryOp(spv::OpBitcast, typeInt2, idU2);
+
+    const spv::Id extent = pushMember(2, typeInt2);
+    // A group covers 8x8 pixels, so the last group of a rectangle whose size is
+    // not a multiple of 8 runs past its edge. Those invocations must write
+    // nothing -- an imageStore outside the destination is undefined, and an
+    // imageLoad outside the source would drag in a neighbouring tile's pixels.
+    const spv::Id outside = builder.createBinOp(
+        spv::OpLogicalOr, typeBool,
+        builder.createBinOp(spv::OpSGreaterThanEqual, typeBool,
+                            builder.createCompositeExtract(id2, typeInt, 0),
+                            builder.createCompositeExtract(extent, typeInt, 0)),
+        builder.createBinOp(spv::OpSGreaterThanEqual, typeBool,
+                            builder.createCompositeExtract(id2, typeInt, 1),
+                            builder.createCompositeExtract(extent, typeInt, 1)));
+    {
+        spv::Block &predecessor = *builder.getBuildPoint();
+        spv::Block &thenBlock = builder.makeNewBlock();
+        spv::Block &mergeBlock = builder.makeNewBlock();
+        builder.createSelectionMerge(&mergeBlock, spv::SelectionControlMaskNone);
+        builder.createConditionalBranch(outside, &thenBlock, &mergeBlock);
+        builder.setBuildPoint(&thenBlock);
+        builder.makeReturn(false);
+        builder.setBuildPoint(&mergeBlock);
+    }
+
+    // THE DESTINATION STEPS PIXELS, THE SOURCE STEPS SAMPLES.
+    //
+    //   src = srcOffset + id * srcScale + sampleOffset
+    //
+    // srcScale is the source surface's own msaa scale, so a 2X surface is read
+    // every second sample row and a 4X one every second sample in both axes;
+    // sampleOffset is which sample of that pixel RB_COPY_CONTROL.
+    // copy_sample_select picked. Both default to (1,1) and (0,0), which is the
+    // copy this shader has always done.
+    const spv::Id srcBase =
+        builder.createBinOp(spv::OpIAdd, typeInt2,
+                            builder.createBinOp(spv::OpIAdd, typeInt2, pushMember(0, typeInt2),
+                                                builder.createBinOp(spv::OpIMul, typeInt2, id2,
+                                                                    pushMember(5, typeInt2))),
+                            pushMember(6, typeInt2));
+    const spv::Id dstCoord =
+        builder.createBinOp(spv::OpIAdd, typeInt2, pushMember(1, typeInt2), id2);
+
+    // FOUR TAPS, ALWAYS, summed and multiplied by tapWeight = 0.25. A
+    // single-sample copy passes tapDelta (0,0), so all four read the same texel
+    // and 4x * 0.25 is exactly x; a 2X k01 copy passes (0,1), so the pair
+    // appears twice and 2(a+b) * 0.25 is exactly (a+b)/2. One code path serves
+    // every selector, a single-sample copy is bit-for-bit what it was, and
+    // there is no branch and no second pipeline for the one copy in this frame
+    // that averages (the 2X k01 colour resolve of surface 0x400).
+    const spv::Id tapDelta = pushMember(7, typeInt2);
+    const spv::Id dx = builder.createCompositeConstruct(
+        typeInt2,
+        {builder.createCompositeExtract(tapDelta, typeInt, 0), builder.makeIntConstant(0)});
+    const spv::Id dy = builder.createCompositeConstruct(
+        typeInt2,
+        {builder.makeIntConstant(0), builder.createCompositeExtract(tapDelta, typeInt, 1)});
+    const spv::Id srcImage = builder.createLoad(imageSrc, spv::NoPrecision);
+    auto tap = [&](spv::Id coord)
+    { return builder.createOp(spv::OpImageRead, typeFloat4, {srcImage, coord}); };
+    spv::Id texel = tap(srcBase);
+    texel = builder.createBinOp(spv::OpFAdd, typeFloat4, texel,
+                                tap(builder.createBinOp(spv::OpIAdd, typeInt2, srcBase, dx)));
+    texel = builder.createBinOp(spv::OpFAdd, typeFloat4, texel,
+                                tap(builder.createBinOp(spv::OpIAdd, typeInt2, srcBase, dy)));
+    texel = builder.createBinOp(
+        spv::OpFAdd, typeFloat4, texel,
+        tap(builder.createBinOp(spv::OpIAdd, typeInt2, srcBase,
+                                builder.createBinOp(spv::OpIAdd, typeInt2, dx, dy))));
+    texel =
+        builder.createBinOp(spv::OpVectorTimesScalar, typeFloat4, texel, pushMember(8, typeFloat));
+
+    // The exponent bias, applied to all four components (Xenia's resolve shader
+    // does the same on a float4).
+    const spv::Id scale = pushMember(3, typeFloat);
+    texel = builder.createBinOp(spv::OpVectorTimesScalar, typeFloat4, texel, scale);
+
+    // copy_dest_swap exchanges red and blue.
+    const spv::Id swapped =
+        builder.createRvalueSwizzle(spv::NoPrecision, typeFloat4, texel, {2, 1, 0, 3});
+    const spv::Id doSwap = builder.createBinOp(spv::OpINotEqual, typeBool, pushMember(4, typeUint),
+                                               builder.makeUintConstant(0));
+    // The condition is BROADCAST to a bool4. In SPIR-V 1.3 and earlier -- and
+    // this builder emits Spv_1_0 -- OpSelect on a vector result requires a
+    // condition vector of the same size; a scalar condition is only legal from
+    // SPIR-V 1.4 (spirv-val: "Expected vector sizes of Result Type and the
+    // condition to be equal"). The module was invalid, and the driver happened
+    // to run it.
+    const spv::Id typeBool4 = builder.makeVectorType(builder.makeBoolType(), 4);
+    const spv::Id doSwap4 =
+        builder.createCompositeConstruct(typeBool4, {doSwap, doSwap, doSwap, doSwap});
+    texel = builder.createTriOp(spv::OpSelect, typeFloat4, doSwap4, swapped, texel);
+
+    builder.createNoResultOp(spv::OpImageWrite,
+                             {builder.createLoad(imageDst, spv::NoPrecision), dstCoord, texel});
+
+    builder.leaveFunction();
+
+    std::vector<unsigned int> code;
+    builder.dump(code);
+    spirv.assign(code.begin(), code.end());
+    return !spirv.empty();
+}
+
+// The DEPTH resolve compute shader. Separate from the colour one because the
+// source is a depth image, which cannot be a storage image on Vulkan -- it is
+// bound as a SAMPLED image and read with OpImageFetch (no sampler needed; a
+// VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE gives an OpTypeImage with Sampled=1) -- and
+// because the destination is not a copy of the source at all.
+//
+// The guest resolves depth to a k_8_8_8_8 destination: the Xenos
+// depth-as-colour resolve. The 24-bit depth is packed with its 8-bit stencil
+// into a dword and the sampling shaders decode it arithmetically. So this
+// shader ENCODES our float32 depth back into the guest's 24-bit format --
+// float24 (20e4) for kD24FS8, unorm24 for kD24S8 -- packs it with stencil, and
+// writes the four bytes as normalised components, which is exactly what a fetch
+// of an 8888 texture would hand the shader.
+bool BuildDepthResolveComputeShader(std::vector<uint32_t> &spirv, bool multisampled)
+{
+    constexpr uint32_t kGroupSize = 8;
+
+    xe::gpu::SpirvBuilder builder(spv::Spv_1_0,
+                                  (SpirvShaderTranslator::kSpirvMagicToolId << 16) | 1, nullptr);
+    builder.addCapability(spv::CapabilityShader);
+    builder.addCapability(spv::Capability::StorageImageWriteWithoutFormat);
+    builder.setMemoryModel(spv::AddressingModelLogical, spv::MemoryModelGLSL450);
+    builder.setSource(spv::SourceLanguageUnknown, 0);
+    const spv::Id extGlsl = builder.import("GLSL.std.450");
+
+    const spv::Id typeVoid = builder.makeVoidType();
+    const spv::Id typeBool = builder.makeBoolType();
+    const spv::Id typeInt = builder.makeIntType(32);
+    const spv::Id typeUint = builder.makeUintType(32);
+    const spv::Id typeFloat = builder.makeFloatType(32);
+    const spv::Id typeInt2 = builder.makeVectorType(typeInt, 2);
+    const spv::Id typeUint3 = builder.makeVectorType(typeUint, 3);
+    const spv::Id typeFloat4 = builder.makeVectorType(typeFloat, 4);
+
+    // Sampled depth in, storage colour out.
+    const spv::Id typeDepthImage = builder.makeImageType(
+        typeFloat, spv::Dim2D, false, false, multisampled, 1, spv::ImageFormat::Unknown);
+    const spv::Id typeDstImage = builder.makeImageType(typeFloat, spv::Dim2D, false, false, false,
+                                                       /*sampled=*/2, spv::ImageFormat::Unknown);
+
+    std::vector<spv::Id> mainInterface;
+    const spv::Id imageSrc = builder.createVariable(
+        spv::NoPrecision, spv::StorageClassUniformConstant, typeDepthImage, "xe_depth_src");
+    builder.addDecoration(imageSrc, spv::DecorationDescriptorSet, 0);
+    builder.addDecoration(imageSrc, spv::DecorationBinding, 0);
+    const spv::Id imageDst = builder.createVariable(
+        spv::NoPrecision, spv::StorageClassUniformConstant, typeDstImage, "xe_depth_dst");
+    builder.addDecoration(imageDst, spv::DecorationDescriptorSet, 0);
+    builder.addDecoration(imageDst, spv::DecorationBinding, 1);
+    builder.addDecoration(imageDst, spv::DecorationNonReadable);
+    // NOT in mainInterface. In SPIR-V 1.3 and earlier -- and this builder emits
+    // Spv_1_0 -- an OpEntryPoint interface may only name Input and Output
+    // variables; listing a UniformConstant or PushConstant one is invalid
+    // (spirv-val: "OpEntryPoint interfaces must be OpVariables with Storage
+    // Class of Input(1) or Output(3)"). SPIR-V 1.4 widened it to every global,
+    // which is where the habit comes from. The variables are still declared and
+    // still used; the interface list is metadata.
+
+    // Same push-constant block as the colour resolve, plus the depth format:
+    // swapRB is reused as "1 = kD24FS8 (float24), 0 = kD24S8 (unorm24)".
+    std::vector<spv::Id> pushMembers{typeInt2, typeInt2, typeInt2, typeFloat, typeUint,
+                                     typeInt2, typeInt2, typeInt2, typeFloat};
+    const spv::Id typePush = builder.makeStructType(pushMembers, "XeResolveConstants");
+    builder.addDecoration(typePush, spv::DecorationBlock);
+    static const int kOffsets[9] = {0, 8, 16, 24, 28, 32, 40, 48, 56};
+    for (int i = 0; i < 9; ++i)
+        builder.addMemberDecoration(typePush, unsigned(i), spv::DecorationOffset, kOffsets[i]);
+    const spv::Id pushVar = builder.createVariable(spv::NoPrecision, spv::StorageClassPushConstant,
+                                                   typePush, "xe_resolve_constants");
+    // pushVar is PushConstant: same rule, see above.
+
+    const spv::Id inGlobalId = builder.createVariable(spv::NoPrecision, spv::StorageClassInput,
+                                                      typeUint3, "gl_GlobalInvocationID");
+    builder.addDecoration(inGlobalId, spv::DecorationBuiltIn,
+                          int(spv::BuiltIn::GlobalInvocationId));
+    mainInterface.push_back(inGlobalId);
+
+    std::vector<spv::Id> mainParamTypes;
+    std::vector<std::vector<spv::Decoration>> mainPrecisions;
+    spv::Block *mainEntry = nullptr;
+    spv::Function *mainFunction = builder.makeFunctionEntry(
+        spv::NoPrecision, typeVoid, "main", mainParamTypes, mainPrecisions, &mainEntry);
+    spv::Instruction *entryPoint =
+        builder.addEntryPoint(spv::ExecutionModelGLCompute, mainFunction, "main");
+    for (spv::Id id : mainInterface)
+        entryPoint->addIdOperand(id);
+    builder.addExecutionMode(mainFunction, spv::ExecutionModeLocalSize, int(kGroupSize),
+                             int(kGroupSize), 1);
+
+    auto pushMember = [&](int index)
+    {
+        std::vector<spv::Id> chain{builder.makeIntConstant(index)};
+        return builder.createLoad(
+            builder.createAccessChain(spv::StorageClassPushConstant, pushVar, chain),
+            spv::NoPrecision);
+    };
+
+    const spv::Id globalId = builder.createLoad(inGlobalId, spv::NoPrecision);
+    const spv::Id idU2 = builder.createRvalueSwizzle(
+        spv::NoPrecision, builder.makeVectorType(typeUint, 2), globalId, {0, 1});
+    const spv::Id id2 = builder.createUnaryOp(spv::OpBitcast, typeInt2, idU2);
+    const spv::Id extent = pushMember(2);
+    const spv::Id outside = builder.createBinOp(
+        spv::OpLogicalOr, typeBool,
+        builder.createBinOp(spv::OpSGreaterThanEqual, typeBool,
+                            builder.createCompositeExtract(id2, typeInt, 0),
+                            builder.createCompositeExtract(extent, typeInt, 0)),
+        builder.createBinOp(spv::OpSGreaterThanEqual, typeBool,
+                            builder.createCompositeExtract(id2, typeInt, 1),
+                            builder.createCompositeExtract(extent, typeInt, 1)));
+    {
+        spv::Block &thenBlock = builder.makeNewBlock();
+        spv::Block &mergeBlock = builder.makeNewBlock();
+        builder.createSelectionMerge(&mergeBlock, spv::SelectionControlMaskNone);
+        builder.createConditionalBranch(outside, &thenBlock, &mergeBlock);
+        builder.setBuildPoint(&thenBlock);
+        builder.makeReturn(false);
+        builder.setBuildPoint(&mergeBlock);
+    }
+
+    // Same sample stepping as the colour resolve: the destination steps
+    // pixels, the source steps this surface's samples. NO averaging here --
+    // every depth copy in this title picks a single sample (measured: the 2X
+    // depth resolve of surface 0x0 selects k0), and averaging depth across
+    // samples is not a resolve any hardware does, so the tap members are not
+    // read by this shader at all.
+    spv::Id srcCoord =
+        builder.createBinOp(spv::OpIAdd, typeInt2, pushMember(0),
+                            builder.createBinOp(spv::OpIMul, typeInt2, id2, pushMember(5)));
+    if (!multisampled)
+        srcCoord = builder.createBinOp(spv::OpIAdd, typeInt2, srcCoord, pushMember(6));
+    const spv::Id dstCoord = builder.createBinOp(spv::OpIAdd, typeInt2, pushMember(1), id2);
+
+    // d = texelFetch(depth, srcCoord, 0).x
+    //
+    // The Lod image operand is REQUIRED for a fetch from a non-multisampled
+    // sampled image. Omitting it does not fail validation or pipeline creation
+    // -- it just returns zero, which is indistinguishable from "the depth buffer
+    // is empty".
+    spv::Id fetched;
+    {
+        spv::Instruction *fetch =
+            new spv::Instruction(builder.getUniqueId(), typeFloat4, spv::OpImageFetch);
+        fetch->addIdOperand(builder.createLoad(imageSrc, spv::NoPrecision));
+        fetch->addIdOperand(srcCoord);
+        const spv::ImageOperandsMask operand =
+            multisampled ? spv::ImageOperandsMask::Sample : spv::ImageOperandsMask::Lod;
+        fetch->addImmediateOperand(unsigned(operand));
+        fetch->addIdOperand(multisampled ? builder.createCompositeExtract(pushMember(6), typeInt, 1)
+                                         : builder.makeIntConstant(0));
+        builder.getBuildPoint()->addInstruction(std::unique_ptr<spv::Instruction>(fetch));
+        fetched = fetch->getResultId();
+    }
+    spv::Id d = builder.createCompositeExtract(fetched, typeFloat, 0);
+    // Clamp to [0,1]: the encode below assumes a pre-clamped value, as Xenia's
+    // PreClampedDepthTo20e4 does.
+    d = builder.createTriBuiltinCall(typeFloat, extGlsl, GLSLstd450FClamp, d,
+                                     builder.makeFloatConstant(0.0f),
+                                     builder.makeFloatConstant(1.0f));
+
+    // --- float24 (20e4), a port of Xenia's PreClampedDepthTo20e4 -------------
+    const spv::Id dBits = builder.createUnaryOp(spv::OpBitcast, typeUint, d);
+    // denormal = ((bits & 0x7FFFFF) | 0x800000) >> min(113 - (bits >> 23), 24)
+    const spv::Id denormMantissa = builder.createBinOp(
+        spv::OpBitwiseOr, typeUint,
+        builder.createBinOp(spv::OpBitwiseAnd, typeUint, dBits, builder.makeUintConstant(0x7FFFFF)),
+        builder.makeUintConstant(0x800000));
+    const spv::Id shiftAmount = builder.createBinBuiltinCall(
+        typeUint, extGlsl, GLSLstd450UMin,
+        builder.createBinOp(spv::OpISub, typeUint, builder.makeUintConstant(113),
+                            builder.createBinOp(spv::OpShiftRightLogical, typeUint, dBits,
+                                                builder.makeUintConstant(23))),
+        builder.makeUintConstant(24));
+    const spv::Id denormBiased =
+        builder.createBinOp(spv::OpShiftRightLogical, typeUint, denormMantissa, shiftAmount);
+    const spv::Id normalBiased =
+        builder.createBinOp(spv::OpISub, typeUint, dBits, builder.makeUintConstant(112u << 23));
+    spv::Id biased = builder.createTriOp(spv::OpSelect, typeUint,
+                                         builder.createBinOp(spv::OpULessThan, typeBool, dBits,
+                                                             builder.makeUintConstant(0x38800000)),
+                                         denormBiased, normalBiased);
+    // Round to nearest even: biased += 3 + ((biased >> 3) & 1)
+    biased = builder.createBinOp(
+        spv::OpIAdd, typeUint,
+        builder.createBinOp(spv::OpIAdd, typeUint, biased, builder.makeUintConstant(3)),
+        builder.createTriOp(spv::OpBitFieldUExtract, typeUint, biased, builder.makeUintConstant(3),
+                            builder.makeUintConstant(1)));
+    const spv::Id float24 =
+        builder.createTriOp(spv::OpBitFieldUExtract, typeUint, biased, builder.makeUintConstant(3),
+                            builder.makeUintConstant(24));
+
+    // --- unorm24: roundEven(d * 0xFFFFFF) ------------------------------------
+    const spv::Id unorm24 =
+        builder.createUnaryOp(spv::OpConvertFToU, typeUint,
+                              builder.createUnaryBuiltinCall(
+                                  typeFloat, extGlsl, GLSLstd450RoundEven,
+                                  builder.createBinOp(spv::OpFMul, typeFloat, d,
+                                                      builder.makeFloatConstant(float(0xFFFFFF)))));
+
+    const spv::Id isFloat24 =
+        builder.createBinOp(spv::OpINotEqual, typeBool, pushMember(4), builder.makeUintConstant(0));
+    const spv::Id depth24 =
+        builder.createTriOp(spv::OpSelect, typeUint, isFloat24, float24, unorm24);
+
+    // Captured depth consumers bind the resolved surface through a depth-texture
+    // view and consume its scalar depth component. The texture unit therefore
+    // exposes decoded depth rather than the intermediate packed colour bytes.
+    //
+    // We bypass guest memory entirely, so packing the bytes only to have them
+    // unpacked again would be a round trip through a representation nobody
+    // observes. The host image holds what the fetch would have produced: depth
+    // in .x, stencil in .y.
+    //
+    // NOT applied, and small: the guest's float24 quantisation. Its depth has 20
+    // mantissa bits against our 32, so a sampled depth here is up to one 20-bit
+    // ULP finer than the console's. Depth32To20e4 is ported and verified as the
+    // exact inverse of the decode if this ever needs to be exact.
+    (void)depth24;
+    const spv::Id texel = builder.createCompositeConstruct(
+        typeFloat4, {d, builder.makeFloatConstant(0.0f), builder.makeFloatConstant(0.0f),
+                     builder.makeFloatConstant(1.0f)});
+
+    builder.createNoResultOp(spv::OpImageWrite,
+                             {builder.createLoad(imageDst, spv::NoPrecision), dstCoord, texel});
+
+    builder.leaveFunction();
+
+    std::vector<unsigned int> code;
+    builder.dump(code);
+    spirv.assign(code.begin(), code.end());
+    return !spirv.empty();
+}
+
+bool IsPrimitivePolygonal(const uint32_t *registerFile)
+{
+    const RegisterFile &regs = AsRegisterFile(registerFile);
+    return draw_util::IsPrimitivePolygonal(regs);
+}
+
+bool ClassifyDraw(const uint32_t *registerFile, const uint8_t *psUcode, size_t psSize,
+                  uint64_t psHash, DrawClassification &out)
+{
+    const RegisterFile &regs = AsRegisterFile(registerFile);
+    out = DrawClassification{};
+    out.rasterisationDone =
+        draw_util::IsRasterizationPotentiallyDone(regs, draw_util::IsPrimitivePolygonal(regs));
+    if (!out.rasterisationDone)
+        return true; // a decided answer: nothing is rasterised, so no stage runs
+    // The remaining question needs the shader's ANALYSIS -- whether it kills
+    // pixels, writes depth, exports memory, and which colour targets it writes
+    // -- so it needs the same analyzed Shader the translator uses. Cached by
+    // hash there, so this is a lookup on all but the first draw of a shader.
+    xe::gpu::SpirvShader *ps =
+        GetAnalyzedShader(xenos::ShaderType::kPixel, psUcode, psSize, psHash);
+    if (!ps)
+        return false; // UNDECIDED, and the caller must not read the fields
+    out.pixelShaderNeeded = draw_util::IsPixelShaderNeededWithRasterization(*ps, regs);
+    return true;
+}
+
+void DeriveSystemConstants(const uint32_t *registerFile, std::vector<uint8_t> &out)
+{
+    const RegisterFile &regs = AsRegisterFile(registerFile);
+
+    SpirvShaderTranslator::SystemConstants sc;
+    std::memset(&sc, 0, sizeof(sc));
+
+    const uint32_t draw_resolution_scale_x = 1;
+    const uint32_t draw_resolution_scale_y = 1;
+
+    auto pa_cl_vte_cntl = regs.Get<reg::PA_CL_VTE_CNTL>();
+    auto rb_colorcontrol = regs.Get<reg::RB_COLORCONTROL>();
+    auto rb_surface_info = regs.Get<reg::RB_SURFACE_INFO>();
+    auto vgt_draw_initiator = regs.Get<reg::VGT_DRAW_INITIATOR>();
+    auto rb_alpha_ref = regs.Get<float>(XE_GPU_REG_RB_ALPHA_REF);
+    auto vgt_indx_offset = regs.Get<int32_t>(XE_GPU_REG_VGT_INDX_OFFSET);
+
+    reg::RB_DEPTHCONTROL normalized_depth_control = draw_util::GetNormalizedDepthControl(regs);
+    bool primitive_polygonal = draw_util::IsPrimitivePolygonal(regs);
+
+    draw_util::ViewportInfo viewport_info;
+    draw_util::GetViewportInfoArgs gviargs{};
+    const uint32_t host_max_viewport_dim = 16384;
+    gviargs.Setup(draw_resolution_scale_x, draw_resolution_scale_y,
+                  xe::divisors::MagicDiv(draw_resolution_scale_x),
+                  xe::divisors::MagicDiv(draw_resolution_scale_y),
+                  /*origin_bottom_left=*/false, host_max_viewport_dim, host_max_viewport_dim,
+                  /*allow_reverse_z=*/true, normalized_depth_control,
+                  /*convert_z_to_float24=*/false,
+                  /*full_float24_in_0_to_1=*/false,
+                  /*pixel_shader_writes_depth=*/false);
+    gviargs.SetupRegisterValues(regs);
+    draw_util::GetHostViewportInfo(&gviargs, viewport_info);
+
+    uint32_t flags = 0;
+    if (pa_cl_vte_cntl.vtx_xy_fmt)
+        flags |= SpirvShaderTranslator::kSysFlag_XYDividedByW;
+    if (pa_cl_vte_cntl.vtx_z_fmt)
+        flags |= SpirvShaderTranslator::kSysFlag_ZDividedByW;
+    if (pa_cl_vte_cntl.vtx_w0_fmt)
+        flags |= SpirvShaderTranslator::kSysFlag_WNotReciprocal;
+    if (primitive_polygonal)
+        flags |= SpirvShaderTranslator::kSysFlag_PrimitivePolygonal;
+    if (draw_util::IsPrimitiveLine(regs))
+        flags |= SpirvShaderTranslator::kSysFlag_PrimitiveLine;
+    flags |= uint32_t(rb_surface_info.msaa_samples)
+             << SpirvShaderTranslator::kSysFlag_MsaaSamples_Shift;
+    // kSysFlag_DepthFloat24 IS DELIBERATELY NOT SET, AND IT MUST NOT BE WHILE
+    // WE USE THE FULL DEPTH RANGE. It is one half of a two-part convention in
+    // Xenia and the halves have to agree:
+    //
+    //   * the VIEWPORT half is GetViewportInfoArgs::full_float24_in_0_to_1,
+    //     which halves z_min/z_max to "remap the full [0...2) float24 range to
+    //     [0...1)" (draw_util.cc:553) so EDRAM ownership transfer can round-trip
+    //     a depth image through a depth input without unrestricted depth range.
+    //   * the SHADER half is this flag, which makes
+    //     CompleteFragmentShader_DSV_DepthTo24Bit multiply oDepth by 0.5
+    //     (spirv_shader_translator_rb.cc:1512) -- needed precisely BECAUSE, in
+    //     its own words, "viewport scaling doesn't apply to oDepth".
+    //
+    // We pass full_float24_in_0_to_1=false at both call sites, so our viewport
+    // keeps the full range. Setting the shader half alone made every pixel
+    // shader that WRITES oDepth emit half-scale depth into a buffer whose
+    // rasterised depth is full-scale. Measured: our depth buffer held exactly
+    // half the console's -- median ratio 2.000057 over 655,360 pixels, 98.11%
+    // of them within 1% of exactly 2.0, and 2x ours matched the console to
+    // 0.774% mean absolute error.
+    //
+    // EVERY CORRELATION-BASED CHECK IN THIS PROJECT WAS BLIND TO IT, because
+    // correlation is scale-invariant: the scene depth pass scored 0.9847
+    // against the console throughout. What it broke was the DEPTH TEST, which
+    // is not scale-invariant. Under reverse-Z GEQUAL a halved buffer lets MORE
+    // fragments pass (zpass marks over-fired ~2.85x) and FEWER fail (depth-fail
+    // shadow volumes under-fired, to zero), which is catalog #91: one constant
+    // producing divergence in two opposite directions at once.
+    //
+    // Adopting the other convention instead -- passing full_float24_in_0_to_1
+    // and keeping this flag -- would also be consistent, but it exists for an
+    // EDRAM round-trip through depth input that this renderer does not do: we
+    // hold one host depth+stencil image per RB_DEPTH_INFO.depth_base and never
+    // reinterpret depth as colour input. So the full range is the right half to
+    // keep, and this flag is the one to drop.
+    xenos::CompareFunction alpha_test_function = rb_colorcontrol.alpha_test_enable
+                                                     ? rb_colorcontrol.alpha_func
+                                                     : xenos::CompareFunction::kAlways;
+    flags |= uint32_t(alpha_test_function) << SpirvShaderTranslator::kSysFlag_AlphaPassIfLess_Shift;
+    // TEXTURE SIGNEDNESS AND GAMMA. Every translated fetch branches on this
+    // constant to choose between the unsigned and signed views of a texture and
+    // whether to apply a sign remap; the remap for TextureSign::kGamma is the
+    // piecewise sRGB-to-linear decode. Leaving it zero makes every fetch take the
+    // unsigned, undecoded path -- on a gameplay frame of this title that is 566 of
+    // 834 bindings reading a GAMMA texture as linear (catalog #69).
+    //
+    // Xenia fills only the slots its shaders use, for dirty-tracking; filling all
+    // 32 costs nothing and removes the need for the shader's texture mask in a
+    // function that only has the register file. Non-texture slots are SKIPPED
+    // rather than packed as zero: a vertex-fetch constant's bits in these
+    // positions are not signs and must never be read as them.
+    //
+    // The signs are POST-SWIZZLE -- the fetch's swizzle decides which source
+    // component feeds each output component and the shader reads them in output
+    // order -- so this uses Xenia's own texture_util::SwizzleSigns.
+    //
+    // GEARS_DRAW_NO_TEX_SIGNS=1 restores the undecoded behaviour as a control arm.
+    if (!lucent::config::flag("DRAW_NO_TEX_SIGNS"))
+    {
+        for (uint32_t fc = 0; fc < 32; ++fc)
+        {
+            xenos::xe_gpu_texture_fetch_t fetch{};
+            std::memcpy(&fetch, &registerFile[XE_GPU_REG_SHADER_CONSTANT_FETCH_00_0 + fc * 6],
+                        sizeof(fetch));
+            if (fetch.type != xenos::FetchConstantType::kTexture)
+                continue;
+            const uint8_t signs = texture_util::SwizzleSigns(fetch);
+            sc.texture_swizzled_signs[fc >> 2] |= uint32_t(signs) << (8 * (fc & 3));
+        }
+    }
+
+    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i)
+    {
+        auto color_info = regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[i]);
+        if (color_info.color_format == xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA)
+            flags |= SpirvShaderTranslator::kSysFlag_ConvertColor0ToGamma << i;
+    }
+    sc.flags = flags;
+
+    sc.vertex_index_endian = xenos::Endian::kNone;
+    sc.vertex_base_index = vgt_indx_offset;
+
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        sc.ndc_scale[i] = viewport_info.ndc_scale[i];
+        sc.ndc_offset[i] = viewport_info.ndc_offset[i];
+    }
+
+    if (vgt_draw_initiator.prim_type == xenos::PrimitiveType::kPointList)
+    {
+        auto pa_su_point_minmax = regs.Get<reg::PA_SU_POINT_MINMAX>();
+        auto pa_su_point_size = regs.Get<reg::PA_SU_POINT_SIZE>();
+        sc.point_vertex_diameter_min = float(pa_su_point_minmax.min_size) * (2.0f / 16.0f);
+        sc.point_vertex_diameter_max = float(pa_su_point_minmax.max_size) * (2.0f / 16.0f);
+        sc.point_constant_diameter[0] = float(pa_su_point_size.width) * (2.0f / 16.0f);
+        sc.point_constant_diameter[1] = float(pa_su_point_size.height) * (2.0f / 16.0f);
+        sc.point_screen_diameter_to_ndc_radius[0] =
+            float(draw_resolution_scale_x) / std::max(viewport_info.xy_extent[0], 1u);
+        sc.point_screen_diameter_to_ndc_radius[1] =
+            float(draw_resolution_scale_y) / std::max(viewport_info.xy_extent[1], 1u);
+    }
+
+    sc.alpha_test_reference = rb_alpha_ref;
+    sc.alpha_to_mask =
+        rb_colorcontrol.alpha_to_mask_enable ? (rb_colorcontrol.value >> 24) | (1 << 8) : 0;
+    sc.zpd_fsi_counter_index = UINT32_MAX;
+
+    for (uint32_t i = 0; i < xenos::kMaxColorRenderTargets; ++i)
+    {
+        auto color_info = regs.Get<reg::RB_COLOR_INFO>(reg::RB_COLOR_INFO::rt_register_indices[i]);
+        int32_t color_exp_bias = color_info.color_exp_bias;
+        float color_exp_bias_scale;
+        int32_t bits = int32_t(0x3F800000) + (color_exp_bias << 23);
+        std::memcpy(&color_exp_bias_scale, &bits, sizeof(bits));
+        sc.color_exp_bias[i] = color_exp_bias_scale;
+    }
+
+    out.resize(sizeof(sc));
+    std::memcpy(out.data(), &sc, sizeof(sc));
+}
+
+bool DeriveViewport(const uint32_t *registerFile, GuestViewport &out)
+{
+    const RegisterFile &regs = AsRegisterFile(registerFile);
+
+    reg::RB_DEPTHCONTROL normalized_depth_control = draw_util::GetNormalizedDepthControl(regs);
+    draw_util::ViewportInfo vi;
+    draw_util::GetViewportInfoArgs args{};
+    const uint32_t host_max_viewport_dim = 16384;
+    args.Setup(1, 1, xe::divisors::MagicDiv(1), xe::divisors::MagicDiv(1),
+               /*origin_bottom_left=*/false, host_max_viewport_dim, host_max_viewport_dim,
+               /*allow_reverse_z=*/true, normalized_depth_control, /*convert_z_to_float24=*/false,
+               /*full_float24_in_0_to_1=*/false,
+               /*pixel_shader_writes_depth=*/false);
+    args.SetupRegisterValues(regs);
+    draw_util::GetHostViewportInfo(&args, vi);
+
+    out.x = vi.xy_offset[0];
+    out.y = vi.xy_offset[1];
+    out.w = vi.xy_extent[0];
+    out.h = vi.xy_extent[1];
+    out.zMin = vi.z_min;
+    out.zMax = vi.z_max;
+
+    draw_util::Scissor sc{};
+    draw_util::GetScissor(regs, sc);
+    out.scissorX = sc.offset[0];
+    out.scissorY = sc.offset[1];
+    out.scissorW = sc.extent[0];
+    out.scissorH = sc.extent[1];
+    return true;
+}
+
+bool DeriveSamplerState(const uint32_t *fetch6, const ShaderSamplerBinding &sb,
+                        GuestSamplerState &out)
+{
+    xenos::xe_gpu_texture_fetch_t fetch{};
+    std::memcpy(&fetch, fetch6, sizeof(fetch));
+    if (fetch.type != xenos::FetchConstantType::kTexture)
+        return false;
+
+    // kUseFetchConst means the shader's fetch instruction deferred the filter
+    // to the fetch constant; that is the whole point of the encoding.
+    auto pick = [](uint32_t fromShader, xenos::TextureFilter fromFetch)
+    {
+        return fromShader == uint32_t(xenos::TextureFilter::kUseFetchConst) ? uint32_t(fromFetch)
+                                                                            : fromShader;
+    };
+    out.magFilter = pick(sb.magFilter, fetch.mag_filter);
+    out.minFilter = pick(sb.minFilter, fetch.min_filter);
+    out.mipFilter = pick(sb.mipFilter, fetch.mip_filter);
+
+    xenos::ClampMode cx, cy, cz;
+    texture_util::GetClampModesForDimension(fetch, cx, cy, cz);
+    out.clamp[0] = uint32_t(cx);
+    out.clamp[1] = uint32_t(cy);
+    out.clamp[2] = uint32_t(cz);
+
+    xenos::AnisoFilter aniso =
+        xenos::AnisoFilter(sb.anisoFilter) == xenos::AnisoFilter::kUseFetchConst
+            ? fetch.aniso_filter
+            : xenos::AnisoFilter(sb.anisoFilter);
+    out.anisoMax = aniso == xenos::AnisoFilter::kDisabled ? 0u : (1u << (uint32_t(aniso) - 1));
+    return true;
+}
+
+} // namespace gears::draw
+
+#endif // GEARS_HAVE_GUEST_DRAW

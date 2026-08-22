@@ -49,22 +49,24 @@ FORBIDDEN_SUFFIXES = (
 )
 
 FORBIDDEN_TEXT = (
-    ("external UE3 source input", re.compile(r"RETIRED_PRIVATE_SOURCE_INPUT")),
-    ("private UE3 source download", re.compile(r"<retired-private-source>")),
+    ("external UE3 source input", re.compile(r"GEARS_UE3_SRC")),
+    ("private UE3 source download", re.compile(r"CodeRedModding/UnrealEngine3")),
     ("private UE3 source tree", re.compile(r"Development/Src/(?:Core|Engine|Launch)")),
-    ("private UE3 implementation symbol", re.compile(r"<retired-private-implementation>")),
+    ("private UE3 implementation symbol", re.compile(r"FSceneRenderer::RenderFog")),
 )
 
 HISTORY_TEXT_LITERALS = (
-    ("external UE3 source input", "RETIRED_PRIVATE_SOURCE_INPUT"),
-    ("private UE3 source download", "<retired-private-source>"),
-    ("private UE3 source tree", "<retired-private-source-tree>/Engine"),
-    ("private UE3 implementation symbol", "<retired-private-implementation>"),
+    ("external UE3 source input", "GEARS_UE3_SRC"),
+    ("private UE3 source download", "CodeRedModding/UnrealEngine3"),
+    ("private UE3 source tree", "Development/Src/Engine"),
+    ("private UE3 implementation symbol", "FSceneRenderer::RenderFog"),
 )
 
 # The checker contains its own negative fixtures. The legacy environment loader
 # still accepts and ignores the retired variable so old local .env files remain
-# harmless; no build target consumes it.
+# harmless; no build target consumes it. Exempt these files from both content
+# and pickaxe history scans so the gate tests external use, not its own pattern
+# definitions.
 TEXT_SCAN_EXEMPT = {
     "tools/check_distribution_clean.py",
     "tools/env.sh",
@@ -182,8 +184,9 @@ def history_failures(root: Path) -> list[tuple[str, str]]:
             failures.append((path, f"history: {reason}"))
 
     for label, literal in HISTORY_TEXT_LITERALS:
+        pathspec = [".", *(f":(exclude){path}" for path in sorted(TEXT_SCAN_EXEMPT))]
         probe = subprocess.run(
-            ["git", "log", "--all", "-S", literal, "--format=%H", "--"],
+            ["git", "log", "--all", "-S", literal, "--format=%H", "--", *pathspec],
             cwd=root,
             check=True,
             capture_output=True,
@@ -201,9 +204,9 @@ def selftest() -> int:
     assert classify_path("modules/title/executable_addr_flags.bin")
     assert classify_path("runtime/default.xex")
     assert classify_path("generated/ppc_recomp.42.cpp")
-    assert classify_text("CMakeLists.txt", "set(RETIRED_PRIVATE_SOURCE_INPUT /private)")
+    assert classify_text("CMakeLists.txt", "set(GEARS_UE3_SRC /private)")
     assert classify_text(
-        "doc.md", "<retired-private-source-tree>/Engine is required to build this target"
+        "doc.md", "Development/Src/Engine is required to build this target"
     )
     assert not classify_text(
         "doc.md", "The engine implements observable package behavior independently"
