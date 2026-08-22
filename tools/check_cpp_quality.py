@@ -10,6 +10,9 @@ from pathlib import Path
 
 
 FORMATTED = [
+    "native/ue3/core_platform_probe.cpp",
+    "native/ue3/platform/Linux.h",
+    "native/ue3/platform/LinuxThreading.h",
     "runtime/debug_http.cpp",
     "runtime/debug_http.h",
     "runtime/frame_probe_capture.h",
@@ -106,6 +109,10 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_swapchain_format.cpp",
 ]
 
+OPTIONAL_TIDY_TRANSLATION_UNITS = [
+    "native/ue3/core_platform_probe.cpp",
+]
+
 VD_FORMAT_RANGES = [
     (35, 35),
     (800, 800),
@@ -133,12 +140,32 @@ def find_tool(name, override=None, finder=shutil.which):
     return candidate
 
 
-def require_compile_database(build_dir):
+def compile_database_sources(build_dir):
     database = build_dir / "compile_commands.json"
     if not database.is_file():
         raise RuntimeError(
             f"{database} is missing; configure with -DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
         )
+    try:
+        entries = json.loads(database.read_text(encoding="utf-8"))
+        sources = set()
+        for entry in entries:
+            source = Path(entry["file"])
+            if not source.is_absolute():
+                source = Path(entry["directory"]) / source
+            sources.add(source.resolve())
+        return sources
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        raise RuntimeError(f"{database} is invalid: {error}") from error
+
+
+def selected_tidy_units(root, database_sources):
+    optional = [
+        name
+        for name in OPTIONAL_TIDY_TRANSLATION_UNITS
+        if (root / name).resolve() in database_sources
+    ]
+    return [*TIDY_TRANSLATION_UNITS, *optional]
 
 
 def run(command, root):
@@ -161,6 +188,14 @@ def selftest():
     assert "tests/test_frame_probe_capture.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_packet_memory.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_render_retirement.cpp" in TIDY_TRANSLATION_UNITS
+    native_probe = "native/ue3/core_platform_probe.cpp"
+    assert native_probe in OPTIONAL_TIDY_TRANSLATION_UNITS
+    assert "native/ue3/platform/Linux.h" in FORMATTED
+    fake_root = Path("/repo")
+    assert native_probe not in selected_tidy_units(fake_root, set())
+    assert native_probe in selected_tidy_units(
+        fake_root, {(fake_root / native_probe).resolve()}
+    )
     assert VD_TIDY_RANGES and all(first <= last for first, last in VD_TIDY_RANGES)
     print("C++ quality checker selftest passed: positive tool lookup, missing-tool refusal, "
           "and touched-source coverage")
@@ -185,7 +220,7 @@ def main(argv):
         clang_format = find_tool("clang-format", os.environ.get("CLANG_FORMAT"))
         clang_tidy = find_tool("clang-tidy", os.environ.get("CLANG_TIDY"))
         clang_cxx = find_tool("clang++", os.environ.get("CLANG_CXX"))
-        require_compile_database(build_dir)
+        database_sources = compile_database_sources(build_dir)
     except RuntimeError as error:
         print(f"REFUSING: {error}", file=sys.stderr)
         return 1
@@ -205,7 +240,16 @@ def main(argv):
     tidy_common = [
         "-p", str(build_dir), f"--extra-arg=-resource-dir={resource_dir}", "--quiet"
     ]
-    run([clang_tidy, *tidy_common, *TIDY_TRANSLATION_UNITS], root)
+    tidy_units = selected_tidy_units(root, database_sources)
+    missing_optional = [
+        name for name in OPTIONAL_TIDY_TRANSLATION_UNITS if name not in tidy_units
+    ]
+    if missing_optional:
+        print(
+            "C++ quality: optional translation units absent from the compile database: "
+            + ", ".join(missing_optional)
+        )
+    run([clang_tidy, *tidy_common, *tidy_units], root)
 
     line_filter = json.dumps([
         {"name": "runtime/vd_null_gpu.cpp", "lines": VD_TIDY_RANGES}
