@@ -3,6 +3,23 @@
 The repository-wide rules in `../../AGENTS.md` apply here. Consult
 `docs/codemap.md` before changing a subsystem and update it in the same commit.
 
+## Product target
+
+USER 2026-08-22: "The goal is to build a native UE3 engine using UE3 sources so the game runs well"
+
+The shipping product is a native UE3 runtime built from the available UE3
+source and adapted to Gears of War's version-374 Xenon-cooked content. The
+recompiled PPC runtime, PM4 command processor, Xenos shader translator, and
+guest-draw renderer are the reference oracle and transition path; improving
+them is justified when it protects correctness or produces evidence needed by
+the native runtime, but they are not the product architecture.
+
+“Native” means the UE3 object/package system, engine loop, scene, gameplay
+module, renderer, audio, and input execute as host code. Replacing individual
+Xenos shaders or removing one console GPU behavior inside a PM4-driven renderer
+does not satisfy this target. Keep the licensed UE3 checkout external through
+`RETIRED_PRIVATE_SOURCE_INPUT`; never vendor it or game content into this repository.
+
 ## Host architecture
 
 Use `${DUSKLIGHT_REPO}` when set, otherwise the sibling checkout at
