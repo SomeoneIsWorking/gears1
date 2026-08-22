@@ -29,3 +29,7 @@ ownership remains behind the indirect UE3 game-thread/render-command producer
 chain upstream of the render-thread Present tick. Instrument that semantic tick
 and render-command enqueue cadence/delta next; no Present, vblank, clock, or
 constant override is justified by current evidence.
+
+Priority: defer this per-game enhancement until Gears 1 is stable and performs
+well enough at its faithful cadence. Renderer/native-engine performance and
+glitch prevention remain active work; 60 fps is the final override milestone.

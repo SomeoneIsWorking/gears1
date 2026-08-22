@@ -110,7 +110,7 @@ retires. With two presenter frames in flight, retained-latest, recording, and
 presenter-held lifetimes require four scan-out images in the worst case; the
 current alternating pair cannot be reused safely by an overlapping renderer.
 
-## Performance and 60 fps direction
+## Performance first, 60 fps override last
 
 There are two independent limits. With rendering effectively disabled, Gears 1
 still reaches only about 30 fps, so a title-side timing or frame-production
@@ -119,7 +119,14 @@ costs roughly 44 ms, including about 34 ms in a flat draw-loop profile. Neither
 changing the 60 Hz vblank source nor dropping stale presentation work proves
 that the title simulates and produces frames at 60 Hz.
 
-The 60 fps product gate therefore has two required arms:
+The immediate target is a stable, responsive Gears 1 at its faithful cadence.
+Renderer lifetime fixes, native-engine performance, correctness, and glitch
+prevention come before changing game timing. Compatibility reports still carry
+a measured 60 fps enhancement result so absence cannot be hidden, but that
+result does not block faithful compatibility readiness.
+
+Once Gears 1 runs well enough and the compatibility/native paths are established,
+the final per-game 60 fps enhancement has two required arms:
 
 1. identify the semantic title timing limiter for each exact revision and add a
    runtime A/B enhancement that preserves the faithful 30 Hz arm; do not speed
@@ -172,7 +179,8 @@ the user's supplied disc, so support claims must name the exact input scope.
 `tools/title_conformance.py` reports exact-build gates from local, digest-bound
 evidence. It distinguishes identity, recompilation, headless boot, content
 mount, menu, gameplay, compatibility rendering, native-renderer parity, and
-override A/B results, plus a required sustained 60 fps gameplay gate.
+override A/B results, plus a separately reported sustained 60 fps gameplay
+enhancement gate.
 Recognition is never promoted to compatibility, missing evidence fails, and
 every referenced artifact must be relative, present, and digest-matched. For
 Gears 2, Gears 3, and Judgment, the reporter rejects Xenia
@@ -181,7 +189,7 @@ original/native A/B evidence, or hardware-derived evidence.
 
 | Title | Current evidence | Exact-profile/conformance gap | Oracle policy |
 |---|---|---|---|
-| Gears of War | Headless boot, menu, gameplay, compatibility renderer, and narrowly scoped renderer-oracle evidence exist | Current Gears 1 bindings have not yet been emitted through the exact `TitleProfile` boundary; native-RHI parity, 60 fps, and an all-gates conformance report are absent | Xenia may support only the Gears 1 behaviors for which this project has separately validated the instrument |
+| Gears of War | Headless boot, menu, gameplay, compatibility renderer, and narrowly scoped renderer-oracle evidence exist | Current Gears 1 bindings have not yet been emitted through the exact `TitleProfile` boundary; native-RHI parity and an exact compatibility report are absent. The 60 fps override remains a deferred enhancement. | Xenia may support only the Gears 1 behaviors for which this project has separately validated the instrument |
 | Gears of War 2 | None | No local exact revision, recompilation, content, gameplay, render, native-RHI, or 60 fps evidence | Xenia evidence is rejected |
 | Gears of War 3 | None | No local exact revision, recompilation, content, gameplay, render, native-RHI, or 60 fps evidence | Xenia evidence is rejected |
 | Gears of War: Judgment | None | No local exact revision, recompilation, content, gameplay, render, native-RHI, or 60 fps evidence | Xenia evidence is rejected |

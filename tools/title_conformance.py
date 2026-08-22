@@ -6,6 +6,11 @@ one exact executable build, and results describing evidence-backed gates for
 that same manifest. It does not identify a game from a title ID and it never
 turns recognition into a compatibility claim.
 
+Faithful compatibility and the per-game 60 fps enhancement are separate
+outcomes. The enhancement gate remains mandatory in the evidence schema so it
+cannot disappear from reports, but a failed enhancement does not make an
+otherwise faithful exact build incompatible.
+
 Usage:
     tools/title_conformance.py check MANIFEST RESULTS [MANIFEST RESULTS ...]
     tools/title_conformance.py check --json MANIFEST RESULTS
@@ -32,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 GAME_NAMES = {
     "gears1": "Gears of War",
@@ -49,13 +54,13 @@ COMPATIBILITY_GATES = (
     "menu",
     "gameplay",
     "renderer_compatibility",
-    "gameplay_60fps",
 )
 PARITY_GATES = (
     "renderer_native_parity",
     "override_ab",
 )
-ALL_GATES = COMPATIBILITY_GATES + PARITY_GATES
+ENHANCEMENT_GATES = ("gameplay_60fps",)
+ALL_GATES = COMPATIBILITY_GATES + PARITY_GATES + ENHANCEMENT_GATES
 
 STATUSES = {"pass", "fail", "not_applicable"}
 HEX32_FIELDS = (
@@ -82,6 +87,7 @@ class CaseReport:
     summaries: dict[str, tuple[str, ...]]
     compatibility_ready: bool
     native_parity: str
+    sixty_fps_ready: bool
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -94,6 +100,7 @@ class CaseReport:
             },
             "compatibility_ready": self.compatibility_ready,
             "native_parity": self.native_parity,
+            "sixty_fps_ready": self.sixty_fps_ready,
         }
 
 
@@ -366,6 +373,7 @@ def evaluate_case(manifest_path: Path, result_path: Path) -> CaseReport:
         summaries=summaries,
         compatibility_ready=compatibility_ready,
         native_parity=native_parity,
+        sixty_fps_ready=statuses["gameplay_60fps"] == "pass",
     )
 
 
@@ -388,8 +396,10 @@ def print_text(reports: list[CaseReport]) -> None:
             for summary in report.summaries[gate]:
                 print(f"    - {summary}")
         compatibility = "READY" if report.compatibility_ready else "NOT READY"
+        sixty_fps = "READY" if report.sixty_fps_ready else "NOT READY"
         print(f"  recomp-path compatibility: {compatibility}")
         print(f"  native renderer parity:    {report.native_parity.upper().replace('_', ' ')}")
+        print(f"  60 fps enhancement:        {sixty_fps}")
 
 
 def run_check(inputs: list[str], as_json: bool) -> int:
@@ -498,6 +508,7 @@ def selftest() -> int:
         assert [report.game for report in reports] == list(GAME_NAMES)
         assert all(report.compatibility_ready for report in reports)
         assert all(report.native_parity == "ready" for report in reports)
+        assert all(report.sixty_fps_ready for report in reports)
 
         text_output = io.StringIO()
         with redirect_stdout(text_output):
@@ -505,6 +516,7 @@ def selftest() -> int:
         text_report = text_output.getvalue()
         assert "recomp-path compatibility: READY" in text_report
         assert "native renderer parity:    READY" in text_report
+        assert "60 fps enhancement:        READY" in text_report
         assert "supported" not in text_report.lower()
 
         json_output = io.StringIO()
@@ -513,6 +525,16 @@ def selftest() -> int:
         json_report = json.loads(json_output.getvalue())
         assert json_report["cases"][0]["game"] == "gears1"
         assert json_report["cases"][0]["compatibility_ready"] is True
+        assert json_report["cases"][0]["sixty_fps_ready"] is True
+
+        old_schema = json.loads(cases[0][1].read_text(encoding="utf-8"))
+        old_schema["schema_version"] = 1
+        old_schema_path = cases[0][1].parent / "old-schema.json"
+        old_schema_path.write_text(json.dumps(old_schema), encoding="utf-8")
+        expect_refusal(
+            lambda: evaluate_case(cases[0][0], old_schema_path),
+            f"schema_version must be {SCHEMA_VERSION}",
+        )
 
         no_native_root = root / "no-native"
         no_native_root.mkdir()
@@ -539,6 +561,19 @@ def selftest() -> int:
         expect_refusal(
             lambda: evaluate_case(manifest, missing_60fps_path), "gameplay_60fps"
         )
+
+        deferred_60fps = json.loads(results.read_text(encoding="utf-8"))
+        deferred_60fps["gates"]["gameplay_60fps"]["status"] = "fail"
+        deferred_60fps_path = results.parent / "deferred-60fps.json"
+        deferred_60fps_path.write_text(json.dumps(deferred_60fps), encoding="utf-8")
+        deferred_report = evaluate_case(manifest, deferred_60fps_path)
+        assert deferred_report.compatibility_ready
+        assert not deferred_report.sixty_fps_ready
+        deferred_output = io.StringIO()
+        with redirect_stdout(deferred_output):
+            assert run_check([str(manifest), str(deferred_60fps_path)], False) == 0
+        assert "recomp-path compatibility: READY" in deferred_output.getvalue()
+        assert "60 fps enhancement:        NOT READY" in deferred_output.getvalue()
 
         absent = json.loads(results.read_text(encoding="utf-8"))
         absent["gates"]["content_mount"]["evidence"] = []
@@ -603,7 +638,8 @@ def selftest() -> int:
 
     print(
         "title conformance selftest passed: four-title distinction, exact-build binding, "
-        "identity-only, missing-60fps, and unknown-evidence refusal, "
+        "schema-version, identity-only, missing-60fps, deferred-60fps compatibility, "
+        "and unknown-evidence refusal, "
         "artifact tamper/escape detection, "
         "non-Gears-1 Xenia-oracle refusal, CLI reporting/exit status, "
         "compatibility failure, and explicit "
