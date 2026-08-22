@@ -1,4 +1,4 @@
-# RE Frontier — the ordered RE dependency chain toward a faithful BL2
+# RE Frontier — the ordered RE dependency chain toward GearsUE3
 
 Tracked by `tools/re_frontier.py` (consult it FIRST; update it in the SAME commit
 that changes a step). This is the fine-grained companion to `docs/codemap.md`:
@@ -163,7 +163,7 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - evidence: Catalog #118 and #120: the larger-room corruption disappears when EVENT_WRITE_SHD publication follows renderer completion, while the first synchronous wait implementation collapsed the same live heavy phase to 5 fps. Generation-tagged asynchronous publication preserves the ordering without blocking the command processor; test_render_retirement proves an older completion cannot publish the newer pending frame fence. The bounded one-frame queue reaches 17-21 fps in the measured transition path.
 - where: runtime/gpu_packet_memory.cpp; runtime/render_thread.cpp; runtime/render_retirement.h; tests/test_render_retirement.cpp
 - gap:
-- notes: This is generation-specific retirement ordering, not global renderer idleness and not a timed stall. The recompiled PM4 route is compatibility and oracle infrastructure for the shared GearsUE3 native RHI frontend.
+- notes: This is generation-specific guest-fence publication, not global renderer idleness and not a timed stall. The separately unit-tested `runtime/gpu_retirement.*` slot owner is not integrated into Vulkan yet; it must not be cited as shipping retirement or performance evidence. The recompiled PM4 route is compatibility and oracle infrastructure for the shared GearsUE3 native RHI frontend.
 
 
 ## kernel
@@ -277,12 +277,12 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 ## gearsue3-engine
 
 ### clean-distribution-tip — Remove private-source and game-derived build inputs from the tracked tip
-- status: in-progress
+- status: re-partial
 - deps:
-- evidence: The external-source Core build island and its generator/tests have been removed. `tools/check_distribution_clean.py` scans the Git index and rejects private-source inputs, generated recomp bodies, title caches, and game/media extensions; its self-test includes both answers. The native-pass roster contains declarations only and refuses substitution when no independently distributable module exists.
+- evidence: The external-source Core build island and its generator/tests have been removed. After the approved rewrite, a fresh single-branch public clone at `bf2e829f0043237909b00b2b1722369b1cb5fb9a` passed both tracked-tip and `--history` modes of `tools/check_distribution_clean.py`, and `origin/main` resolved to that commit. The gate rejects private-source inputs, generated recomp bodies, title caches, and game/media artifacts; its self-test includes both answers.
 - where: AGENTS.md; docs/gearsue3-engine.md; tools/check_distribution_clean.py; .gitignore
-- gap: The public Git history still contains deleted title cache/trace blobs and requires a separately approved scoped rewrite. Native shader/protocol provenance and third-party notices still need a complete audit before the repository can be called clean.
-- notes: A clean current checkout does not make deleted public blobs disappear. The full-history release gate is independent of the tracked-tip CTest.
+- gap: Native shader/protocol provenance and third-party notices still need a complete audit before the repository can be called clean. Any newly pushed commit or ref requires the history gate again.
+- notes: The history rewrite is complete; do not carry its former pending status forward. The full-history release gate remains independent of the tracked-tip CTest.
 
 ### recomp-forwarding-seam — Keep every recomp body while making all direct calls overridable
 - status: re-verified
@@ -293,20 +293,36 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - notes: Generated output remains ignored and unmodified. The original `__imp__*` body is never removed.
 
 ### title-revision-boundary — Separate shared engine behavior from exact title bindings
-- status: todo
+- status: in-progress
 - deps: recomp-forwarding-seam
-- evidence:
-- where: docs/gearsue3-engine.md; runtime/main.cpp; runtime/hle_d3d.cpp; runtime/guest_probes.cpp; runtime/native_pass.cpp
-- gap: Gears 1 image identity, addresses, shader hashes, probes, save namespace, and scripted policy are still compiled into shared-looking runtime files. Runtime acceptance checks only image base and size.
+- evidence: `runtime/title_profile.*` provides a shared schema for exact container and parsed-image SHA-256, image base/size/entry, revision status, capability status, and save namespace. Synthetic production-interface tests prove malformed, duplicate, unknown, and ambiguous registries refuse instead of selecting a partial match.
+- where: runtime/title_profile.*; tests/test_title_profile.cpp; docs/gearsue3-engine.md; runtime/main.cpp; runtime/hle_d3d.cpp; runtime/guest_probes.cpp; runtime/native_pass.cpp
+- gap: No locally generated title module supplies a real profile to the runtime yet. Gears 1 addresses, shader hashes, probes, save namespace, and scripted policy remain compiled into shared-looking files, and the current loader still accepts only its older layout check.
 - notes: One executable links one locally generated title module. Exact parsed-image identity must fail closed before any build-specific binding activates.
 
 ### rom-only-provisioning — Generate a playable title from one user-owned disc/image
+- status: in-progress
+- deps: title-revision-boundary
+- evidence: `tools/title_identity.py` and its 12 synthetic tests implement strict input priority, streaming disc SHA-256, generic XGD/XEX identity capture, refusal of missing/ambiguous inputs, and path-free JSON under ignored `scratch/titles/<disc-sha256>/`.
+- where: tools/title_identity.py; tests/test_title_identity.py; tools/gdf_extract.py; tools/xex_probe; config; run.sh
+- gap: Extraction, switch analysis/merge, parsed-image digest production, exact-profile generation, recompilation, validation, build, and launch are still separate manual steps that can reuse stale output. There is not yet one deterministic command from a clean clone to a playable executable.
+- notes: The identity record is the first boundary, not a provisioner completion claim. Generate every disc-derived artifact under the content-addressed ignored directory and write a tool/input receipt. Unknown revisions refuse.
+
+### frame-delivery-contract — Carry one guest frame identity through a bounded latest-frame pipeline
+- status: in-progress
+- deps: gpu-retirement
+- evidence: Production-interface synthetic tests cover `FrameQueue`'s one-active/latest-pending replacement and stale-completion refusal, `FrameContract`'s non-zero monotonic publication and no-stale/no-unpublished presentation rules, `GpuRetirement`'s bounded generation-checked leases, polling, teardown drain, error retention, and device-loss cleanup, and `GpuQueueAccess`'s serialization under concurrent callers. The guest present sequence is now passed into scan-out rather than replaced by a scan-out-local counter, and every shared renderer/presenter queue operation goes through the external-synchronization owner.
+- where: runtime/frame_queue.*; runtime/frame_contract.*; runtime/gpu_queue_access.*; runtime/gpu_retirement.*; runtime/render_thread.*; runtime/gpu_scanout.*; runtime/gpu_shared_device.*; tests/test_frame_queue.cpp; tests/test_frame_contract.cpp; tests/test_gpu_queue_access.cpp; tests/test_gpu_retirement.cpp
+- gap: The new GPU slot retirement owner is not integrated into the Vulkan renderer. Command buffer/fence/descriptor/arena/readback and fallback cleanup remain single-frame resources, and shared images need explicit GPU-ready and consumer-complete signaling. No real-run performance or visual-glitch result has been measured for the latest-pending policy.
+- notes: Replacing stale pending CPU work bounds latency but cannot raise title production or GPU throughput. `RenderRetirement`'s verified generation-specific guest fence publication remains a separate shipping contract.
+
+### title-60hz-enhancement — Produce title simulation and frames at 60 Hz
 - status: todo
 - deps: title-revision-boundary
-- evidence:
-- where: tools/gdf_extract.py; tools/xex_probe; config; run.sh
-- gap: Extraction, switch analysis/merge, recompilation, validation, and build are still manual and can reuse stale output. The current documentation does not yet constitute one deterministic command from a clean clone.
-- notes: Generate into a fresh content-addressed `scratch/titles/<fingerprint>/` directory and write a tool/input receipt. Unknown revisions refuse.
+- evidence: With rendering effectively disabled, Gears 1 remains near 30 fps. The host vblank source is already 60 Hz, so renderer removal and vblank frequency do not by themselves remove the title-side frame-production limit.
+- where: title/revision timing bindings; runtime guest timing services; headless timing A/B reports
+- gap: Identify the semantic limiter in each exact executable revision, then implement a runtime faithful/enhanced A/B seam. No verified limiter or 60 Hz title enhancement exists yet.
+- notes: Do not speed the general guest clock, alter vblank to hide the cap, or patch an unexplained constant. Catalog #126 records two rejected shortcuts: forcing live D3D sync mode 2 to mode 1 remained near 30 presents/s, and the only exact 1/30 fixed-step branch was disabled at runtime. The semantic limiter is still behind the indirect game-thread/render-command producer chain upstream of Present. Gears 1 evidence cannot establish the Gears 2, Gears 3, or Judgment timing policy.
 
 ### native-rhi-observation — Mirror semantic D3D/RHI operations while super-calling recomp bodies
 - status: todo
@@ -324,10 +340,18 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap: No runtime original/native toggle or state/pixel parity gate exists for a complete RHI frontend.
 - notes: Preserve the PM4/recomp arm in the same binary. Performance is measured only after the faithful arm passes, with a deliberately wrong control that the comparer rejects.
 
-### multi-title-conformance — Verify each Gears UE3 title independently
+### renderer-60hz-budget — Render steady gameplay below 16.67 ms per produced frame
 - status: todo
+- deps: frame-delivery-contract, native-rhi-bypass
+- evidence: The current warm 743-draw Gears 1 compatibility frame is about 44 ms, including roughly 34 ms in a flat draw loop. The latest-frame queue changes latency policy, not that throughput measurement.
+- where: runtime/gpu_draw*; runtime/frame_queue.*; runtime/gpu_retirement.*; native RHI frontend; headless frame-time reports
+- gap: Integrate bounded GPU resource slots and the native RHI path, then demonstrate a sustained sub-16.67 ms frame budget with correct retirement and no dropped evidence frames. No title currently passes this gate.
+- notes: A 60 Hz vblank, a repeated presentation, or an average inflated by menu frames is not a 60 fps gameplay result. Measure produced gameplay frames and preserve the compatibility arm for parity.
+
+### multi-title-conformance — Verify each Gears UE3 title independently
+- status: in-progress
 - deps: rom-only-provisioning, native-rhi-bypass
-- evidence: Only Gears 1 currently has headless boot, menu, gameplay, renderer, and oracle evidence.
-- where: docs/gearsue3-engine.md; title manifests; headless conformance reports
-- gap: Gears 2, Gears 3, and Judgment have no local revision identity, recompiler coverage, package corpus, oracle validation, or gameplay/render evidence.
-- notes: Shared engine code is a design target; support remains per exact revision and per gate.
+- evidence: `tools/title_conformance.py` and its synthetic self-test distinguish Gears 1, Gears 2, Gears 3, and Judgment; require exact manifest/result identity and digest-bound relative artifacts, including sustained 60 fps gameplay; fail missing or incompatible gates; and reject Xenia-sourced evidence for every non-Gears-1 title. Only Gears 1 currently has real headless boot, menu, gameplay, compatibility-renderer, and narrowly validated oracle evidence.
+- where: tools/title_conformance.py; tests/CMakeLists.txt; docs/gearsue3-engine.md; local title manifests and headless conformance reports
+- gap: No real exact-build report has passed all gates. Gears 2, Gears 3, and Judgment have no local revision identity, recompiler coverage, package corpus, headless content/menu/gameplay evidence, renderer compatibility/native parity, or 60 fps evidence.
+- notes: The reporter is implemented; compatibility is not. Shared engine code is a design target, and support remains per exact revision and per gate. Xenia is not an accepted oracle for Gears 2, Gears 3, or Judgment.

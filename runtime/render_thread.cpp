@@ -1,15 +1,15 @@
 #include "render_thread.h"
 
+#include "frame_queue.h"
 #include "graphics_probe_render.h"
 
 #include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <ctime>
-#include <chrono>
-#include <condition_variable>
+#include <exception>
 #include <mutex>
-#include <optional>
 #include <thread>
 
 #include <sys/resource.h>
@@ -26,19 +26,12 @@ namespace gears
 namespace
 {
 
-std::mutex g_mutex;
-std::condition_variable g_wake; // renderer waits for work
-std::condition_variable g_idle; // WaitForRenderIdle waits for the renderer
-struct PendingFrame
-{
-    FrameDrawInputs inputs;
-    uint64_t generation = 0;
-};
-std::optional<PendingFrame> g_pending;
+std::mutex g_stateMutex;
+FrameQueue g_frames;
 RenderRetirement g_retirement;
-bool g_rendering = false;
-bool g_stop = false;
 bool g_started = false;
+bool g_stopping = false;
+uint64_t g_nextFrameId = 0;
 std::thread g_thread;
 
 std::atomic<uint64_t> g_submitted{0};
@@ -75,11 +68,11 @@ uint64_t ThreadRunqueueNanos()
 void RenderThreadMain()
 {
     // NICED DOWN, deliberately. This thread is the only one in the process whose
-    // work is allowed to be skipped: at most one newer frame waits, and further
-    // arrivals are dropped. The guest's threads have no such freedom -- the
-    // audio mixer is a hand-off at 187.5 Hz and every slot it misses is heard --
-    // so when the machine is short of cores, the renderer is the one that should
-    // wait. Measured with the renderer at normal priority:
+    // work is allowed to be skipped: at most one newer frame waits, and a later
+    // arrival replaces that stale pending frame. The guest's threads have no
+    // such freedom -- the audio mixer is a hand-off at 187.5 Hz and every slot
+    // it misses is heard -- so when the machine is short of cores, the renderer
+    // is the one that should wait. Measured with the renderer at normal priority:
     // the guest's frame loop recovered to 28 fps but the audio pump fell to
     // 57-67 Hz against 187.5.
     //
@@ -94,30 +87,14 @@ void RenderThreadMain()
 
     for (;;)
     {
-        FrameDrawInputs work;
-        uint64_t workGeneration = 0;
-        {
-            std::unique_lock<std::mutex> lock(g_mutex);
-            g_wake.wait(lock, [] { return g_pending.has_value() || g_stop; });
-            if (!g_pending.has_value())
-            {
-                // The wait predicate permits this state only for shutdown.
-                // Keeping the check explicit also makes the optional access
-                // locally proven rather than dependent on the predicate.
-                if (g_stop)
-                    return;
-                continue;
-            }
-            work = std::move(g_pending->inputs);
-            workGeneration = g_pending->generation;
-            g_pending.reset();
-            g_rendering = true;
-        }
+        std::optional<QueuedFrame> work = g_frames.WaitTake();
+        if (!work.has_value())
+            return;
 
         const auto t0 = std::chrono::steady_clock::now();
         const uint64_t cpu0 = ThreadCpuNanos();
         const uint64_t rq0 = ThreadRunqueueNanos();
-        RenderFrameWithGraphicsProbe(work);
+        RenderFrameWithGraphicsProbe(work->inputs);
         g_busyMillis.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
                                             std::chrono::steady_clock::now() - t0)
                                             .count()));
@@ -133,18 +110,20 @@ void RenderThreadMain()
         {
             RenderRetirement::FinishBatch batch;
             {
-                std::lock_guard<std::mutex> lock(g_mutex);
-                batch = g_retirement.Finish(workGeneration);
+                std::lock_guard<std::mutex> lock(g_stateMutex);
+                batch = g_retirement.Finish(work->retirementGeneration);
                 if (batch.generationComplete)
-                {
-                    g_rendering = false;
                     break;
-                }
             }
             for (RenderRetirement::Completion &completion : batch.completions)
                 completion();
         }
-        g_idle.notify_all();
+        if (!g_frames.Complete(work->frameId))
+        {
+            lucent::error("draw", "render thread rejected completion for stale frame {}",
+                          work->frameId);
+            std::terminate();
+        }
     }
 }
 
@@ -152,31 +131,36 @@ void RenderThreadMain()
 
 bool SubmitFrameForRender(FrameDrawInputs &&in)
 {
-    std::unique_lock<std::mutex> lock(g_mutex);
-    if (!g_started)
-    {
-        g_started = true;
-        g_thread = std::thread(RenderThreadMain);
-        lucent::info("draw", "render thread started: the command processor hands over"
-                             " each frame's draw list and returns; one newer frame may wait while"
-                             " rendering, and further stale arrivals are dropped");
-    }
+    std::lock_guard<std::mutex> lock(g_stateMutex);
     g_submitted.fetch_add(1);
-    // Keep the renderer saturated with at most one waiting frame. With a 53 ms
-    // renderer and a 30 Hz guest, dropping every arrival while busy renders at
-    // only ~11 fps: each 33 ms arrival misses the completion boundary and the
-    // renderer then sits idle until the following one. One pending frame raises
-    // that to the renderer's real ~19 fps capacity while bounding latency. A
-    // second waiting frame is stale, so that one is counted and dropped.
-    if (g_pending.has_value())
+    if (g_stopping)
     {
         g_dropped.fetch_add(1);
         return false;
     }
+    if (!g_started)
+    {
+        g_thread = std::thread(RenderThreadMain);
+        g_started = true;
+        lucent::info("draw", "render thread started: the command processor hands over"
+                             " each frame's draw list and returns; one newer frame may wait while"
+                             " rendering, and each newer arrival replaces a stale pending frame");
+    }
+
+    const uint64_t frameId = g_nextFrameId++;
     const uint64_t generation = g_retirement.AcceptFrame();
-    g_pending = PendingFrame{std::move(in), generation};
-    lock.unlock();
-    g_wake.notify_one();
+    const FrameQueueSubmitResult result = g_frames.Submit(frameId, generation, std::move(in));
+    if (result.status == FrameQueueSubmitStatus::ReplacedPending)
+        g_dropped.fetch_add(1);
+    if (!result.accepted())
+    {
+        // Stop and submission are serialized by g_stateMutex, and frame IDs
+        // originate here, so reaching this branch means those invariants were
+        // broken. The generation was already accepted, so continuing would
+        // strand its retirement completions and corrupt the guest GPU contract.
+        lucent::error("draw", "render queue rejected monotonic frame {} after acceptance", frameId);
+        std::terminate();
+    }
     return true;
 }
 
@@ -195,7 +179,7 @@ RenderThreadStats RenderThreadCounters()
 void DeferUntilAcceptedRenderRetires(std::function<void()> completion)
 {
     {
-        std::lock_guard<std::mutex> lock(g_mutex);
+        std::lock_guard<std::mutex> lock(g_stateMutex);
         if (g_retirement.Defer(completion))
             return;
     }
@@ -204,21 +188,18 @@ void DeferUntilAcceptedRenderRetires(std::function<void()> completion)
 
 void WaitForRenderIdle()
 {
-    std::unique_lock<std::mutex> lock(g_mutex);
-    if (!g_started)
-        return;
-    g_idle.wait(lock, [] { return !g_rendering && !g_pending.has_value(); });
+    g_frames.WaitIdle();
 }
 
 void StopRenderThread()
 {
     {
-        std::lock_guard<std::mutex> lock(g_mutex);
-        if (!g_started || g_stop)
+        std::lock_guard<std::mutex> lock(g_stateMutex);
+        if (!g_started || g_stopping)
             return;
-        g_stop = true;
+        g_stopping = true;
+        g_frames.Close();
     }
-    g_wake.notify_all();
     if (g_thread.joinable())
         g_thread.join();
 }

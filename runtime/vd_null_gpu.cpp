@@ -1912,11 +1912,8 @@ struct CommandProcessor
         // next to each other.
         if (in.report)
             gears::ReportTitleTextureSlots();
-        // Number the reported screenshots in a live run so a menu walk leaves a
-        // filmstrip rather than overwriting one file. By the GUEST PRESENT
-        // counter, for the reason above: the filename IS the join key.
-        if (in.probe || (frameCount <= 0 && in.report))
-            in.sequence = long(guestPresents);
+        // Carry guest-present identity through every frame; scan-out must not mint its own clock.
+        in.sequence = long(guestPresents);
 
         // GEARS_DRAW_FRAME_DUMP=<path>: write this frame's whole draw stream to a
         // file that tools/frame_replay renders offline. Reaching a gameplay frame
@@ -1943,9 +1940,10 @@ struct CommandProcessor
                 skinnedBestDraws = std::max(skinnedBestDraws, c.skinnedDraws);
                 if (c.Passed())
                 {
-                    lucent::info("gpu", "guest-draw: frame {} is the first to"
-                        " submit a skinned character, after {} frames scanned."
-                        " Capturing it", frameSwaps, skinnedScans);
+                    lucent::info("gpu",
+                                 "guest-draw: frame {} has a skinned character after {}"
+                                 " scans; capturing it",
+                                 frameSwaps, skinnedScans);
                     gears::ReportSkinnedFrameCensus(c);
                     frameDumpWritten = gears::WriteFrameCapture(dumpPath.c_str(), in);
                 }

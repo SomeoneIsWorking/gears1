@@ -112,16 +112,20 @@ bool GpuScanout::Record(Renderer &renderer, VkCommandBuffer commands, VkImage so
     return true;
 }
 
-void GpuScanout::Publish(const GpuScanoutResult &result, uint32_t width, uint32_t height)
+bool GpuScanout::Publish(const GpuScanoutResult &result, uint32_t width, uint32_t height,
+                         long frameId)
 {
-    if (result.image == VK_NULL_HANDLE)
-        return;
+    if (result.image == VK_NULL_HANDLE || frameId <= 0)
+    {
+        lucent::error("draw", "refusing shared scan-out without a valid guest frame identity");
+        return false;
+    }
     SharedFrameImage frame;
     frame.image = result.image;
     frame.width = width;
     frame.height = height;
-    frame.sequence = ++published_;
-    PublishSharedFrameImage(frame);
+    frame.sequence = static_cast<uint64_t>(frameId);
+    return PublishSharedFrameImage(frame);
 }
 
 void GpuScanout::Release(Renderer &renderer)

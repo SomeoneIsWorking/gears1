@@ -59,8 +59,9 @@ bool AdoptSharedGpu(SharedGpu &out);
 //
 // The image is left in TRANSFER_SRC_OPTIMAL by the draw path, which also waits on
 // its own fence before returning, so the contents are complete by the time this is
-// published. `sequence` lets the presenter tell a new frame from the one it already
-// showed.
+// published. `sequence` is the original guest-present identity carried unchanged
+// through the renderer. The shared-frame contract rejects zero, duplicate, and
+// regressive publications rather than allowing scan-out to invent another clock.
 struct SharedFrameImage
 {
     VkImage image = VK_NULL_HANDLE;
@@ -69,7 +70,7 @@ struct SharedFrameImage
     uint64_t sequence = 0;
 };
 
-void PublishSharedFrameImage(const SharedFrameImage &frame);
+bool PublishSharedFrameImage(const SharedFrameImage &frame);
 bool AcquireSharedFrameImage(SharedFrameImage &out);
 
 // Whether anything has been published yet, without taking a copy. Used by the

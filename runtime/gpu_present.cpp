@@ -45,8 +45,8 @@
 #include "gpu_present_stage.h"
 #include "gpu_shared_device.h"
 #include "gpu_queue_family.h"
+#include "gpu_queue_access.h"
 #include "swapchain_format.h"
-
 #ifdef GEARS_HAVE_PRESENTER
 
 #include <atomic>
@@ -892,7 +892,7 @@ bool Presenter::PresentOne(uint32_t sequence)
         // The window was resized between frames. Rebuild and drop this frame
         // rather than presenting into a stale surface; the guest's next VdSwap
         // brings the next one.
-        vkDeviceWaitIdle(device);
+        gears::SharedGpuQueueAccess().WaitDeviceIdle(device);
         for (bool &used : slotUsed)
             used = false;
         return CreateSwapchain();
@@ -1139,7 +1139,7 @@ bool Presenter::PresentOne(uint32_t sequence)
     submit.pCommandBuffers = &commands[slot];
     submit.signalSemaphoreCount = 1;
     submit.pSignalSemaphores = &presentReady[imageIndex];
-    if (vkQueueSubmit(queue, 1, &submit, submitted[slot]) != VK_SUCCESS)
+    if (gears::SharedGpuQueueAccess().Submit(queue, 1, &submit, submitted[slot]) != VK_SUCCESS)
         return false;
 
     if (capturingThisFrame)
@@ -1173,10 +1173,10 @@ bool Presenter::PresentOne(uint32_t sequence)
     present.swapchainCount = 1;
     present.pSwapchains = &swapchain;
     present.pImageIndices = &imageIndex;
-    r = vkQueuePresentKHR(queue, &present);
+    r = gears::SharedGpuQueueAccess().Present(queue, &present);
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR)
     {
-        vkDeviceWaitIdle(device);
+        gears::SharedGpuQueueAccess().WaitDeviceIdle(device);
         for (bool &used : slotUsed)
             used = false;
         return CreateSwapchain();

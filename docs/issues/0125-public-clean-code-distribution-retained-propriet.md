@@ -16,4 +16,12 @@ The product boundary treated a private source checkout, locally reconstructed ti
 
 The tracked tip is now a GearsUE3 recomp-plus-override engine: the private-source build island and reconstructed title shaders are removed; generated output is never patched; XenonRecomp emits retained bodies plus override-safe forwarders; and the clean-distribution gate rejects known private/game/cache paths, non-UTF-8 binaries, executable/archive magic, generated PPC, and SPIR-V without a tracked clean source.
 
-The current public history still contains deleted title caches and retired proprietary-derived files. The history gate refuses release until a separately approved rewrite removes them. Therefore resolved here means the root architecture and tracked tip are corrected, not that old public commits are clean.
+The public `main` history was rewritten after explicit approval. Deleted title
+caches, generated PPC/game artifacts, reconstructed title shaders, retired
+private-source build paths, and their private-source path strings were removed;
+purged-only commits were dropped. A fresh single-branch clone at
+`bf2e829f0043237909b00b2b1722369b1cb5fb9a` passed both the tracked-tip and
+full-history modes of `tools/check_distribution_clean.py`, and `origin/main`
+resolved to that commit. Future commits and refs can reintroduce history
+contamination, so the full-history gate remains a release requirement rather
+than a one-time assertion.
