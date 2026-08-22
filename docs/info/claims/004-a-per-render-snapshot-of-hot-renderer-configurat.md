@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-22
 tags: performance,renderer
 depends: runtime/gpu_draw_options.cpp#ReadFrameOptions, runtime/gpu_draw.cpp#Renderer::RenderFrameImpl
+reconfirmed: 2026-08-22
+verified_at: 2026-08-22 18:43:45
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ Interleaved same-process A/B on chapter45_recovered.gfr: old 39.39 ms over 44 fr
 ## What would falsify it
 
 a representative paired same-process replay does not resolve the snapshot faster, or a renderer control is allowed to change inside one RenderFrame call
+
+## Re-confirmed 2026-08-22
+
+Committed implementation f09e856; interleaved chapter45 replay old 39.39 ms over 44 frames versus snapshot 34.25 ms over 43 frames, 2.30 ms resolution; 60/60 CTests and two-capture zero-VUID validation pass
