@@ -16,11 +16,11 @@
 namespace gears::draw
 {
 
-UniformCache::Result UniformCache::Update(const uint32_t* regs, const FrameDrawItem& d,
-                                          const ShaderXlate& vsX, const ShaderXlate& psX)
+UniformCache::Result UniformCache::Update(const uint32_t *regs, const FrameDrawItem &d,
+                                          const ShaderXlate &vsX, const ShaderXlate &psX)
 {
-    const bool same = valid && keySnapshot == d.registerFile.get() &&
-                      keyVs == d.vsHash && keyPs == d.psHash;
+    const bool same =
+        valid && keySnapshot == d.registerFile.get() && keyVs == d.vsHash && keyPs == d.psHash;
     ++lookups;
     if (same)
     {
@@ -48,17 +48,20 @@ UniformCache::Result UniformCache::Update(const uint32_t* regs, const FrameDrawI
     // This counts how often the repacked blocks come out byte-identical to the
     // ones already cached. Without it, narrowing the cache key would be a guess
     // at where the time goes.
-    const bool measureHeadroom = lucent::config::flag("DRAW_UBOCHECK");
+    static const bool measureHeadroom = lucent::config::flag("DRAW_UBOCHECK");
     std::vector<uint8_t> prevSysc, prevFvs, prevFps, prevBl, prevFetch;
     if (measureHeadroom && valid)
     {
-        prevSysc = sysc; prevFvs = fVs; prevFps = fPs;
-        prevBl = boolLoop; prevFetch = fetch;
+        prevSysc = sysc;
+        prevFvs = fVs;
+        prevFps = fPs;
+        prevBl = boolLoop;
+        prevFetch = fetch;
     }
 
-    sysc = DeriveSystemConstants(regs);
-    fVs = PackFloatConstants(regs, vsX.floatBitmap, vsX.floatCount, 0x4000);
-    fPs = PackFloatConstants(regs, psX.floatBitmap, psX.floatCount, 0x4400);
+    DeriveSystemConstants(regs, sysc);
+    PackFloatConstants(regs, vsX.floatBitmap, vsX.floatCount, 0x4000, fVs);
+    PackFloatConstants(regs, psX.floatBitmap, psX.floatCount, 0x4400, fPs);
     // Look at the VALUES, not just pack them. See gpu_draw_uniforms.h.
     CensusConstants(fPs, d.psHash, true);
     CensusConstants(fVs, d.vsHash, false);
@@ -68,8 +71,8 @@ UniformCache::Result UniformCache::Update(const uint32_t* regs, const FrameDrawI
     // because of THIS number?" -- by substituting the value a working capture
     // has. It is never a fix: the number comes from the guest, and a wrong one
     // is a bug on the CPU side, not here.
-    if (const std::string& setSpec = lucent::config::text("DRAW_PS_CONST_SET");
-        !setSpec.empty())
+    static const std::string &setSpec = lucent::config::text("DRAW_PS_CONST_SET");
+    if (!setSpec.empty())
     {
         size_t at = 0;
         while (at < setSpec.size())
@@ -79,26 +82,41 @@ UniformCache::Result UniformCache::Update(const uint32_t* regs, const FrameDrawI
             at = end + 1;
             const size_t colon = one.find(':'), eq = one.find('=');
             if (colon == std::string::npos || eq == std::string::npos || eq < colon)
-            { lucent::warn("draw", "GEARS_DRAW_PS_CONST_SET: cannot parse"
-                " '{}', expected <pshash>:<index>=<x>,<y>,<z>,<w>", one); continue; }
+            {
+                lucent::warn("draw",
+                             "GEARS_DRAW_PS_CONST_SET: cannot parse"
+                             " '{}', expected <pshash>:<index>=<x>,<y>,<z>,<w>",
+                             one);
+                continue;
+            }
             const uint64_t h = std::strtoull(one.c_str(), nullptr, 16);
             if (h != d.psHash)
                 continue;
-            const uint32_t idx = uint32_t(std::strtoul(
-                one.c_str() + colon + 1, nullptr, 10));
+            const uint32_t idx = uint32_t(std::strtoul(one.c_str() + colon + 1, nullptr, 10));
             float v[4] = {0, 0, 0, 0};
-            const char* p = one.c_str() + eq + 1;
-            for (float& f : v)
-            { char* nxt = nullptr; f = std::strtof(p, &nxt);
-              if (nxt == p) break; p = (*nxt == ',') ? nxt + 1 : nxt; }
+            const char *p = one.c_str() + eq + 1;
+            for (float &f : v)
+            {
+                char *nxt = nullptr;
+                f = std::strtof(p, &nxt);
+                if (nxt == p)
+                    break;
+                p = (*nxt == ',') ? nxt + 1 : nxt;
+            }
             if ((idx + 1) * 16 > fPs.size())
-            { lucent::warn("draw", "GEARS_DRAW_PS_CONST_SET: ps {:#x} has"
-                " {} packed constants, so index {} DOES NOT EXIST and was"
-                " NOT applied", d.psHash, psX.floatCount, idx); continue; }
+            {
+                lucent::warn("draw",
+                             "GEARS_DRAW_PS_CONST_SET: ps {:#x} has"
+                             " {} packed constants, so index {} DOES NOT EXIST and was"
+                             " NOT applied",
+                             d.psHash, psX.floatCount, idx);
+                continue;
+            }
             std::memcpy(fPs.data() + size_t(idx) * 16, v, 16);
-            lucent::info("draw", "GEARS_DRAW_PS_CONST_SET: ps {:#x} c[{}]"
-                " forced to ({}, {}, {}, {})", d.psHash, idx,
-                v[0], v[1], v[2], v[3]);
+            lucent::info("draw",
+                         "GEARS_DRAW_PS_CONST_SET: ps {:#x} c[{}]"
+                         " forced to ({}, {}, {}, {})",
+                         d.psHash, idx, v[0], v[1], v[2], v[3]);
         }
     }
     boolLoop.resize(sizeof(uint32_t) * (8 + 32));
@@ -107,8 +125,7 @@ UniformCache::Result UniformCache::Update(const uint32_t* regs, const FrameDrawI
     std::memcpy(fetch.data(), &regs[0x4800], fetch.size());
 
     if (!AR.MakeUbo(sysc.data(), sysc.size(), biSys) ||
-        !AR.MakeUbo(fVs.data(), fVs.size(), biFvs) ||
-        !AR.MakeUbo(fPs.data(), fPs.size(), biFps) ||
+        !AR.MakeUbo(fVs.data(), fVs.size(), biFvs) || !AR.MakeUbo(fPs.data(), fPs.size(), biFps) ||
         !AR.MakeUbo(boolLoop.data(), boolLoop.size(), biBl) ||
         !AR.MakeUbo(fetch.data(), fetch.size(), biFetch))
     {
@@ -119,8 +136,8 @@ UniformCache::Result UniformCache::Update(const uint32_t* regs, const FrameDrawI
     if (measureHeadroom && !prevSysc.empty())
     {
         ++recomputes;
-        if (prevSysc == sysc && prevFvs == fVs && prevFps == fPs &&
-            prevBl == boolLoop && prevFetch == fetch)
+        if (prevSysc == sysc && prevFvs == fVs && prevFps == fPs && prevBl == boolLoop &&
+            prevFetch == fetch)
             ++recomputesIdentical;
     }
 
@@ -132,11 +149,9 @@ UniformCache::Result UniformCache::Update(const uint32_t* regs, const FrameDrawI
     return Result::kRebuilt;
 }
 
-
 // A NaN or an Inf in a constant a shader will multiply by. See the header for
 // why this is not gated behind a knob.
-void UniformCache::CensusConstants(const std::vector<uint8_t>& block,
-                                   uint64_t hash, bool isPixel)
+void UniformCache::CensusConstants(const std::vector<uint8_t> &block, uint64_t hash, bool isPixel)
 {
     for (size_t i = 0; i + 16 <= block.size(); i += 16)
     {
@@ -149,18 +164,24 @@ void UniformCache::CensusConstants(const std::vector<uint8_t>& block,
             const uint32_t mantissa = b[k] & 0x7FFFFFu;
             if (exponent != 0xFFu)
                 continue;
-            if (mantissa) nan = true; else inf = true;
+            if (mantissa)
+                nan = true;
+            else
+                inf = true;
         }
         if (!nan && !inf)
             continue;
-        if (nan) ++nanBlocks; else ++infBlocks;
+        if (nan)
+            ++nanBlocks;
+        else
+            ++infBlocks;
         // NaN is the one that kills a frame outright, so it wins the capped
         // slots: an Inf is a normal value of at least one of this title's
         // constant blocks (catalog #73 killed that hypothesis by running it
         // against both classes) and must not crowd out a real finding.
         if (nan && badConsts.size() < kMaxBadConsts)
-            badConsts.push_back(BadConst{hash, uint32_t(i / 16),
-                                         {b[0], b[1], b[2], b[3]}, isPixel});
+            badConsts.push_back(
+                BadConst{hash, uint32_t(i / 16), {b[0], b[1], b[2], b[3]}, isPixel});
     }
 }
 
@@ -172,10 +193,11 @@ void UniformCache::ReportConstantCensus() const
         // scanned" must not look the same, and this scan runs only on a cache
         // REBUILD -- so the denominator is rebuilds, not draws.
         if (rebuilds != 0)
-            lucent::debug("draw", "constant census: no NaN in any float"
-                " constant, over {} repacked block set(s) ({} carried an Inf,"
-                " which is a normal value of this title's c1)",
-                rebuilds, infBlocks);
+            lucent::debug("draw",
+                          "constant census: no NaN in any float"
+                          " constant, over {} repacked block set(s) ({} carried an Inf,"
+                          " which is a normal value of this title's c1)",
+                          rebuilds, infBlocks);
         return;
     }
     lucent::Line l;
@@ -185,10 +207,10 @@ void UniformCache::ReportConstantCensus() const
           " so a frame that renders black for this reason is NOT a renderer"
           " defect and no draw-level probe will show it (catalog #73).",
           nanBlocks, rebuilds);
-    for (const BadConst& c : badConsts)
+    for (const BadConst &c : badConsts)
         l.add("\n  {} shader {:#x}  c[{}] = [{:08x} {:08x} {:08x} {:08x}]",
-              c.isPixel ? "pixel " : "vertex", c.psHash, c.index,
-              c.bits[0], c.bits[1], c.bits[2], c.bits[3]);
+              c.isPixel ? "pixel " : "vertex", c.psHash, c.index, c.bits[0], c.bits[1], c.bits[2],
+              c.bits[3]);
     if (nanBlocks > badConsts.size())
         l.add("\n  ... and {} further NaN vec4(s) not listed (cap {}); the"
               " count above is the whole frame, the list is not",

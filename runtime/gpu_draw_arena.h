@@ -22,7 +22,7 @@ namespace gears::draw
 
 struct FrameArena
 {
-    FrameArena(Renderer& r, RendererPersistent& p) : R(r), P(p) {}
+    FrameArena(Renderer &r, RendererPersistent &p) : R(r), P(p) {}
 
     // Sizes (and if necessary regrows) the arena for a frame of nDraws draws.
     // False means the buffer could not be created or mapped; there is no
@@ -30,8 +30,8 @@ struct FrameArena
     // fall back per allocation and call the result a slow frame.
     bool Build(uint32_t nDraws);
 
-    Renderer& R;
-    RendererPersistent& P;
+    Renderer &R;
+    RendererPersistent &P;
 
     VkDeviceSize cursor = 0;
     uint32_t overflows = 0;
@@ -50,19 +50,23 @@ struct FrameArena
     std::vector<VkBuffer> keepBuffers;
     std::vector<VkDeviceMemory> keepMem;
 
+    // Reused by index conversion for every draw in this frame. Keeping the
+    // capacity here removes two heap allocations per indexed draw without
+    // changing the authoritative conversion path.
+    std::vector<uint32_t> indexSource;
+    std::vector<uint32_t> indexExpanded;
+
     // Copies `size` bytes into the arena and reports where they landed, or
     // returns false when the arena is full (the caller then falls back).
-    bool Write(const void* data, size_t size, VkDeviceSize alignment,
-               VkDeviceSize& outOffset);
+    bool Write(const void *data, size_t size, VkDeviceSize alignment, VkDeviceSize &outOffset);
 
     // An index buffer for one draw, from the same arena. Index offsets need
     // 4-byte alignment; the buffer is bound with that offset.
-    bool MakeIndexBuffer(const void* data, size_t bytes, VkBuffer& outBuf,
-                         VkDeviceSize& outOffset);
+    bool MakeIndexBuffer(const void *data, size_t bytes, VkBuffer &outBuf, VkDeviceSize &outOffset);
 
     // A uniform block for one draw: (buffer, offset, range) rather than a whole
     // VkBuffer of its own.
-    bool MakeUbo(const void* data, size_t size, VkDescriptorBufferInfo& out);
+    bool MakeUbo(const void *data, size_t size, VkDescriptorBufferInfo &out);
 
     // Records what this frame needed so the next one is sized for it, and
     // reports any overflow. Call once the last allocation is made.

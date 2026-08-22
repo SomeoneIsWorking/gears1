@@ -40,11 +40,22 @@ larger-room corruption; it is not the root cause of the wedges.
 
 ## Resolution
 
-Before storing an `EVENT_WRITE_SHD` value, the command processor now waits for
-the renderer's already-existing completion boundary. This implements the event's
-actual retirement ordering; it is neither a timed delay nor a cache reset. The
-persistent surface cache also accumulates every guest colour format seen for a
-base and recreates the Vulkan target only when a wider container is required.
+An `EVENT_WRITE_SHD` memory write now attaches to the accepted render
+generation preceding it and is published when that generation completes. The
+command processor keeps consuming packets while the write is pending. This is
+the hardware contract: the event write is delayed by prior GPU work, but packet
+consumption is not blocked on the event. A focused production-interface test
+proves that completing an older render generation cannot publish a completion
+owned by the newer queued frame.
+
+The first fix waited synchronously at this point. It restored correctness but
+serialized the command processor behind 50-200 ms host renders, producing the
+5 fps regression recorded in catalog #120. That wait was an over-broad
+implementation of the right ordering rule and has been removed.
+
+The persistent surface cache also accumulates every guest colour format seen
+for a base and recreates the Vulkan target only when a wider container is
+required.
 
 Verified headlessly with the same Lucent-driven input script. Before the fence
 fix, the larger-room probe rendered 4,402 draws but only 21,864 non-black pixels

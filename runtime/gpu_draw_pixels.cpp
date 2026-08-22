@@ -3,6 +3,7 @@
 
 #include "gpu_draw_pixels.h"
 
+#include <algorithm>
 #include <bit>
 #include <cstring>
 #include <fstream>
@@ -10,29 +11,40 @@
 namespace gears::draw
 {
 
-const char* VkStr(VkResult r)
+const char *VkStr(VkResult r)
 {
     switch (r)
     {
-    case VK_SUCCESS: return "VK_SUCCESS";
-    case VK_ERROR_OUT_OF_HOST_MEMORY: return "OUT_OF_HOST_MEMORY";
-    case VK_ERROR_OUT_OF_DEVICE_MEMORY: return "OUT_OF_DEVICE_MEMORY";
-    case VK_ERROR_INITIALIZATION_FAILED: return "INITIALIZATION_FAILED";
-    case VK_ERROR_FEATURE_NOT_PRESENT: return "FEATURE_NOT_PRESENT";
-    case VK_ERROR_EXTENSION_NOT_PRESENT: return "EXTENSION_NOT_PRESENT";
-    case VK_ERROR_INCOMPATIBLE_DRIVER: return "INCOMPATIBLE_DRIVER";
-    default: return "VkResult";
+    case VK_SUCCESS:
+        return "VK_SUCCESS";
+    case VK_ERROR_OUT_OF_HOST_MEMORY:
+        return "OUT_OF_HOST_MEMORY";
+    case VK_ERROR_OUT_OF_DEVICE_MEMORY:
+        return "OUT_OF_DEVICE_MEMORY";
+    case VK_ERROR_INITIALIZATION_FAILED:
+        return "INITIALIZATION_FAILED";
+    case VK_ERROR_FEATURE_NOT_PRESENT:
+        return "FEATURE_NOT_PRESENT";
+    case VK_ERROR_EXTENSION_NOT_PRESENT:
+        return "EXTENSION_NOT_PRESENT";
+    case VK_ERROR_INCOMPATIBLE_DRIVER:
+        return "INCOMPATIBLE_DRIVER";
+    default:
+        return "VkResult";
     }
 }
 
-std::vector<uint8_t> PackFloatConstants(const uint32_t* regDwords,
-    const uint64_t bitmap[4], uint32_t floatCount, uint32_t regBase)
+void PackFloatConstants(const uint32_t *regDwords, const uint64_t bitmap[4], uint32_t floatCount,
+                        uint32_t regBase, std::vector<uint8_t> &out)
 {
-    std::vector<uint8_t> out(size_t(std::max(floatCount, 1u)) * 16, 0);
-    uint8_t* w = out.data();
-    for (uint32_t block = 0; block < 4; ++block) {
+    out.resize(size_t(std::max(floatCount, 1u)) * 16);
+    std::fill(out.begin(), out.end(), uint8_t{0});
+    uint8_t *w = out.data();
+    for (uint32_t block = 0; block < 4; ++block)
+    {
         uint64_t entry = bitmap[block];
-        while (entry) {
+        while (entry)
+        {
             uint32_t idx = uint32_t(std::countr_zero(entry));
             entry &= ~(uint64_t(1) << idx);
             uint32_t constant = block * 64 + idx;
@@ -40,7 +52,6 @@ std::vector<uint8_t> PackFloatConstants(const uint32_t* regDwords,
             w += 16;
         }
     }
-    return out;
 }
 
 bool FormatSupportsStorage(VkPhysicalDevice physical, VkFormat format)
@@ -66,7 +77,7 @@ float Depth20e4To32(uint32_t f24)
     {
         // Denormal: normalise the mantissa and pay for it in the exponent.
         const uint32_t msb = 31u - uint32_t(__builtin_clz(mantissa));
-        unbiasedExponent = msb - 19u;             // wraps below 19, as intended
+        unbiasedExponent = msb - 19u; // wraps below 19, as intended
         f32Mantissa = mantissa << (20u - msb);
     }
     else
@@ -101,7 +112,11 @@ float HalfToFloat(uint16_t h)
         {
             // Subnormal: normalise into a float32 normal.
             exponent = 1;
-            while ((mantissa & 0x400) == 0) { mantissa <<= 1; --exponent; }
+            while ((mantissa & 0x400) == 0)
+            {
+                mantissa <<= 1;
+                --exponent;
+            }
             mantissa &= 0x3FF;
             bits = sign | ((exponent + (127 - 15)) << 23) | (mantissa << 13);
         }
@@ -115,15 +130,14 @@ float HalfToFloat(uint16_t h)
     return f;
 }
 
-bool EnsureParentDirectory(const std::filesystem::path& path)
+bool EnsureParentDirectory(const std::filesystem::path &path)
 {
     std::error_code ec;
     std::filesystem::create_directories(path.parent_path(), ec);
     return !ec;
 }
 
-bool WritePpm(const std::filesystem::path& path, const uint8_t* rgba,
-              uint32_t w, uint32_t h)
+bool WritePpm(const std::filesystem::path &path, const uint8_t *rgba, uint32_t w, uint32_t h)
 {
     if (!EnsureParentDirectory(path))
         return false;
@@ -134,14 +148,14 @@ bool WritePpm(const std::filesystem::path& path, const uint8_t* rgba,
     std::vector<uint8_t> row(size_t(w) * 3);
     for (uint32_t y = 0; y < h; ++y)
     {
-        const uint8_t* src = rgba + size_t(y) * w * 4;
+        const uint8_t *src = rgba + size_t(y) * w * 4;
         for (uint32_t x = 0; x < w; ++x)
         {
             row[x * 3 + 0] = src[x * 4 + 0];
             row[x * 3 + 1] = src[x * 4 + 1];
             row[x * 3 + 2] = src[x * 4 + 2];
         }
-        f.write(reinterpret_cast<const char*>(row.data()), std::streamsize(row.size()));
+        f.write(reinterpret_cast<const char *>(row.data()), std::streamsize(row.size()));
     }
     return true;
 }
