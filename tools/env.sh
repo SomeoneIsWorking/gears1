@@ -41,7 +41,7 @@ if [ -f "$gears_env_file" ]; then
     while IFS= read -r gears_env_line; do
         case "$gears_env_line" in
             \#*|'') continue ;;
-            GEARS_ISO=*|GEARS_GAME_DIR=*|GEARS_BUILD_DIR=*|RETIRED_PRIVATE_SOURCE_INPUT=*) ;;
+            GEARS_ISO=*|GEARS_GAME_DIR=*|GEARS_BUILD_DIR=*|GEARS_UE3_SRC=*) ;;
             *) continue ;;
         esac
         gears_env_name=${gears_env_line%%=*}
