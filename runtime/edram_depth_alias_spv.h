@@ -1,5 +1,5 @@
-// GENERATED from runtime/shaders/edram_depth_alias.comp by tools/gen_native_spv.sh -- do not edit.
-// Regenerate: tools/gen_native_spv.sh runtime/shaders/edram_depth_alias.comp runtime/edram_depth_alias_spv.h EdramDepthAliasSpirv
+// GENERATED from runtime/shaders/edram_depth_alias.comp by tools/gen_native_spv.py -- do not edit.
+// Regenerate: tools/gen_native_spv.py runtime/shaders/edram_depth_alias.comp runtime/edram_depth_alias_spv.h EdramDepthAliasSpirv
 #pragma once
 #include <cstdint>
 #include <vector>

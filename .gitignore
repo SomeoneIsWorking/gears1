@@ -2,6 +2,10 @@
 scratch/
 build/
 
+# Optional user-owned drop-in disc images. Provisioning never scans arbitrary
+# repository files; it accepts an explicit path, .env, or this ignored location.
+roms/
+
 # Python bytecode. A committed .pyc embeds the absolute path of the machine
 # that produced it -- tools/__pycache__/pass_structure.cpython-314.pyc carried
 # /home/<user> through every clone until 2026-08-05.

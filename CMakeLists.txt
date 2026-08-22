@@ -47,23 +47,6 @@ add_subdirectory(xenia_gpu)
 set(GEARS_HAVE_XMA_DECODER OFF)
 include(cmake/ffmpeg_xma.cmake)
 
-# The licensed UE3 checkout stays external. When configured, build its native
-# host port through the narrow adapter in native/ue3; no UE3 source is copied
-# into this repository.
-set(RETIRED_PRIVATE_SOURCE_INPUT "$ENV{RETIRED_PRIVATE_SOURCE_INPUT}" CACHE PATH
-    "External UE3 source checkout used by the native engine target")
-if(RETIRED_PRIVATE_SOURCE_INPUT)
-    if(NOT EXISTS "${RETIRED_PRIVATE_SOURCE_INPUT}/<retired-private-source-tree>/Core/Inc/Core.h")
-        message(FATAL_ERROR
-            "RETIRED_PRIVATE_SOURCE_INPUT='${RETIRED_PRIVATE_SOURCE_INPUT}' does not contain "
-            "<retired-private-source-tree>/Core/Inc/Core.h")
-    endif()
-    add_subdirectory(native/ue3)
-else()
-    message(STATUS
-        "Native UE3 target unavailable: set RETIRED_PRIVATE_SOURCE_INPUT to the external source checkout")
-endif()
-
 add_subdirectory(runtime)
 
 if(GEARS_HAVE_XENOS_TRANSLATOR)

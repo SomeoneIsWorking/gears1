@@ -10,20 +10,6 @@ from pathlib import Path
 
 
 FORMATTED = [
-    "native/ue3/core_platform_probe.cpp",
-    "native/ue3/platform/HostFileSystem.cpp",
-    "native/ue3/platform/HostFileSystem.h",
-    "native/ue3/platform/HostLzo.cpp",
-    "native/ue3/platform/HostLzo.h",
-    "native/ue3/platform/Linux.h",
-    "native/ue3/platform/LinuxDiagnostics.cpp",
-    "native/ue3/platform/LinuxDiagnostics.h",
-    "native/ue3/platform/LinuxFileManager.cpp",
-    "native/ue3/platform/LinuxFileManager.h",
-    "native/ue3/platform/LinuxThreading.h",
-    "native/ue3/test_linux_diagnostics.cpp",
-    "native/ue3/test_host_file_system.cpp",
-    "native/ue3/test_host_lzo.cpp",
     "runtime/debug_http.cpp",
     "runtime/debug_http.h",
     "runtime/frame_probe_capture.h",
@@ -44,6 +30,7 @@ FORMATTED = [
     "runtime/gpu_draw_resolve_decode.cpp",
     "runtime/gpu_draw_resolve_decode.h",
     "runtime/gpu_draw_sample_layout.h",
+    "runtime/gpu_draw_shaders.cpp",
     "runtime/gpu_draw_targets.cpp",
     "runtime/gpu_draw_targets.h",
     "runtime/gpu_draw_uniforms.cpp",
@@ -67,6 +54,8 @@ FORMATTED = [
     "runtime/graphics_probe_render.h",
     "runtime/input.cpp",
     "runtime/input.h",
+    "runtime/native_pass.cpp",
+    "runtime/native_pass.h",
     "runtime/render_thread.cpp",
     "runtime/render_thread.h",
     "runtime/render_retirement.h",
@@ -81,6 +70,7 @@ FORMATTED = [
     "tests/test_remote_input.cpp",
     "tests/test_render_retirement.cpp",
     "tests/test_scanout_gamma.cpp",
+    "tests/test_spirv_clamp.cpp",
     "tests/test_swapchain_format.cpp",
 ]
 
@@ -96,6 +86,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/gpu_draw_reinterpret.cpp",
     "runtime/gpu_draw_resolve.cpp",
     "runtime/gpu_draw_resolve_decode.cpp",
+    "runtime/gpu_draw_shaders.cpp",
     "runtime/gpu_draw_targets.cpp",
     "runtime/gpu_draw_uniforms.cpp",
     "runtime/gpu_draw_vertexfetch.cpp",
@@ -107,6 +98,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/gpu_scanout_gamma.cpp",
     "runtime/gpu_renderer_lifetime.cpp",
     "runtime/input.cpp",
+    "runtime/native_pass.cpp",
     "runtime/render_thread.cpp",
     "runtime/scanout_gamma.cpp",
     "tests/test_depth_alias_shader_format.cpp",
@@ -117,18 +109,8 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_remote_input.cpp",
     "tests/test_render_retirement.cpp",
     "tests/test_scanout_gamma.cpp",
+    "tests/test_spirv_clamp.cpp",
     "tests/test_swapchain_format.cpp",
-]
-
-OPTIONAL_TIDY_TRANSLATION_UNITS = [
-    "native/ue3/core_platform_probe.cpp",
-    "native/ue3/platform/HostFileSystem.cpp",
-    "native/ue3/platform/HostLzo.cpp",
-    "native/ue3/platform/LinuxDiagnostics.cpp",
-    "native/ue3/platform/LinuxFileManager.cpp",
-    "native/ue3/test_linux_diagnostics.cpp",
-    "native/ue3/test_host_file_system.cpp",
-    "native/ue3/test_host_lzo.cpp",
 ]
 
 VD_FORMAT_RANGES = [
@@ -178,12 +160,7 @@ def compile_database_sources(build_dir):
 
 
 def selected_tidy_units(root, database_sources):
-    optional = [
-        name
-        for name in OPTIONAL_TIDY_TRANSLATION_UNITS
-        if (root / name).resolve() in database_sources
-    ]
-    return [*TIDY_TRANSLATION_UNITS, *optional]
+    return TIDY_TRANSLATION_UNITS
 
 
 def run(command, root):
@@ -206,22 +183,6 @@ def selftest():
     assert "tests/test_frame_probe_capture.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_packet_memory.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_render_retirement.cpp" in TIDY_TRANSLATION_UNITS
-    native_probe = "native/ue3/core_platform_probe.cpp"
-    assert native_probe in OPTIONAL_TIDY_TRANSLATION_UNITS
-    assert "native/ue3/platform/HostFileSystem.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
-    assert "native/ue3/platform/HostLzo.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
-    assert "native/ue3/platform/HostLzo.h" in FORMATTED
-    assert "native/ue3/platform/LinuxFileManager.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
-    assert "native/ue3/platform/Linux.h" in FORMATTED
-    assert "native/ue3/platform/LinuxDiagnostics.cpp" in FORMATTED
-    assert "native/ue3/platform/LinuxDiagnostics.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
-    assert "native/ue3/test_linux_diagnostics.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
-    assert "native/ue3/test_host_lzo.cpp" in OPTIONAL_TIDY_TRANSLATION_UNITS
-    fake_root = Path("/repo")
-    assert native_probe not in selected_tidy_units(fake_root, set())
-    assert native_probe in selected_tidy_units(
-        fake_root, {(fake_root / native_probe).resolve()}
-    )
     assert VD_TIDY_RANGES and all(first <= last for first, last in VD_TIDY_RANGES)
     print("C++ quality checker selftest passed: positive tool lookup, missing-tool refusal, "
           "and touched-source coverage")
@@ -267,14 +228,6 @@ def main(argv):
         "-p", str(build_dir), f"--extra-arg=-resource-dir={resource_dir}", "--quiet"
     ]
     tidy_units = selected_tidy_units(root, database_sources)
-    missing_optional = [
-        name for name in OPTIONAL_TIDY_TRANSLATION_UNITS if name not in tidy_units
-    ]
-    if missing_optional:
-        print(
-            "C++ quality: optional translation units absent from the compile database: "
-            + ", ".join(missing_optional)
-        )
     run([clang_tidy, *tidy_common, *tidy_units], root)
 
     line_filter = json.dumps([

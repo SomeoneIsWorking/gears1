@@ -10,13 +10,13 @@ SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp", ".py", ".sh"}
 DEFAULT_MAX_LINES = 1000
 LEGACY_LIMITS = {
     "runtime/gpu_draw.cpp": 3841,
-    "runtime/vd_null_gpu.cpp": 3428,
+    "runtime/vd_null_gpu.cpp": 3412,
     "runtime/guest_probes.cpp": 2182,
-    "runtime/gpu_draw_probe.cpp": 1513,
-    "runtime/gpu_draw_xlate.cpp": 1443,
+    "runtime/gpu_draw_probe.cpp": 1507,
+    "runtime/gpu_draw_xlate.cpp": 1439,
     "runtime/gpu_present.cpp": 1414,
     "tools/layer_compare.py": 1073,
-    "tools/gfr_to_xtr.py": 974,
+    "tools/gfr_to_xtr.py": 965,
 }
 
 

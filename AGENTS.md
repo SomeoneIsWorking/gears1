@@ -1,24 +1,44 @@
-# Gears 1 port guidance
+# GearsUE3 engine-port guidance
 
 The repository-wide rules in `../../AGENTS.md` apply here. Consult
 `docs/codemap.md` before changing a subsystem and update it in the same commit.
 
 ## Product target
 
-USER 2026-08-22: "The goal is to build a native UE3 engine using UE3 sources so the game runs well"
+USER 2026-08-22: "I mean we can continue optimizing the recomp path but make it like an engine port so like GearsUE3 engine with recomp + overrides but it is supposed to handle all Gears of War UE3 games not just the first one"
 
-The shipping product is a native UE3 runtime built from the available UE3
-source and adapted to Gears of War's version-374 Xenon-cooked content. The
-recompiled PPC runtime, PM4 command processor, Xenos shader translator, and
-guest-draw renderer are the reference oracle and transition path; improving
-them is justified when it protects correctness or produces evidence needed by
-the native runtime, but they are not the product architecture.
+The product is GearsUE3: a shared engine port built from static recompilation,
+host Xbox 360 services, and measured native overrides. Gears 1 is the first
+conformance target, not the ownership boundary. Each supported title/revision
+gets its own locally generated recomp module and factual binding profile while
+the host runtime, renderer, audio, input, storage, override infrastructure, and
+semantic native implementations remain shared.
 
-“Native” means the UE3 object/package system, engine loop, scene, gameplay
-module, renderer, audio, and input execute as host code. Replacing individual
-Xenos shaders or removing one console GPU behavior inside a PM4-driven renderer
-does not satisfy this target. Keep the licensed UE3 checkout external through
-`RETIRED_PRIVATE_SOURCE_INPUT`; never vendor it or game content into this repository.
+Keep every recompiled body compiled and callable. Native overrides are runtime
+A/B seams with an explicit super-call, not edits to generated output or
+compile-time deletions. Guest addresses, image identity, shader hashes, menu
+walks, and diagnostics belong to a title/revision adapter; shared engine code
+must not acquire Gears 1 address tables merely because it is the first target.
+
+## Clean distribution boundary
+
+USER 2026-08-22: "I don't want to provide copyrighted material in anyway either from a private repo or a download link, I only want to provide absolute clean code and others should only provide the ROMs"
+
+The public repository contains independently authored source, compatible
+open-source dependencies with their required notices, and factual interoperability
+metadata only. It must not contain or fetch UE3 source, game code/assets,
+extracted files, decoded shader listings, decompiler output, generated recomp
+bodies, or caches derived from a title. Do not instruct users to obtain private
+source or game files from a download. A user-owned disc/image is the only
+copyrighted input accepted by provisioning.
+
+All disc-derived output belongs under ignored `scratch/titles/<fingerprint>/`
+and must be regenerable. Private UE3 source may settle a conceptual question for
+a developer, but no expression, comment, declaration, patch context, mechanical
+translation, or generated artifact from it may enter this repository. Public
+implementations must be independently written and verified against observable
+behavior or locally supplied game bytes. This is an engineering provenance
+rule, not a claim that the project has used a formal clean-room team process.
 
 ## Verification runs
 
@@ -35,14 +55,16 @@ Use `${DUSKLIGHT_REPO}` when set, otherwise the sibling checkout at
 `../../dusklight`, as the ownership reference. Adapt its cohesive host
 subsystems rather than copying platform-specific implementations.
 
-- `native/ue3/CMakeLists.txt` owns composition of the external UE3 source build;
-  `native/ue3/platform/` owns the host Linux contract, with diagnostics kept in
-  `LinuxDiagnostics.*`, filesystem semantics in `HostFileSystem.*`, and the
-  UE3 archive adapter in `LinuxFileManager.*` rather than accumulated in
-  `Linux.h`. The selected and deferred Core manifests must account for every
-  source in Core's current `.vcxproj`. Licensed source seams are exact-checked
-  and generated only in the ignored build tree by `tools/prepare_ue3_core.py`;
-  never modify the external checkout in place or commit a generated overlay.
+- Shared engine sources compose separately from locally generated title code.
+  One executable links one exact title/revision module; do not link multiple
+  generated images whose `_xstart`, `sub_*`, and `ppc_config.h` namespaces
+  collide.
+- The recompiler emits weak forwarding functions and retains `__imp__sub_*`
+  bodies. Generated sources are sacrosanct: no alias-stripping or other
+  post-generation mutation is allowed.
+- A title adapter owns exact image identity, semantic override bindings,
+  title-specific probes, pass hashes, save namespace, and scripted navigation.
+  Unknown revisions refuse rather than falling back by title name or image size.
 - `runtime/vd_null_gpu.cpp` composes guest GPU dispatch with host subsystems; it
   must not absorb their implementations.
 - `runtime/input.cpp` owns controller sources, arbitration, and the guest-facing

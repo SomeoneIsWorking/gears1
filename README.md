@@ -1,10 +1,14 @@
-# gears1
+# GearsUE3
 
-An in-progress attempt at a PC-native port of **Gears of War** (Xbox 360) by
-**static recompilation** — translating the game's PowerPC code to C++ ahead of
-time and overriding only at hardware/OS seams (graphics, audio, input, file
-I/O), following the [XenonRecomp](https://github.com/hedge-dev/XenonRecomp) /
-[N64Recomp](https://github.com/N64Recomp/N64Recomp) model.
+GearsUE3 is an in-progress clean-code engine port for the Xbox 360 Gears of War
+games. It combines static recompilation with shared host Xbox services and
+runtime native overrides. One exact title/revision is generated locally from a
+user-owned disc and linked against the shared engine; game-derived generated
+code and data never enter this repository.
+
+Gears of War 1 is the first and currently only verified target. Gears 2, Gears
+3, and Gears of War: Judgment are product scope, not present compatibility
+claims. See `docs/gearsue3-engine.md` for the ownership and evidence model.
 
 **Status: it boots, it plays its own menus, and it renders.** The title runs
 from boot through its startup movies into the main menu, takes a controller into
@@ -58,13 +62,13 @@ approximate, `docs/codemap.md` says where each subsystem lives, and
 
 ## You must supply the game
 
-**No game data is included, and none ever will be.** This repository contains
-only tooling and configuration. To use it you need your own legally obtained
-Gears of War disc image.
+**No game or UE3 source is included, fetched, or accepted as a dependency.** To
+build a playable title module you supply your own legally obtained Gears disc
+image. Extraction and recompilation output stay under gitignored `scratch/`.
 
 ```sh
-export GEARS_ISO="/path/to/your/Gears of War.iso"     # or put it in .env
-python3 tools/gdf_extract.py --extract default.xex --out scratch/bin/default.xex
+export GEARS_ISO="/path/to/your/Gears of War.iso"
+python3 tools/gdf_extract.py "$GEARS_ISO" --extract-all scratch/game
 ```
 
 Everything derived from the disc lands in `scratch/`, which is gitignored.
@@ -88,12 +92,21 @@ Everything derived from the disc lands in `scratch/`, which is gitignored.
 ```sh
 git clone --recursive https://github.com/SomeoneIsWorking/gears1
 cmake -S extern/XenonRecomp -B scratch/build-xenonrecomp -G Ninja \
-      -DCMAKE_BUILD_TYPE=Release
+      -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ \
+      -DCMAKE_C_COMPILER=clang
 cmake --build scratch/build-xenonrecomp
 
-# jump tables, then the recompilation itself
+# Recover jump tables, merge the tracked correction, and generate into a fresh
+# ignored directory. Generated code is never patched after emission.
+mkdir -p scratch/config
 ./scratch/build-xenonrecomp/XenonAnalyse/XenonAnalyse \
-    scratch/bin/default.xex scratch/config/gears_switch_tables.toml
+    scratch/game/default.xex scratch/config/gears_switch_tables.auto.toml
+python3 tools/merge_switch_tables.py \
+    scratch/config/gears_switch_tables.auto.toml \
+    config/gears_switch_tables.extra.toml \
+    scratch/config/gears_switch_tables.toml
+tools/cleanup_scratch_path.sh scratch/ppc
+mkdir -p scratch/ppc
 ./scratch/build-xenonrecomp/XenonRecomp/XenonRecomp \
     config/gears.toml extern/XenonRecomp/XenonUtils/ppc_context.h
 ```
@@ -101,7 +114,7 @@ cmake --build scratch/build-xenonrecomp
 XenonRecomp needs CMake 3.20+ and Clang 18+. It exits non-zero if any
 instruction lacks an implementation.
 
-Then build and run the runtime against the generated code:
+Then build and run the runtime against the locally generated code:
 
 ```sh
 ./run.sh                 # configure if needed, build, and play
@@ -164,9 +177,14 @@ endorsed by the Xenia project or its contributors.
 
 ## Licence
 
-Tooling here is MIT. XenonRecomp is MIT (see the submodule). Xenia is
+First-party tooling and engine code are intended to be MIT-licensed. XenonRecomp is MIT
+(see the submodule). Xenia is
 BSD 3-Clause (see above). The XMA decoder is built from a fork of FFmpeg
 (`extern/ffmpeg-xmaframes`, LGPL 2.1 or later) that adds a per-frame XMA codec;
 it is compiled from source by the build and linked statically. Gears of War is
-copyright Epic Games / Microsoft; this project ships none of it, and none of it
-is required to build.
+copyright Epic Games / Microsoft; this project ships none of it. Building the
+clean engine-owned tools does not require game material; generating and building
+a playable title module requires the user's own disc.
+
+See [`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) for
+the complete first- and third-party notices.
