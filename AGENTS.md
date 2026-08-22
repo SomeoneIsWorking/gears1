@@ -36,10 +36,12 @@ Use `${DUSKLIGHT_REPO}` when set, otherwise the sibling checkout at
 subsystems rather than copying platform-specific implementations.
 
 - `native/ue3/CMakeLists.txt` owns composition of the external UE3 source build;
-  `native/ue3/platform/` owns the host Linux contract. Licensed source seams
-  are exact-checked and generated only in the ignored build tree by
-  `tools/prepare_ue3_core.py`; never modify the external checkout in place or
-  commit a generated overlay.
+  `native/ue3/platform/` owns the host Linux contract, with diagnostics kept in
+  `LinuxDiagnostics.*` rather than accumulated in `Linux.h`. The selected and
+  deferred Core manifests must account for every source in Core's current
+  `.vcxproj`. Licensed source seams are exact-checked and generated only in the
+  ignored build tree by `tools/prepare_ue3_core.py`; never modify the external
+  checkout in place or commit a generated overlay.
 - `runtime/vd_null_gpu.cpp` composes guest GPU dispatch with host subsystems; it
   must not absorb their implementations.
 - `runtime/input.cpp` owns controller sources, arbitration, and the guest-facing
