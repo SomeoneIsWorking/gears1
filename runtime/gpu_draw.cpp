@@ -19,6 +19,7 @@
 #include "spirv_clamp.h"
 #include "gpu_shared_device.h"
 #include "gpu_queue_family.h"
+#include "gpu_queue_access.h"
 #include <lucent/config.h>
 #include <lucent/log.h>
 
@@ -2827,7 +2828,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
-    VK_CHECK(vkQueueSubmit(queue, 1, &submit, fence));
+    VK_CHECK(SharedGpuQueueAccess().Submit(queue, 1, &submit, fence));
     VK_CHECK(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
     accumulate(msSubmit, tSubmit);
 
@@ -3208,15 +3209,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
 
     DS.Report(drawn, prepared);
 
-    if (!ownsDevice && presentableImage != VK_NULL_HANDLE)
-        P.scanout.Publish(scanoutResult, W, H);
+    if (!ownsDevice && presentableImage != VK_NULL_HANDLE &&
+        !P.scanout.Publish(scanoutResult, W, H, in.sequence))
+        return false;
 
     // --- read pixels + coverage numbers ----------------------------------
-    // Only when they are still wanted: on the shared-device path the presenter blits
-    // the image and never looks at these bytes, so copying a whole frame out of the
-    // GPU every frame would be pure cost. g_frame is left holding the previous
-    // frame's contents in that case, which nothing reads -- and if that ever changes,
-    // this is where it would go stale.
+    // Shared-device presentation never reads these bytes, so copying a full frame to host
+    // every frame would be pure cost. g_frame keeps previous contents, which nothing reads;
+    // if that changes, this is where they go stale.
     if (needHostPixels)
     {
         // The readback allocation may include MSAA rows; the host contract is W x H RGBA.
@@ -3793,7 +3793,7 @@ void ResetRendererForComparison()
     Renderer &r = FrameRenderer();
     if (r.device != VK_NULL_HANDLE)
     {
-        vkDeviceWaitIdle(r.device);
+        SharedGpuQueueAccess().WaitDeviceIdle(r.device);
         r.ReleasePersistent();
     }
 }

@@ -37,6 +37,7 @@
 #include "edram_depth_alias_spv.h"
 #include "gpu_draw_formats.h"
 #include "gpu_draw_pixels.h"
+#include "gpu_queue_access.h"
 
 namespace gears::draw
 {
@@ -688,8 +689,10 @@ bool RenderTargetCache::ReinterpretSelfTest()
         VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
         si.commandBufferCount = 1;
         si.pCommandBuffers = &cmd;
-        if (vkQueueSubmit(R.queue, 1, &si, VK_NULL_HANDLE) != VK_SUCCESS ||
-            vkQueueWaitIdle(R.queue) != VK_SUCCESS)
+        const bool submitted =
+            SharedGpuQueueAccess().Submit(R.queue, 1, &si, VK_NULL_HANDLE) == VK_SUCCESS &&
+            SharedGpuQueueAccess().WaitIdle(R.queue) == VK_SUCCESS;
+        if (!submitted)
         {
             lucent::error("draw",
                           "EDRAM reinterpretation self-test: case '{}'"

@@ -103,6 +103,12 @@ function(gears_optimise_host target)
     endif()
 endfunction()
 
+add_library(gears_title_profile STATIC title_profile.cpp)
+target_include_directories(gears_title_profile PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+
+add_library(gears_gpu_queue_access STATIC gpu_queue_access.cpp)
+target_include_directories(gears_gpu_queue_access PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+
 # Import stubs are generated because the import list comes from the game.
 set(IMPORT_STUBS "${CMAKE_CURRENT_BINARY_DIR}/imports_generated.cpp")
 add_custom_command(
@@ -158,6 +164,7 @@ add_executable(gears1
     fault_report.cpp
     file_disposition.cpp
     guest_stack_argument.cpp
+    frame_queue.cpp
     gpu_queue_family.cpp
     gpu_instance.cpp
     gpu_device_features.cpp
@@ -191,7 +198,7 @@ endif()
 set_source_files_properties(main.cpp PROPERTIES COMPILE_DEFINITIONS
                             "GEARS_BUILD_REVISION=\"${GEARS_GIT_REV}\"")
 target_include_directories(gears1 PRIVATE . "${THIRDPARTY_ROOT}/xxHash")
-target_link_libraries(gears1 PRIVATE gears_ppc XenonUtils lucent::lucent)
+target_link_libraries(gears1 PRIVATE gears_ppc gears_title_profile XenonUtils lucent::lucent)
 
 if(GEARS_HAVE_XMA_DECODER)
     target_link_libraries(gears1 PRIVATE ffmpeg_xma)
@@ -208,6 +215,7 @@ add_library(gears_draw STATIC
     frame_ab.cpp
     frame_capture.cpp
     frame_content.cpp
+    frame_contract.cpp
     gpu_device_features.cpp
     gpu_draw.cpp
     gpu_draw_arena.cpp
@@ -231,6 +239,7 @@ add_library(gears_draw STATIC
     gpu_draw_vertexfetch.cpp
     gpu_instance.cpp
     gpu_queue_family.cpp
+    gpu_retirement.cpp
     gpu_renderer_capacity.cpp
     gpu_renderer_lifetime.cpp
     gpu_resolve_extent.cpp
@@ -244,7 +253,9 @@ add_library(gears_draw STATIC
     spirv_clamp.cpp)
 target_include_directories(gears_draw PUBLIC . PRIVATE "${THIRDPARTY_ROOT}/xxHash")
 target_link_libraries(gears_draw PRIVATE lucent::lucent)
+target_link_libraries(gears_draw PRIVATE gears_gpu_queue_access)
 target_link_libraries(gears1 PRIVATE gears_draw)
+target_link_libraries(gears1 PRIVATE gears_gpu_queue_access)
 
 # The host graphics backend. Vulkan because extern/xenia's SPIR-V shader
 # translator is the intended path for real content later, and SDL3 for the
@@ -340,6 +351,7 @@ target_link_options(gears1 PRIVATE -rdynamic)
 # Every host target gets the optimisation the guest code has always had. Listed
 # explicitly rather than applied globally, so a target added later has to opt in
 # and nobody silently ships an -O0 renderer again.
-foreach(gears_host_target gears1 gears_draw gears_draw_xlate frame_replay)
+foreach(gears_host_target gears1 gears_title_profile gears_gpu_queue_access gears_draw
+                          gears_draw_xlate frame_replay)
     gears_optimise_host(${gears_host_target})
 endforeach()

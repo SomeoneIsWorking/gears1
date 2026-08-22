@@ -174,6 +174,20 @@ add_executable(test_render_retirement test_render_retirement.cpp)
 target_include_directories(test_render_retirement PRIVATE ../runtime)
 add_test(NAME render_retirement COMMAND test_render_retirement)
 
+add_executable(test_gpu_retirement
+    test_gpu_retirement.cpp
+    ../runtime/gpu_retirement.cpp)
+target_include_directories(test_gpu_retirement PRIVATE ../runtime)
+add_test(NAME gpu_retirement COMMAND test_gpu_retirement)
+
+add_executable(test_gpu_queue_access test_gpu_queue_access.cpp)
+target_link_libraries(test_gpu_queue_access PRIVATE gears_gpu_queue_access)
+add_test(NAME gpu_queue_access COMMAND test_gpu_queue_access)
+
+add_executable(test_title_profile test_title_profile.cpp)
+target_link_libraries(test_title_profile PRIVATE gears_title_profile)
+add_test(NAME title_profile COMMAND test_title_profile)
+
 add_executable(test_scanout_gamma
     test_scanout_gamma.cpp
     ../runtime/scanout_gamma.cpp)
@@ -229,6 +243,12 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME clean_distribution_selftest
         COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_SOURCE_DIR}/tools/check_distribution_clean.py" --selftest)
+    add_test(NAME title_identity
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_title_identity.py")
+    add_test(NAME title_conformance_selftest
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_SOURCE_DIR}/tools/title_conformance.py" --selftest)
     add_test(NAME instrument_find_addr_refs
         COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/find_addr_refs.py" --selftest)
     add_test(NAME instrument_atomic_audit
@@ -492,6 +512,22 @@ add_executable(test_frame_ab
     ../runtime/frame_ab.cpp)
 target_include_directories(test_frame_ab PRIVATE ../runtime)
 add_test(NAME frame_ab COMMAND test_frame_ab)
+
+# The live renderer's producer must never wait behind Vulkan work. It owns one
+# pending frame, replaces it with a newer arrival, rejects stale IDs, and drains
+# deterministically when closed. This test exercises the production queue with
+# no renderer, clock, guest, or graphics device.
+add_executable(test_frame_queue
+    test_frame_queue.cpp
+    ../runtime/frame_queue.cpp)
+target_include_directories(test_frame_queue PRIVATE ../runtime)
+add_test(NAME frame_queue COMMAND test_frame_queue)
+
+add_executable(test_frame_contract
+    test_frame_contract.cpp
+    ../runtime/frame_contract.cpp)
+target_include_directories(test_frame_contract PRIVATE ../runtime)
+add_test(NAME frame_contract COMMAND test_frame_contract)
 
 # The fragment-output clamp. A fixed-point render target clamps a shader's colour
 # output to [0,1] before blending and a floating-point one does not -- and this

@@ -13,6 +13,10 @@ FORMATTED = [
     "runtime/debug_http.cpp",
     "runtime/debug_http.h",
     "runtime/frame_probe_capture.h",
+    "runtime/frame_contract.cpp",
+    "runtime/frame_contract.h",
+    "runtime/frame_queue.cpp",
+    "runtime/frame_queue.h",
     "runtime/gpu_device_features.h",
     "runtime/gpu_draw.cpp",
     "runtime/gpu_draw.h",
@@ -41,6 +45,11 @@ FORMATTED = [
     "runtime/gpu_present.cpp",
     "runtime/gpu_present_stage.cpp",
     "runtime/gpu_present_stage.h",
+    "runtime/gpu_queue_access.cpp",
+    "runtime/gpu_queue_access.h",
+    "runtime/gpu_retirement.cpp",
+    "runtime/gpu_retirement.h",
+    "runtime/gpu_renderer_capacity.cpp",
     "runtime/gpu_packet_memory.cpp",
     "runtime/gpu_packet_memory.h",
     "runtime/gpu_scanout.cpp",
@@ -64,8 +73,12 @@ FORMATTED = [
     "runtime/swapchain_format.h",
     "tests/test_depth_alias_shader_format.cpp",
     "tests/test_frame_probe_capture.cpp",
+    "tests/test_frame_contract.cpp",
+    "tests/test_frame_queue.cpp",
     "tests/test_graphics_probe.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
+    "tests/test_gpu_retirement.cpp",
+    "tests/test_gpu_queue_access.cpp",
     "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_render_retirement.cpp",
@@ -78,6 +91,8 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/debug_http.cpp",
     "runtime/graphics_probe.cpp",
     "runtime/graphics_probe_render.cpp",
+    "runtime/frame_contract.cpp",
+    "runtime/frame_queue.cpp",
     "runtime/gpu_draw.cpp",
     "runtime/gpu_draw_indices.cpp",
     "runtime/gpu_draw_pixels.cpp",
@@ -93,6 +108,9 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/gpu_draw_xlate.cpp",
     "runtime/gpu_present.cpp",
     "runtime/gpu_present_stage.cpp",
+    "runtime/gpu_queue_access.cpp",
+    "runtime/gpu_retirement.cpp",
+    "runtime/gpu_renderer_capacity.cpp",
     "runtime/gpu_packet_memory.cpp",
     "runtime/gpu_scanout.cpp",
     "runtime/gpu_scanout_gamma.cpp",
@@ -103,8 +121,12 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/scanout_gamma.cpp",
     "tests/test_depth_alias_shader_format.cpp",
     "tests/test_frame_probe_capture.cpp",
+    "tests/test_frame_contract.cpp",
+    "tests/test_frame_queue.cpp",
     "tests/test_graphics_probe.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
+    "tests/test_gpu_retirement.cpp",
+    "tests/test_gpu_queue_access.cpp",
     "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_render_retirement.cpp",
@@ -181,7 +203,12 @@ def selftest():
     assert "tests/test_gpu_draw_sample_layout.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_surface_format_capacity.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_frame_probe_capture.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/frame_queue.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_frame_queue.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_packet_memory.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_queue_access.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_renderer_capacity.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_gpu_queue_access.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_render_retirement.cpp" in TIDY_TRANSLATION_UNITS
     assert VD_TIDY_RANGES and all(first <= last for first, last in VD_TIDY_RANGES)
     print("C++ quality checker selftest passed: positive tool lookup, missing-tool refusal, "

@@ -26,14 +26,13 @@ class GpuScanout
     bool Record(Renderer &renderer, VkCommandBuffer commands, VkImage source, uint32_t width,
                 uint32_t height, const uint32_t *guestGammaRamp, VkBuffer readback, bool copyToHost,
                 GpuScanoutResult &result);
-    void Publish(const GpuScanoutResult &result, uint32_t width, uint32_t height);
+    bool Publish(const GpuScanoutResult &result, uint32_t width, uint32_t height, long frameId);
     void Release(Renderer &renderer);
 
   private:
     VkImage images_[2]{};
     VkDeviceMemory memory_[2]{};
     uint32_t nextImage_ = 0;
-    uint64_t published_ = 0;
     GpuScanoutGamma gamma_;
 };
 

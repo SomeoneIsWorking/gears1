@@ -20,8 +20,8 @@
 //     mix of two frames' data. It cannot fault: every read is bounds-checked
 //     against the guest window.
 //   - One newer frame may wait while the renderer is busy, keeping the renderer
-//     saturated without an unbounded latency queue. Further arrivals are stale
-//     and are dropped, counted, and reported.
+//     saturated without an unbounded latency queue. A newer arrival replaces a
+//     stale pending frame; the displaced frame is counted and reported.
 //   - The register snapshots the draw list points at are shared_ptr copies, and
 //     the microcode pointers are into the shader-capture map, whose entries are
 //     never erased. Those are safe to read from this thread; the guest's PIXEL
@@ -37,11 +37,11 @@ namespace gears
 {
 
 // Hand one frame's draw list to the render thread. One frame may wait behind the
-// one being rendered; returns false only when that bounded queue is already full
-// and this arrival is dropped. Starts the thread on first use.
+// one being rendered; a newer arrival replaces that pending frame without
+// waiting. Returns false only after shutdown. Starts the thread on first use.
 bool SubmitFrameForRender(FrameDrawInputs &&in);
 
-// Frames handed over, and frames dropped because the bounded queue was full.
+// Frames handed over, and pending frames displaced by newer arrivals.
 struct RenderThreadStats
 {
     uint64_t submitted = 0;
