@@ -1200,8 +1200,8 @@ bool ClassifyDraw(const uint32_t *registerFile, const uint8_t *psUcode, size_t p
     out.pixelShaderNeeded = draw_util::IsPixelShaderNeededWithRasterization(*ps, regs);
     return true;
 }
-
-void DeriveSystemConstants(const uint32_t *registerFile, std::vector<uint8_t> &out)
+void DeriveSystemConstants(const uint32_t *registerFile, bool applyTextureSigns,
+                           std::vector<uint8_t> &out)
 {
     const RegisterFile &regs = AsRegisterFile(registerFile);
 
@@ -1304,8 +1304,8 @@ void DeriveSystemConstants(const uint32_t *registerFile, std::vector<uint8_t> &o
     // component feeds each output component and the shader reads them in output
     // order -- so this uses Xenia's own texture_util::SwizzleSigns.
     //
-    // GEARS_DRAW_NO_TEX_SIGNS=1 restores the undecoded behaviour as a control arm.
-    if (!lucent::config::flag("DRAW_NO_TEX_SIGNS"))
+    // GEARS_DRAW_NO_TEX_SIGNS=1 restores undecoded sampling as a control arm.
+    if (applyTextureSigns)
     {
         for (uint32_t fc = 0; fc < 32; ++fc)
         {

@@ -280,7 +280,8 @@ bool TranslateShader(bool isVertex, const uint8_t *ucode, size_t size, uint64_t 
 // Derives the system-constants UBO (Xenia's SpirvShaderTranslator::
 // SystemConstants) from our tracked register file, returned as raw bytes.
 // Ports UpdateSystemConstantValues (non-FSI host-render-targets path).
-void DeriveSystemConstants(const uint32_t *registerFile, std::vector<uint8_t> &out);
+void DeriveSystemConstants(const uint32_t *registerFile, bool applyTextureSigns,
+                           std::vector<uint8_t> &out);
 
 // The draw's own viewport and scissor, in render-target pixels, derived from
 // the guest's PA_CL_VPORT_*/PA_SC_* registers by Xenia's draw_util

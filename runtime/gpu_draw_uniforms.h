@@ -30,18 +30,27 @@ namespace gears::draw
 
 struct UniformCache
 {
-    explicit UniformCache(FrameArena& arena) : AR(arena) {}
+    UniformCache(FrameArena &arena, bool applyTextureSigns)
+        : AR(arena), applyTextureSigns(applyTextureSigns)
+    {
+    }
 
-    FrameArena& AR;
+    FrameArena &AR;
+    const bool applyTextureSigns;
 
-    enum class Result { kReused, kRebuilt, kFailed };
+    enum class Result
+    {
+        kReused,
+        kRebuilt,
+        kFailed
+    };
 
     // Returns kReused when this draw's blocks are already the cached ones,
     // kRebuilt when they were repacked, and kFailed when the arena could not
     // hold them -- on which the caller must SKIP the draw, because the
     // descriptor infos then describe the previous draw's constants.
-    Result Update(const uint32_t* regs, const FrameDrawItem& d,
-                  const ShaderXlate& vsX, const ShaderXlate& psX);
+    Result Update(const uint32_t *regs, const FrameDrawItem &d, const ShaderXlate &vsX,
+                  const ShaderXlate &psX);
 
     // The packed bytes, kept after the call so a diagnostic can print the
     // numbers the shader will actually multiply by (GEARS_DRAW_PS_CONSTS).
@@ -74,24 +83,23 @@ struct UniformCache
     struct BadConst
     {
         uint64_t psHash;
-        uint32_t index;      // vec4 index in the shader's own packed order
+        uint32_t index; // vec4 index in the shader's own packed order
         uint32_t bits[4];
         bool isPixel;
     };
     uint64_t nanBlocks = 0, infBlocks = 0;
-    std::vector<BadConst> badConsts;     // capped; nanBlocks is the denominator
+    std::vector<BadConst> badConsts; // capped; nanBlocks is the denominator
     static constexpr size_t kMaxBadConsts = 8;
     // Scans one packed block and records what it finds. `isPixel` only labels
     // the report.
-    void CensusConstants(const std::vector<uint8_t>& block, uint64_t psHash,
-                         bool isPixel);
+    void CensusConstants(const std::vector<uint8_t> &block, uint64_t psHash, bool isPixel);
     // One line per frame, or SILENCE ONLY when a scan actually ran and found
     // nothing -- which it says, with its denominator.
     void ReportConstantCensus() const;
 
-private:
+  private:
     bool valid = false;
-    const void* keySnapshot = nullptr;
+    const void *keySnapshot = nullptr;
     uint64_t keyVs = 0, keyPs = 0;
 };
 
