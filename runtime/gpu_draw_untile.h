@@ -49,7 +49,9 @@ namespace gears::draw
 // are in destination PIXELS, so the widening below has to convert. Mixing the
 // two silently leaves a 2X tile's scissor at its band height and is exactly why
 // the sample model rendered 508 of 720 rows (catalog #91).
-void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
-                         bool scissorsAreSamples = false);
+// Detailed rejection strings and group censuses are diagnostic work, so normal
+// frames disable them; report frames enable them without changing the collapse.
+void CollapseEdramTiling(std::vector<PreparedDraw> &prepared, uint32_t &issued,
+                         bool scissorsAreSamples = false, bool reportDiagnostics = true);
 
 } // namespace gears::draw

@@ -14,6 +14,8 @@ FORMATTED = [
     "runtime/generated_title_profile.h",
     "runtime/guest_filesystem.cpp",
     "runtime/guest_filesystem.h",
+    "runtime/guest_texture_hash.cpp",
+    "runtime/guest_texture_hash.h",
     "runtime/main.cpp",
     "runtime/debug_http.cpp",
     "runtime/debug_http.h",
@@ -91,7 +93,9 @@ FORMATTED = [
     "tests/test_frame_contract.cpp",
     "tests/test_frame_queue.cpp",
     "tests/test_graphics_probe.cpp",
+    "tests/test_guest_texture_hash.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
+    "tests/test_gpu_draw_untile.cpp",
     "tests/test_gpu_draw_options.cpp",
     "tests/test_gpu_draw_indices.cpp",
     "tests/test_gpu_retirement.cpp",
@@ -110,6 +114,7 @@ FORMATTED = [
 TIDY_TRANSLATION_UNITS = [
     "runtime/generated_title_profile.cpp",
     "runtime/guest_filesystem.cpp",
+    "runtime/guest_texture_hash.cpp",
     "runtime/main.cpp",
     "runtime/debug_http.cpp",
     "runtime/graphics_probe.cpp",
@@ -151,7 +156,9 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_frame_contract.cpp",
     "tests/test_frame_queue.cpp",
     "tests/test_graphics_probe.cpp",
+    "tests/test_guest_texture_hash.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
+    "tests/test_gpu_draw_untile.cpp",
     "tests/test_gpu_draw_options.cpp",
     "tests/test_gpu_draw_indices.cpp",
     "tests/test_gpu_retirement.cpp",
@@ -233,6 +240,7 @@ def selftest():
     assert "runtime/gpu_draw_reinterpret.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_targets.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_draw_sample_layout.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_gpu_draw_untile.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_surface_format_capacity.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_frame_probe_capture.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/frame_queue.cpp" in TIDY_TRANSLATION_UNITS
@@ -244,6 +252,8 @@ def selftest():
     assert "tests/test_render_retirement.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/title_executable.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/generated_title_profile.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/guest_texture_hash.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_guest_texture_hash.cpp" in TIDY_TRANSLATION_UNITS
     assert VD_TIDY_RANGES and all(first <= last for first, last in VD_TIDY_RANGES)
     print("C++ quality checker selftest passed: positive tool lookup, missing-tool refusal, "
           "and touched-source coverage")

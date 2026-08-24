@@ -129,6 +129,47 @@ add_custom_command(
             "${GEARS_PPC_DIR}/ppc_func_mapping.cpp"
     COMMENT "Generating Xbox 360 kernel import stubs")
 
+# Texture content identity is shared by the live renderer and its focused test.
+# Build it once so both exercise the same CPU-dispatch path rather than compiling
+# separate copies with potentially different target-feature flags.
+#
+# Probe the TARGET compiler rather than the host architecture: the latter is
+# wrong for cross-compiles. An Apple universal ARM64+x86_64 build deliberately
+# fails this compile-only probe and uses normal xxHash for both slices.
+include(CheckCSourceCompiles)
+if(DEFINED CMAKE_TRY_COMPILE_TARGET_TYPE)
+    set(GEARS_SAVED_TRY_COMPILE_TARGET_TYPE "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
+    set(GEARS_HAD_TRY_COMPILE_TARGET_TYPE TRUE)
+endif()
+set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+check_c_source_compiles([[
+#if !(defined(__x86_64__) || defined(__i386__) || defined(_M_IX86) || defined(_M_X64))
+#error xxHash x86 dispatch requires an exclusively x86 target
+#endif
+#if !(defined(__GNUC__) || defined(_MSC_VER))
+#error xxHash x86 dispatch requires a compiler supported by the vendor source
+#endif
+int main(void) { return 0; }
+]] GEARS_HAVE_XXHASH_X86_DISPATCH)
+if(GEARS_HAD_TRY_COMPILE_TARGET_TYPE)
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE "${GEARS_SAVED_TRY_COMPILE_TARGET_TYPE}")
+else()
+    unset(CMAKE_TRY_COMPILE_TARGET_TYPE)
+endif()
+unset(GEARS_HAD_TRY_COMPILE_TARGET_TYPE)
+unset(GEARS_SAVED_TRY_COMPILE_TARGET_TYPE)
+
+add_library(gears_guest_texture_hash STATIC guest_texture_hash.cpp)
+target_include_directories(gears_guest_texture_hash PUBLIC .
+    PRIVATE "${THIRDPARTY_ROOT}/xxHash")
+target_link_libraries(gears_guest_texture_hash PRIVATE xxHash::xxhash)
+if(GEARS_HAVE_XXHASH_X86_DISPATCH)
+    target_sources(gears_guest_texture_hash PRIVATE
+        "${THIRDPARTY_ROOT}/xxHash/xxh_x86dispatch.c")
+    target_compile_definitions(gears_guest_texture_hash PRIVATE
+        GEARS_XXHASH_X86_DISPATCH=1)
+endif()
+
 add_executable(gears1
     main.cpp
     guest_memory.cpp
@@ -179,7 +220,6 @@ add_executable(gears1
     gpu_packet_memory.cpp
     render_thread.cpp
     native_pass.cpp
-    guest_texture_hash.cpp
     guest_indirect_call.cpp
     user_profile.cpp
     xam_apps.cpp
@@ -256,7 +296,6 @@ add_library(gears_draw STATIC
     gpu_scanout.cpp
     gpu_scanout_gamma.cpp
     gpu_shared_device.cpp
-    guest_texture_hash.cpp
     native_pass.cpp
     render_ab.cpp
     scanout_gamma.cpp
@@ -264,6 +303,7 @@ add_library(gears_draw STATIC
 target_include_directories(gears_draw PUBLIC . PRIVATE "${THIRDPARTY_ROOT}/xxHash")
 target_link_libraries(gears_draw PRIVATE lucent::lucent)
 target_link_libraries(gears_draw PRIVATE gears_gpu_queue_access)
+target_link_libraries(gears_draw PRIVATE gears_guest_texture_hash)
 target_link_libraries(gears1 PRIVATE gears_draw)
 target_link_libraries(gears1 PRIVATE gears_gpu_queue_access)
 
@@ -362,7 +402,8 @@ target_link_options(gears1 PRIVATE -rdynamic)
 # explicitly rather than applied globally, so a target added later has to opt in
 # and nobody silently ships an -O0 renderer again.
 foreach(gears_host_target gears1 gears_title_profile gears_generated_title_profile
-                          gears_title_executable gears_gpu_queue_access gears_draw
-                          gears_draw_xlate frame_replay)
+                          gears_title_executable gears_gpu_queue_access
+                          gears_guest_texture_hash gears_draw
+                          gears_draw_xlate frame_replay xxhash)
     gears_optimise_host(${gears_host_target})
 endforeach()

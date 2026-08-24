@@ -24,7 +24,7 @@ namespace
 
 int g_failures = 0;
 
-void Check(bool ok, const char* what)
+void Check(bool ok, const char *what)
 {
     if (!ok)
     {
@@ -33,21 +33,20 @@ void Check(bool ok, const char* what)
     }
 }
 
+using gears::GuestTextureUnchanged;
 using gears::HashGuestTexture;
 using gears::HashGuestTextureParts;
-using gears::GuestTextureUnchanged;
 
 void TestSameBytesHashTheSame()
 {
     const std::vector<uint8_t> a(4096, 0x7F);
     const std::vector<uint8_t> b(4096, 0x7F);
-    Check(HashGuestTexture(a.data(), a.size()) ==
-              HashGuestTexture(b.data(), b.size()),
-        "identical contents hash identically, so an unchanged texture is not"
-        " re-uploaded every frame");
+    Check(HashGuestTexture(a.data(), a.size()) == HashGuestTexture(b.data(), b.size()),
+          "identical contents hash identically, so an unchanged texture is not"
+          " re-uploaded every frame");
     Check(GuestTextureUnchanged(HashGuestTexture(a.data(), a.size()),
                                 HashGuestTexture(b.data(), b.size())),
-        "and the policy reports it unchanged");
+          "and the policy reports it unchanged");
 }
 
 // THE POINT OF THE FILE. Every byte must matter, including ones a sampled hash
@@ -66,10 +65,9 @@ void TestEverySinglePositionIsCovered()
         if (HashGuestTexture(changed.data(), kSize) == baseHash)
             ++missed;
     }
-    Check(missed == 0,
-        "a one-byte change at EVERY position changes the hash -- a hash that"
-        " sampled a few offsets would miss the interior ones and report a modified"
-        " texture as unchanged");
+    Check(missed == 0, "a one-byte change at EVERY position changes the hash -- a hash that"
+                       " sampled a few offsets would miss the interior ones and report a modified"
+                       " texture as unchanged");
     if (missed != 0)
         printf("  %zu of %zu positions were invisible to the hash\n", missed, kSize);
 }
@@ -81,30 +79,43 @@ void TestSingleBitChangeIsSeen()
     const uint64_t before = HashGuestTexture(a.data(), a.size());
     a[300] = 0x01;
     Check(HashGuestTexture(a.data(), a.size()) != before,
-        "one bit set in the middle changes the hash");
+          "one bit set in the middle changes the hash");
     Check(!GuestTextureUnchanged(before, HashGuestTexture(a.data(), a.size())),
-        "and the policy reports it changed, so the cache re-uploads");
+          "and the policy reports it changed, so the cache re-uploads");
 }
 
 void TestEveryMipByteIsCovered()
 {
     std::vector<uint8_t> base(256, 0x21);
     std::vector<uint8_t> mips(1024, 0x42);
-    const uint64_t original = HashGuestTextureParts(
-        base.data(), base.size(), mips.data(), mips.size());
+    const uint64_t original =
+        HashGuestTextureParts(base.data(), base.size(), mips.data(), mips.size());
     size_t missed = 0;
     for (size_t i = 0; i < mips.size(); ++i)
     {
         mips[i] ^= 1;
-        missed += HashGuestTextureParts(base.data(), base.size(),
-                                        mips.data(), mips.size()) == original;
+        missed +=
+            HashGuestTextureParts(base.data(), base.size(), mips.data(), mips.size()) == original;
         mips[i] ^= 1;
     }
-    Check(missed == 0,
-        "every byte in disjoint mip storage changes the cache identity");
+    Check(missed == 0, "every byte in disjoint mip storage changes the cache identity");
     if (missed != 0)
-        printf("  %zu of %zu mip positions were invisible to the hash\n",
-               missed, mips.size());
+        printf("  %zu of %zu mip positions were invisible to the hash\n", missed, mips.size());
+}
+
+void TestDisjointPartsMatchContiguousIdentity()
+{
+    std::vector<uint8_t> base(513);
+    std::vector<uint8_t> mips(271);
+    for (size_t i = 0; i < base.size(); ++i)
+        base[i] = uint8_t(i * 17u + 3u);
+    for (size_t i = 0; i < mips.size(); ++i)
+        mips[i] = uint8_t(i * 29u + 5u);
+    std::vector<uint8_t> contiguous = base;
+    contiguous.insert(contiguous.end(), mips.begin(), mips.end());
+    Check(HashGuestTextureParts(base.data(), base.size(), mips.data(), mips.size()) ==
+              HashGuestTexture(contiguous.data(), contiguous.size()),
+          "disjoint base and mip updates produce the same identity as the concatenated bytes");
 }
 
 // Length is part of the identity: a texture that grew must not be mistaken for the
@@ -112,10 +123,9 @@ void TestEveryMipByteIsCovered()
 void TestLengthMatters()
 {
     const std::vector<uint8_t> bytes(1000, 0xAB);
-    Check(HashGuestTexture(bytes.data(), 500) !=
-              HashGuestTexture(bytes.data(), 1000),
-        "the same buffer hashed over different lengths differs, so a resized"
-        " texture is not treated as unchanged");
+    Check(HashGuestTexture(bytes.data(), 500) != HashGuestTexture(bytes.data(), 1000),
+          "the same buffer hashed over different lengths differs, so a resized"
+          " texture is not treated as unchanged");
 }
 
 // Reordering must not collapse: two textures holding the same bytes in a different
@@ -124,20 +134,19 @@ void TestOrderMatters()
 {
     const std::vector<uint8_t> a = {1, 2, 3, 4};
     const std::vector<uint8_t> b = {4, 3, 2, 1};
-    Check(HashGuestTexture(a.data(), a.size()) !=
-              HashGuestTexture(b.data(), b.size()),
-        "the same bytes in a different order hash differently");
+    Check(HashGuestTexture(a.data(), a.size()) != HashGuestTexture(b.data(), b.size()),
+          "the same bytes in a different order hash differently");
 }
 
 // Degenerate inputs must not crash or claim a match with real data.
 void TestDegenerateInputs()
 {
     Check(HashGuestTexture(nullptr, 0) == HashGuestTexture(nullptr, 100),
-        "a null pointer yields the basis regardless of the claimed length, rather"
-        " than reading through it");
+          "a null pointer yields the basis regardless of the claimed length, rather"
+          " than reading through it");
     const std::vector<uint8_t> one = {0};
     Check(HashGuestTexture(one.data(), 0) != HashGuestTexture(one.data(), 1),
-        "an empty span and a one-byte span differ");
+          "an empty span and a one-byte span differ");
 }
 
 } // namespace
@@ -148,6 +157,7 @@ int main()
     TestEverySinglePositionIsCovered();
     TestSingleBitChangeIsSeen();
     TestEveryMipByteIsCovered();
+    TestDisjointPartsMatchContiguousIdentity();
     TestLengthMatters();
     TestOrderMatters();
     TestDegenerateInputs();

@@ -196,6 +196,11 @@ target_include_directories(test_gpu_draw_indices PRIVATE ../runtime)
 target_link_libraries(test_gpu_draw_indices PRIVATE gears_draw lucent::lucent)
 add_test(NAME gpu_draw_indices COMMAND test_gpu_draw_indices)
 
+add_executable(test_gpu_draw_untile test_gpu_draw_untile.cpp)
+target_include_directories(test_gpu_draw_untile PRIVATE ../runtime)
+target_link_libraries(test_gpu_draw_untile PRIVATE gears_draw lucent::lucent)
+add_test(NAME gpu_draw_untile COMMAND test_gpu_draw_untile)
+
 add_executable(test_title_profile test_title_profile.cpp)
 target_link_libraries(test_title_profile PRIVATE gears_title_profile)
 add_test(NAME title_profile COMMAND test_title_profile)
@@ -476,11 +481,8 @@ add_test(NAME gpu_instance COMMAND test_gpu_instance)
 # The property under test is COVERAGE: a hash over a few sampled offsets would pass
 # a naive test and silently miss an interior change, leaving a stale texture on
 # screen with no error anywhere, so the test flips every byte position in turn.
-add_executable(test_guest_texture_hash
-    test_guest_texture_hash.cpp
-    ../runtime/guest_texture_hash.cpp)
-target_include_directories(test_guest_texture_hash PRIVATE ../runtime
-    "${THIRDPARTY_ROOT}/xxHash")
+add_executable(test_guest_texture_hash test_guest_texture_hash.cpp)
+target_link_libraries(test_guest_texture_hash PRIVATE gears_guest_texture_hash)
 add_test(NAME guest_texture_hash COMMAND test_guest_texture_hash)
 
 add_executable(test_gpu_resolve_extent

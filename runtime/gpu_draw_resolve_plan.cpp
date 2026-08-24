@@ -161,26 +161,29 @@ ResolvePlan PlanResolves(const FrameDrawInputs &in, RenderTargetCache &RT)
     return plan;
 }
 
-void ReportResolvePlan(const ResolvePlan &plan)
+void ReportResolvePlan(const ResolvePlan &plan, bool enabled)
 {
     // Printed at zero as well: "no depth copy went unrouted" and "nobody
     // counted" must not read the same.
-    lucent::info("draw",
-                 "frame depth copies routed to a host destination: {};"
-                 " NOT routed: {} (no destination base, or no host image for it)",
-                 plan.depthRouted, plan.depthUnrouted);
-    if (plan.unmatched)
-        lucent::info("draw",
-                     "frame resolves not served: {} from an EDRAM base"
-                     " this frame never rendered",
-                     plan.unmatched);
+    lucent::Line depth;
+    lucent::Line unmatched;
+    lucent::Line destinations;
+    if (enabled)
     {
-        lucent::Line rd;
-        rd.add("frame: {} resolve destinations (from kCopy draws):", plan.dests.size());
+        depth.add("frame depth copies routed to a host destination: {};"
+                  " NOT routed: {} (no destination base, or no host image for it)",
+                  plan.depthRouted, plan.depthUnrouted);
+        if (plan.unmatched)
+            unmatched.add("frame resolves not served: {} from an EDRAM base"
+                          " this frame never rendered",
+                          plan.unmatched);
+        destinations.add("frame: {} resolve destinations (from kCopy draws):", plan.dests.size());
         for (uint32_t b : plan.dests)
-            rd.add(" {:#x}", b);
-        rd.flush(lucent::Level::Info, "draw");
+            destinations.add(" {:#x}", b);
     }
+    depth.flush(lucent::Level::Info, "draw");
+    unmatched.flush(lucent::Level::Info, "draw");
+    destinations.flush(lucent::Level::Info, "draw");
 }
 
 } // namespace gears::draw

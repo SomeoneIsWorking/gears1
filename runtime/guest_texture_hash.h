@@ -26,13 +26,13 @@ namespace gears
 // XXH3 over the whole span. Every byte enters the hash: the speed came from the
 // mixing, never from looking at less of the texture, which is the trade this file
 // refuses. See the .cpp for the measured rate.
-uint64_t HashGuestTexture(const uint8_t* bytes, size_t length);
+uint64_t HashGuestTexture(const uint8_t *bytes, size_t length);
 
 // Hashes disjoint base-level and mip-storage spans as one texture identity.
 // Guest textures store them under separate addresses, so callers must not hash
 // the potentially huge and unrelated gap between the two allocations.
-uint64_t HashGuestTextureParts(const uint8_t* base, size_t baseLength,
-                               const uint8_t* mips, size_t mipLength);
+uint64_t HashGuestTextureParts(const uint8_t *base, size_t baseLength, const uint8_t *mips,
+                               size_t mipLength);
 
 // Whether a cached upload is still good. Separated from the hashing so the policy
 // reads as a policy: a cache entry survives exactly while its bytes are unchanged.
