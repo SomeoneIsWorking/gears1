@@ -485,6 +485,10 @@ add_executable(test_guest_texture_hash test_guest_texture_hash.cpp)
 target_link_libraries(test_guest_texture_hash PRIVATE gears_guest_texture_hash)
 add_test(NAME guest_texture_hash COMMAND test_guest_texture_hash)
 
+add_executable(test_guest_dirty_pages test_guest_dirty_pages.cpp)
+target_link_libraries(test_guest_dirty_pages PRIVATE gears_draw lucent::lucent)
+add_test(NAME guest_dirty_pages COMMAND test_guest_dirty_pages)
+
 add_executable(test_gpu_resolve_extent
     test_gpu_resolve_extent.cpp
     ../runtime/gpu_resolve_extent.cpp)

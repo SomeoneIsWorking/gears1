@@ -424,11 +424,18 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // number rather than two replay timings -- one of which came out slower.
     static AbTest abUntile(lucent::config::flag("DRAW_AB_UNTILE"));
     abUntile.BeginFrame();
-    if (ab.Enabled() && abUntile.Enabled())
-        lucent::error("draw",
-                      "GEARS_DRAW_AB_CENSUS and GEARS_DRAW_AB_UNTILE are"
-                      " both on. They alternate independently and both record the same frame"
-                      " cost, so neither result would mean anything. Enable ONE.");
+    // And for the soft-dirty texture-staleness skips (catalog #137): the
+    // baseline arm re-hashes every cached texture, the experimental arm skips
+    // the ones whose guest pages the kernel reports unwritten.
+    static AbTest abTexDirty(lucent::config::flag("DRAW_AB_TEXDIRTY"));
+    abTexDirty.BeginFrame();
+    {
+        const int armed = int(ab.Enabled()) + int(abUntile.Enabled()) + int(abTexDirty.Enabled());
+        if (armed > 1)
+            lucent::error("draw", "more than one GEARS_DRAW_AB_* timing knob is on."
+                                  " They alternate independently and all record the same frame"
+                                  " cost, so no result would mean anything. Enable ONE");
+    }
     // ON BY DEFAULT. A renderer that is native does not emulate the console's
     // EDRAM tiling, and this one no longer does: GEARS_DRAW_TILED=1 puts the
     // faithful per-tile replay back for an A/B or a bisect.
@@ -634,6 +641,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // records is printed there -- a skipped texture that is not reported is a
     // texture silently replaced by a stub.
     draw::TextureUploader TX(*this, P, in);
+    // One soft-dirty observation period per rendered frame. The A/B arm
+    // decides whether THIS frame may skip hashing page-clean textures; the
+    // clear itself runs for both arms so generations stay aligned.
+    TX.BeginStalenessFrame(!abTexDirty.Enabled() || abTexDirty.Arm());
     std::vector<VkBuffer> &stagingBufs = TX.stagingBufs;
     std::vector<VkDeviceMemory> &stagingMems = TX.stagingMems;
 
@@ -3316,23 +3327,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
                      " bindings entirely; the uniform sets are always the draw's own",
                      DB.hits, DB.builds, DB.CacheSize());
         IP.Report();
-        lucent::info(
-            "draw",
-            "texture cache: slowest single hash {:.2f} ms for"
-            " {:.2f} MiB at {:#x} ({:.2f} GB/s)",
-            TX.texHashWorstMs, double(TX.texHashWorstBytes) / (1024.0 * 1024.0),
-            TX.texHashWorstBase,
-            TX.texHashWorstMs > 0 ? double(TX.texHashWorstBytes) / (TX.texHashWorstMs * 1e6) : 0.0);
-        lucent::info("draw",
-                     "texture cache: {} distinct texture(s) re-hashed"
-                     " ({:.2f} MiB in {:.1f} ms) over {} bindings, {} CHANGED under an"
-                     " unchanged fetch constant and were evicted and re-uploaded{}",
-                     TX.texContentChecked, double(TX.texHashBytes) / (1024.0 * 1024.0),
-                     TX.msTexHash, TX.texBindingCalls, TX.texContentChanged,
-                     TX.texContentChecked == 0
-                         ? " -- the denominator is ZERO: no cache hit could be checked at"
-                           " all, so this says NOTHING about staleness"
-                         : "");
+        TX.Report();
 
         if (PC.rectDraws)
             lucent::info("draw",
@@ -3685,6 +3680,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         abUntile.RecordFrame(msDrawLoop);
     if (ab.Enabled() && recordable)
         ab.RecordFrame(msDrawLoop);
+    if (abTexDirty.Enabled() && recordable)
+        abTexDirty.RecordFrame(msDrawLoop);
     // One reporter for whichever A/B is running. Both arms are summarised the
     // same way, including the case it must not get wrong: a difference smaller
     // than the run's own resolution is noise and is printed as such.
@@ -3726,6 +3723,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     };
     summarise(ab, "per-draw viewport census");
     summarise(abUntile, "EDRAM tiling collapsed");
+    summarise(abTexDirty, "texture staleness page-skips");
     PB.Report(prepared);
 
     // --- teardown --------------------------------------------------------

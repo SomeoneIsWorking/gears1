@@ -1,5 +1,6 @@
 #define _GNU_SOURCE 1
 #include "guest_memory.h"
+#include "guest_dirty_pages.h"
 
 #include <sys/mman.h>
 #include <unistd.h>
@@ -149,6 +150,18 @@ void GuestMemory::Zero(uint32_t address, uint32_t size)
     lucent::debug("mem", "zeroed {:#x}+{:#x}", address, size);
 }
 
+bool GuestMemory::Contains(const void* host) const
+{
+    const uintptr_t p = reinterpret_cast<uintptr_t>(host);
+    const uintptr_t b = reinterpret_cast<uintptr_t>(base_);
+    return base_ != nullptr && p >= b && p < b + reservedSize_;
+}
+
+uint64_t GuestMemory::AliasOffset(size_t i) const
+{
+    constexpr size_t kCount = sizeof(kPhysicalAliases) / sizeof(kPhysicalAliases[0]);
+    return kPhysicalAliases[i < kCount ? i : 0];
+}
 namespace
 {
 GuestMemory* g_memory = nullptr;

@@ -247,6 +247,18 @@ struct RendererPersistent
     // is the fetch constant, which does not change when the guest overwrites the
     // pixels at the same address, so this is the only thing that can notice.
     std::map<GuestTextureKey, uint64_t> texContentHash;
+    // Soft-dirty staleness bookkeeping (runtime/guest_dirty_pages.h, catalog
+    // #137). The generation is the last frame in which this entry's content was
+    // CONFIRMED against the guest bytes -- by hashing them, or by a clean page
+    // report -- and a clean SKIP is only valid when the previous generation
+    // confirmed too: a texture unbound for k frames has an observation gap no
+    // page bit can cover, because each frame's clear wipes older evidence.
+    std::map<GuestTextureKey, uint64_t> texVerifiedGen;
+    // Entries whose most recent staleness decision was a clean skip. A forced
+    // verification that finds changed bytes under one of these contradicts the
+    // page tracker itself and is counted as its miss, not as an ordinary late
+    // write the tracker never claimed to see.
+    std::set<GuestTextureKey> texTrustedClean;
     std::map<uint64_t, VkSampler> samplerCache;
     StubTex stub2D{}, stub3D{}, stubCube{};
     VkSampler stubSampler = VK_NULL_HANDLE;
