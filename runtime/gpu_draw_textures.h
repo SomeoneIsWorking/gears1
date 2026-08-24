@@ -27,6 +27,7 @@
 #include "gpu_draw.h"
 #include "gpu_draw_renderer.h"
 #include "gpu_draw_xlate.h"
+#include "guest_dirty_pages.h"
 
 namespace gears::draw
 {
@@ -114,6 +115,24 @@ struct TextureUploader
     // sampler binding resolved against its own fetch constant (clamp modes,
     // filters, anisotropy) -- not a fixed host sampler.
     VkSampler GetSampler(const GuestSamplerState &gs);
+
+    // --- soft-dirty texture staleness (catalog #137) ---------------------
+
+    // Opens the process tracker once and starts this frame's observation
+    // period. Runs whether or not THIS frame may skip, so generations advance
+    // uniformly under the interleaved A/B arm; `allowSkipThisFrame` is the arm
+    // permission, not the knob.
+    void BeginStalenessFrame(bool allowSkipThisFrame);
+
+    // The frame report's texture-cache block, moved here so the counters it
+    // names live beside the code that owns them.
+    void Report();
+
+    // True when this frame may skip hashing a page-clean texture: the knob is
+    // on, the tracker proved itself at Open, and the A/B arm allows it.
+    bool texDirtyEnabled = false;
+    uint64_t texSkippedClean = 0; // textures served without re-hashing this frame
+    uint64_t texSkippedBytes = 0; // ... and the bytes those hashes would have read
 };
 
 // Which image a texture binding is served by -- the frame's own resolved

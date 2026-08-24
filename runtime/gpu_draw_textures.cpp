@@ -13,6 +13,7 @@
 #include <lucent/log.h>
 
 #include "gpu_draw_pixels.h"
+#include "guest_dirty_pages.h"
 #include "guest_texture_hash.h"
 
 namespace gears::draw
@@ -21,6 +22,58 @@ namespace
 {
 
 using Clock = std::chrono::steady_clock;
+
+// The process-wide soft-dirty tracker, opened once against the guest-memory
+// base this process is actually hashing. StalenessWindowsFor supplies the
+// windows: live runtime memory aliases physical RAM at several offsets, so a
+// page query must consult every one of them or miss writes made through
+// another view; a capture replay's flat buffer has exactly one.
+gears::GuestDirtyPages g_texDirtyPages;
+bool g_texDirtyOpenAttempted = false;
+// Staleness POLICY state outlives a single frame -- unlike the per-frame
+// upload counters below, a contradiction found on the verification frame must
+// still be disabling skips ten frames later.
+uint64_t g_texDirtyVerifies = 0;
+uint64_t g_texDirtyMisses = 0;
+bool g_texDirtyDisabledByMisses = false;
+
+// Whether neither span of this texture holds a store since the last clear.
+// Both spans are consulted because either can change the sampled image.
+bool TextureSpansClean(const FrameDrawInputs &inputs, const GuestTexture &header)
+{
+    return g_texDirtyPages.RangeCleanSinceLastClear(header.baseAddress,
+                                                    header.baseGuestExtentBytes) &&
+           (header.mipGuestExtentBytes == 0 || g_texDirtyPages.RangeCleanSinceLastClear(
+                                                   header.mipAddress, header.mipGuestExtentBytes));
+}
+
+} // namespace
+
+void TextureUploader::BeginStalenessFrame(bool allowSkipThisFrame)
+{
+    texDirtyEnabled = false;
+    if (!lucent::config::flag("DRAW_TEX_DIRTY"))
+        return;
+
+    if (!g_texDirtyOpenAttempted)
+    {
+        g_texDirtyOpenAttempted = true;
+        std::vector<uint64_t> windows;
+        uint64_t aliasMask = 0;
+        if (gears::StalenessWindowsFor(in.guestBase, windows, aliasMask))
+            g_texDirtyPages.Open(in.guestBase, std::move(windows), aliasMask);
+    }
+
+    if (!g_texDirtyPages.Supported())
+        return;
+    // Runs for every arm of an interleaved A/B so generations advance
+    // uniformly; only the skip DECISION below is arm-dependent.
+    g_texDirtyPages.BeginFrame();
+    texDirtyEnabled = allowSkipThisFrame && !g_texDirtyDisabledByMisses;
+}
+
+namespace
+{
 
 uint64_t HashTextureStorage(const GuestTexture &texture, const FrameDrawInputs &inputs)
 {
@@ -159,13 +212,49 @@ VkImageView TextureUploader::Upload(const uint32_t *fetch6, uint32_t wantDim)
                                /*wantData=*/false, header) &&
             header.skipReason == nullptr && header.baseGuestExtentBytes != 0)
         {
+            const uint64_t hashBytes =
+                uint64_t(header.baseGuestExtentBytes) + header.mipGuestExtentBytes;
+            const uint64_t gen = g_texDirtyPages.Generation();
+            const bool verifyAll = texDirtyEnabled && gen % gears::kTexStalenessVerifyEvery == 0;
+
+            // THE SKIP. Valid only when the tracker is armed this frame AND
+            // the previous generation confirmed this entry too: a texture that
+            // skipped being checked while unbound has an observation gap, and
+            // each frame's clear erases the evidence older than one frame.
+            if (texDirtyEnabled && !verifyAll)
+            {
+                const auto vg = P.texVerifiedGen.find(key);
+                if (vg != P.texVerifiedGen.end() && vg->second + 1 == gen &&
+                    TextureSpansClean(in, header))
+                {
+                    ++texSkippedClean;
+                    texSkippedBytes += hashBytes;
+                    P.texVerifiedGen[key] = gen;
+                    P.texTrustedClean.insert(key);
+                    return it->second;
+                }
+            }
+
+            // Forced verification queries the page bits BEFORE hashing, so a
+            // contradiction -- every queried page clean since the generation
+            // that recorded the stored hash, yet the bytes differ -- can be
+            // attributed to the tracker rather than to an ordinary late write
+            // it never claimed to cover.
+            bool cleanAtVerify = false;
+            bool consecutive = false;
+            if (verifyAll)
+            {
+                ++g_texDirtyVerifies;
+                cleanAtVerify = TextureSpansClean(in, header);
+                const auto vg = P.texVerifiedGen.find(key);
+                consecutive = vg != P.texVerifiedGen.end() && vg->second + 1 == gen;
+            }
+
             const auto tHash = Clock::now();
             const uint64_t now = HashTextureStorage(header, in);
             const double thisHashMs =
                 std::chrono::duration<double, std::milli>(Clock::now() - tHash).count();
             msTexHash += thisHashMs;
-            const uint64_t hashBytes =
-                uint64_t(header.baseGuestExtentBytes) + header.mipGuestExtentBytes;
             texHashBytes += hashBytes;
             if (thisHashMs > texHashWorstMs)
             {
@@ -174,8 +263,40 @@ VkImageView TextureUploader::Upload(const uint32_t *fetch6, uint32_t wantDim)
                 texHashWorstBase = header.baseAddress;
             }
             ++texContentChecked;
+
             const auto known = texContentHash.find(key);
-            if (known != texContentHash.end() && !gears::GuestTextureUnchanged(known->second, now))
+            const bool changed =
+                known != texContentHash.end() && !gears::GuestTextureUnchanged(known->second, now);
+            if (changed && verifyAll && cleanAtVerify && consecutive)
+            {
+                // The tracker vouched for these exact bytes last generation
+                // and every page still reads unwritten, yet the bytes moved.
+                // One such contradiction is expected eventually from the
+                // documented clear/write race; a sustained rate means the
+                // kernel's answer cannot be trusted here. The eviction below
+                // repairs the damage either way; skipping stops at a rate no
+                // race explains.
+                ++g_texDirtyMisses;
+                lucent::warn("draw",
+                             "soft-dirty staleness MISS #{}: texture at {:#x}"
+                             " changed under pages reported unwritten"
+                             " ({} verification(s) so far)",
+                             g_texDirtyMisses, header.baseAddress, g_texDirtyVerifies);
+                if (g_texDirtyMisses > 32)
+                {
+                    g_texDirtyDisabledByMisses = true;
+                    texDirtyEnabled = false;
+                    lucent::warn("draw",
+                                 "soft-dirty texture skipping DISABLED: {}"
+                                 " contradictions exceed what the clear/write race"
+                                 " should produce. Every texture re-hashes from"
+                                 " here on",
+                                 g_texDirtyMisses);
+                }
+            }
+            P.texVerifiedGen[key] = gen;
+            P.texTrustedClean.erase(key);
+            if (changed)
             {
                 // EVICT: retire the stale image and fall through to a fresh
                 // upload of the bytes that are there now. The old image is not
@@ -191,6 +312,8 @@ VkImageView TextureUploader::Upload(const uint32_t *fetch6, uint32_t wantDim)
                 }
                 texCache.erase(key);
                 texContentHash.erase(known);
+                P.texVerifiedGen.erase(key);
+                P.texTrustedClean.erase(key);
             }
             else
             {
@@ -373,9 +496,64 @@ VkImageView TextureUploader::Upload(const uint32_t *fetch6, uint32_t wantDim)
             header.skipReason == nullptr && header.baseGuestExtentBytes != 0)
         {
             texContentHash[key] = HashTextureStorage(header, in);
+            // A freshly hashed entry is confirmed as of this generation; it is
+            // NOT page-clean-vouched, so the next frame's skip needs this
+            // record plus a clean query, exactly as any other frame.
+            P.texVerifiedGen[key] = g_texDirtyPages.Generation();
+            P.texTrustedClean.erase(key);
         }
     }
     return tex.view;
+}
+
+// The texture-cache block of the frame report. Every number here carries its
+// denominator: "0 skipped" means nothing next to a zero count of checks, and
+// "0 misses" means nothing next to the verification count that could have
+// found one.
+void TextureUploader::Report()
+{
+    lucent::info("draw",
+                 "texture cache: slowest single hash {:.2f} ms for"
+                 " {:.2f} MiB at {:#x} ({:.2f} GB/s)",
+                 texHashWorstMs, double(texHashWorstBytes) / (1024.0 * 1024.0), texHashWorstBase,
+                 texHashWorstMs > 0 ? double(texHashWorstBytes) / (texHashWorstMs * 1e6) : 0.0);
+    lucent::info("draw",
+                 "texture cache: {} distinct texture(s) re-hashed"
+                 " ({:.2f} MiB in {:.1f} ms) over {} bindings, {} CHANGED under an"
+                 " unchanged fetch constant and were evicted and re-uploaded{}",
+                 texContentChecked, double(texHashBytes) / (1024.0 * 1024.0), msTexHash,
+                 texBindingCalls, texContentChanged,
+                 texContentChecked == 0
+                     ? " -- the denominator is ZERO: no cache hit could be checked at"
+                       " all, so this says NOTHING about staleness"
+                     : "");
+    if (texDirtyEnabled || texSkippedClean != 0)
+    {
+        lucent::info("draw",
+                     "texture staleness: {} texture(s) SKIPPED as page-clean"
+                     " ({:.2f} MiB not re-read) by soft-dirty tracking; tracker"
+                     " scanned {} span(s) across {} pages and found {} dirty,"
+                     " {} short reads, {} clear failures",
+                     texSkippedClean, double(texSkippedBytes) / (1024.0 * 1024.0),
+                     g_texDirtyPages.spansQueried, g_texDirtyPages.pagesRead,
+                     g_texDirtyPages.spansDirty, g_texDirtyPages.preadShort,
+                     g_texDirtyPages.clearFailures);
+    }
+    else
+    {
+        lucent::info("draw",
+                     "texture staleness: NOTHING was skipped this frame"
+                     " (tracking {}); every cached texture was re-read and"
+                     " re-hashed",
+                     texDirtyEnabled ? "armed but unused" : "off or unsupported");
+    }
+    // Misses print even at zero: the forced verifications are what could have
+    // found one, so their count is what makes a zero mean anything.
+    lucent::info("draw",
+                 "texture staleness: {} forced full re-verification(s) found"
+                 " {} contradiction(s){}",
+                 g_texDirtyVerifies, g_texDirtyMisses,
+                 g_texDirtyDisabledByMisses ? " -- skipping DISABLED by that rate" : "");
 }
 
 VkSampler TextureUploader::GetSampler(const GuestSamplerState &gs)

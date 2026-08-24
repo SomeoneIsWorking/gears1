@@ -296,6 +296,7 @@ add_library(gears_draw STATIC
     gpu_scanout.cpp
     gpu_scanout_gamma.cpp
     gpu_shared_device.cpp
+    guest_dirty_pages.cpp
     native_pass.cpp
     render_ab.cpp
     scanout_gamma.cpp

@@ -40,6 +40,19 @@ public:
     // physical RAM, so a write through one view is visible through the others.
     bool MapPhysicalAliases();
 
+    // Whether a HOST pointer lies inside this reservation.
+    bool Contains(const void* host) const;
+
+    // The offsets from Base() at which the same physical bytes appear. A
+    // write through any one of them lands in all of them, so an observer that
+    // must not miss a write -- page dirty tracking, for one -- has to consult
+    // every window, not just the one it reads through.
+    static constexpr size_t kAliasCount = 4;
+    uint64_t AliasOffset(size_t i) const;
+    // Mask extracting the physical offset from a guest address: guest code
+    // converts between windows by clearing the top three bits.
+    static constexpr uint32_t kAliasMask = 0x1FFFFFFF;
+
     template<typename T>
     T* Translate(uint32_t address) const
     {

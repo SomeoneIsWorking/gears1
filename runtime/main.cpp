@@ -10,6 +10,7 @@
 #include "fault_report.h"
 #include "generated_title_profile.h"
 #include "guest_clock.h"
+#include "guest_dirty_pages.h"
 #include "guest_memory.h"
 #include "guest_heap.h"
 #include "guest_filesystem.h"
@@ -182,6 +183,16 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
 
     gears::SetMemory(memory);
+    // Publish the alias layout for the renderer's soft-dirty texture-staleness
+    // tracker, which must consult every window a write can come through.
+    {
+        std::vector<uint64_t> windows;
+        windows.reserve(gears::GuestMemory::kAliasCount);
+        for (size_t i = 0; i < gears::GuestMemory::kAliasCount; ++i)
+            windows.push_back(memory.AliasOffset(i));
+        gears::RegisterGuestAliasLayout(memory.Base(), std::move(windows),
+                                        gears::GuestMemory::kAliasMask);
+    }
     // Now the reporter can tell a guest address from a host pointer. It has been
     // armed since the first line of main; this only sharpens what it prints.
     gears::SetFaultReportGuestMapping(memory.Base(), memory.ReservedSize());
