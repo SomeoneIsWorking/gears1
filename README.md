@@ -79,8 +79,8 @@ Everything derived from the disc lands in `scratch/`, which is gitignored.
 |---|---|
 | `run.sh` | Build and play (`--headless`, `--menu-walk`, `--no-build`, `--log`); `./run.sh --help` |
 | `config/gears.toml` | XenonRecomp configuration — section addresses, register save/restore helpers |
-| `tools/gdf_extract.py` | GDF/XDVDFS extractor for the Xbox 360 disc image |
-| `tools/xex_probe/` | XEX decrypt/decompress, section + import dump, save/restore helper scan |
+| `tools/gdf_extract.py` | Confined, bounds-checked GDF/XDVDFS extractor for the Xbox 360 disc image |
+| `tools/title_identity.py` | Content-addressed disc/XEX identity through XenonRecomp's checked `xex-inspect` loader |
 | `extern/XenonRecomp` | Submodule → our fork, `gears` branch |
 | `docs/codemap.md` | Orientation map — what's where, and how far each subsystem really got |
 | `docs/issues/` | Findings registry keyed by symptom (`tools/catalog.py search "..."`) |
@@ -95,6 +95,10 @@ cmake -S extern/XenonRecomp -B scratch/build-xenonrecomp -G Ninja \
       -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ \
       -DCMAKE_C_COMPILER=clang
 cmake --build scratch/build-xenonrecomp
+
+# Seal the disc, container, normalized-image, execution, section, import, and
+# helper identities. XEX_INSPECT or --xex-inspect may select another build.
+python3 tools/title_identity.py --xex scratch/game/default.xex
 
 # Recover jump tables, merge the tracked correction, and generate into a fresh
 # ignored directory. Generated code is never patched after emission.

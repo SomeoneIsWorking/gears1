@@ -258,6 +258,9 @@ if(Python3_Interpreter_FOUND)
     add_test(NAME title_identity
         COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/test_title_identity.py")
+    add_test(NAME gdf_extract
+        COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/test_gdf_extract.py")
     add_test(NAME title_conformance_selftest
         COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_SOURCE_DIR}/tools/title_conformance.py" --selftest)

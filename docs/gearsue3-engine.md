@@ -150,11 +150,15 @@ disc/image.
 
 `tools/title_identity.py` implements the first provisioning boundary. It
 resolves an explicit path before `GEARS_ISO` and then an unambiguous ignored
-`roms/` drop-in, streams the disc digest, records generic XGD/XEX identity when
-available, and writes path-free JSON under ignored
-`scratch/titles/<disc-sha256>/`. It does not yet extract, analyze, recompile, or
-build a playable module. The complete provisioner must perform this operation
-in a fresh, content-addressed directory:
+`roms/` drop-in, streams the disc digest, and delegates XEX parsing to
+XenonRecomp's checked `xex-inspect` authority. It strictly validates that
+schema and independently re-hashes both the selected container and emitted
+normalized image before writing path-free JSON under ignored
+`scratch/titles/<disc-sha256>/`. The inspector is selected by
+`--xex-inspect`, `XEX_INSPECT`, or the documented repo-relative build. This
+does not yet orchestrate extraction, analysis, recompilation, or a playable
+module. The complete provisioner must perform this operation in a fresh,
+content-addressed directory:
 
 1. resolve explicit CLI, `.env`, or a narrowly named ignored drop-in image;
 2. safely extract and fingerprint the executable and required content;

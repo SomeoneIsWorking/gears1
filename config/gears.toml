@@ -14,6 +14,15 @@ out_directory_path = "../scratch/ppc"
 # recompiled wrongly and the title crashes in sub_82544148.
 switch_table_file_path = "../scratch/config/gears_switch_tables.toml"
 
+# This revision embeds two four-entry address tables inside the code ranges of
+# their owning switch functions. They are data, not standalone functions or PPC
+# instructions. The recompiler's switch-aware CFG crosses these holes through
+# the recovered case labels while refusing to decode the table words.
+data_ranges = [
+    { address = 0x8251E798, size = 0x10 },
+    { address = 0x8287F04C, size = 0x10 },
+]
+
 # All optimizations off for the first pass, per XenonRecomp README:
 # do not enable until there is a working recompilation.
 skip_lr = false
@@ -25,7 +34,7 @@ cr_as_local = false
 non_argument_as_local = false
 non_volatile_as_local = false
 
-# Byte-pattern-scanned from the decompressed image by tools/xex_probe.
+# Byte-pattern-scanned from the normalized image by XenonRecomp's xex-inspect.
 restgprlr_14_address = 0x828D2830
 savegprlr_14_address = 0x828D27E0
 restfpr_14_address   = 0x828D424C
