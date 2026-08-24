@@ -919,7 +919,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         }
     }
 
-    draw::ReportResolvePlan(plan);
+    draw::ReportResolvePlan(plan, in.report);
 
     // Which image serves each texture binding, and the census of what the
     // frame's bindings named, live on TextureBinder in gpu_draw_textures.
@@ -1521,7 +1521,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // The EDRAM-tiling collapse lives in gpu_draw_untile.{h,cpp}; the reasoning
     // for it, and for what it refuses to do, is on that header.
     if (untileThisFrame)
-        draw::CollapseEdramTiling(prepared, issued, msaaModel);
+        draw::CollapseEdramTiling(prepared, issued, msaaModel, in.report);
 
     // --- deferred range upload into the shared SSBO ----------------------
     // Only the memory this frame's draws fetch is copied. The mirror SPANS the
@@ -3631,21 +3631,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             lucent::info("draw", "frame screenshot written to {}", out.string());
     }
     msReadback = sinceStartMs() - msSetup - msDrawLoop - msSubmit;
-    // TWO OF THESE ARE SUPERSETS AND THE LINE SAYS SO. state+pipeline contains
-    // shader translation, pipeline creation and texture upload; record contains
-    // descriptor alloc, descriptor update and the viewport census. Printed as a
-    // flat list they invite a reader to add them up, and the sum is meaningless.
-    // The residual is printed rather than left for the reader to derive, because
-    // an unnamed remainder is how 18 ms of a 36 ms draw loop went unnoticed.
-    // TB.msUpload is NOT a child of msState. uploadTexture is reached from exactly
-    // one place -- TextureBinder::SelectView, inside the descriptor-write assembly -- so the
-    // 8 ms it costs on a gameplay frame belongs under record, and reporting it
-    // under state+pipeline made state look twice its real size and the
-    // descriptor writes look a third of theirs. Grep confirmed the single call
-    // site rather than assuming it from where the accumulator is declared.
-    // msTranslate is inside msShaderLookup (a cache miss translates) and
-    // msPipeline is inside the pipeline lookup that follows, so neither is
-    // subtracted again.
+    // state+pipeline and record are supersets, so the line names their children
+    // instead of inviting readers to add a meaningless flat list. Texture upload
+    // belongs under record: TextureBinder::SelectView has its sole call inside
+    // descriptor-write assembly. Shader translation is inside shader lookup and
+    // pipeline creation is inside the following pipeline lookup.
     const double msStateOwn = msState - msModify - msShaderLookup - PC.msPipeline;
     // The census is INSIDE the prepare span (the viewport block), and the
     // descriptor update is inside the descriptor-write span, so neither is
@@ -3653,22 +3643,27 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // negative and gets waved away as a rounding artefact.
     const double msRecordOwn = msRecord - DB.msAlloc - DB.msWrite - msPrepare;
     const double msLoopOther = msDrawLoop - msState - msUniforms - msIndex - msRecord;
-    lucent::info("draw",
-                 "frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f},"
-                 " guest-memory upload {:.0f}, submit+wait {:.0f}, readback+report {:.0f}",
-                 sinceStartMs(), msSetup, msDrawLoop, msSsboUpload, msSubmit, msReadback);
-    lucent::info("draw",
-                 "  draw loop {:.0f} ms = state+pipeline {:.0f}"
-                 " (shader translation {:.0f} + pipeline creation {:.0f} + modification"
-                 " derivation {:.0f} + shader/layout cache lookups {:.0f} + own {:.0f})"
-                 " + uniforms {:.0f} + index prep {:.0f} + record {:.0f} (descriptor alloc"
-                 " {:.0f} + descriptor writes {:.0f} of which texture upload {:.0f} and the"
-                 " driver's update {:.0f}, so own {:.0f} + prepare {:.0f} of which viewport"
-                 " census {:.0f} + own {:.0f}) + unattributed {:.0f}",
-                 msDrawLoop, msState, SC.msTranslate, PC.msPipeline, msModify, msShaderLookup,
-                 msStateOwn, msUniforms, msIndex, msRecord, DB.msAlloc, DB.msWrite, TB.msUpload,
-                 DB.msUpdate, DB.msWrite - TB.msUpload - DB.msUpdate, msPrepare, msCensus,
-                 msRecordOwn, msLoopOther);
+    lucent::Line frameCost, drawLoopCost;
+    if (in.report)
+    {
+        frameCost.add("frame cost {:.0f} ms: setup {:.0f}, draw loop {:.0f},"
+                      " guest-memory upload {:.0f}, submit+wait {:.0f}, readback+report {:.0f}",
+                      sinceStartMs(), msSetup, msDrawLoop, msSsboUpload, msSubmit, msReadback);
+        drawLoopCost.add("  draw loop {:.0f} ms = state+pipeline {:.0f}"
+                         " (shader translation {:.0f} + pipeline creation {:.0f} + modification"
+                         " derivation {:.0f} + shader/layout cache lookups {:.0f} + own {:.0f})"
+                         " + uniforms {:.0f} + index prep {:.0f} + record {:.0f} (descriptor alloc"
+                         " {:.0f} + descriptor writes {:.0f} of which texture upload {:.0f} and the"
+                         " driver's update {:.0f}, so own {:.0f} + prepare {:.0f} of which viewport"
+                         " census {:.0f} + own {:.0f}) + unattributed {:.0f}",
+                         msDrawLoop, msState, SC.msTranslate, PC.msPipeline, msModify,
+                         msShaderLookup, msStateOwn, msUniforms, msIndex, msRecord, DB.msAlloc,
+                         DB.msWrite, TB.msUpload, DB.msUpdate,
+                         DB.msWrite - TB.msUpload - DB.msUpdate, msPrepare, msCensus, msRecordOwn,
+                         msLoopOther);
+    }
+    frameCost.flush(lucent::Level::Info, "draw");
+    drawLoopCost.flush(lucent::Level::Info, "draw");
 
     // The draw loop rather than the whole frame, and not on report frames: their
     // readback and PPM cost would land on whichever arm they happened to use.

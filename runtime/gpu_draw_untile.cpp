@@ -14,8 +14,8 @@
 namespace gears::draw
 {
 
-void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
-                         bool scissorsAreSamples)
+void CollapseEdramTiling(std::vector<PreparedDraw> &prepared, uint32_t &issued,
+                         bool scissorsAreSamples, bool reportDiagnostics)
 {
     // A tile group is a maximal run of consecutive draws on one surface
     // sharing a window offset. Resolves delimit them.
@@ -23,18 +23,17 @@ void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
     {
         uint32_t surface = 0;
         uint32_t windowOffset = 0;
-        size_t first = 0, last = 0;   // indices into `prepared`
+        size_t first = 0, last = 0; // indices into `prepared`
         size_t drawCount = 0;
     };
     std::vector<Group> groups;
     for (size_t i = 0; i < prepared.size(); ++i)
     {
-        const PreparedDraw& pd = prepared[i];
+        const PreparedDraw &pd = prepared[i];
         if (pd.isResolve)
             continue;
         if (!groups.empty() && groups.back().surface == pd.surfaceBase &&
-            groups.back().windowOffset == pd.windowOffset &&
-            groups.back().last + 1 >= i)
+            groups.back().windowOffset == pd.windowOffset && groups.back().last + 1 >= i)
         {
             groups.back().last = i;
             ++groups.back().drawCount;
@@ -53,13 +52,26 @@ void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
     // distinguish "this frame is not tiled" from "my grouping is wrong",
     // and the first version of this code could not tell those apart.
     std::map<std::string, uint32_t> rejectWhy;
-    auto isReplayOf = [&](const Group& a, const Group& b) {
+    auto isReplayOf = [&](const Group &a, const Group &b)
+    {
         if (a.surface != b.surface)
-        { ++rejectWhy["different surface"]; return false; }
+        {
+            if (reportDiagnostics)
+                ++rejectWhy["different surface"];
+            return false;
+        }
         if (a.drawCount == 0)
-        { ++rejectWhy["empty group"]; return false; }
+        {
+            if (reportDiagnostics)
+                ++rejectWhy["empty group"];
+            return false;
+        }
         if (a.windowOffset == b.windowOffset)
-        { ++rejectWhy["same window offset (not a tile replay)"]; return false; }
+        {
+            if (reportDiagnostics)
+                ++rejectWhy["same window offset (not a tile replay)"];
+            return false;
+        }
         // A SUFFIX MATCH, not an equal-length one. The base tile's group
         // also carries the frame's one-off setup -- on the Act 1 courtyard
         // frame it starts with the colour clear, so it is 175 draws against
@@ -68,34 +80,39 @@ void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
         // was added to reveal.
         if (b.drawCount > a.drawCount)
         {
-            ++rejectWhy["replay longer than base (" + std::to_string(b.drawCount) +
-                        " vs " + std::to_string(a.drawCount) + ")"];
+            if (reportDiagnostics)
+                ++rejectWhy["replay longer than base (" + std::to_string(b.drawCount) + " vs " +
+                            std::to_string(a.drawCount) + ")"];
             return false;
         }
         // Walk A from the point where its trailing b.drawCount draws begin.
         size_t ia = a.first, ib = b.first;
         for (size_t skip = a.drawCount - b.drawCount; skip != 0; --skip)
         {
-            while (ia <= a.last && prepared[ia].isResolve) ++ia;
+            while (ia <= a.last && prepared[ia].isResolve)
+                ++ia;
             ++ia;
         }
         for (size_t n = 0; n < b.drawCount; ++n)
         {
-            while (ia <= a.last && prepared[ia].isResolve) ++ia;
-            while (ib <= b.last && prepared[ib].isResolve) ++ib;
+            while (ia <= a.last && prepared[ia].isResolve)
+                ++ia;
+            while (ib <= b.last && prepared[ib].isResolve)
+                ++ib;
             if (ia > a.last || ib > b.last)
                 return false;
-            const PreparedDraw& x = prepared[ia];
-            const PreparedDraw& y = prepared[ib];
-            if (x.vsHash != y.vsHash || x.psHash != y.psHash ||
-                x.count != y.count || x.primType != y.primType ||
-                x.indexed != y.indexed || x.colorMask != y.colorMask ||
+            const PreparedDraw &x = prepared[ia];
+            const PreparedDraw &y = prepared[ib];
+            if (x.vsHash != y.vsHash || x.psHash != y.psHash || x.count != y.count ||
+                x.primType != y.primType || x.indexed != y.indexed || x.colorMask != y.colorMask ||
                 x.blend0 != y.blend0 || x.depthControl != y.depthControl)
             {
-                ++rejectWhy["state differs at pair " + std::to_string(n)];
+                if (reportDiagnostics)
+                    ++rejectWhy["state differs at pair " + std::to_string(n)];
                 return false;
             }
-            ++ia; ++ib;
+            ++ia;
+            ++ib;
         }
         return true;
     };
@@ -115,7 +132,10 @@ void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
                 break;
             ++examined;
             if (!isReplayOf(groups[gi], groups[gj]))
-            { ++rejected; break; }
+            {
+                ++rejected;
+                break;
+            }
             replays.push_back(gj);
         }
         if (replays.empty())
@@ -130,16 +150,17 @@ void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
             ++unionEnd;
         for (size_t i = groups[gi].first; i <= unionEnd && i < prepared.size(); ++i)
         {
-            const PreparedDraw& r = prepared[i];
+            const PreparedDraw &r = prepared[i];
             if (!r.isResolve || r.resolveIsDepth || r.resolveDest == 0)
                 continue;
             dest = r.resolveDest;
-            dstBottom = std::max(dstBottom,
-                r.resolveDstY + int32_t(r.resolveSrcRect.extent.height));
+            dstBottom =
+                std::max(dstBottom, r.resolveDstY + int32_t(r.resolveSrcRect.extent.height));
         }
         if (dest == 0 || dstBottom <= 0)
         {
-            ++rejectWhy["no colour resolve destination spanning the tiles"];
+            if (reportDiagnostics)
+                ++rejectWhy["no colour resolve destination spanning the tiles"];
             ++rejected;
             continue;
         }
@@ -154,8 +175,8 @@ void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
             // those differ by the surface's vertical sample scale, and
             // comparing them unconverted is a no-op for every 2X tile --
             // max(1024 samples, 720 pixels) leaves the band at 1024.
-            const uint32_t sy = scissorsAreSamples
-                ? MsaaScaleY((prepared[i].surfaceInfo >> 16) & 3) : 1u;
+            const uint32_t sy =
+                scissorsAreSamples ? MsaaScaleY((prepared[i].surfaceInfo >> 16) & 3) : 1u;
             prepared[i].scissor.extent.height =
                 std::max(prepared[i].scissor.extent.height,
                          uint32_t(dstBottom) * sy - prepared[i].scissor.offset.y);
@@ -181,7 +202,7 @@ void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
             ++scanEnd;
         for (size_t i = groups[gi].first; i <= scanEnd && i < prepared.size(); ++i)
         {
-            PreparedDraw& r = prepared[i];
+            PreparedDraw &r = prepared[i];
             const bool inBase = i < firstReplay;
             if (r.isResolve)
             {
@@ -207,10 +228,10 @@ void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
         {
             // The base tile has no resolve at the origin to widen, so the
             // collapse would lose the replays' output. Undo and leave it.
-            for (size_t i = groups[gi].first;
-                 i <= scanEnd && i < prepared.size(); ++i)
+            for (size_t i = groups[gi].first; i <= scanEnd && i < prepared.size(); ++i)
                 drop[i] = false;
-            ++rejectWhy["base tile has no resolve at destination row 0"];
+            if (reportDiagnostics)
+                ++rejectWhy["base tile has no resolve at destination row 0"];
             ++rejected;
             continue;
         }
@@ -233,32 +254,36 @@ void CollapseEdramTiling(std::vector<PreparedDraw>& prepared, uint32_t& issued,
         prepared.swap(kept);
         issued -= droppedDraws;
     }
-    lucent::info("draw", "untile: {} tile group(s) collapsed, {} replayed draws"
-        " and {} resolves dropped; {} candidate group(s) examined, {} REJECTED"
-        " as not provable replays and left tiled", collapsedGroups, droppedDraws,
-        mergedResolves, examined, rejected);
-    if (!rejectWhy.empty())
+    lucent::Line summary;
+    lucent::Line rejectionReasons;
+    lucent::Line groupCensus;
+    lucent::Line warning;
+    if (reportDiagnostics)
     {
-        lucent::Line rl;
-        rl.add("untile: why candidates were rejected:");
-        for (const auto& kv : rejectWhy)
-            rl.add(" [{} x{}]", kv.first, kv.second);
-        rl.flush(lucent::Level::Info, "draw");
+        summary.add("untile: {} tile group(s) collapsed, {} replayed draws"
+                    " and {} resolves dropped; {} candidate group(s) examined, {} REJECTED"
+                    " as not provable replays and left tiled",
+                    collapsedGroups, droppedDraws, mergedResolves, examined, rejected);
+        if (!rejectWhy.empty())
+        {
+            rejectionReasons.add("untile: why candidates were rejected:");
+            for (const auto &kv : rejectWhy)
+                rejectionReasons.add(" [{} x{}]", kv.first, kv.second);
+        }
+        // The group census, so "not a provable replay" can be checked against
+        // what the grouping actually saw rather than believed.
+        groupCensus.add("untile: {} draw group(s):", groups.size());
+        for (const Group &g : groups)
+            groupCensus.add(" [surf {:#x} wo {:#x} x{}]", g.surface, g.windowOffset, g.drawCount);
+        if (collapsedGroups == 0)
+            warning.add("untile: nothing was collapsed. Either this frame"
+                        " is not tiled, or every candidate failed the replay test -- the"
+                        " counts above say which, and NOT collapsing is the safe outcome");
     }
-    // The group census, so "not a provable replay" can be checked against
-    // what the grouping actually saw rather than believed.
-    {
-        lucent::Line gl;
-        gl.add("untile: {} draw group(s):", groups.size());
-        for (const Group& g : groups)
-            gl.add(" [surf {:#x} wo {:#x} x{}]", g.surface, g.windowOffset,
-                   g.drawCount);
-        gl.flush(lucent::Level::Info, "draw");
-    }
-    if (collapsedGroups == 0)
-        lucent::warn("draw", "untile: nothing was collapsed. Either this frame"
-            " is not tiled, or every candidate failed the replay test -- the"
-            " counts above say which, and NOT collapsing is the safe outcome");
+    summary.flush(lucent::Level::Info, "draw");
+    rejectionReasons.flush(lucent::Level::Info, "draw");
+    groupCensus.flush(lucent::Level::Info, "draw");
+    warning.flush(lucent::Level::Warn, "draw");
 }
 
 } // namespace gears::draw

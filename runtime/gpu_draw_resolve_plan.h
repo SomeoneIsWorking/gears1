@@ -67,10 +67,11 @@ struct ResolvePlan
 
 // Fills RT.formatsPerBase and returns the routing. Nothing here touches the
 // GPU; it is a read of the frame's registers.
-ResolvePlan PlanResolves(const FrameDrawInputs& in, RenderTargetCache& RT);
+ResolvePlan PlanResolves(const FrameDrawInputs &in, RenderTargetCache &RT);
 
-// Both counts are printed even at zero, because "no resolve went unserved" and
-// "nobody checked" are the same silence otherwise.
-void ReportResolvePlan(const ResolvePlan& plan);
+// Report frames print both counts even at zero, because "no resolve went
+// unserved" and "nobody checked" are the same silence otherwise. Normal frames
+// skip constructing this diagnostic census.
+void ReportResolvePlan(const ResolvePlan &plan, bool enabled = true);
 
 } // namespace gears::draw
