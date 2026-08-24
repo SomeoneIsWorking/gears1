@@ -6,7 +6,7 @@ created: 2026-08-24
 tags: recompiler,switch
 depends: config/gears.toml, extern/XenonRecomp/XenonAnalyse/function.cpp, extern/XenonRecomp/XenonRecomp/function_scan.cpp, extern/XenonRecomp/XenonRecomp/switch_extent.cpp
 reconfirmed: 2026-08-24
-verified_at: 2026-08-24 20:57:49
+verified_at: 2026-08-24 20:58:29
 ---
 
 ## Claim
@@ -24,3 +24,7 @@ Fresh generation for the exact configured image emits a target as sub_*, decodes
 ## Re-confirmed 2026-08-24
 
 Re-verified against XenonRecomp commit a841864: exact Gears generation reached 100% with eight one-label/one-edge local targets, zero standalone case functions, zero table-word functions, and zero generated error markers.
+
+## Re-confirmed 2026-08-24
+
+Confirmed after parent commit ae7df48: the committed exact data ranges are the inputs used by the clean 100% generation audit with local-only case blocks and no decoded table words.
