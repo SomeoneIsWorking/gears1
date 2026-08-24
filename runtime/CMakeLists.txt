@@ -121,7 +121,7 @@ target_include_directories(gears_gpu_queue_access PUBLIC "${CMAKE_CURRENT_SOURCE
 set(IMPORT_STUBS "${CMAKE_CURRENT_BINARY_DIR}/imports_generated.cpp")
 add_custom_command(
     OUTPUT "${IMPORT_STUBS}"
-    COMMAND ${CMAKE_COMMAND} -E env python3
+    COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/gen_import_stubs.py"
             "${GEARS_PPC_DIR}/ppc_func_mapping.cpp"
             "${IMPORT_STUBS}"

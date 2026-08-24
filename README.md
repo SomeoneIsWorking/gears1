@@ -65,10 +65,12 @@ approximate, `docs/codemap.md` says where each subsystem lives, and
 **No game or UE3 source is included, fetched, or accepted as a dependency.** To
 build a playable title module you supply your own legally obtained Gears disc
 image. Extraction and recompilation output stay under gitignored `scratch/`.
+Python 3.12 tool dependencies are locked by `uv.lock`; install `uv` and run the
+commands below from the repository root.
 
 ```sh
 export GEARS_ISO="/path/to/your/Gears of War.iso"
-python3 tools/gdf_extract.py "$GEARS_ISO" --extract-all scratch/game
+uv run --locked python tools/gdf_extract.py "$GEARS_ISO" --extract-all scratch/game
 ```
 
 Everything derived from the disc lands in `scratch/`, which is gitignored.
@@ -98,14 +100,14 @@ cmake --build scratch/build-xenonrecomp
 
 # Seal the disc, container, normalized-image, execution, section, import, and
 # helper identities. XEX_INSPECT or --xex-inspect may select another build.
-python3 tools/title_identity.py --xex scratch/game/default.xex
+uv run --locked python tools/title_identity.py --xex scratch/game/default.xex
 
 # Recover jump tables, merge the tracked correction, and generate into a fresh
 # ignored directory. Generated code is never patched after emission.
 mkdir -p scratch/config
 ./scratch/build-xenonrecomp/XenonAnalyse/XenonAnalyse \
     scratch/game/default.xex scratch/config/gears_switch_tables.auto.toml
-python3 tools/merge_switch_tables.py \
+uv run --locked python tools/merge_switch_tables.py \
     scratch/config/gears_switch_tables.auto.toml \
     config/gears_switch_tables.extra.toml \
     scratch/config/gears_switch_tables.toml

@@ -160,9 +160,12 @@ struct TextureBinder
     // shaders that decode resolved depth, so their microcode can be read.
     std::map<std::pair<uint32_t, uint64_t>, uint64_t> depthDestSamplers;
     std::map<uint32_t, uint64_t> fetchesWithSigns; // sign bits -> bindings
-    std::map<uint32_t, uint64_t> signedBases;      // base -> bindings wanting kSigned
-    std::map<uint32_t, uint64_t> baseCount;        // fetch base address -> bindings
-    std::map<uint32_t, uint64_t> baseRtCount;      // ... restricted to resolve destinations
+    // Guest fixed-point textures that need an alternate signed-normalized
+    // view. Resolve targets are floating-point and preserve negatives through
+    // the same view in both shader descriptor slots.
+    std::map<uint32_t, uint64_t> signedBases; // base -> bindings wanting kSigned
+    std::map<uint32_t, uint64_t> baseCount;   // fetch base address -> bindings
+    std::map<uint32_t, uint64_t> baseRtCount; // ... restricted to resolve destinations
 
     // What UPLOAD cost this frame. Accumulated here because this is the only
     // call site of TextureUploader::Upload -- reporting it under state+pipeline,

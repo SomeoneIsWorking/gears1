@@ -3477,10 +3477,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         if (!TB.signedBases.empty())
         {
             lucent::Line bl;
-            bl.add("frame kSigned textures: {} distinct bases want the SIGNED view,"
-                   " which this renderer does not create -- the unsigned view is"
-                   " bound to both slots, so these fetches read 0..1 where the"
-                   " shader expects -1..1:",
+            bl.add("frame kSigned guest textures: {} distinct bases need a"
+                   " signed-normalized host view, which this renderer does not create --"
+                   " the unsigned view is bound to both slots, so these fixed-point"
+                   " fetches read 0..1 where the shader expects -1..1:",
                    TB.signedBases.size());
             for (const auto &[b, n] : TB.signedBases)
                 bl.add(" [{:#x} x{}]", b, n);

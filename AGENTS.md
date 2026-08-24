@@ -49,6 +49,16 @@ diagnosis must use `./run.sh --headless` or a purpose-built headless tool. Do
 not open a game window for a smoke test, including when checking the launcher;
 exercise the launcher with its headless option instead.
 
+## Python tooling
+
+USER 2026-08-24: "all python should run through uv projects"
+
+The repository root `pyproject.toml` and `uv.lock` are the only Python
+dependency authority. Run project tools as `uv run --locked python <tool>`;
+CMake generators and CTest use the same locked project. Do not select an
+ambient interpreter, install dependencies outside the project, or add inline
+script dependency metadata that creates a second environment.
+
 ## Host architecture
 
 Use `${DUSKLIGHT_REPO}` when set, otherwise the sibling checkout at

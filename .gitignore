@@ -11,6 +11,7 @@ roms/
 # /home/<user> through every clone until 2026-08-05.
 __pycache__/
 *.pyc
+.venv/
 
 # Xenia writes this beside its working directory when run from the repo root
 xconfig.settings

@@ -233,10 +233,10 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 ### frame-first-divergence — Walk the frame in execution order and name the first pass that loses agreement
 - status: re-partial
 - deps: frame-pair-validated
-- evidence: The former gross C400 divergence and draw-743 localization are withdrawn: Xenia's trace dump was using asynchronous first-use placeholder shaders. The tool now forces synchronous pipeline creation, and its no-flag output is byte-identical across all 27 raw destinations to the prior explicit synchronous control. On that trustworthy oracle, all 24 compatibility-renderer pass handoffs have structurally paired oracle counterparts; the complete C400 handoff is already close (mean 0.0596 native / 0.0594 oracle, 0.20% of pixels over 0.1). The largest pass-localized defect began at the first C5A0 blur: native created a 352-wide sampled image from guest pitch while the fetch constant declared 322 pixels. Using the logical extent makes all three bloom passes 0.00% over 0.1 and cuts the downstream composite from 4.98% to 0.41% (catalog #114).
-- where: runtime/gpu_resolve_extent.*; runtime/gpu_draw_resolve_plan.cpp; runtime/gpu_draw_targets.cpp; tools/layer_compare.py; tools/resolve_exact.py; tools/gfr_to_xtr.py; tools/gfr_trace_plan.py; extern/xenia/src/xenia/gpu/vulkan/vulkan_trace_dump_main.cc; scratch/frames/chapter45_recovered.gfr
-- gap: Localize the remaining 0.41% composite residual from the earliest synchronous-oracle pass whose values exceed the comparison threshold. Do not reopen C400 from an async trace dump or rely on I051/I054 zero checkpoint content.
-- notes: Guest destination pitch and logical sampled width are independent quantities. The raw half-float comparator still reports exact numerical differences in bloom despite perceptual pass agreement; it remains the strict falsifier and must not be replaced by a score when locating the residual.
+- evidence: The former gross C400 divergence and draw-743 localization are withdrawn: Xenia's trace dump was using asynchronous first-use placeholder shaders. Current code replayed `chapter45_recovered.gfr` against the synchronous oracle and paired all 24 compatibility-renderer handoffs with zero one-sided passes. All colour rows now have 0.00% of available pixels over the 0.1 threshold, including the former 0.41% downstream composite. `layer_compare_ranges` proves a unique legacy texture base from the complete D5A0 sibling and makes all 11 shadow-depth copies comparable; all 12 depth handoffs match, with copy #0 exact where both sides wrote. The largest former defect was the C5A0 logical-width error fixed in catalog #114.
+- where: runtime/gpu_resolve_extent.*; runtime/gpu_draw_resolve_plan.cpp; runtime/gpu_draw_targets.cpp; runtime/gpu_draw_textures.cpp; tools/layer_compare.py; tools/layer_compare_ranges.py; tools/resolve_exact.py; tools/gfr_to_xtr.py; tools/gfr_trace_plan.py; extern/xenia/src/xenia/gpu/vulkan/vulkan_trace_dump_main.cc; scratch/frames/chapter45_recovered.gfr
+- gap: Exact half-float bits still differ at C400 despite no threshold-visible pass residual. Localize that numerical delta only with the exact synchronous corpus and only if it propagates into a consumer; broaden the same 24/24 gate to a materially different paired scene. Do not reopen C400 from an async trace dump or rely on I051/I054 zero checkpoint content.
+- notes: Guest destination pitch and logical sampled width are independent quantities. The raw half-float comparator remains the strict numerical falsifier; the pass comparer is the visual-severity gate, and neither may be substituted for the other.
 
 ### hdr-pair-ui-state — Acquire a UI-state-matched HDR oracle/native pair
 - status: re-verified
@@ -250,11 +250,11 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 ## render
 
 ### f7-first-loss-localisation — Localise the first f7 resolve's inherited or produced difference
-- status: re-partial
+- status: re-verified
 - deps: hdr-pair-ui-state, frame-first-divergence
-- evidence: The former correlation-scored conclusion was withdrawn with C053. Structural resolve pairing remains available, but no exact first divergent draw has been established.
+- evidence: The former correlation-scored conclusion was withdrawn with C053. On the current synchronous chapter-45 rebaseline the f7 handoff matches with 0.00% of available pixels over 0.1, and every earlier structural handoff does too. There is no threshold-visible f7 loss to localize in this capture.
 - where: tools/layer_compare.py; tools/draw_interval_ledger.py
-- gap: Do not rank pass correlations. Establish the earliest exact draw/state mismatch in the cached chapter-45 pair, then trace its producer behavior.
+- gap:
 - notes: Score-based pair_score.py and first_divergence.py were removed to prevent aggregate metrics from being mistaken for a first divergence.
 
 ### diverse-scene-pair-coverage — Verify rendering across materially different gameplay views
@@ -319,7 +319,7 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 ### frame-delivery-contract — Carry one guest frame identity through a bounded latest-frame pipeline
 - status: in-progress
 - deps: gpu-retirement
-- evidence: Production-interface synthetic tests cover `FrameQueue`'s one-active/latest-pending replacement and stale-completion refusal, `FrameContract`'s non-zero monotonic publication and no-stale/no-unpublished presentation rules, `GpuRetirement`'s bounded generation-checked leases, polling, teardown drain, error retention, and device-loss cleanup, and `GpuQueueAccess`'s serialization under concurrent callers. The guest present sequence is now passed into scan-out rather than replaced by a scan-out-local counter, and every shared renderer/presenter queue operation goes through the external-synchronization owner.
+- evidence: Production-interface synthetic tests cover `FrameQueue`'s one-active/latest-pending replacement and stale-completion refusal, `FrameContract`'s non-zero monotonic publication and no-stale/no-unpublished presentation rules, `GpuRetirement`'s bounded generation-checked leases, polling, teardown drain, error retention, and device-loss cleanup, and `GpuQueueAccess`'s serialization under concurrent callers. The guest present sequence is now passed into scan-out rather than replaced by a scan-out-local counter, and every shared renderer/presenter queue operation goes through the external-synchronization owner. A current 101-frame same-process replay, excluding 12 cold frames and the final report, measured median 53 ms total / 36.5 ms draw loop / 14 ms submit+wait. Texture safety re-hashed 49.39 MiB in 3.9 ms; removing it would reintroduce stale movies, so the stable submit wait remains the bounded overlap target.
 - where: runtime/frame_queue.*; runtime/frame_contract.*; runtime/gpu_queue_access.*; runtime/gpu_retirement.*; runtime/render_thread.*; runtime/gpu_scanout.*; runtime/gpu_shared_device.*; tests/test_frame_queue.cpp; tests/test_frame_contract.cpp; tests/test_gpu_queue_access.cpp; tests/test_gpu_retirement.cpp
 - gap: The new GPU slot retirement owner is not integrated into the Vulkan renderer. Command buffer/fence/descriptor/arena/readback and fallback cleanup remain single-frame resources, and shared images need explicit GPU-ready and consumer-complete signaling. No real-run performance or visual-glitch result has been measured for the latest-pending policy.
 - notes: Replacing stale pending CPU work bounds latency but cannot raise title production or GPU throughput. `RenderRetirement`'s verified generation-specific guest fence publication remains a separate shipping contract.
@@ -351,7 +351,7 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 ### renderer-60hz-budget — Render steady gameplay below 16.67 ms per produced frame
 - status: todo
 - deps: frame-delivery-contract, native-rhi-bypass
-- evidence: The current warm 743-draw Gears 1 compatibility frame is about 44 ms, including roughly 34 ms in a flat draw loop. The latest-frame queue changes latency policy, not that throughput measurement.
+- evidence: A current 101-frame same-process chapter-45 replay, after 12 cold frames and excluding the report frame, measured median 53 ms total, 36.5 ms CPU draw loop, and 14 ms submit+wait. The run was noisy (p10/p90 total 43/94 ms), so these are architecture-scale baselines, not a sub-millisecond optimization claim. The latest-frame queue changes latency policy, not throughput, and the unconditional one-frame fence wait prevents CPU/GPU overlap.
 - where: runtime/gpu_draw*; runtime/frame_queue.*; runtime/gpu_retirement.*; native RHI frontend; headless frame-time reports
 - gap: Integrate bounded GPU resource slots and the native RHI path, then demonstrate a sustained sub-16.67 ms frame budget with correct retirement and no dropped evidence frames. No title currently passes this gate.
 - notes: A 60 Hz vblank, a repeated presentation, or an average inflated by menu frames is not a 60 fps gameplay result. Measure produced gameplay frames and preserve the compatibility arm for parity.

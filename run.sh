@@ -83,7 +83,7 @@ if [ ! -f "$game_dir/default.xex" ]; then
     echo "run.sh: no '$game_dir/default.xex'." >&2
     echo "  The title's files must be extracted from your own disc image first:" >&2
     echo "    export GEARS_ISO=/path/to/your/Gears\\ of\\ War.iso" >&2
-    echo "    python3 tools/gdf_extract.py \"\$GEARS_ISO\" --extract-all $game_dir" >&2
+    echo "    uv run --locked python tools/gdf_extract.py \"\$GEARS_ISO\" --extract-all $game_dir" >&2
     echo "  Or point GEARS_GAME_DIR at an existing extraction. See README.md." >&2
     exit 1
 fi

@@ -1,11 +1,11 @@
 ---
 id: 97
 title: The console clears a fifth of the shadow atlas that we leave at far depth
-status: open
+status: resolved
 symptom: srcD5A0 864x864 f22 depth resolve: mean |d| 0.196 overall, but 0.0084 over the 78.9% the console does not clear
 tags: oracle,layer-compare,depth,shadow,clear
 created: 2026-08-11
-updated: 2026-08-12
+updated: 2026-08-24
 ---
 
 ## What was measured
@@ -95,3 +95,6 @@ STOP: ZERO-FRAGMENT CLEAR DRAWS ARE NORMAL. THE CONSOLE DOES IT TOO, AND MORE TH
 
 ### Note (2026-08-12)
 SETTLED AT A MATCHED CAMERA, AND IT IS PADDING, NOT A CLEAR -- WHICH IS WHAT THIS ENTRY'S OWN 2026-08-11 NOTE SAID AND I RE-DERIVED THE HARD WAY. On the first validated pair (scratch/camerapair_rot, colour 0.6082 against console frame 790, camera matched at 0.13 thresholds), the shadow atlas srcD5A0 864x864 f22 at our draw 1084 against oracle_f790_copy9. The console's near-zero region is EXACTLY 13,824 pixels = 864 x 16, a solid full-width band at rows 432..447 of its 448-row buffer, and our value across it is uniformly 1.0000. 448 = align(432, 32): the buffer holds 432 real rows padded up to the 32-row tile alignment, and the padding is guest memory, i.e. zeros. NEITHER SIDE WROTE THERE. OVER WHAT BOTH WROTE THE ATLAS IS ESSENTIALLY EXACT: ours mean 0.8891 against the console's 0.8891, mean |d| 0.0005 -- tighter than the 0.0084 this entry recorded and the 0.0031 the camera-gated capture gave earlier. Scored as a picture, cropped to the rows the console wrote, the pass correlates at 0.9981 against a 0.60 gate. So the shadow map's content agrees to five significant figures and there is no missing clear: this entry's original symptom is an artefact of comparing over alignment padding. THE INSTRUMENT LESSON, because this is the second time in one hour: tools/first_divergence.py named this pass its FRONTIER at 0.3312 before the crop was added, exactly as it had earlier named the velocity buffer at 0.34 before a coverage guard was added. Both were correlations over regions where one or both sides hold nothing. A frontier tool that scores padding will keep manufacturing frontiers, and the fix in both cases was to make the tool say what it could not see rather than to reason about the number. THE FRONTIER MOVES to draw 1089, srcC2D0 1280x720 f6 to 0x0d1c9000, which scores 0.2681 where the console wrote 98.5% of the buffer -- so cropping does not touch it and it is a real divergence -- between neighbours at 0.9981 and 0.8607.
+
+### Resolution (2026-08-24)
+Current-code replay of chapter45_recovered.gfr against the synchronous oracle now decodes every legacy partial tiled range by inferring the unique base from its complete sibling. All 11 srcD5A0 copies match over their available texels; copy #0 agrees exactly where both wrote. The old clear/mismatch premise was padding plus an instrument blind spot.

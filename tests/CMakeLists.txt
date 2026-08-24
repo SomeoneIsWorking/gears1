@@ -252,103 +252,108 @@ add_test(NAME xam_notify COMMAND test_xam_notify)
 # feeds it a case which MUST produce a positive.
 #
 # A self-test nobody runs is the same failure one level up, so they run here.
-find_package(Python3 COMPONENTS Interpreter REQUIRED)
-if(Python3_Interpreter_FOUND)
-    add_test(NAME source_structure
-        COMMAND ${Python3_EXECUTABLE}
-                "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py")
-    add_test(NAME source_structure_selftest
-        COMMAND ${Python3_EXECUTABLE}
-                "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py" --selftest)
-    add_test(NAME clean_distribution
-        COMMAND ${Python3_EXECUTABLE}
-                "${CMAKE_SOURCE_DIR}/tools/check_distribution_clean.py")
-    add_test(NAME clean_distribution_selftest
-        COMMAND ${Python3_EXECUTABLE}
-                "${CMAKE_SOURCE_DIR}/tools/check_distribution_clean.py" --selftest)
-    add_test(NAME title_identity
-        COMMAND ${Python3_EXECUTABLE}
-                "${CMAKE_CURRENT_SOURCE_DIR}/test_title_identity.py")
-    add_test(NAME gdf_extract
-        COMMAND ${Python3_EXECUTABLE}
-                "${CMAKE_CURRENT_SOURCE_DIR}/test_gdf_extract.py")
-    add_test(NAME title_conformance_selftest
-        COMMAND ${Python3_EXECUTABLE}
-                "${CMAKE_SOURCE_DIR}/tools/title_conformance.py" --selftest)
-    add_test(NAME instrument_find_addr_refs
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/find_addr_refs.py" --selftest)
-    add_test(NAME instrument_atomic_audit
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/atomic_audit.py" --selftest)
-    # The catalog must REFUSE to answer from a directory that is not there,
-    # rather than reporting "(no matches)" and exiting 0 -- that is the shape
-    # that makes an anti-re-derivation tool actively harmful.
-    add_test(NAME instrument_catalog_refuses_empty_corpus
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/catalog.py"
-                --dir "${CMAKE_CURRENT_BINARY_DIR}/no-such-catalog" search anything)
-    set_tests_properties(instrument_catalog_refuses_empty_corpus
-        PROPERTIES WILL_FAIL TRUE)
-    # frame_stats.py reports catalog #62's headline number. Its self-test
-    # includes cases that must NOT trip -- the R/B-swap detector staying silent
-    # on an unrelated pair, an all-black frame being named as black rather than
-    # handed a ratio, and the PNG reader matching the PPM reader byte for byte,
-    # without which a cross-format diff compares two decoders.
-    add_test(NAME instrument_frame_stats
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/frame_stats.py" --selftest)
-    # ... and it must REFUSE a file that is not there rather than print
-    # statistics of nothing.
-    add_test(NAME instrument_frame_stats_refuses_missing
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/frame_stats.py"
-                "${CMAKE_CURRENT_BINARY_DIR}/no-such-frame.ppm")
-    set_tests_properties(instrument_frame_stats_refuses_missing
-        PROPERTIES WILL_FAIL TRUE)
-    # Same for the capture search: a search of a corpus that is not there
-    # searched NOTHING, and must not be readable as "no matches".
-    add_test(NAME instrument_find_const_block_refuses_missing
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/find_const_block.py"
-                "${CMAKE_CURRENT_BINARY_DIR}/no-such-capture.gfr")
-    set_tests_properties(instrument_find_const_block_refuses_missing
-        PROPERTIES WILL_FAIL TRUE)
-    # clip_volume_check.py carries every number inline, so it needs no capture:
-    # it re-runs catalog #74's arithmetic, requires it to agree with the GPU on
-    # the draw that rasterised, AND requires a deliberately wrong constant
-    # layout to be rejected. A check that has only ever passed is not a check.
-    add_test(NAME instrument_clip_volume_check
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/clip_volume_check.py")
-    # The pass classifier's own self-test: cases it must accept, and one it
-    # must reject.
-    add_test(NAME instrument_pass_structure
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/pass_structure.py" --selftest)
-    # gfr_to_xtr transcribes Xenia's trace format and Xenos packet bitfields by
-    # hand. A transcription slip there produces a trace that parses and renders
-    # the WRONG thing -- an oracle that lies is worse than no oracle -- so the
-    # packing is checked against values worked out independently.
-    add_test(NAME instrument_gfr_to_xtr
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/gfr_to_xtr.py" --selftest)
-    add_test(NAME instrument_gfr_to_xtr_refuses_missing
-        COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/gfr_to_xtr.py"
-                "${CMAKE_CURRENT_BINARY_DIR}/no-such.gfr" "${CMAKE_CURRENT_BINARY_DIR}/o.xtr")
-    set_tests_properties(instrument_gfr_to_xtr_refuses_missing
-        PROPERTIES WILL_FAIL TRUE)
-    # The interval ledger must distinguish three cases before it is allowed to
-    # interpret a real capture: exact alignment, the same draw touching a
-    # different EDRAM owner, and a draw present on only one side.
-    add_test(NAME instrument_draw_interval_ledger
-        COMMAND ${Python3_EXECUTABLE}
-                "${CMAKE_SOURCE_DIR}/tools/draw_interval_ledger.py" --selftest)
-    # A camera and input schedule can both match behind a title-owned modal.
-    # Exercise isolated clean draws, the measured consecutive eight-draw modal
-    # suffix, zero occurrences and an unknown run so the capture harness cannot
-    # silently accept unequal UI state or overfit a whole-frame draw count.
-    add_test(NAME instrument_ui_state
-        COMMAND ${Python3_EXECUTABLE}
-                "${CMAKE_SOURCE_DIR}/tools/ui_state_check.py" --selftest)
-endif()
+add_test(NAME python_project_locked
+    COMMAND "${GEARS_UV_EXECUTABLE}" lock --check --project "${CMAKE_SOURCE_DIR}")
+add_test(NAME source_structure
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py")
+add_test(NAME source_structure_selftest
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py" --selftest)
+add_test(NAME clean_distribution
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/check_distribution_clean.py")
+add_test(NAME clean_distribution_selftest
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/check_distribution_clean.py" --selftest)
+add_test(NAME title_identity
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_title_identity.py")
+add_test(NAME gdf_extract
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_gdf_extract.py")
+add_test(NAME title_conformance_selftest
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/title_conformance.py" --selftest)
+add_test(NAME instrument_find_addr_refs
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/find_addr_refs.py" --selftest)
+add_test(NAME instrument_atomic_audit
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/atomic_audit.py" --selftest)
+# The catalog must REFUSE to answer from a directory that is not there,
+# rather than reporting "(no matches)" and exiting 0 -- that is the shape
+# that makes an anti-re-derivation tool actively harmful.
+add_test(NAME instrument_catalog_refuses_empty_corpus
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/catalog.py"
+            --dir "${CMAKE_CURRENT_BINARY_DIR}/no-such-catalog" search anything)
+set_tests_properties(instrument_catalog_refuses_empty_corpus
+    PROPERTIES WILL_FAIL TRUE)
+# frame_stats.py reports catalog #62's headline number. Its self-test
+# includes cases that must NOT trip -- the R/B-swap detector staying silent
+# on an unrelated pair, an all-black frame being named as black rather than
+# handed a ratio, and the PNG reader matching the PPM reader byte for byte,
+# without which a cross-format diff compares two decoders.
+add_test(NAME instrument_frame_stats
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/frame_stats.py" --selftest)
+# ... and it must REFUSE a file that is not there rather than print
+# statistics of nothing.
+add_test(NAME instrument_frame_stats_refuses_missing
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/frame_stats.py"
+            "${CMAKE_CURRENT_BINARY_DIR}/no-such-frame.ppm")
+set_tests_properties(instrument_frame_stats_refuses_missing
+    PROPERTIES WILL_FAIL TRUE)
+# Same for the capture search: a search of a corpus that is not there
+# searched NOTHING, and must not be readable as "no matches".
+add_test(NAME instrument_find_const_block_refuses_missing
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/find_const_block.py"
+            "${CMAKE_CURRENT_BINARY_DIR}/no-such-capture.gfr")
+set_tests_properties(instrument_find_const_block_refuses_missing
+    PROPERTIES WILL_FAIL TRUE)
+# clip_volume_check.py carries every number inline, so it needs no capture:
+# it re-runs catalog #74's arithmetic, requires it to agree with the GPU on
+# the draw that rasterised, AND requires a deliberately wrong constant
+# layout to be rejected. A check that has only ever passed is not a check.
+add_test(NAME instrument_clip_volume_check
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/clip_volume_check.py")
+# The pass classifier's own self-test: cases it must accept, and one it
+# must reject.
+add_test(NAME instrument_pass_structure
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/pass_structure.py" --selftest)
+# gfr_to_xtr transcribes Xenia's trace format and Xenos packet bitfields by
+# hand. A transcription slip there produces a trace that parses and renders
+# the WRONG thing -- an oracle that lies is worse than no oracle -- so the
+# packing is checked against values worked out independently.
+add_test(NAME instrument_gfr_to_xtr
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/gfr_to_xtr.py" --selftest)
+add_test(NAME instrument_gfr_to_xtr_refuses_missing
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/gfr_to_xtr.py"
+            "${CMAKE_CURRENT_BINARY_DIR}/no-such.gfr" "${CMAKE_CURRENT_BINARY_DIR}/o.xtr")
+set_tests_properties(instrument_gfr_to_xtr_refuses_missing
+    PROPERTIES WILL_FAIL TRUE)
+# The interval ledger must distinguish three cases before it is allowed to
+# interpret a real capture: exact alignment, the same draw touching a
+# different EDRAM owner, and a draw present on only one side.
+add_test(NAME instrument_draw_interval_ledger
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/draw_interval_ledger.py" --selftest)
+# Partial tiled oracle ranges are only comparable when their allocation
+# base is proven. Exercise explicit metadata, unique legacy inference, the
+# ambiguous refusal, an identical image and a deliberately shifted image.
+add_test(NAME instrument_layer_compare
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/layer_compare.py" --selftest)
+# A camera and input schedule can both match behind a title-owned modal.
+# Exercise isolated clean draws, the measured consecutive eight-draw modal
+# suffix, zero occurrences and an unknown run so the capture harness cannot
+# silently accept unequal UI state or overfit a whole-frame draw count.
+add_test(NAME instrument_ui_state
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/ui_state_check.py" --selftest)
 
 add_test(NAME cpp_quality
-    COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.py"
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.py"
             "${CMAKE_BINARY_DIR}")
 add_test(NAME cpp_quality_selftest
-    COMMAND ${Python3_EXECUTABLE} "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.py"
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.py"
             --selftest)
 
 # RtlTimeToTimeFields / RtlTimeFieldsToTime. Verified until now only by "the
