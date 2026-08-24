@@ -121,4 +121,22 @@ TitleProfileResolution ResolveTitleProfile(std::span<const TitleProfile> profile
     return {.profile = &*match, .error = TitleProfileError::None};
 }
 
+std::string_view TitleProfileErrorText(TitleProfileError error) noexcept
+{
+    switch (error)
+    {
+    case TitleProfileError::None:
+        return "none";
+    case TitleProfileError::InvalidObservedIdentity:
+        return "invalid executable identity";
+    case TitleProfileError::InvalidProfile:
+        return "invalid generated title profile";
+    case TitleProfileError::AmbiguousRegistry:
+        return "ambiguous generated title registry";
+    case TitleProfileError::UnknownBuild:
+        return "executable does not match the generated title module";
+    }
+    return "unknown title profile error";
+}
+
 } // namespace gears

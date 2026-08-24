@@ -115,6 +115,15 @@ void CheckUnknownBuildIsRefused()
           "empty registry does not imply a default profile");
 }
 
+void CheckErrorDescriptions()
+{
+    Check(gears::TitleProfileErrorText(gears::TitleProfileError::UnknownBuild) ==
+              "executable does not match the generated title module",
+          "unknown-build refusal has an actionable description");
+    Check(!gears::TitleProfileErrorText(gears::TitleProfileError::InvalidProfile).empty(),
+          "every registry refusal has a description");
+}
+
 void CheckInvalidObservedIdentityIsRefused()
 {
     const std::array profiles{SyntheticProfile(SyntheticIdentity(5))};
@@ -178,6 +187,7 @@ int main()
     CheckExactMatch();
     CheckEveryIdentityFieldIsExact();
     CheckUnknownBuildIsRefused();
+    CheckErrorDescriptions();
     CheckInvalidObservedIdentityIsRefused();
     CheckInvalidProfileIsRefused();
     CheckRegistryAmbiguityIsRefused();

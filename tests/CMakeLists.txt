@@ -200,6 +200,17 @@ add_executable(test_title_profile test_title_profile.cpp)
 target_link_libraries(test_title_profile PRIVATE gears_title_profile)
 add_test(NAME title_profile COMMAND test_title_profile)
 
+add_executable(test_generated_title_profile test_generated_title_profile.cpp)
+target_include_directories(test_generated_title_profile PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}")
+target_link_libraries(test_generated_title_profile PRIVATE gears_generated_title_profile)
+add_test(NAME generated_title_profile COMMAND test_generated_title_profile)
+
+add_executable(test_title_executable test_title_executable.cpp)
+target_link_libraries(test_title_executable PRIVATE gears_title_executable)
+add_test(NAME title_executable COMMAND test_title_executable)
+
 add_executable(test_scanout_gamma
     test_scanout_gamma.cpp
     ../runtime/scanout_gamma.cpp)

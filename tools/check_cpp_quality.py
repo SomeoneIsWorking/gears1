@@ -10,6 +10,11 @@ from pathlib import Path
 
 
 FORMATTED = [
+    "runtime/generated_title_profile.cpp",
+    "runtime/generated_title_profile.h",
+    "runtime/guest_filesystem.cpp",
+    "runtime/guest_filesystem.h",
+    "runtime/main.cpp",
     "runtime/debug_http.cpp",
     "runtime/debug_http.h",
     "runtime/frame_probe_capture.h",
@@ -76,6 +81,10 @@ FORMATTED = [
     "runtime/render_retirement.h",
     "runtime/scanout_gamma.cpp",
     "runtime/scanout_gamma.h",
+    "runtime/title_executable.cpp",
+    "runtime/title_executable.h",
+    "runtime/title_profile.cpp",
+    "runtime/title_profile.h",
     "runtime/swapchain_format.h",
     "tests/test_depth_alias_shader_format.cpp",
     "tests/test_frame_probe_capture.cpp",
@@ -93,9 +102,15 @@ FORMATTED = [
     "tests/test_scanout_gamma.cpp",
     "tests/test_spirv_clamp.cpp",
     "tests/test_swapchain_format.cpp",
+    "tests/test_generated_title_profile.cpp",
+    "tests/test_title_executable.cpp",
+    "tests/test_title_profile.cpp",
 ]
 
 TIDY_TRANSLATION_UNITS = [
+    "runtime/generated_title_profile.cpp",
+    "runtime/guest_filesystem.cpp",
+    "runtime/main.cpp",
     "runtime/debug_http.cpp",
     "runtime/graphics_probe.cpp",
     "runtime/graphics_probe_render.cpp",
@@ -129,6 +144,8 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/native_pass.cpp",
     "runtime/render_thread.cpp",
     "runtime/scanout_gamma.cpp",
+    "runtime/title_executable.cpp",
+    "runtime/title_profile.cpp",
     "tests/test_depth_alias_shader_format.cpp",
     "tests/test_frame_probe_capture.cpp",
     "tests/test_frame_contract.cpp",
@@ -145,6 +162,9 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_scanout_gamma.cpp",
     "tests/test_spirv_clamp.cpp",
     "tests/test_swapchain_format.cpp",
+    "tests/test_generated_title_profile.cpp",
+    "tests/test_title_executable.cpp",
+    "tests/test_title_profile.cpp",
 ]
 
 VD_FORMAT_RANGES = [
@@ -222,6 +242,8 @@ def selftest():
     assert "runtime/gpu_renderer_capacity.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_queue_access.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_render_retirement.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/title_executable.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/generated_title_profile.cpp" in TIDY_TRANSLATION_UNITS
     assert VD_TIDY_RANGES and all(first <= last for first, last in VD_TIDY_RANGES)
     print("C++ quality checker selftest passed: positive tool lookup, missing-tool refusal, "
           "and touched-source coverage")

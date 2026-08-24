@@ -19,7 +19,7 @@ namespace
 // Device prefixes the title uses to reach its own data. They all resolve to the
 // game directory: on the console these are the disc and its aliases, and here
 // there is only one place the files can be.
-constexpr const char* kGamePrefixes[] = {
+constexpr const char *kGamePrefixes[] = {
     "\\Device\\Cdrom0\\",
     "\\Device\\Harddisk0\\Partition1\\",
     "\\Device\\Harddisk0\\Partition0\\",
@@ -29,9 +29,9 @@ constexpr const char* kGamePrefixes[] = {
     "D:\\",
 };
 
-std::string StripPrefix(const std::string& path)
+std::string StripPrefix(const std::string &path)
 {
-    for (const char* prefix : kGamePrefixes)
+    for (const char *prefix : kGamePrefixes)
     {
         const size_t length = std::char_traits<char>::length(prefix);
         if (path.size() >= length && path.compare(0, length, prefix) == 0)
@@ -42,38 +42,50 @@ std::string StripPrefix(const std::string& path)
 
 } // namespace
 
-void FileSystem::SetGameDirectory(const std::filesystem::path& directory)
+void FileSystem::SetGameDirectory(const std::filesystem::path &directory)
 {
     std::lock_guard<std::mutex> guard(mutex_);
     gameDirectory_ = directory;
     lucent::info("fs", "game directory: {}", gameDirectory_.string());
 }
 
-const std::filesystem::path& FileSystem::SaveDirectory() const
+bool FileSystem::SetSaveNamespace(std::string_view saveNamespace)
+{
+    std::lock_guard<std::mutex> guard(mutex_);
+    if (!saveDirectory_.empty() || saveNamespace.empty())
+    {
+        lucent::error("fs", "cannot activate save namespace '{}'", saveNamespace);
+        return false;
+    }
+    saveNamespace_ = saveNamespace;
+    lucent::info("fs", "save namespace: {}", saveNamespace_);
+    return true;
+}
+
+const std::filesystem::path &FileSystem::SaveDirectory() const
 {
     std::lock_guard<std::mutex> guard(mutex_);
     if (!saveDirectory_.empty())
         return saveDirectory_;
 
-    if (const std::string& configured = lucent::config::text("SAVE_DIR");
-        !configured.empty())
+    if (const std::string &configured = lucent::config::text("SAVE_DIR"); !configured.empty())
     {
         saveDirectory_ = configured;
     }
-    else if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
+    else if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
     {
         // Where a Linux game is expected to keep user data. A console port
         // that scatters saves next to the executable is a port that has not
         // finished arriving.
-        saveDirectory_ = std::filesystem::path(xdg) / "gears1";
+        saveDirectory_ = std::filesystem::path(xdg) / saveNamespace_;
     }
-    else if (const char* home = std::getenv("HOME"); home && *home)
+    else if (const char *home = std::getenv("HOME"); home && *home)
     {
-        saveDirectory_ = std::filesystem::path(home) / ".local/share/gears1";
+        saveDirectory_ = std::filesystem::path(home) / ".local/share" / saveNamespace_;
     }
     else
     {
-        saveDirectory_ = "saves";
+        saveDirectory_ = std::filesystem::path("saves") / saveNamespace_;
     }
 
     std::error_code ec;
@@ -82,7 +94,7 @@ const std::filesystem::path& FileSystem::SaveDirectory() const
     return saveDirectory_;
 }
 
-void FileSystem::Mount(const std::string& rootName, const std::filesystem::path& hostDirectory)
+void FileSystem::Mount(const std::string &rootName, const std::filesystem::path &hostDirectory)
 {
     std::lock_guard<std::mutex> guard(mutex_);
     std::error_code ec;
@@ -94,7 +106,7 @@ void FileSystem::Mount(const std::string& rootName, const std::filesystem::path&
     lucent::info("fs", "mounted '{}:' -> {} (writable)", rootName, hostDirectory.string());
 }
 
-void FileSystem::Unmount(const std::string& rootName)
+void FileSystem::Unmount(const std::string &rootName)
 {
     std::lock_guard<std::mutex> guard(mutex_);
     std::string key = rootName;
@@ -107,10 +119,10 @@ void FileSystem::Unmount(const std::string& rootName)
 namespace
 {
 // "SAVE:\slot0" or "\Device\SAVE\slot0" -> ("save", "slot0").
-bool SplitMountPath(const std::string& guestPath, std::string& root, std::string& rest)
+bool SplitMountPath(const std::string &guestPath, std::string &root, std::string &rest)
 {
     std::string path = guestPath;
-    constexpr const char* kDevice = "\\Device\\";
+    constexpr const char *kDevice = "\\Device\\";
     if (path.compare(0, std::char_traits<char>::length(kDevice), kDevice) == 0)
         path = path.substr(std::char_traits<char>::length(kDevice));
 
@@ -130,14 +142,14 @@ bool SplitMountPath(const std::string& guestPath, std::string& root, std::string
 }
 } // namespace
 
-bool FileSystem::IsWritable(const std::string& guestPath) const
+bool FileSystem::IsWritable(const std::string &guestPath) const
 {
     std::lock_guard<std::mutex> guard(mutex_);
     std::string root, rest;
     return SplitMountPath(guestPath, root, rest) && mounts_.find(root) != mounts_.end();
 }
 
-std::filesystem::path FileSystem::Resolve(const std::string& guestPath) const
+std::filesystem::path FileSystem::Resolve(const std::string &guestPath) const
 {
     std::lock_guard<std::mutex> guard(mutex_);
     // A writable mount wins over the disc: the title asks for the same shape of
@@ -189,13 +201,13 @@ std::filesystem::path FileSystem::Resolve(const std::string& guestPath) const
 
         std::error_code ec;
         bool matched = false;
-        for (const auto& entry : std::filesystem::directory_iterator(walk, ec))
+        for (const auto &entry : std::filesystem::directory_iterator(walk, ec))
         {
             const std::string name = entry.path().filename().string();
             if (name.size() != component.size())
                 continue;
             if (std::equal(name.begin(), name.end(), component.begin(),
-                    [](char a, char b) { return tolower(a) == tolower(b); }))
+                           [](char a, char b) { return tolower(a) == tolower(b); }))
             {
                 walk = entry.path();
                 matched = true;
@@ -210,7 +222,7 @@ std::filesystem::path FileSystem::Resolve(const std::string& guestPath) const
     return walk;
 }
 
-FileSystem& Files()
+FileSystem &Files()
 {
     static FileSystem instance;
     return instance;

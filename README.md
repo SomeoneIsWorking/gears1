@@ -110,13 +110,16 @@ python3 tools/merge_switch_tables.py \
     config/gears_switch_tables.extra.toml \
     scratch/config/gears_switch_tables.toml
 tools/cleanup_scratch_path.sh scratch/ppc
-mkdir -p scratch/ppc
 ./scratch/build-xenonrecomp/XenonRecomp/XenonRecomp \
     config/gears.toml extern/XenonRecomp/XenonUtils/ppc_context.h
 ```
 
-XenonRecomp needs CMake 3.20+ and Clang 18+. It exits non-zero if any
-instruction lacks an implementation.
+XenonRecomp needs CMake 3.20+ and Clang 18+. It creates its ignored output
+directory, exits non-zero if any instruction lacks an implementation, and
+seals the effective XEX SHA-256, normalized-image SHA-256, image layout, and
+entry point into the generated `ppc_config.h`. The runtime recomputes that
+identity through the checked loader and refuses a different revision before
+save state, guest memory, generated function mappings, or guest entry.
 
 Then build and run the runtime against the locally generated code:
 
