@@ -20,7 +20,7 @@ from ghidra.program.model.symbol import SourceType
 from jarray import array
 BLR = array([0x4e, -0x80, 0x00, 0x20], "b")  # blr = 0x4E800020
 
-# From config/gears.toml, byte-pattern scanned by tools/xex_probe.
+# From config/gears.toml, byte-pattern scanned by XenonRecomp's xex-inspect.
 RANGES = [
     (0x828D27E0, 0x828D2850),  # __savegprlr_14 .. __restgprlr_* tail
     (0x828D4200, 0x828D4290),  # __savefpr_14   .. __restfpr_* tail

@@ -22,7 +22,7 @@ fm = currentProgram.getFunctionManager()
 def addr(v):
     return af.getAddress("0x%X" % v)
 
-# From config/gears.toml, byte-pattern scanned by tools/xex_probe.
+# From config/gears.toml, byte-pattern scanned by XenonRecomp's xex-inspect.
 RANGES = [
     (0x828D27E0, 0x828D2850),  # __savegprlr_14 .. __restgprlr_* tail
     (0x828D4200, 0x828D4290),  # __savefpr_14   .. __restfpr_* tail

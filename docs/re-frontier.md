@@ -292,9 +292,17 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap: Runtime A/B selection remains per override rather than one central engine registry; build-specific bindings still need the title-revision boundary below.
 - notes: Generated output remains ignored and unmodified. The original `__imp__*` body is never removed.
 
+### recomp-disjoint-switch-cfg — Preserve computed-dispatch ownership across inline data
+- status: re-verified
+- deps: recomp-forwarding-seam
+- evidence: Function ownership is now a normalized set of executable blocks. Configured switch labels seed bounded CFG discovery only inside executable, non-data ranges and cannot cross an authoritative foreign function envelope. A fresh exact Gears generation reached 100% with zero `ERROR`, unreachable-switch, or unrecognized-instruction matches. Each of the eight targets beyond the two inline address tables emitted as one local label with one dispatch edge, no target emitted as a standalone function, and no table-word address emitted as a function. Focused red/green discovery and emission tests pass in the aggregate 9/9 sanitizer CTest suite.
+- where: extern/XenonRecomp/XenonAnalyse/function.*; extern/XenonRecomp/XenonRecomp/data_range.*; extern/XenonRecomp/XenonRecomp/function_scan.*; extern/XenonRecomp/XenonRecomp/switch_extent.cpp; extern/XenonRecomp/XenonRecompTests; config/gears.toml
+- gap: This verifies the exact configured Gears revision. Other titles and revisions still need their computed dispatches detected and their factual inline-data ranges supplied; an unconfigured pattern must continue to fail generation rather than being absorbed by extent.
+- notes: Case blocks are not callable functions. The retired maximum-target repair crossed data and could absorb unrelated code; do not restore it or add case labels to the manual function list.
+
 ### title-revision-boundary — Separate shared engine behavior from exact title bindings
 - status: in-progress
-- deps: recomp-forwarding-seam
+- deps: recomp-disjoint-switch-cfg
 - evidence: `runtime/title_profile.*` provides a shared schema for exact container and parsed-image SHA-256, image base/size/entry, revision status, capability status, and save namespace. Synthetic production-interface tests prove malformed, duplicate, unknown, and ambiguous registries refuse instead of selecting a partial match.
 - where: runtime/title_profile.*; tests/test_title_profile.cpp; docs/gearsue3-engine.md; runtime/main.cpp; runtime/hle_d3d.cpp; runtime/guest_probes.cpp; runtime/native_pass.cpp
 - gap: No locally generated title module supplies a real profile to the runtime yet. Gears 1 addresses, shader hashes, probes, save namespace, and scripted policy remain compiled into shared-looking files, and the current loader still accepts only its older layout check.
@@ -303,9 +311,9 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 ### rom-only-provisioning — Generate a playable title from one user-owned disc/image
 - status: in-progress
 - deps: title-revision-boundary
-- evidence: `tools/title_identity.py` and its 12 synthetic tests implement strict input priority, streaming disc SHA-256, generic XGD/XEX identity capture, refusal of missing/ambiguous inputs, and path-free JSON under ignored `scratch/titles/<disc-sha256>/`.
-- where: tools/title_identity.py; tests/test_title_identity.py; tools/gdf_extract.py; tools/xex_probe; config; run.sh
-- gap: Extraction, switch analysis/merge, parsed-image digest production, exact-profile generation, recompilation, validation, build, and launch are still separate manual steps that can reuse stale output. There is not yet one deterministic command from a clean clone to a playable executable.
+- evidence: `tools/title_identity.py` and its 16 synthetic tests implement strict input priority, streaming disc SHA-256, duplicate-key/schema refusal, one checked `xex-inspect` authority, independent container/normalized-image re-hashing, and path-free JSON under ignored `scratch/titles/<disc-sha256>/`. The hardened GDF extractor's 13 tests cover bounded parsing, traversal/cycle/collision refusal, symlink confinement, exact reads, verified resume, and atomic publication. The retail XEX passes ASan/UBSan inspection with 17 sections, 236 logical imports, and normalized SHA-256 `f61cc78e4057bc68a2c65386a0341f6d26a7add3dfd9918007a455750ec6ed5c`.
+- where: tools/title_identity.py; tests/test_title_identity.py; tools/gdf_extract.py; tests/test_gdf_extract.py; extern/XenonRecomp/XexInspect; config; run.sh
+- gap: Extraction, switch analysis/merge, exact-profile generation, recompilation, validation, build, and launch are still separate manual steps. There is not yet one deterministic command from a clean clone to a playable executable, and the generated module does not yet enforce the recorded identity before activating revision bindings.
 - notes: The identity record is the first boundary, not a provisioner completion claim. Generate every disc-derived artifact under the content-addressed ignored directory and write a tool/input receipt. Unknown revisions refuse.
 
 ### frame-delivery-contract — Carry one guest frame identity through a bounded latest-frame pipeline
