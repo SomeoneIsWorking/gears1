@@ -62,6 +62,11 @@ import re
 import sys
 from pathlib import Path
 
+from layer_compare_ranges import (
+    infer_legacy_texture_bases,
+    merge_bands,
+    selftest_legacy_texture_bases,
+)
 from xenos_tiled import stored_rows, tiled_offset_2d, untile, untile_range
 
 OURS_RE = re.compile(
@@ -211,53 +216,6 @@ def atlas_tiles(ours_dir, source_base):
     return sorted(rects.items())
 
 
-def merge_bands(dumps, np):
-    """Join a console pass that was resolved in horizontal BANDS into one pass.
-
-    The console cannot hold a 1280x720 colour+depth surface in 10 MiB of EDRAM,
-    so UE3 resolves the frame in two bands -- 512 rows and then 208 -- to two
-    destinations that are exactly contiguous in guest memory. Our renderer
-    collapses the tiling and resolves once, so without this the second band is
-    reported as a pass "only theirs" resolves (which reads as a missing pass)
-    and the first is reported as "only 512 of 720 rows are in the console's
-    buffer" (which silently drops the bottom 29% of every full-screen
-    comparison in the frame).
-
-    Joined ONLY on arithmetic: same source surface, width and format, and a
-    destination address exactly one band's worth of bytes past the previous
-    one. Anything else is left alone -- a guess here would concatenate two
-    unrelated buffers into a plausible image.
-
-    Returns the list of (kept-key, joined-key) it merged, for printing.
-    """
-    merged = []
-    changed = True
-    while changed:                       # a surface could be split in 3+ bands
-        changed = False
-        for k in sorted(dumps):
-            path, dest, length, endian, base, extra = dumps[k]
-            bpp = 4 if k[0] == "D" else DECODABLE_FORMATS.get(k[4], (None, 4))[1]
-            rows = stored_rows(length, k[2], bpp)
-            if not rows:
-                continue
-            want = dest + k[2] * rows * bpp
-            nxt = next((k2 for k2 in sorted(dumps)
-                        if k2 != k
-                        and (k2[0], k2[1], k2[2], k2[4]) ==
-                            (k[0], k[1], k[2], k[4])
-                        and k2[3] < k[3]          # a band is SHORTER than the whole
-                        and dumps[k2][1] == want), None)
-            if nxt is None:
-                continue
-            p2, d2, l2, e2, b2, x2 = dumps.pop(nxt)
-            dumps[k] = (path, dest, length + l2, endian, base,
-                        extra + [(p2, d2, l2, e2, b2)] + x2)
-            merged.append((k, nxt))
-            changed = True
-            break
-    return merged
-
-
 def key_str(k):
     src, base, w, h, fmt, nth = k
     return f"src{src}{base:03X} {w}x{h} f{fmt} #{nth}"
@@ -398,6 +356,17 @@ def selftest(work, np, Image):
                     .astype(np.uint8)).save(
         ours_dir / f"resolve_08_srcD001_{kw}x{kh}_f22_00000000_draw8.ppm")
 
+    # A legacy capture may omit `_b<TEXTURE_BASE>` on every file. A complete
+    # sibling still pins the base for a partial range of the same structural
+    # destination. Test the inference directly, including its refusal to infer
+    # when two complete siblings disagree about the base.
+    legacy_ok, ambiguous_ok = selftest_legacy_texture_bases()
+    print(f"selftest: legacy partial ranges inherit one proven complete-sibling"
+          f" texture base: {legacy_ok} (expected True)")
+    print(f"selftest: ambiguous legacy bases are refused: {ambiguous_ok}"
+          f" (expected True)")
+    ok = ok and legacy_ok and ambiguous_ok
+
     # The oracle probes the exact contiguous memory range Xenia says a resolve
     # may modify. A rectangle in a tiled texture is not necessarily a whole
     # number of linear rows. Base + range address metadata must locate those
@@ -522,8 +491,8 @@ def selftest(work, np, Image):
          "3 DEPTH pass(es) paired on both sides, 2 of them value-compared"
          " and 1 not" in out),
         ("a k_24_8 DEPTH pass is decoded and COMPARED, and matches",
-         "srcD001" in out and "match" in
-         [ln for ln in out.splitlines() if "srcD001" in ln][0]),
+         any("srcD001" in ln and "match" in ln
+             for ln in out.splitlines())),
         ("an arbitrary partial tiled range is located from texture base"
          " metadata and compared only over available texels",
          any("srcD002" in ln and "match" in ln and
@@ -640,6 +609,11 @@ def main(argv):
         d[0][k + (nth,)] = (p, int(m.group(10), 16), int(m.group(11)), endian,
                             base, [])
 
+    color_bpp = {fmt: spec[1] for fmt, spec in DECODABLE_FORMATS.items()}
+    legacy_base_inferences = {}
+    for frame, (dumps, _) in by_frame.items():
+        legacy_base_inferences[frame] = infer_legacy_texture_bases(dumps, color_bpp)
+
     # THE CONSOLE RESOLVES A FULL-SCREEN SURFACE IN BANDS, because 1280x720 of
     # colour plus depth does not fit in 10 MiB of EDRAM. Rejoined here, per
     # frame, before anything is scored or paired -- otherwise the second band
@@ -648,7 +622,7 @@ def main(argv):
     # comparison in the frame.
     band_joins = []
     for frame, (dumps, _) in by_frame.items():
-        for kept, joined in merge_bands(dumps, np):
+        for kept, joined in merge_bands(dumps, color_bpp):
             band_joins.append((frame, kept, joined))
 
     # CHOSEN BY STRUCTURE, NEVER BY AGREEMENT. The frame is picked on which
@@ -680,6 +654,11 @@ def main(argv):
             print(f"the console resolved {key_str(kept)} in bands;"
                   f" {key_str(joined)} is its continuation in guest memory and"
                   f" is joined onto it")
+    for structural_key, base, count in legacy_base_inferences.get(theirs_frame, []):
+        src, source_base, width, height, fmt = structural_key
+        print(f"legacy oracle capture: inferred texture base {base:#x} for"
+              f" {count} src{src}{source_base:03X} {width}x{height} f{fmt}"
+              f" range(s) from the unique complete sibling dump")
     # Held, and printed next to the pass lists it qualifies rather than above
     # the dump counts, because it is a caveat on the TABLE.
     alignment_note = None

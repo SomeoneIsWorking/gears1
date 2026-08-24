@@ -6,6 +6,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 enable_testing()
 
+# Python tools run in one locked uv project. Never select an ambient Python:
+# that made CTest and interactive diagnostics exercise different dependencies.
+find_program(GEARS_UV_EXECUTABLE NAMES uv REQUIRED)
+set(GEARS_UV_RUN
+    "${GEARS_UV_EXECUTABLE}" run --locked --project "${CMAKE_SOURCE_DIR}")
+
 if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     message(FATAL_ERROR
         "XenonRecomp's output relies on Clang-specific intrinsics and function "

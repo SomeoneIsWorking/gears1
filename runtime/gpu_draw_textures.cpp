@@ -419,25 +419,6 @@ VkImageView TextureUploader::ResolveTargetView(ResolveTarget &rt, uint32_t guest
     if (guestSwizzle == kIdentity)
         return rt.view;
 
-    // A DEPTH destination's host image is R32_SFLOAT: it has no G/B/A to route,
-    // and mapping one in would sample a component that does not exist. The
-    // guest asks XYZW for these in every frame measured, so this is a guard
-    // rather than a known case -- and it SAYS SO instead of silently serving
-    // the unmapped view, because a depth pass reading the wrong channel is
-    // exactly the kind of fault that presents as plausible geometry.
-    if (rt.isDepth)
-    {
-        static std::set<uint32_t> reported;
-        if (reported.insert(guestSwizzle).second)
-            lucent::warn("draw",
-                         "resolve destination {:#x} is DEPTH (R32) and a"
-                         " binding asks for swizzle {:#05x}, which is not XYZW. Serving"
-                         " the unmapped view: a single-component image has nothing to"
-                         " route. If a depth pass reads the wrong channel, this is why",
-                         rt.base, guestSwizzle);
-        return rt.view;
-    }
-
     auto it = rt.swizzleViews.find(guestSwizzle);
     if (it != rt.swizzleViews.end())
         return it->second;
@@ -447,9 +428,12 @@ VkImageView TextureUploader::ResolveTargetView(ResolveTarget &rt, uint32_t guest
     vi.viewType = VK_IMAGE_VIEW_TYPE_2D_ARRAY; // as the unmapped view is
     vi.format = rt.hostFormat;
     vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    // The host image is canonical RGBA (R16G16B16A16_SFLOAT), so unlike a guest
-    // texture there is no host-format order to compose with: the guest swizzle
-    // maps straight onto components.
+    // The host image is canonical RGBA (R16G16B16A16_SFLOAT), or R for a depth
+    // destination, so unlike a guest texture there is no host-format order to
+    // compose with: the guest swizzle maps straight onto components. Vulkan's
+    // component mapping also defines constants and missing source components,
+    // so an R32 depth view can implement the title's X111 request -- it is not
+    // limited to the unmapped R001 default.
     vi.components.r = compSwizzle(uint8_t((guestSwizzle >> 0) & 7));
     vi.components.g = compSwizzle(uint8_t((guestSwizzle >> 3) & 7));
     vi.components.b = compSwizzle(uint8_t((guestSwizzle >> 6) & 7));
@@ -549,12 +533,15 @@ VkImageView TextureBinder::SelectView(const uint32_t *regs, const ShaderTextureB
         if (signs != 0)
         {
             ++fetchesWithSigns[signs];
-            // WHICH textures, not just how many. A sign mode this renderer
-            // cannot serve properly (kSigned needs the signed view, and only
-            // the unsigned one is bound) has to name the texture it affects,
-            // or the count is a number nobody can act on.
-            if (((signs >> 0) & 3) == 1 || ((signs >> 2) & 3) == 1 || ((signs >> 4) & 3) == 1 ||
-                ((signs >> 6) & 3) == 1)
+            // Resolve destinations use floating-point host images, where the
+            // signed and unsigned descriptors legitimately share a view and
+            // negative values are already preserved. Only a decoded guest
+            // fixed-point texture needs the alternate signed-normalized view
+            // that is still missing. Naming the float velocity/HDR targets as
+            // broken produced a false warning on every gameplay report.
+            const bool wantsSigned = ((signs >> 0) & 3) == 1 || ((signs >> 2) & 3) == 1 ||
+                                     ((signs >> 4) & 3) == 1 || ((signs >> 6) & 3) == 1;
+            if (wantsSigned && !isRt && base != 0)
                 ++signedBases[base];
         }
     }

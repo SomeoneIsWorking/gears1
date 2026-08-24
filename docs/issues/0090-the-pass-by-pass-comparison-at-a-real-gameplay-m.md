@@ -1,11 +1,11 @@
 ---
 id: 90
 title: The pass-by-pass comparison at a real gameplay moment: our presented frame matches, five copies are never executed
-status: open
+status: resolved
 symptom: paired per-pass capture 300 frames past the fade-in: the presented buffer agrees per channel with the console, but our renderer executes 13 of the frame's 19 copy draws
 tags: oracle,render,gameplay-scene,resolve,method
 created: 2026-08-07
-updated: 2026-08-11
+updated: 2026-08-24
 ---
 
 The first paired per-pass capture that lands on a comparable moment. Both sides
@@ -127,3 +127,6 @@ texture. Verified byte-identical output on courtyard.gfr before and after.
 
 Instrument I031 is DISTRUSTED; the repaired tool is I032. Claim C026 is
 falsified and replaced by C027.
+
+### Resolution (2026-08-24)
+Current-code synchronous rebaseline pairs all 24 resolve handoffs with zero only-native and zero only-oracle passes. All color passes have 0.00% of available pixels over the 0.1 threshold, and all 12 depth passes are value-compared and match. The historic missing-copy and intermediate-difference findings were instrument defects or pre-current renderer results.
