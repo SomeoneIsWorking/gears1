@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-22
 tags:
 depends: extern/XenonRecomp
+reconfirmed: 2026-08-24
+verified_at: 2026-08-24 22:41:03
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ XenonRecomp commit 884206f CTest XenonRecompBindingTests passed; a fresh Gears g
 ## What would falsify it
 
 if the linker regression fails, a generated same-TU call bypasses the strong override, a retained __imp__ body is missing, or generated output contains a compiler alias
+
+## Re-confirmed 2026-08-24
+
+At d739721 with XenonRecomp c02a522: the sanitizer-backed XenonRecomp CTest suite passed all binding emission/link tests after the loader extraction and fresh generated module build.
