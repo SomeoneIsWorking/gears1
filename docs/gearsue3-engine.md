@@ -37,6 +37,20 @@ refuse before a title binding can activate. A tracked title adapter may contain
 factual interoperability metadata, but never copied code, assets, decoded
 instruction listings, or decompiler output.
 
+The linked executable identity is generated atomically with the PPC module.
+XenonRecomp writes the effective container digest, normalized-image digest,
+base, size, and entry point into ignored `ppc_config.h`; the runtime performs
+one checked load of the selected XEX, recomputes both digests, and resolves the
+compiled profile before selecting a save namespace or creating guest memory.
+This closes same-layout cross-revision activation without tracking a game
+digest in the public tree. It is not yet the complete content-addressed
+provisioning receipt.
+
+Executable identity and save compatibility are separate policies. The current
+Gears 1 profile retains the stable `gears1` save namespace across compatible
+title updates; a future revision gets a different namespace only when its save
+format or title identity actually requires isolation.
+
 ## Ownership boundaries
 
 | Owner | Shared | Per exact title/revision |
@@ -193,7 +207,7 @@ original/native A/B evidence, or hardware-derived evidence.
 
 | Title | Current evidence | Exact-profile/conformance gap | Oracle policy |
 |---|---|---|---|
-| Gears of War | Headless boot, menu, gameplay, compatibility renderer, and narrowly scoped renderer-oracle evidence exist | Current Gears 1 bindings have not yet been emitted through the exact `TitleProfile` boundary; native-RHI parity and an exact compatibility report are absent. The 60 fps override remains a deferred enhancement. | Xenia may support only the Gears 1 behaviors for which this project has separately validated the instrument |
+| Gears of War | Headless boot, menu, gameplay, compatibility renderer, narrowly scoped renderer-oracle evidence, and linked exact-XEX profile activation exist | Guest-address bindings and shader/probe policy still need to move into the factual title adapter; native-RHI parity and an exact compatibility report are absent. The 60 fps override remains a deferred enhancement. | Xenia may support only the Gears 1 behaviors for which this project has separately validated the instrument |
 | Gears of War 2 | None | No local exact revision, recompilation, content, gameplay, render, native-RHI, or 60 fps evidence | Xenia evidence is rejected |
 | Gears of War 3 | None | No local exact revision, recompilation, content, gameplay, render, native-RHI, or 60 fps evidence | Xenia evidence is rejected |
 | Gears of War: Judgment | None | No local exact revision, recompilation, content, gameplay, render, native-RHI, or 60 fps evidence | Xenia evidence is rejected |

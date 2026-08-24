@@ -98,4 +98,6 @@ struct TitleProfileResolution
 [[nodiscard]] TitleProfileResolution ResolveTitleProfile(std::span<const TitleProfile> profiles,
                                                          const XexIdentity &observed) noexcept;
 
+[[nodiscard]] std::string_view TitleProfileErrorText(TitleProfileError error) noexcept;
+
 } // namespace gears

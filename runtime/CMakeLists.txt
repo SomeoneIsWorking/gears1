@@ -106,6 +106,14 @@ endfunction()
 add_library(gears_title_profile STATIC title_profile.cpp)
 target_include_directories(gears_title_profile PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
+add_library(gears_generated_title_profile STATIC generated_title_profile.cpp)
+target_include_directories(gears_generated_title_profile PRIVATE "${GEARS_PPC_DIR}")
+target_link_libraries(gears_generated_title_profile PUBLIC gears_title_profile)
+
+add_library(gears_title_executable STATIC title_executable.cpp)
+target_include_directories(gears_title_executable PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(gears_title_executable PUBLIC gears_title_profile XenonUtils)
+
 add_library(gears_gpu_queue_access STATIC gpu_queue_access.cpp)
 target_include_directories(gears_gpu_queue_access PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
@@ -198,7 +206,8 @@ endif()
 set_source_files_properties(main.cpp PROPERTIES COMPILE_DEFINITIONS
                             "GEARS_BUILD_REVISION=\"${GEARS_GIT_REV}\"")
 target_include_directories(gears1 PRIVATE . "${THIRDPARTY_ROOT}/xxHash")
-target_link_libraries(gears1 PRIVATE gears_ppc gears_title_profile XenonUtils lucent::lucent)
+target_link_libraries(gears1 PRIVATE gears_ppc gears_generated_title_profile
+    gears_title_executable XenonUtils lucent::lucent)
 
 if(GEARS_HAVE_XMA_DECODER)
     target_link_libraries(gears1 PRIVATE ffmpeg_xma)
@@ -352,7 +361,8 @@ target_link_options(gears1 PRIVATE -rdynamic)
 # Every host target gets the optimisation the guest code has always had. Listed
 # explicitly rather than applied globally, so a target added later has to opt in
 # and nobody silently ships an -O0 renderer again.
-foreach(gears_host_target gears1 gears_title_profile gears_gpu_queue_access gears_draw
+foreach(gears_host_target gears1 gears_title_profile gears_generated_title_profile
+                          gears_title_executable gears_gpu_queue_access gears_draw
                           gears_draw_xlate frame_replay)
     gears_optimise_host(${gears_host_target})
 endforeach()

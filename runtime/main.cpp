@@ -1,13 +1,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <string>
 #include <vector>
 
-#include <image.h>
 #include <lucent/config.h>
 #include <lucent/log.h>
 
 #include "fault_report.h"
+#include "generated_title_profile.h"
 #include "guest_clock.h"
 #include "guest_memory.h"
 #include "guest_heap.h"
@@ -15,8 +16,12 @@
 #include "user_profile.h"
 #include "guest_thread.h"
 #include "fatal_exit.h"
+#include "title_executable.h"
 
-namespace gears { bool CommitDeviceWindow(GuestMemory& memory); }
+namespace gears
+{
+bool CommitDeviceWindow(GuestMemory &memory);
+}
 #include "wait_probe.h"
 #include "xma.h"
 #include "import_variables.h"
@@ -27,10 +32,10 @@ PPC_EXTERN_FUNC(_xstart);
 namespace
 {
 
-std::vector<uint8_t> ReadFile(const std::filesystem::path& path)
+std::vector<uint8_t> ReadFile(const std::filesystem::path &path)
 {
     std::vector<uint8_t> data;
-    FILE* f = fopen(path.c_str(), "rb");
+    FILE *f = fopen(path.c_str(), "rb");
     if (f == nullptr)
         return data;
 
@@ -60,12 +65,12 @@ constexpr uint32_t kStackSize = 1 * 1024 * 1024;
 // out-of-bounds read of a heap allocation and expects a report. It exists only
 // in a sanitizer build; a normal build has no such code path at all.
 #if defined(__has_feature)
-#  if __has_feature(address_sanitizer)
-#    define GEARS_ASAN_BUILD 1
-#  endif
+#if __has_feature(address_sanitizer)
+#define GEARS_ASAN_BUILD 1
+#endif
 #endif
 #if defined(__SANITIZE_ADDRESS__)
-#  define GEARS_ASAN_BUILD 1
+#define GEARS_ASAN_BUILD 1
 #endif
 
 #ifdef GEARS_ASAN_BUILD
@@ -73,18 +78,20 @@ namespace
 {
 void AsanSelfTest()
 {
-    volatile uint8_t* block = new uint8_t[64]();
+    volatile uint8_t *block = new uint8_t[64]();
     lucent::info("asan", "self-test: reading one byte past a 64-byte heap block");
     // Deliberately out of bounds. volatile so it is not optimised away.
     volatile uint8_t v = block[64];
-    lucent::error("asan", "self-test READ {} WITHOUT A REPORT -- the sanitizer is "
-                          "not watching this process", int(v));
+    lucent::error("asan",
+                  "self-test READ {} WITHOUT A REPORT -- the sanitizer is "
+                  "not watching this process",
+                  int(v));
     delete[] block;
 }
 } // namespace
 #endif
 
-int main(int argc, char* argv[])
+int main(int argc, char *argv[])
 {
     lucent::config::set_prefix("GEARS_");
 
@@ -115,20 +122,6 @@ int main(int argc, char* argv[])
         return EXIT_FAILURE;
     }
 
-    // Where the title's own data files live, extracted from the user's disc.
-    // Without it the game runs but every file open fails, which is a legitimate
-    // way to test the rest of the runtime.
-    const char* gameDirectory = argc >= 3 ? argv[2] : getenv("GEARS_GAME_DIR");
-    if (gameDirectory != nullptr)
-        gears::Files().SetGameDirectory(gameDirectory);
-    else
-        lucent::warn("fs", "no game directory given; all file opens will fail");
-
-    // The player's profile settings, from the last run. A first run has none,
-    // which is not an error -- the title then reads every setting as unset and
-    // uses its own defaults, exactly as a freshly created console profile does.
-    gears::Profile().Load(gears::Files().SaveDirectory() / "profile.bin");
-
     const std::filesystem::path xexPath = argv[1];
     std::vector<uint8_t> xex = ReadFile(xexPath);
     if (xex.empty())
@@ -139,24 +132,50 @@ int main(int argc, char* argv[])
     // WHICH BUILD IS THIS. Screenshots and logs from a run get compared against
     // fixes that landed at a known time, and "did that binary contain the fix" was
     // guessed at twice. It is one line and it removes the guess.
-    lucent::info("boot", "gears1 built {} {} from {}", __DATE__, __TIME__,
-                 GEARS_BUILD_REVISION);
+    lucent::info("boot", "gears1 built {} {} from {}", __DATE__, __TIME__, GEARS_BUILD_REVISION);
     lucent::info("boot", "read {} ({} bytes)", xexPath.string(), xex.size());
 
-    Image image = Image::ParseImage(xex.data(), xex.size());
-    lucent::info("boot", "image base {:#x}, size {:#x}, entry {:#x}",
-        image.base, image.size, image.entry_point);
-
-    // The recompiled code was generated against one specific image layout; if
-    // the runtime is handed a different build, every address is wrong.
-    if (image.base != PPC_IMAGE_BASE || image.size != PPC_IMAGE_SIZE)
+    gears::LoadedTitleExecutable loaded;
+    std::string loadError;
+    if (!gears::LoadTitleExecutable(xex, loaded, loadError))
     {
-        lucent::error("boot",
-            "image layout {:#x}/{:#x} does not match the recompiled code's {:#x}/{:#x} "
-            "-- this XEX is not the one the C++ was generated from",
-            image.base, image.size, uint64_t(PPC_IMAGE_BASE), uint64_t(PPC_IMAGE_SIZE));
+        lucent::error("boot", "cannot load {}: {}", xexPath.string(), loadError);
         return EXIT_FAILURE;
     }
+    Image &image = loaded.image;
+    lucent::info("boot", "image base {:#x}, size {:#x}, entry {:#x}", image.base, image.size,
+                 image.entry_point);
+
+    // Exact revision selection precedes save state, image mapping, generated
+    // function tables, and every title-specific binding. Matching only layout
+    // is unsafe because distinct revisions routinely reuse the same addresses.
+    const gears::TitleProfileResolution title =
+        gears::ResolveTitleProfile(gears::GeneratedTitleProfiles(), loaded.identity);
+    if (!title)
+    {
+        lucent::error("boot", "title profile refusal: {}",
+                      gears::TitleProfileErrorText(title.error));
+        return EXIT_FAILURE;
+    }
+    lucent::info("boot", "selected title {}/{}", title.profile->titleKey,
+                 title.profile->revisionKey);
+
+    // Where the title's own data files live, extracted from the user's disc.
+    // Without it the game runs but every file open fails, which is a legitimate
+    // way to test the rest of the runtime.
+    const char *gameDirectory = argc >= 3 ? argv[2] : getenv("GEARS_GAME_DIR");
+    if (gameDirectory != nullptr)
+        gears::Files().SetGameDirectory(gameDirectory);
+    else
+        lucent::warn("fs", "no game directory given; all file opens will fail");
+
+    if (!gears::Files().SetSaveNamespace(title.profile->saveNamespace))
+        return EXIT_FAILURE;
+
+    // The player's profile settings, from the last run. A first run has none,
+    // which is not an error -- the title then reads every setting as unset and
+    // uses its own defaults, exactly as a freshly created console profile does.
+    gears::Profile().Load(gears::Files().SaveDirectory() / "profile.bin");
 
     gears::GuestMemory memory;
     if (!memory.Reserve())
