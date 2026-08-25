@@ -190,6 +190,13 @@ through the level, proven against a no-input control arm (172 of 173 frames
 changed with the stick, 0 of 129 without; `catalog.py show 38`). The deferred in-game frame renders: whole (both predicated tiles),
 correctly exposed (0.0% of pixels saturated), depth-tested and depth-lit.
 
+The title screen's animated fire background is **pixel-exact against the
+console at matched animation state** (0.00% of the fire pass's pixels differ;
+`catalog.py show 88`): the pass is a procedural radial function of guest
+constants that animate on guest time, so cross-emulator comparisons must pair
+on animation STATE (the pass output or the camera constants), never frame
+index — the console's own animation phase differs between oracle runs.
+
 **Not yet faithful**, each measured rather than guessed and tracked on
 `docs/re-frontier.md`: the colour clear is still a diagnostic sentinel rather
 than the guest's; the resolve ignores destination tiling and scaling; cull mode

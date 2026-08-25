@@ -1,11 +1,11 @@
 ---
 id: 88
 title: The title screen's animated background is submitted on 8 frames of 1581, not every frame
-status: open
+status: resolved
 symptom: our title screen is a flat grey-brown where the console's is bright orange fire; at guest frame 600, same moment on both, our mean red is 0.1045 against the oracle's 0.2508 while green is 0.0533 against 0.0713
 tags: render,oracle,title-screen,gameplay-scene,guest-logic
 created: 2026-08-07
-updated: 2026-08-07
+updated: 2026-08-25
 ---
 
 FOUND BY THE FIRST TRUE SAME-MOMENT COMPARISON. tools/oracle_lockstep.sh now
@@ -167,3 +167,6 @@ STILL OPEN on this issue: the title screen is closer but not at parity -- the
 console's fire is brighter and its shape is not reproduced. With the draw set
 and the classification now both matching, the remaining difference is in what
 those shared draws PRODUCE, not in which draws run.
+
+### Resolution (2026-08-25)
+RESOLVED in three steps, each measured. (1) The pass group ran on 2 percent of frames because every occlusion query answered nothing-visible; EVENT_WRITE_ZPD now reports monotonic visibility and the group runs on 100 percent of title frames. (2) Fragment-stage classification now applies all three of Xenia's draw conditions; the vs 760aacf6212e632c split matches the console exactly. (3) The remaining brightness/shape difference at guest frame 600 is GUEST-ANIMATION PHASE, not a renderer defect - proven positively: the fire pass (vs 15dbe06e53bd0f02 / ps 32091b4c63cda933) is procedural (radial function of interpolator 1, no texture); a PS-override probe series proved our translated SPIR-V computes the microcode faithfully (a hand GLSL transcription of the ucode reproduces a varying radial field; painting each interpolator shows both arrive varying); the title camera and fire scale are guest-time animations - our fire scale sweeps 7.8 -> 15 -> 53 across a live run and our view-projection constants evolve from the axis-aligned zoomed state to the console's drifted state; and at a STATE-MATCHED pair (our frame 602 against an oracle run whose frame-590 camera constants equal ours: c10.y 21.32 exactly on both, c11 within 0.2 percent) the fire pass compares 0.00 PERCENT of pixels differing - the console renders the identical flat field at that phase, and the depth pass matches exactly too. The frame-600 brightness numbers in this issue compared different animation moments: the title screen has no input events to pin a walk to, so frame-keyed pairing degenerated to frame-index pairing, which the standing hazards already rule out - both emulators advance the guest by wall clock (catalog #84). METHOD going forward: title-screen comparisons must pair on animation STATE (the pass output itself, or the camera constants c8..c11), never frame index; the oracle's own animation phase differs BETWEEN oracle runs (its fire scale read 15.0 at frames 504/571 of two runs and 3.74 at frame 590 of a third), so even console-vs-console cross-run numbers are phase-shifted. Evidence: scratch/layercap_title/ (ours frame-602 and frame-2400 dumps, theirs590 same-run consts+dumps, cmp_matched report), probe sources under scratch/layercap_title/ovr/.
