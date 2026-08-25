@@ -235,32 +235,38 @@ VkImageView TextureUploader::Upload(const uint32_t *fetch6, uint32_t wantDim)
                 }
             }
 
-            // Forced verification queries the page bits BEFORE hashing, so a
-            // contradiction -- every queried page clean since the generation
-            // that recorded the stored hash, yet the bytes differ -- can be
-            // attributed to the tracker rather than to an ordinary late write
-            // it never claimed to cover.
+            // Forced verification. The page query deliberately happens AFTER
+            // the hash, not before: the live guest writes concurrently, and a
+            // store landing between a pre-hash query and the hash read would
+            // be misclassified as a contradiction even though its bit is
+            // visibly set microseconds later. Queried afterwards, a real
+            // late write reports its bit and reads as the ordinary detection
+            // it is; only bytes that changed while every page -- checked
+            // after the fact -- still reads unwritten accuse the tracker.
             bool cleanAtVerify = false;
             bool consecutive = false;
+            const uint64_t now = [&]
+            {
+                const auto tHash = Clock::now();
+                const uint64_t h = HashTextureStorage(header, in);
+                const double thisHashMs =
+                    std::chrono::duration<double, std::milli>(Clock::now() - tHash).count();
+                msTexHash += thisHashMs;
+                texHashBytes += hashBytes;
+                if (thisHashMs > texHashWorstMs)
+                {
+                    texHashWorstMs = thisHashMs;
+                    texHashWorstBytes = hashBytes;
+                    texHashWorstBase = header.baseAddress;
+                }
+                return h;
+            }();
             if (verifyAll)
             {
                 ++g_texDirtyVerifies;
                 cleanAtVerify = TextureSpansClean(in, header);
                 const auto vg = P.texVerifiedGen.find(key);
                 consecutive = vg != P.texVerifiedGen.end() && vg->second + 1 == gen;
-            }
-
-            const auto tHash = Clock::now();
-            const uint64_t now = HashTextureStorage(header, in);
-            const double thisHashMs =
-                std::chrono::duration<double, std::milli>(Clock::now() - tHash).count();
-            msTexHash += thisHashMs;
-            texHashBytes += hashBytes;
-            if (thisHashMs > texHashWorstMs)
-            {
-                texHashWorstMs = thisHashMs;
-                texHashWorstBytes = hashBytes;
-                texHashWorstBase = header.baseAddress;
             }
             ++texContentChecked;
 
