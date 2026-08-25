@@ -291,9 +291,14 @@ trap - EXIT INT TERM
 # a whole-frame correlation hid it because most background pixels still agreed.
 # Prove both that the runtime accepted the script and that the title polled far
 # enough for at least one scripted transition to fire.
-input_lines=$(grep -c '^\[input\]' "$OUT/ours.log" 2>/dev/null || true)
-scripted_sources=$(grep -c '^\[input\] scripted input:' "$OUT/ours.log" 2>/dev/null || true)
-scripted_steps=$(grep -c '^\[input\] scripted pad at ' "$OUT/ours.log" 2>/dev/null || true)
+#
+# The patterns are NOT line-anchored: lucent prefixes every log line with a
+# timestamp, so the marker sits mid-line, and a ^-anchored grep validates
+# nothing while reading as one (the ch45 pair of 2026-08-25 captured cleanly
+# and was then refused by its own stale check).
+input_lines=$(grep -c '\[input\]' "$OUT/ours.log" 2>/dev/null || true)
+scripted_sources=$(grep -c '\[input\] scripted input:' "$OUT/ours.log" 2>/dev/null || true)
+scripted_steps=$(grep -c '\[input\] scripted pad at ' "$OUT/ours.log" 2>/dev/null || true)
 if [ "$DIRECT_BOOT" = 1 ]; then
     if [ "$scripted_sources" -ne 0 ] || [ "$scripted_steps" -ne 0 ]; then
         echo "REFUSING: direct-boot native unexpectedly accepted/fired a pad schedule" >&2
@@ -311,7 +316,7 @@ else
     echo "   native input validated: scanned $input_lines input log line(s), one scripted source, $scripted_steps fired step(s)"
 fi
 
-selector_calls=$(grep -c '^\[xam\] storage device selected automatically:' \
+selector_calls=$(grep -c '\[xam\] storage device selected automatically:' \
     "$OUT/ours.log" 2>/dev/null || true)
 expected_selectors=$([ "$DIRECT_BOOT" = 1 ] && echo 0 || echo 1)
 if [ "$selector_calls" -ne "$expected_selectors" ]; then
