@@ -17,8 +17,7 @@
 namespace gears
 {
 
-std::string DescribeFaultAddress(uintptr_t guestBase, uint64_t guestSize,
-                                 uintptr_t faultAddress)
+std::string DescribeFaultAddress(uintptr_t guestBase, uint64_t guestSize, uintptr_t faultAddress)
 {
     char buffer[256];
 
@@ -30,24 +29,22 @@ std::string DescribeFaultAddress(uintptr_t guestBase, uint64_t guestSize,
         // reads real memory and never reaches here. A fault low in the mapping
         // means the mapping itself is not backed there, which is a different
         // and much rarer thing.
-        std::snprintf(buffer, sizeof(buffer),
-            "guest memory at %#" PRIx64 " (host %p)", guestAddress,
-            reinterpret_cast<void*>(faultAddress));
+        std::snprintf(buffer, sizeof(buffer), "guest memory at %#" PRIx64 " (host %p)",
+                      guestAddress, reinterpret_cast<void *>(faultAddress));
         return buffer;
     }
 
     if (faultAddress < 0x1000)
     {
         std::snprintf(buffer, sizeof(buffer),
-            "a host null dereference (%p) -- this is the runtime dereferencing"
-            " something it did not check, not the guest going astray",
-            reinterpret_cast<void*>(faultAddress));
+                      "a host null dereference (%p) -- this is the runtime dereferencing"
+                      " something it did not check, not the guest going astray",
+                      reinterpret_cast<void *>(faultAddress));
         return buffer;
     }
 
-    std::snprintf(buffer, sizeof(buffer),
-        "a host pointer outside the guest mapping (%p)",
-        reinterpret_cast<void*>(faultAddress));
+    std::snprintf(buffer, sizeof(buffer), "a host pointer outside the guest mapping (%p)",
+                  reinterpret_cast<void *>(faultAddress));
     return buffer;
 }
 
@@ -55,7 +52,7 @@ uintptr_t g_guestBase = 0;
 uint64_t g_guestSize = 0;
 
 // The fault-context slot. See the header.
-const char* volatile g_contextLabel = nullptr;
+const char *volatile g_contextLabel = nullptr;
 volatile uint32_t g_contextValues[4] = {0, 0, 0, 0};
 
 #ifndef _WIN32
@@ -66,6 +63,7 @@ struct sigaction g_previousSegv{};
 struct sigaction g_previousBus{};
 struct sigaction g_previousAbort{};
 volatile sig_atomic_t g_reporting = 0;
+std::atomic<SegvObserver> g_segvObserver{nullptr};
 
 // Written with write(2) rather than the logger: the process is already broken,
 // and a logger that takes a mutex can deadlock against the thread that faulted
@@ -91,14 +89,22 @@ void EmitHex(uint32_t value)
     (void)ignored;
 }
 
-void Emit(const char* text)
+void Emit(const char *text)
 {
     const ssize_t ignored = write(STDERR_FILENO, text, std::strlen(text));
     (void)ignored;
 }
 
-void OnFatalMemorySignal(int signal, siginfo_t* info, void* context)
+void OnFatalMemorySignal(int signal, siginfo_t *info, void *context)
 {
+    if (signal == SIGSEGV)
+    {
+        const SegvObserver observer = g_segvObserver.load(std::memory_order_acquire);
+        if (observer != nullptr &&
+            observer(reinterpret_cast<uintptr_t>(info ? info->si_addr : nullptr), context))
+            return;
+    }
+
     // A fault inside the reporter itself must not loop forever. One report,
     // then straight to the previous handler.
     if (g_reporting == 0)
@@ -112,8 +118,7 @@ void OnFatalMemorySignal(int signal, siginfo_t* info, void* context)
                                  : "signal: SIGSEGV\n");
 
         const std::string where = DescribeFaultAddress(
-            g_guestBase, g_guestSize,
-            reinterpret_cast<uintptr_t>(info ? info->si_addr : nullptr));
+            g_guestBase, g_guestSize, reinterpret_cast<uintptr_t>(info ? info->si_addr : nullptr));
         Emit("address: ");
         Emit(where.c_str());
         Emit("\n");
@@ -124,7 +129,7 @@ void OnFatalMemorySignal(int signal, siginfo_t* info, void* context)
         // rather than backtrace_symbols because the latter allocates, and
         // allocating from a signal handler in a broken process is how a crash
         // reporter becomes a hang.
-        void* frames[64];
+        void *frames[64];
         const int count = backtrace(frames, 64);
         Emit("host backtrace (recompiled frames are named for their guest"
              " addresses):\n");
@@ -146,10 +151,9 @@ void OnFatalMemorySignal(int signal, siginfo_t* info, void* context)
 
     // Chain, so a core is still produced and anything else that wanted this
     // signal still sees it.
-    const struct sigaction& previous =
-        signal == SIGBUS    ? g_previousBus
-        : signal == SIGABRT ? g_previousAbort
-                            : g_previousSegv;
+    const struct sigaction &previous = signal == SIGBUS    ? g_previousBus
+                                       : signal == SIGABRT ? g_previousAbort
+                                                           : g_previousSegv;
     if (previous.sa_flags & SA_SIGINFO)
     {
         if (previous.sa_sigaction != nullptr)
@@ -176,6 +180,18 @@ void OnFatalMemorySignal(int signal, siginfo_t* info, void* context)
 } // namespace
 #endif
 
+#ifndef _WIN32
+bool RegisterSegvObserver(SegvObserver observer)
+{
+    if (observer == nullptr)
+        return false;
+    SegvObserver expected = nullptr;
+    return g_segvObserver.compare_exchange_strong(expected, observer, std::memory_order_release,
+                                                  std::memory_order_relaxed) ||
+           expected == observer;
+}
+#endif
+
 // Per-thread alternate stack. Not freed: it must outlive every fault, and a
 // process that is exiting has no use for the reclaimed pages.
 // IS OUR HANDLER STILL THE ONE INSTALLED? It was installed at the top of main
@@ -195,20 +211,21 @@ void VerifyFaultReporterStillInstalled()
     if (sigaction(SIGSEGV, nullptr, &current) != 0)
         return;
 
-    const bool ours = (current.sa_flags & SA_SIGINFO) &&
-                      current.sa_sigaction == &OnFatalMemorySignal;
+    const bool ours =
+        (current.sa_flags & SA_SIGINFO) && current.sa_sigaction == &OnFatalMemorySignal;
     if (ours)
         return;
 
     reported.store(true, std::memory_order_relaxed);
-    lucent::error("fault", "THE FAULT REPORTER HAS BEEN DISPLACED: SIGSEGV now"
-        " goes to {} (flags {:#x}), not to this runtime's handler. Every crash"
-        " from here on will be silent, and whoever installed that handler is the"
-        " reason six runs of the repro said nothing about their own fault",
-        (current.sa_flags & SA_SIGINFO)
-            ? static_cast<void*>(reinterpret_cast<void*>(current.sa_sigaction))
-            : static_cast<void*>(reinterpret_cast<void*>(current.sa_handler)),
-        uint32_t(current.sa_flags));
+    lucent::error("fault",
+                  "THE FAULT REPORTER HAS BEEN DISPLACED: SIGSEGV now"
+                  " goes to {} (flags {:#x}), not to this runtime's handler. Every crash"
+                  " from here on will be silent, and whoever installed that handler is the"
+                  " reason six runs of the repro said nothing about their own fault",
+                  (current.sa_flags & SA_SIGINFO)
+                      ? static_cast<void *>(reinterpret_cast<void *>(current.sa_sigaction))
+                      : static_cast<void *>(reinterpret_cast<void *>(current.sa_handler)),
+                  uint32_t(current.sa_flags));
 #endif
 }
 
@@ -221,24 +238,23 @@ void InstallSignalStackForThisThread()
     installed = true;
 
     stack_t stack{};
-    stack.ss_size = size_t(SIGSTKSZ) * 4;   // backtrace_symbols_fd needs room
+    stack.ss_size = size_t(SIGSTKSZ) * 4; // backtrace_symbols_fd needs room
     stack.ss_sp = new uint8_t[stack.ss_size];
     stack.ss_flags = 0;
     sigaltstack(&stack, nullptr);
 #endif
 }
 
-void SetFaultContext(const char* label, uint32_t a, uint32_t b, uint32_t c,
-                     uint32_t d)
+void SetFaultContext(const char *label, uint32_t a, uint32_t b, uint32_t c, uint32_t d)
 {
     g_contextValues[0] = a;
     g_contextValues[1] = b;
     g_contextValues[2] = c;
     g_contextValues[3] = d;
-    g_contextLabel = label;     // published last, so a set label implies set values
+    g_contextLabel = label; // published last, so a set label implies set values
 }
 
-void SetFaultReportGuestMapping(void* guestBase, uint64_t guestSize)
+void SetFaultReportGuestMapping(void *guestBase, uint64_t guestSize)
 {
     g_guestBase = reinterpret_cast<uintptr_t>(guestBase);
     g_guestSize = guestSize;
@@ -247,9 +263,11 @@ void SetFaultReportGuestMapping(void* guestBase, uint64_t guestSize)
     // gives is only as good as these two numbers. A zero size would make the
     // classifier call EVERY fault a host pointer, which is a confident wrong
     // answer rather than a missing one.
-    lucent::info("fault", "fault reporter knows the guest mapping: {} bytes at"
-        " {} (so guest {:#x} is host {})", guestSize, guestBase, 0x82000000u,
-        static_cast<void*>(static_cast<uint8_t*>(guestBase) + 0x82000000u));
+    lucent::info("fault",
+                 "fault reporter knows the guest mapping: {} bytes at"
+                 " {} (so guest {:#x} is host {})",
+                 guestSize, guestBase, 0x82000000u,
+                 static_cast<void *>(static_cast<uint8_t *>(guestBase) + 0x82000000u));
 }
 
 void InstallFaultReporter()
@@ -283,8 +301,8 @@ void InstallFaultReporter()
     if (lucent::config::flag("FAULT_SELFTEST"))
     {
         lucent::info("fault", "selftest: faulting on purpose -- a report MUST"
-            " follow this line, and its absence means the reporter is dead");
-        volatile uint8_t* deliberate = reinterpret_cast<uint8_t*>(0x10);
+                              " follow this line, and its absence means the reporter is dead");
+        volatile uint8_t *deliberate = reinterpret_cast<uint8_t *>(0x10);
         *deliberate = 1;
     }
 #endif

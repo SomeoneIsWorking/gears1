@@ -204,6 +204,10 @@ add_executable(gears1
     graphics_probe_render.cpp
     input.cpp
     hle_d3d.cpp
+    rhi_semantic_stream.cpp
+    titles/gears1/rhi_draw_bindings.cpp
+    guest_write_watch.cpp
+    gpu_register_watch.cpp
     kernel_rtl.cpp
     kernel_config.cpp
     kernel_dispatcher.cpp

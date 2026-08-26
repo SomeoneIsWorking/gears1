@@ -29,6 +29,7 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 
 ## gpu
 
+
 ### cmd-processor — PM4 command processor executes the ring
 - status: re-verified
 - deps:
@@ -165,8 +166,8 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap:
 - notes: This is generation-specific guest-fence publication, not global renderer idleness and not a timed stall. Diagnostics remain synchronous by contract. The recompiled PM4 route is compatibility and oracle infrastructure for the shared GearsUE3 native RHI frontend.
 
-
 ## kernel
+
 
 ### input — Controller input: XamInput* from a host pad, keyboard or script
 - status: re-verified
@@ -184,8 +185,8 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap:
 - notes:
 
-
 ## audio
+
 
 ### audio-driver — Render-driver frame path: the title produces PCM
 - status: re-verified
@@ -219,8 +220,8 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap:
 - notes: Fixed in runtime/guest_stack_argument.{h,cpp} plus the corrected parameter mapping in xam_user.cpp, tests first. FOUR wrong theories were recorded against this step before the answer and are listed in catalog #45 so they are not re-derived: a game/render thread race, GPU pipeline latency, the holder being freed, and safe-by-allocator-timing. Also cleared as suspects: the gamertag-derived save filename (the read and write share the path builder, so save:\\Pla was always self-consistent) and the default_checkpoint.sav literal (a fallback not meant to be reached). #44 is NOT downstream of this -- the ring two-producer warnings still occur 421 times in the fixed run -- so it stands as its own bug.
 
-
 ## compare
+
 
 ### frame-pair-validated — A cross-console pair that PASSES the same-picture gate
 - status: re-verified
@@ -246,8 +247,8 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap:
 - notes: The acceptance gate is provenance + camera-state match + scripted-input validation + explicit overlay/state inspection. Renderer work starts at the earliest exact draw/state divergence; no aggregate image score certifies the pair.
 
-
 ## render
+
 
 ### f7-first-loss-localisation — Localise the first f7 resolve's inherited or produced difference
 - status: re-verified
@@ -273,8 +274,8 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap:
 - notes: The earlier 0.2681 camerapair_rot frontier and per-draw light-count theory are historical, predating the half-scale depth fix. Do not reopen them from that capture. Issue #91 records the full causal chain and the later A/B.
 
-
 ## gearsue3-engine
+
 
 ### clean-distribution-tip — Remove private-source and game-derived build inputs from the tracked tip
 - status: re-partial
@@ -333,12 +334,12 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - notes: This is the last-priority per-game enhancement after Gears 1 is stable and performant at its faithful cadence and the engine compatibility work is established. Do not speed the general guest clock, alter vblank to hide the cap, or patch an unexplained constant. Catalog #126 records two rejected shortcuts: forcing live D3D sync mode 2 to mode 1 remained near 30 presents/s, and the only exact 1/30 fixed-step branch was disabled at runtime. The semantic limiter is still behind the indirect game-thread/render-command producer chain upstream of Present. Gears 1 evidence cannot establish the Gears 2, Gears 3, or Judgment timing policy.
 
 ### native-rhi-observation — Mirror semantic D3D/RHI operations while super-calling recomp bodies
-- status: todo
+- status: in-progress
 - deps: title-revision-boundary
-- evidence: The measured warm renderer cost is about 44 ms for a 743-draw gameplay frame and has a flat draw-loop profile; another local shader optimization cannot remove the PM4 emission/parsing and register-reconstruction architecture.
-- where: runtime/hle_d3d.cpp; runtime/gpu_draw*; docs/d3d-seam.md
-- gap: The actual per-draw emitter is not identified, and no semantic draw stream is differentially compared with the PM4-derived `FrameDrawInputs`.
-- notes: Resource lifetime, dirtiness, state, shaders, draws, resolves, presentation, and retirement form one cohesive frontend. `SetTexture` alone is not a performance milestone.
+- evidence: Scoped alias-aware guest write attribution and raw packet-construction scans grounded four normal Gears 1 draw entry points. runtime/titles/gears1/rhi_draw_bindings.cpp retains and super-calls every recompiled body, then publishes typed observations to runtime/rhi_semantic_stream.* only under GEARS_NATIVE_RHI_OBSERVE=1. A headless menu walk through frame 1712 compared 90,854 semantic calls with their emitted PM4 packets: 90,854 matches, zero missing, zero mismatched. tests/test_rhi_semantic_stream.cpp proves match ordering and a deliberately altered mismatch control.
+- where: runtime/rhi_semantic_stream.*; runtime/titles/gears1/rhi_draw_bindings.cpp; runtime/guest_write_watch.*; runtime/hle_d3d.cpp; docs/d3d-seam.md; tests/test_rhi_semantic_stream.cpp
+- gap: The bound-vertex entry is statically grounded but lacks live coverage. Complete state, resource lifetime, shaders, resolves, presentation, retirement, full-stream comparison, and pixel parity do not yet exist, so no native bypass is authorized.
+- notes: Logical title draw calls are not one-to-one with compatibility-renderer draw executions because predicated Xenos packets replay per EDRAM tile. Exact guest addresses and device offsets remain in the Gears 1 adapter; the semantic stream is title-neutral.
 
 ### native-rhi-bypass — Bypass guest D3D/PM4 work only after faithful parity
 - status: todo

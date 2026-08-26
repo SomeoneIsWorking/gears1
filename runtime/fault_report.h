@@ -28,13 +28,21 @@ namespace gears
 // This runtime maps guest physical address zero as a real window, so a guest
 // null dereference reads live RAM rather than faulting. An address low in the
 // mapping is therefore NOT a null pointer, and must never be described as one.
-std::string DescribeFaultAddress(uintptr_t guestBase, uint64_t guestSize,
-                                 uintptr_t faultAddress);
+std::string DescribeFaultAddress(uintptr_t guestBase, uint64_t guestSize, uintptr_t faultAddress);
 
-// Installs handlers for the fatal memory signals. Chains to whatever was
-// installed before -- hle_d3d's watchpoint machinery installs its own SIGSEGV
-// handler while a watch is armed, and replacing it silently would disable the
-// watchpoints instead of reporting anything.
+#ifndef _WIN32
+// A narrow, process-wide seam for diagnostics that intentionally turn a guest
+// page access into SIGSEGV. The fault reporter remains the signal owner: it
+// offers the fault to the observer first and emits a fatal report only when the
+// observer declines it. Observers run in signal context: they must not allocate,
+// lock, log, or call general runtime/library code.
+using SegvObserver = bool (*)(uintptr_t faultAddress, void *platformContext) noexcept;
+bool RegisterSegvObserver(SegvObserver observer);
+#endif
+
+// Installs handlers for the fatal memory signals and remains the sole SIGSEGV
+// owner. Diagnostic page watches register through RegisterSegvObserver rather
+// than replacing this handler.
 //
 // After reporting, the previous disposition runs, so a core is still dumped and
 // the exit status is unchanged. This adds output; it changes nothing else.
@@ -49,7 +57,7 @@ void InstallFaultReporter();
 
 // Teaches the reporter where guest memory ended up, once it exists. Until this
 // is called a fault is still reported, just without the guest/host distinction.
-void SetFaultReportGuestMapping(void* guestBase, uint64_t guestSize);
+void SetFaultReportGuestMapping(void *guestBase, uint64_t guestSize);
 
 // Gives the CALLING thread an alternate signal stack. Every thread needs its
 // own: without one, a fault that exhausted the thread's stack leaves the
@@ -67,8 +75,7 @@ void InstallSignalStackForThisThread();
 // The values are plain words written without a lock, because the handler must not
 // take one. A torn read is possible in principle and harmless in practice: this is
 // a diagnostic of last resort, and stale-but-printed beats correct-but-absent.
-void SetFaultContext(const char* label, uint32_t a, uint32_t b, uint32_t c,
-                     uint32_t d);
+void SetFaultContext(const char *label, uint32_t a, uint32_t b, uint32_t c, uint32_t d);
 
 // Reports, once, if something has replaced the SIGSEGV handler since install.
 // Called from a per-frame path: a displaced reporter is invisible otherwise,

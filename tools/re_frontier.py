@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""re_frontier.py — the RE-frontier progress tracker for OpenBL2.
+"""re_frontier.py — the RE-frontier progress tracker for GearsUE3.
 
 The codemap (docs/codemap.md) answers "what subsystem is where + coarse status".
 The issue-catalog answers "did we hit this symptom before". Neither answers the
@@ -61,7 +61,7 @@ SATISFIED = {"re-verified", "re-partial", "skip-by-design"}
 FIELDS = ["status", "area", "deps", "evidence", "where", "gap", "notes"]
 VALID_STATUS = set(STATUS_EMOJI) - {"blocked"}
 
-HEADER = """# RE Frontier — the ordered RE dependency chain toward a faithful BL2
+HEADER = """# RE Frontier — the ordered RE dependency chain toward GearsUE3
 
 Tracked by `tools/re_frontier.py` (consult it FIRST; update it in the SAME commit
 that changes a step). This is the fine-grained companion to `docs/codemap.md`:
@@ -107,9 +107,10 @@ class Entry:
     def serialize(self):
         out = [f"### {self.id} — {self.title}"]
         out.append(f"- status: {self.status}")
-        out.append(f"- deps: {', '.join(self.deps)}")
+        out.append("- deps:" + (f" {', '.join(self.deps)}" if self.deps else ""))
         for f in ("evidence", "where", "gap", "notes"):
-            out.append(f"- {f}: {getattr(self, f)}")
+            value = getattr(self, f)
+            out.append(f"- {f}:" + (f" {value}" if value else ""))
         return "\n".join(out)
 
 
@@ -177,19 +178,44 @@ def load(require=True):
     return entries, order
 
 
-def save(entries, order):
+def render(entries, order):
     areas = []
     for eid in order:
         a = entries[eid].area
         if a not in areas:
             areas.append(a)
+    parts = [HEADER.rstrip("\n")]
+    for a in areas:
+        parts.append(f"## {a}\n")
+        area_entries = [entries[eid].serialize() for eid in order if entries[eid].area == a]
+        parts.append("\n\n".join(area_entries))
+    return "\n\n".join(parts) + "\n"
+
+
+def save(entries, order):
     with open(ROADMAP, "w", encoding="utf-8") as fh:
-        fh.write(HEADER)
-        for a in areas:
-            fh.write(f"\n## {a}\n\n")
-            for eid in order:
-                if entries[eid].area == a:
-                    fh.write(entries[eid].serialize() + "\n\n")
+        fh.write(render(entries, order))
+
+
+def cmd_selftest(_entries, _order, _args):
+    empty = Entry("empty", "Empty fields stay clean", "test")
+    full = Entry("full", "Populated fields survive", "test")
+    full.status = "in-progress"
+    full.deps = ["empty"]
+    full.evidence = "measured"
+    full.where = "test.cpp"
+    full.gap = "remaining"
+    full.notes = "note"
+    text = render({empty.id: empty, full.id: full}, [empty.id, full.id])
+    assert text.startswith("# RE Frontier — the ordered RE dependency chain toward GearsUE3\n")
+    assert "- deps: \n" not in text
+    assert "- evidence: \n" not in text
+    assert "- deps: empty\n" in text
+    assert "- evidence: measured\n" in text
+    assert text.endswith("\n") and not text.endswith("\n\n")
+    assert not any(line.endswith(" ") for line in text.splitlines())
+    print("re-frontier selftest passed: project header, clean empty fields, and final newline")
+    return 0
 
 
 def effective_status(e, entries):
@@ -453,7 +479,7 @@ def cmd_set(entries, order, args):
 
 
 def main():
-    p = argparse.ArgumentParser(description="OpenBL2 RE-frontier progress tracker")
+    p = argparse.ArgumentParser(description="GearsUE3 RE-frontier progress tracker")
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("list"); sp.add_argument("--area"); sp.add_argument("--status")
@@ -464,6 +490,7 @@ def main():
     sp = sub.add_parser("tree"); sp.add_argument("--area")
     sub.add_parser("stats")
     sub.add_parser("check")
+    sub.add_parser("selftest")
     sp = sub.add_parser("scaffold"); sp.add_argument("--area")
     sp = sub.add_parser("add")
     sp.add_argument("id"); sp.add_argument("--title", required=True)
@@ -477,11 +504,12 @@ def main():
     # `scaffold` and `add` are the only commands with a legitimate reason to
     # start from an empty roadmap; every other command REPORTS on it, and an
     # empty report from an empty file is the blind spot `require` exists to stop.
-    entries, order = load(require=args.cmd not in ("scaffold", "add"))
+    entries, order = ({}, []) if args.cmd == "selftest" else load(
+        require=args.cmd not in ("scaffold", "add"))
     fn = {
         "list": cmd_list, "show": cmd_show, "next": cmd_next, "hacks": cmd_hacks,
         "blocked": cmd_blocked, "tree": cmd_tree, "stats": cmd_stats, "check": cmd_check,
-        "scaffold": cmd_scaffold, "add": cmd_add, "set": cmd_set,
+        "selftest": cmd_selftest, "scaffold": cmd_scaffold, "add": cmd_add, "set": cmd_set,
     }[args.cmd]
     sys.exit(fn(entries, order, args) or 0)
 

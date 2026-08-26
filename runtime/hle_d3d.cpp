@@ -18,16 +18,13 @@
 #include <mutex>
 #include <set>
 
-#include <csignal>
-#include <cstdlib>
 #include <cstring>
-#include <dlfcn.h>
-#include <sys/mman.h>
-#include <ucontext.h>
 #include <unistd.h>
 
 #include "guest_memory.h"
+#include "guest_write_watch.h"
 #include "hle_d3d.h"
+#include "rhi_semantic_stream.h"
 
 // ---------------------------------------------------------------------------
 // Registration helper. GEARS_HLE_TRACE(addr) defines a strong sub_<addr> that
@@ -239,8 +236,6 @@ void CountValue(ValueSlot* slots, size_t n, uint32_t value)
     }
 }
 
-void WatchReport();
-
 } // namespace
 
 namespace gears
@@ -315,110 +310,21 @@ void HleWorkerCensus()
             s = ReplaySlot{};
         g_replayTotal = g_replayOverflow = g_replaySuspended = g_replayCompleted = 0;
     }
-    WatchReport();
+    ReportGuestWriteWatch(GuestWriteWatchOwner::kQueue, true);
 }
 
 } // namespace gears
 
 // ---------------------------------------------------------------------------
-// A guest-memory write watchpoint.
-//
-// Nothing static locates the producer of the worker's queue: the only store to
-// <ctx>+0x58 in the image is the interpreter's own clear, so the enqueue must
-// reach the field through a different base pointer (a different structure
-// offset). The only way to name the writer is to catch the write.
-//
-// Mechanism: mprotect the page holding the field read-only and take the write
-// fault. The faulting host RIP is inside the recompiled function that performed
-// the store, so `sub_XXXXXXXX` falls out of the host symbol. After recording,
-// the page is reopened and the faulting instruction retried under the x86 trap
-// flag, so the page can be closed again on the resulting SIGTRAP. Handlers do
-// no allocation and no logging; samples are printed from the census.
-//
-// Enabled with GEARS_WATCH_QUEUE=1. Disarms itself after kWatchSamples hits.
+// The D3D worker queue observation point. guest_write_watch owns the shared
+// signal/mprotect machinery; this wrapper owns only discovery of the exact
+// queue field from the running worker object.
 // ---------------------------------------------------------------------------
 
 namespace
 {
 
 constexpr size_t kWatchSamples = 64;
-constexpr size_t kWatchSlots = 16;
-
-struct WatchSlot
-{
-    uintptr_t rip = 0;
-    uint64_t count = 0;
-};
-
-struct Watch
-{
-    std::atomic<bool> armed{false};
-    uint8_t* page = nullptr;
-    size_t pageSize = 0;
-    uint8_t* target = nullptr;
-    uint32_t guestTarget = 0;
-    std::atomic<uint64_t> hits{0};
-    std::atomic<uint64_t> otherFaults{0};
-    WatchSlot slots[kWatchSlots]{};
-    uintptr_t moduleBase = 0;
-    struct sigaction oldSegv{};
-    struct sigaction oldTrap{};
-} g_watch;
-
-void WatchRecord(uintptr_t rip)
-{
-    for (auto& s : g_watch.slots)
-    {
-        if (s.rip == rip) { ++s.count; return; }
-        if (s.rip == 0) { s.rip = rip; s.count = 1; return; }
-    }
-}
-
-void WatchProtect(int prot)
-{
-    mprotect(g_watch.page, g_watch.pageSize, prot);
-}
-
-void OnSegv(int sig, siginfo_t* info, void* uc)
-{
-    auto* addr = static_cast<uint8_t*>(info->si_addr);
-    if (!g_watch.armed.load(std::memory_order_relaxed) || addr < g_watch.page ||
-        addr >= g_watch.page + g_watch.pageSize)
-    {
-        // Not ours: restore the previous disposition and let it fault again.
-        sigaction(SIGSEGV, &g_watch.oldSegv, nullptr);
-        return;
-    }
-
-    auto* ctx = static_cast<ucontext_t*>(uc);
-    if (addr >= g_watch.target && addr < g_watch.target + 4)
-    {
-        WatchRecord(uintptr_t(ctx->uc_mcontext.gregs[REG_RIP]));
-        g_watch.hits.fetch_add(1, std::memory_order_relaxed);
-    }
-    else
-    {
-        g_watch.otherFaults.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    WatchProtect(PROT_READ | PROT_WRITE);
-    if (g_watch.hits.load(std::memory_order_relaxed) >= kWatchSamples)
-    {
-        g_watch.armed.store(false, std::memory_order_relaxed);
-        return; // leave the page open; the census reports what was caught
-    }
-    ctx->uc_mcontext.gregs[REG_EFL] |= 0x100; // single-step the retried store
-}
-
-void OnTrap(int sig, siginfo_t* info, void* uc)
-{
-    (void)sig;
-    (void)info;
-    auto* ctx = static_cast<ucontext_t*>(uc);
-    ctx->uc_mcontext.gregs[REG_EFL] &= ~0x100;
-    if (g_watch.armed.load(std::memory_order_relaxed))
-        WatchProtect(PROT_READ);
-}
 
 void WatchArm(uint32_t guestAddress)
 {
@@ -428,59 +334,7 @@ void WatchArm(uint32_t guestAddress)
     tried = true;
     if (!lucent::config::flag("WATCH_QUEUE"))
         return;
-
-    uint8_t* host = gears::Memory().Translate<uint8_t>(guestAddress);
-    const size_t pageSize = size_t(sysconf(_SC_PAGESIZE));
-    g_watch.pageSize = pageSize;
-    g_watch.page = reinterpret_cast<uint8_t*>(uintptr_t(host) & ~(uintptr_t(pageSize) - 1));
-    g_watch.target = host;
-    g_watch.guestTarget = guestAddress;
-
-    Dl_info info{};
-    if (dladdr(reinterpret_cast<void*>(&WatchArm), &info))
-        g_watch.moduleBase = uintptr_t(info.dli_fbase);
-
-    struct sigaction sa{};
-    sa.sa_sigaction = &OnSegv;
-    sa.sa_flags = SA_SIGINFO | SA_RESTART;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGSEGV, &sa, &g_watch.oldSegv);
-
-    struct sigaction st{};
-    st.sa_sigaction = &OnTrap;
-    st.sa_flags = SA_SIGINFO | SA_RESTART;
-    sigemptyset(&st.sa_mask);
-    sigaction(SIGTRAP, &st, &g_watch.oldTrap);
-
-    g_watch.armed.store(true, std::memory_order_relaxed);
-    WatchProtect(PROT_READ);
-    lucent::info("hle", "queue watchpoint armed on guest {:#x} (host {}, module base {:#x})",
-        guestAddress, static_cast<void*>(host), g_watch.moduleBase);
-}
-
-void WatchReport()
-{
-    if (g_watch.page == nullptr)
-        return;
-    lucent::Line line;
-    line.add("queue watch guest {:#x}: {} target writes, {} other faults on the page",
-        g_watch.guestTarget, g_watch.hits.load(), g_watch.otherFaults.load());
-    for (const auto& s : g_watch.slots)
-    {
-        if (s.rip == 0) break;
-        line.add("  rip {:#x} (+{:#x}) x{}", s.rip, s.rip - g_watch.moduleBase, s.count);
-    }
-    line.flush_debug("hle");
-
-    // Re-arm for the next frame: the interesting phase is the 3D scene, which
-    // starts hundreds of frames in, so a one-shot sample taken at the first
-    // replay would only characterise the intro. Samples are per-frame deltas.
-    for (auto& s : g_watch.slots)
-        s = WatchSlot{};
-    g_watch.hits.store(0, std::memory_order_relaxed);
-    g_watch.otherFaults.store(0, std::memory_order_relaxed);
-    g_watch.armed.store(true, std::memory_order_relaxed);
-    WatchProtect(PROT_READ);
+    gears::ArmGuestWriteWatch(gears::GuestWriteWatchOwner::kQueue, guestAddress, kWatchSamples);
 }
 
 } // namespace
@@ -560,11 +414,10 @@ std::atomic<uint64_t> g_setTextureNull{0};
 // Slots the title used beyond the shadow this census keeps. Counted rather than
 // wrapped, so "16 slots" can never quietly mean "16 of 40".
 std::atomic<uint64_t> g_setTextureOutOfRange{0};
-// The state-flush-and-draw emitter. This is the count of draws the TITLE issued
-// through its own API, which is the number our PM4 capture is supposed to end up
-// with -- the first cross-check that does not depend on any struct layout.
-std::atomic<uint64_t> g_drawFlushCalls{0};
-uint64_t g_lastReportedFlushes = 0;
+// Once-per-frame state work previously misidentified as the draw emitter.
+// Retain its measured rate so it cannot silently regain that false role.
+std::atomic<uint64_t> g_frameStateCalls{0};
+uint64_t g_lastReportedFrameStateCalls = 0;
 uint64_t g_lastReportedSets = 0;
 // The DISTINCT texture base addresses the title bound since the last reported
 // frame. The slot table alone is a snapshot at frame end and is not comparable
@@ -600,13 +453,11 @@ void ReportTitleTextureSlots()
         bl.flush(lucent::Level::Info, "hle");
     }
 
-    const uint64_t flushes = g_drawFlushCalls.load();
-    lucent::info("hle", "title issued {} draws through sub_82544148 since the last"
-        " reported frame ({} total); compare with the renderer's \"N of M draws"
-        " issued\" for this frame -- M is what our PM4 capture saw, and these two"
-        " count the same draws from opposite ends of the same frame",
-        flushes - g_lastReportedFlushes, flushes);
-    g_lastReportedFlushes = flushes;
+    const uint64_t frameStateCalls = g_frameStateCalls.load();
+    lucent::info("hle", "sub_82544148 ran {} time(s) since the last report ({} total);"
+                         " catalog #58 proves this is frame state, NOT a draw count",
+                 frameStateCalls - g_lastReportedFrameStateCalls, frameStateCalls);
+    g_lastReportedFrameStateCalls = frameStateCalls;
 
     lucent::Line line;
     line.add("title texture slots (D3D SetTexture, {} calls since the last report,"
@@ -711,6 +562,7 @@ namespace gears
 
 void HleShaderCaptureFrame(uint64_t frame)
 {
+    ReportRhiSemanticFrame(frame);
     ArgScanInit();
     if (frame % 60 == 0)
         ArgReport();
@@ -718,7 +570,8 @@ void HleShaderCaptureFrame(uint64_t frame)
 
 } // namespace gears
 
-// SetTexture, and the state-flush-and-draw emitter. Census only: both are on
+// SetTexture, and the once-per-frame state function formerly called a draw
+// emitter. Census only: both are on
 // the path the shader work has to understand, and their per-frame call counts
 // with call-site provenance are what say which phase is doing what.
 extern "C" PPC_FUNC(__imp__sub_82220858);
@@ -761,12 +614,12 @@ PPC_FUNC(sub_82220858)
 
 extern "C" PPC_FUNC(__imp__sub_82544148);
 namespace {
-Probe g_probe_draw{"82544148/draw", 0x82544148};
+Probe g_probe_draw{"82544148/frame-state", 0x82544148};
 struct RegDraw { RegDraw() { Register(&g_probe_draw); } } g_regDraw;
 }
 PPC_FUNC(sub_82544148)
 {
-    g_drawFlushCalls.fetch_add(1, std::memory_order_relaxed);
+    g_frameStateCalls.fetch_add(1, std::memory_order_relaxed);
     Note(g_probe_draw, uint32_t(ctx.lr));
     __imp__sub_82544148(ctx, base);
 }
@@ -945,7 +798,6 @@ GEARS_HLE_ARGPROBE(8222AFD8)
 GEARS_HLE_ARGPROBE(8222A2D8)
 GEARS_HLE_ARGPROBE(8222A150)
 GEARS_HLE_ARGPROBE(82235528)
-GEARS_HLE_ARGPROBE(8222CFF8)
 GEARS_HLE_ARGPROBE(82220570)
 GEARS_HLE_ARGPROBE(82222E18)
 GEARS_HLE_ARGPROBE(82222710)
@@ -956,13 +808,11 @@ GEARS_HLE_ARGPROBE(8222ECC0)
 GEARS_HLE_ARGPROBE(82222AC8)
 GEARS_HLE_ARGPROBE(82220028)
 GEARS_HLE_ARGPROBE(8221F8B0)
-GEARS_HLE_ARGPROBE(8222DE50)
 GEARS_HLE_ARGPROBE(82236370)
 GEARS_HLE_ARGPROBE(82228998)
 GEARS_HLE_ARGPROBE(82228AB8)
 GEARS_HLE_ARGPROBE(82228B48)
 GEARS_HLE_ARGPROBE(82229398)
-GEARS_HLE_ARGPROBE(8222D4F8)
 GEARS_HLE_ARGPROBE(82229028)
 GEARS_HLE_ARGPROBE(82222EF8)
 GEARS_HLE_ARGPROBE(82229B28)
