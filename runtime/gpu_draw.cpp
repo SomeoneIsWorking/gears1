@@ -636,15 +636,11 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         VK_CHECK(vkCreateSampler(device, &si, nullptr, &samp));
     }
 
-    // Guest textures and samplers live in gpu_draw_textures.{h,cpp}. Its
-    // counters are read by the frame report below, and every refusal it
-    // records is printed there -- a skipped texture that is not reported is a
-    // texture silently replaced by a stub.
+    // Guest textures and samplers live in gpu_draw_textures.{h,cpp}; every
+    // refusal is reported rather than silently replaced by a stub.
     draw::TextureUploader TX(*this, P, in);
-    // One soft-dirty observation period per rendered frame. The A/B arm
-    // decides whether THIS frame may skip hashing page-clean textures; the
-    // clear itself runs for both arms so generations stay aligned.
-    TX.BeginStalenessFrame(!abTexDirty.Enabled() || abTexDirty.Arm());
+    // The texture owner resolves the default/control/A-B policy (catalog #137).
+    TX.BeginStalenessFrame(options.trackTextureDirtyPages, abTexDirty.Enabled(), abTexDirty.Arm());
     std::vector<VkBuffer> &stagingBufs = TX.stagingBufs;
     std::vector<VkDeviceMemory> &stagingMems = TX.stagingMems;
 
@@ -1518,6 +1514,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         msPrepare += sinceStartMs() - prepareBegin;
         ++issued;
     }
+
+    // Consume dirty bits before arming the next observation period.
+    TX.EndStalenessFrame();
 
     // A HASH THAT MATCHED NOTHING MUST NOT LOOK LIKE A SHADER WITH NO
     // CONSTANTS. Both print nothing, and the difference is "you asked about a

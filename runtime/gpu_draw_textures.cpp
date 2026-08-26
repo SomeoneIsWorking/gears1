@@ -49,10 +49,13 @@ bool TextureSpansClean(const FrameDrawInputs &inputs, const GuestTexture &header
 
 } // namespace
 
-void TextureUploader::BeginStalenessFrame(bool allowSkipThisFrame)
+void TextureUploader::BeginStalenessFrame(bool enabledByDefault, bool abEnabled, bool abArm)
 {
     texDirtyEnabled = false;
-    if (!lucent::config::flag("DRAW_TEX_DIRTY"))
+    texDirtyObservationActive = false;
+    const bool trackThisFrame = enabledByDefault || abEnabled;
+    const bool allowSkipThisFrame = abEnabled ? abArm : enabledByDefault;
+    if (!trackThisFrame)
         return;
 
     if (!g_texDirtyOpenAttempted)
@@ -64,12 +67,19 @@ void TextureUploader::BeginStalenessFrame(bool allowSkipThisFrame)
             g_texDirtyPages.Open(in.guestBase, std::move(windows), aliasMask);
     }
 
-    if (!g_texDirtyPages.Supported())
+    if (!g_texDirtyPages.Supported() || g_texDirtyDisabledByMisses)
         return;
-    // Runs for every arm of an interleaved A/B so generations advance
-    // uniformly; only the skip DECISION below is arm-dependent.
-    g_texDirtyPages.BeginFrame();
-    texDirtyEnabled = allowSkipThisFrame && !g_texDirtyDisabledByMisses;
+    texDirtyObservationActive = true;
+    texDirtyEnabled = allowSkipThisFrame;
+}
+
+void TextureUploader::EndStalenessFrame()
+{
+    if (!texDirtyObservationActive)
+        return;
+    // Consume first, clear second. Any guest write after this point belongs to
+    // the next frame's observation period and must remain visible until then.
+    g_texDirtyPages.BeginObservationPeriod();
 }
 
 namespace
