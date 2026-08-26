@@ -180,6 +180,10 @@ add_executable(test_gpu_retirement
 target_include_directories(test_gpu_retirement PRIVATE ../runtime)
 add_test(NAME gpu_retirement COMMAND test_gpu_retirement)
 
+add_executable(test_gpu_frame_timing test_gpu_frame_timing.cpp)
+target_include_directories(test_gpu_frame_timing PRIVATE ../runtime)
+add_test(NAME gpu_frame_timing COMMAND test_gpu_frame_timing)
+
 add_executable(test_gpu_queue_access test_gpu_queue_access.cpp)
 target_link_libraries(test_gpu_queue_access PRIVATE gears_gpu_queue_access)
 add_test(NAME gpu_queue_access COMMAND test_gpu_queue_access)

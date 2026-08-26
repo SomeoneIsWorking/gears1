@@ -2,14 +2,17 @@
 
 #include "frame_queue.h"
 #include "gpu_draw.h"
+#include "gpu_frame_timing.h"
 #include "graphics_probe_render.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <ctime>
 #include <exception>
+#include <format>
 #include <mutex>
 #include <thread>
 #include <utility>
@@ -39,14 +42,14 @@ std::thread g_thread;
 std::atomic<uint64_t> g_submitted{0};
 std::atomic<uint64_t> g_dropped{0};
 std::atomic<uint64_t> g_rendered{0};
-std::atomic<uint64_t> g_busyMillis{0};
+std::atomic<uint64_t> g_busyNanoseconds{0};
 // Wall against CPU, the same discriminator the audio pump uses (catalog #43): a
 // renderer that is genuinely slow burns thread CPU time roughly equal to its wall
 // time, while one that is descheduled shows wall far above CPU. The live frame
 // costs 53 ms against 29 ms for the same frame replayed offline, and those two
 // explanations want opposite fixes.
-std::atomic<uint64_t> g_cpuMillis{0};
-std::atomic<uint64_t> g_runqueueMillis{0};
+std::atomic<uint64_t> g_cpuNanoseconds{0};
+std::atomic<uint64_t> g_runqueueNanoseconds{0};
 
 uint64_t ThreadCpuNanos()
 {
@@ -122,11 +125,11 @@ void RenderThreadMain()
             retire(RenderFrameWithGraphicsProbe(work->inputs));
         else
             SubmitFrameRender(work->inputs, std::move(retire));
-        g_busyMillis.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                            std::chrono::steady_clock::now() - t0)
-                                            .count()));
-        g_cpuMillis.fetch_add((ThreadCpuNanos() - cpu0) / 1000000ull);
-        g_runqueueMillis.fetch_add((ThreadRunqueueNanos() - rq0) / 1000000ull);
+        g_busyNanoseconds.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                                 std::chrono::steady_clock::now() - t0)
+                                                 .count()));
+        g_cpuNanoseconds.fetch_add(ThreadCpuNanos() - cpu0);
+        g_runqueueNanoseconds.fetch_add(ThreadRunqueueNanos() - rq0);
         if (!g_frames.Complete(work->frameId))
         {
             lucent::error("draw", "render thread rejected completion for stale frame {}",
@@ -179,10 +182,55 @@ RenderThreadStats RenderThreadCounters()
     out.submitted = g_submitted.load();
     out.dropped = g_dropped.load();
     out.rendered = g_rendered.load();
-    out.busyMillis = g_busyMillis.load();
-    out.cpuMillis = g_cpuMillis.load();
-    out.runqueueMillis = g_runqueueMillis.load();
+    out.busyMillis = g_busyNanoseconds.load() / 1000000ull;
+    out.cpuMillis = g_cpuNanoseconds.load() / 1000000ull;
+    out.runqueueMillis = g_runqueueNanoseconds.load() / 1000000ull;
+    const draw::GpuFrameTimingStats gpu = draw::CurrentGpuFrameTimingStats();
+    out.gpuTimingAvailable = gpu.available;
+    out.gpuSamples = gpu.samples;
+    out.gpuNanoseconds = gpu.totalNanoseconds;
+    out.gpuMaximumNanoseconds = gpu.maximumNanoseconds;
+    out.gpuFailedSamples = gpu.failedSamples;
     return out;
+}
+
+void RenderThreadReporter::MaybeReport()
+{
+    const auto now = std::chrono::steady_clock::now();
+    if (now - lastReport_ < std::chrono::seconds(1))
+        return;
+
+    const RenderThreadStats st = RenderThreadCounters();
+    const double elapsed = std::chrono::duration<double>(now - lastReport_).count();
+    const uint64_t rendered = st.rendered - lastRendered_;
+    const uint64_t gpuSamples = st.gpuSamples - lastGpuSamples_;
+    const std::string gpuReport =
+        !st.gpuTimingAvailable ? "unavailable"
+        : gpuSamples == 0      ? "no completed samples in this interval"
+                          : std::format("{:.2f} ms/frame over {} interval completions"
+                                        " (process max {:.2f} ms; {} interval failures)",
+                                        double(st.gpuNanoseconds - lastGpuNanoseconds_) /
+                                            1000000.0 / double(gpuSamples),
+                                        gpuSamples, double(st.gpuMaximumNanoseconds) / 1000000.0,
+                                        st.gpuFailedSamples - lastGpuFailedSamples_);
+    lucent::info("gpu",
+                 "guest-draw: {:.1f} frames/s rendered, {:.1f}/s dropped as the one-frame"
+                 " renderer queue was full ({} ms/frame in RenderFrame, of which {} ms"
+                 " on-core and {} ms runnable-but-off-core); GPU {}",
+                 double(rendered) / elapsed, double(st.dropped - lastDropped_) / elapsed,
+                 (st.busyMillis - lastBusyMillis_) / std::max<uint64_t>(1, rendered),
+                 (st.cpuMillis - lastCpuMillis_) / std::max<uint64_t>(1, rendered),
+                 (st.runqueueMillis - lastRunqueueMillis_) / std::max<uint64_t>(1, rendered),
+                 gpuReport);
+    lastReport_ = now;
+    lastRendered_ = st.rendered;
+    lastDropped_ = st.dropped;
+    lastBusyMillis_ = st.busyMillis;
+    lastCpuMillis_ = st.cpuMillis;
+    lastRunqueueMillis_ = st.runqueueMillis;
+    lastGpuSamples_ = st.gpuSamples;
+    lastGpuNanoseconds_ = st.gpuNanoseconds;
+    lastGpuFailedSamples_ = st.gpuFailedSamples;
 }
 
 void DeferUntilAcceptedRenderRetires(std::function<void()> completion)

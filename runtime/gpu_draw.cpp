@@ -169,7 +169,7 @@ bool Renderer::Init()
                          " device, so the frame reaches the window by BLIT rather than through"
                          " host memory",
                          adoptedProps.deviceName, queueFamily);
-            return frameSlots.Initialize(device, kRendererFramesInFlight);
+            return frameSlots.Initialize(physical, device, queueFamily, kRendererFramesInFlight);
         }
     }
 
@@ -327,7 +327,7 @@ bool Renderer::Init()
     }
     lucent::info("draw", "headless Vulkan device \"{}\" (queue family {})", p.deviceName,
                  queueFamily);
-    return frameSlots.Initialize(device, kRendererFramesInFlight);
+    return frameSlots.Initialize(physical, device, queueFamily, kRendererFramesInFlight);
 }
 
 bool Renderer::FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_t &out)
@@ -1631,7 +1631,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     VkCommandBufferBeginInfo cbi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     cbi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VK_CHECK(vkBeginCommandBuffer(cmd, &cbi));
-
+    frameSlots.BeginTiming(*frameLease, cmd);
     // Every stub image -> white -> shader-read, one per declared dimension.
     // Every resolve destination joins them but is cleared BLACK, not white:
     // until the frame's first resolve into it nothing has been rendered there,
@@ -2692,13 +2692,12 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     bool gpuScanoutGammaApplied = false;
     GpuScanoutResult scanoutResult;
 
-    // WHETHER THE PIXELS ARE STILL NEEDED ON THE HOST. Since the presenter blits the
-    // published image directly, the readback only serves this frame's own diagnostics
-    // -- EXCEPT when this renderer owns its device, because then the presenter (if any)
-    // cannot blit from an image on a different device and falls back to the host
-    // upload, which reads exactly these pixels. Dropping the readback in that case
-    // would present nothing at all, so the condition is deliberately generous.
-    const bool needHostPixels = FrameNeedsHostPixels(in.report, in.probe) || ownsDevice;
+    // WHETHER THE PIXELS ARE STILL NEEDED ON THE HOST. PresenterStart runs before
+    // the first draw: a running presenter publishes its device for this renderer
+    // to adopt and blits the published image directly. If this renderer owns its
+    // device, no presenter started, so an ordinary headless frame has no host
+    // consumer. Only reports and explicit probes request the readback.
+    const bool needHostPixels = FrameNeedsHostPixels(in.report, in.probe);
 
     SurfaceTarget *presentTarget = nullptr;
     if (havePresent)
@@ -2841,6 +2840,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
                                  " read back, so this run says NOTHING about any surface's range");
     }
 
+    frameSlots.EndTiming(*frameLease, cmd);
     VK_CHECK(vkEndCommandBuffer(cmd));
 
     AR.EndFrame();

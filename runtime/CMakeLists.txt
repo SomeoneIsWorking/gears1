@@ -291,6 +291,7 @@ add_library(gears_draw STATIC
     gpu_draw_vertexfetch.cpp
     gpu_frame_cleanup.cpp
     gpu_frame_slots.cpp
+    gpu_frame_timing.cpp
     gpu_instance.cpp
     gpu_queue_family.cpp
     gpu_retirement.cpp

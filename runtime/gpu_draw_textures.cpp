@@ -39,12 +39,13 @@ bool g_texDirtyDisabledByMisses = false;
 
 // Whether neither span of this texture holds a store since the last clear.
 // Both spans are consulted because either can change the sampled image.
-bool TextureSpansClean(const FrameDrawInputs &inputs, const GuestTexture &header)
+bool TextureSpansClean(const FrameDrawInputs &inputs, const GuestTex &texture)
 {
-    return g_texDirtyPages.RangeCleanSinceLastClear(header.baseAddress,
-                                                    header.baseGuestExtentBytes) &&
-           (header.mipGuestExtentBytes == 0 || g_texDirtyPages.RangeCleanSinceLastClear(
-                                                   header.mipAddress, header.mipGuestExtentBytes));
+    return g_texDirtyPages.RangeCleanSinceLastClear(texture.baseAddress,
+                                                    texture.baseGuestExtentBytes) &&
+           (texture.mipGuestExtentBytes == 0 ||
+            g_texDirtyPages.RangeCleanSinceLastClear(texture.mipAddress,
+                                                     texture.mipGuestExtentBytes));
 }
 
 } // namespace
@@ -85,7 +86,7 @@ void TextureUploader::EndStalenessFrame()
 namespace
 {
 
-uint64_t HashTextureStorage(const GuestTexture &texture, const FrameDrawInputs &inputs)
+uint64_t HashTextureStorage(const GuestTex &texture, const FrameDrawInputs &inputs)
 {
     const uint8_t *base =
         texture.baseGuestExtentBytes ? inputs.guestBase + texture.baseAddress : nullptr;
@@ -213,15 +214,14 @@ VkImageView TextureUploader::Upload(const uint32_t *fetch6, uint32_t wantDim)
         // same three addresses every frame, and the whole movie showed as one
         // stuck near-black image (catalog #53).
         //
-        // Ask the decoder for the header only -- pure arithmetic on the fetch
-        // constant, no data copied -- so the guest byte extent is known, then
-        // hash those bytes and compare with what this entry was built from.
-        GuestTexture header;
+        // The decoded storage extents live with the cached image. Re-decoding
+        // the unchanged fetch constant once per texture per frame was pure
+        // steady-state CPU work.
+        const auto cachedTexture = guestTextures.find(key);
         if (it->second != VK_NULL_HANDLE && texCheckedThisFrame.insert(key).second &&
-            DecodeGuestTexture(fetch6, in.guestBase, uint64_t(in.guestWindowBytes),
-                               /*wantData=*/false, header) &&
-            header.skipReason == nullptr && header.baseGuestExtentBytes != 0)
+            cachedTexture != guestTextures.end() && cachedTexture->second.baseGuestExtentBytes != 0)
         {
+            const GuestTex &header = cachedTexture->second;
             const uint64_t hashBytes =
                 uint64_t(header.baseGuestExtentBytes) + header.mipGuestExtentBytes;
             const uint64_t gen = g_texDirtyPages.Generation();
@@ -396,6 +396,10 @@ VkImageView TextureUploader::Upload(const uint32_t *fetch6, uint32_t wantDim)
     const bool is3D = gt.dimension == 2;
     const bool isCube = gt.dimension == 3;
     GuestTex tex;
+    tex.baseAddress = gt.baseAddress;
+    tex.baseGuestExtentBytes = gt.baseGuestExtentBytes;
+    tex.mipAddress = gt.mipAddress;
+    tex.mipGuestExtentBytes = gt.mipGuestExtentBytes;
     VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     ci.flags = isCube ? VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT : 0;
     ci.imageType = is3D ? VK_IMAGE_TYPE_3D : VK_IMAGE_TYPE_2D;
@@ -505,20 +509,12 @@ VkImageView TextureUploader::Upload(const uint32_t *fetch6, uint32_t wantDim)
     // guest has overwritten the texture under an unchanged fetch constant.
     // Unconditional: without this record there is nothing to compare against,
     // and the entry would then look unchanged forever.
-    {
-        GuestTexture header;
-        if (DecodeGuestTexture(fetch6, in.guestBase, uint64_t(in.guestWindowBytes),
-                               /*wantData=*/false, header) &&
-            header.skipReason == nullptr && header.baseGuestExtentBytes != 0)
-        {
-            texContentHash[key] = HashTextureStorage(header, in);
-            // A freshly hashed entry is confirmed as of this generation; it is
-            // NOT page-clean-vouched, so the next frame's skip needs this
-            // record plus a clean query, exactly as any other frame.
-            P.texVerifiedGen[key] = g_texDirtyPages.Generation();
-            P.texTrustedClean.erase(key);
-        }
-    }
+    texContentHash[key] = HashTextureStorage(tex, in);
+    // A freshly hashed entry is confirmed as of this generation; it is NOT
+    // page-clean-vouched, so the next frame's skip needs this record plus a
+    // clean query, exactly as any other frame.
+    P.texVerifiedGen[key] = g_texDirtyPages.Generation();
+    P.texTrustedClean.erase(key);
     return tex.view;
 }
 

@@ -147,12 +147,17 @@ std::string StatusJson()
         "\"buttons\":{},\"lt\":{},\"rt\":{},\"lx\":{},\"ly\":{},"
         "\"rx\":{},\"ry\":{}}},"
         "\"renderer\":{{\"submitted\":{},\"dropped\":{},\"rendered\":{},"
-        "\"busy_ms\":{},\"cpu_ms\":{},\"runqueue_ms\":{}}},"
+        "\"busy_ms\":{},\"cpu_ms\":{},\"runqueue_ms\":{},"
+        "\"gpu_timing_available\":{},\"gpu_samples\":{},\"gpu_ns\":{},"
+        "\"gpu_max_ns\":{},"
+        "\"gpu_failed_samples\":{}}},"
         "\"probe\":{}}}\n",
         CurrentGuestFrame(), PadConnected() ? "true" : "false", InputSourceName(source), packet,
         pad.buttons, pad.leftTrigger, pad.rightTrigger, pad.thumbLX, pad.thumbLY, pad.thumbRX,
         pad.thumbRY, renderer.submitted, renderer.dropped, renderer.rendered, renderer.busyMillis,
-        renderer.cpuMillis, renderer.runqueueMillis, ProbeJson(LatestGraphicsProbe()));
+        renderer.cpuMillis, renderer.runqueueMillis, renderer.gpuTimingAvailable ? "true" : "false",
+        renderer.gpuSamples, renderer.gpuNanoseconds, renderer.gpuMaximumNanoseconds,
+        renderer.gpuFailedSamples, ProbeJson(LatestGraphicsProbe()));
 }
 
 lucent::http::Response PpmResponse(const GraphicsProbeFrame &frame)

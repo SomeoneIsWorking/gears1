@@ -121,10 +121,18 @@ use. Device-idle transitions release presenter leases before teardown.
 
 There are two independent limits. With rendering effectively disabled, Gears 1
 still reaches only about 30 fps, so a title-side timing or frame-production
-limit exists separately from renderer cost. A warm 743-draw gameplay frame also
-costs roughly 44 ms, including about 34 ms in a flat draw-loop profile. Neither
-changing the 60 Hz vblank source nor dropping stale presentation work proves
-that the title simulates and produces frames at 60 Hz.
+limit exists separately from renderer cost. Per-slot Vulkan timestamps now put
+ordinary live title frames at 7-8 ms GPU and a captured 1,742-draw chapter-45
+frame at 13.537 ms; the Release headless CPU path is 5-6 ms after removing an
+unused full-frame readback. These measurements establish useful 60 Hz renderer
+headroom for the bounded workloads, but not a 5 ms/200 fps budget or sustained
+interactive-gameplay proof. The 5 ms target belongs to the native PC engine
+path. The compatibility result is a migration baseline for Xenos PM4, EDRAM,
+and pass reconstruction, not an accepted product ceiling; the retained
+compatibility arm remains the parity oracle while the native RHI removes that
+work. Neither changing the 60 Hz vblank source nor
+dropping stale presentation work proves that the title simulates and produces
+frames at 60 Hz.
 
 The immediate target is a stable, responsive Gears 1 at its faithful cadence.
 Renderer lifetime fixes, native-engine performance, correctness, and glitch
