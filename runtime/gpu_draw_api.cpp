@@ -83,6 +83,11 @@ void ResetRendererForComparison()
     }
 }
 
+void ShutdownRenderer()
+{
+    FrameRenderer().Shutdown();
+}
+
 const std::vector<uint8_t> &GuestFramePixels()
 {
     return draw::g_frame;
@@ -122,6 +127,10 @@ bool SubmitFrameRender(const FrameDrawInputs &, FrameRenderCompletion &&completi
 bool WaitForRendererGpuIdle()
 {
     return true;
+}
+
+void ShutdownRenderer()
+{
 }
 
 const std::vector<uint8_t> &GuestFramePixels()

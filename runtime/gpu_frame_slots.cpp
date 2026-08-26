@@ -1,5 +1,6 @@
 #include "gpu_frame_slots.h"
 
+#include "gpu_frame_timing.h"
 #include "gpu_retirement.h"
 
 #include <condition_variable>
@@ -159,6 +160,7 @@ struct GpuFrameSlots::Impl
     std::vector<bool> inFlight;
     FenceBackend backend;
     GpuRetirement retirement;
+    GpuFrameTiming timing;
 
     mutable std::mutex mutex;
     std::condition_variable changed;
@@ -180,9 +182,10 @@ GpuFrameSlots::~GpuFrameSlots()
         std::abort();
 }
 
-bool GpuFrameSlots::Initialize(VkDevice device, size_t capacity)
+bool GpuFrameSlots::Initialize(VkPhysicalDevice physical, VkDevice device, uint32_t queueFamily,
+                               size_t capacity)
 {
-    if (impl_ || device == VK_NULL_HANDLE || capacity == 0)
+    if (impl_ || physical == VK_NULL_HANDLE || device == VK_NULL_HANDLE || capacity == 0)
         return false;
     std::unique_ptr<Impl> impl = std::make_unique<Impl>(device, capacity);
     VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
@@ -194,9 +197,24 @@ bool GpuFrameSlots::Initialize(VkDevice device, size_t capacity)
             impl->released = true;
             return false;
         }
+    impl->timing.Initialize(physical, device, queueFamily, capacity);
     impl->pump = std::thread([owner = impl.get()] { owner->Pump(); });
     impl_ = impl.release();
     return true;
+}
+
+void GpuFrameSlots::BeginTiming(const Lease &lease, VkCommandBuffer commands)
+{
+    if (impl_ && lease.resources && lease.slot < impl_->frames.size() &&
+        lease.resources == &impl_->frames[lease.slot])
+        impl_->timing.Begin(commands, lease.slot);
+}
+
+void GpuFrameSlots::EndTiming(const Lease &lease, VkCommandBuffer commands)
+{
+    if (impl_ && lease.resources && lease.slot < impl_->frames.size() &&
+        lease.resources == &impl_->frames[lease.slot])
+        impl_->timing.End(commands, lease.slot);
 }
 
 std::optional<GpuFrameSlots::Lease> GpuFrameSlots::Acquire()
@@ -272,6 +290,7 @@ bool GpuFrameSlots::Submit(Lease lease, Completion completion)
         {lease.slot, lease.generation}, GpuCompletionPoint{lease.slot + 1},
         [owner = impl_, slot = lease.slot, sequence, completion = std::move(completion)]() mutable
         {
+            owner->timing.Complete(slot, !owner->backendLost);
             owner->inFlight[slot] = false;
             owner->ordered.emplace(sequence, std::move(completion));
             owner->changed.notify_all();
@@ -339,6 +358,7 @@ void GpuFrameSlots::Release()
     }
     if (impl_->pump.joinable())
         impl_->pump.join();
+    impl_->timing.Release();
     for (GpuFrameResources &frame : impl_->frames)
         ReleaseFrameResources(impl_->device, frame);
     impl_->released = true;

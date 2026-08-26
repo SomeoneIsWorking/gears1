@@ -28,6 +28,7 @@
 //     data is what races.
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 
@@ -50,8 +51,33 @@ struct RenderThreadStats
     uint64_t busyMillis = 0;     // wall time preparing/submitting frames on the CPU
     uint64_t cpuMillis = 0;      // ...of which this thread actually ran
     uint64_t runqueueMillis = 0; // ...and spent RUNNABLE but off-core
+    bool gpuTimingAvailable = false;
+    uint64_t gpuSamples = 0;
+    uint64_t gpuNanoseconds = 0;
+    uint64_t gpuMaximumNanoseconds = 0;
+    uint64_t gpuFailedSamples = 0;
 };
 RenderThreadStats RenderThreadCounters();
+
+// Owns the once-per-second live renderer report and its interval baselines.
+// Keeping this beside RenderThreadStats prevents the command processor from
+// acquiring renderer timing policy and formatting.
+class RenderThreadReporter
+{
+  public:
+    void MaybeReport();
+
+  private:
+    std::chrono::steady_clock::time_point lastReport_ = std::chrono::steady_clock::now();
+    uint64_t lastRendered_ = 0;
+    uint64_t lastDropped_ = 0;
+    uint64_t lastBusyMillis_ = 0;
+    uint64_t lastCpuMillis_ = 0;
+    uint64_t lastRunqueueMillis_ = 0;
+    uint64_t lastGpuSamples_ = 0;
+    uint64_t lastGpuNanoseconds_ = 0;
+    uint64_t lastGpuFailedSamples_ = 0;
+};
 
 // Publish a completion only after the frame currently owned by the renderer
 // has retired. Runs the completion immediately when no frame is in flight.

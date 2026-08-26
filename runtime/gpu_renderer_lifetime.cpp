@@ -7,6 +7,11 @@ namespace gears::draw
 
 Renderer::~Renderer()
 {
+    Shutdown();
+}
+
+void Renderer::Shutdown()
+{
     frameSlots.Drain();
     ReleasePersistent();
     frameSlots.Release();

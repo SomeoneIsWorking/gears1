@@ -31,8 +31,17 @@
 #include "frame_capture.h"
 #include "frame_content.h"
 #include "gpu_draw.h"
+#include "gpu_frame_timing.h"
 #include "gpu_draw_xlate.h"
 #include "render_ab.h"
+
+namespace
+{
+struct RendererShutdownGuard
+{
+    ~RendererShutdownGuard() { gears::ShutdownRenderer(); }
+};
+} // namespace
 
 int main(int argc, char** argv)
 {
@@ -213,6 +222,8 @@ int main(int argc, char** argv)
         return c.Passed() ? 0 : 3;
     }
 
+    RendererShutdownGuard rendererShutdown;
+
     // ---- the interleaved render comparer --------------------------------
     //
     // GEARS_DRAW_AB=<KNOB> renders the frame TWICE IN THIS PROCESS -- once with
@@ -294,6 +305,7 @@ int main(int argc, char** argv)
     }
 
     bool ok = false;
+    const gears::draw::GpuFrameTimingStats timingBefore = gears::draw::CurrentGpuFrameTimingStats();
     for (long i = 0; i < std::max<long>(1, repeats); ++i)
     {
         // Only the last pass reports (the census + screenshot cost ~40 ms), so a
@@ -305,6 +317,28 @@ int main(int argc, char** argv)
             lucent::error("replay", "RenderFrame failed on pass {}", i);
             return 1;
         }
+    }
+    const gears::draw::GpuFrameTimingStats timingAfter = gears::draw::CurrentGpuFrameTimingStats();
+    if (!timingAfter.available)
+        lucent::warn("replay", "GPU frame timing is unavailable; this replay cannot establish a"
+                               " renderer GPU-time budget");
+    else
+    {
+        const uint64_t samples = timingAfter.samples - timingBefore.samples;
+        const uint64_t nanoseconds = timingAfter.totalNanoseconds - timingBefore.totalNanoseconds;
+        if (samples == 0)
+        {
+            lucent::error("replay", "GPU frame timing returned zero samples after rendering;"
+                                    " refusing a false 0 ms result");
+            ok = false;
+        }
+        else
+            lucent::info("replay",
+                         "GPU frame timing: {:.3f} ms mean across {} completed frame(s);"
+                         " process maximum {:.3f} ms, {} failed sample(s)",
+                         double(nanoseconds) / 1000000.0 / double(samples), samples,
+                         double(timingAfter.maximumNanoseconds) / 1000000.0,
+                         timingAfter.failedSamples - timingBefore.failedSamples);
     }
     return ok ? 0 : 1;
 }

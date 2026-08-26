@@ -814,13 +814,7 @@ struct CommandProcessor
     // `presents % every == 0` test would silently miss every report whose exact
     // multiple fell in a skipped run -- a cadence that quietly emits nothing.
     uint64_t reportedAtPresent = 0;
-    uint64_t lastRenderFrames = 0;
-    uint64_t lastDroppedFrames = 0;
-    uint64_t lastBusyMillis = 0;
-    uint64_t lastCpuMillis = 0;
-    uint64_t lastRunqueueMillis = 0;
-    std::chrono::steady_clock::time_point lastRenderReport =
-        std::chrono::steady_clock::now();
+    gears::RenderThreadReporter renderThreadReporter;
     uint32_t frameSwaps = 0; // swaps seen while waiting for GEARS_DRAW_FRAME_AT
     // The front buffer address from the swap packet that ends the frame, handed to
     // the renderer so it presents the surface the GUEST named rather than the one a
@@ -1851,14 +1845,14 @@ struct CommandProcessor
             framesRendered >= frameCount)
             frameRenderDone = true;
 
-        // The same accounting for a frame that IS rendered. A capture whose
-        // draw list is short because we dropped the rest is the difference
-        // between "the guest drew this" and "this is what we kept of it".
-        lucent::info("gpu", "guest-draw: frame {} kept {} of {} draws the guest"
-            " issued (dropped: {} no shader pair, {} zero indices, {}"
-            " immediate-index, {} after frame done)",
-            frameSwaps, frameDraws.size(), drawsOffered, drawsNoShaderPair,
-            drawsZeroIndices, drawsImmediateIndex, drawsAfterFrameDone);
+        // Keep per-frame accounting available on demand without making the
+        // default logger part of the renderer's steady-state workload.
+        lucent::debug("gpu",
+                      "guest-draw: frame {} kept {} of {} draws the guest"
+                      " issued (dropped: {} no shader pair, {} zero indices, {}"
+                      " immediate-index, {} after frame done)",
+                      frameSwaps, frameDraws.size(), drawsOffered, drawsNoShaderPair,
+                      drawsZeroIndices, drawsImmediateIndex, drawsAfterFrameDone);
         drawsOffered = drawsNoShaderPair = drawsZeroIndices = 0;
         drawsImmediateIndex = drawsAfterFrameDone = 0;
 
@@ -2000,38 +1994,7 @@ struct CommandProcessor
             // paced by a hand-off with a guest thread.
             const bool taken = gears::SubmitFrameForRender(std::move(in));
             (void)taken;
-            // One line a second rather than one a frame. The DROPPED count is
-            // the load-bearing number: it is the difference between a renderer
-            // keeping up with the guest and one running at half its rate, and
-            // without it both look identical from here.
-            const auto now = std::chrono::steady_clock::now();
-            if (now - lastRenderReport >= std::chrono::seconds(1))
-            {
-                const gears::RenderThreadStats st = gears::RenderThreadCounters();
-                const double elapsed =
-                    std::chrono::duration<double>(now - lastRenderReport).count();
-                const uint64_t renderedNow = st.rendered;
-                const uint64_t droppedNow = st.dropped;
-                lucent::info("gpu",
-                             "guest-draw: {:.1f} frames/s rendered,"
-                             " {:.1f}/s dropped as the one-frame renderer queue was full"
-                             " ({} ms/frame in RenderFrame, of which {} ms on-core and"
-                             " {} ms runnable-but-off-core)",
-                             double(renderedNow - lastRenderFrames) / elapsed,
-                             double(droppedNow - lastDroppedFrames) / elapsed,
-                             (st.busyMillis - lastBusyMillis) /
-                                 std::max<uint64_t>(1, renderedNow - lastRenderFrames),
-                             (st.cpuMillis - lastCpuMillis) /
-                                 std::max<uint64_t>(1, renderedNow - lastRenderFrames),
-                             (st.runqueueMillis - lastRunqueueMillis) /
-                                 std::max<uint64_t>(1, renderedNow - lastRenderFrames));
-                lastRenderReport = now;
-                lastRenderFrames = renderedNow;
-                lastDroppedFrames = droppedNow;
-                lastBusyMillis = st.busyMillis;
-                lastCpuMillis = st.cpuMillis;
-                lastRunqueueMillis = st.runqueueMillis;
-            }
+            renderThreadReporter.MaybeReport();
         }
         if (probeRequested)
             frameProbeCapture.Complete();

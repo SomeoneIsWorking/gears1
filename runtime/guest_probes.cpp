@@ -325,12 +325,12 @@ PPC_FUNC(sub_8232B548)
             constexpr uint32_t kCarrier = 0x82BFB36C;
             const uint32_t carrierData = ByteSwap(*gears::Memory().Translate<uint32_t>(kCarrier));
             const uint32_t carrierCount = ByteSwap(*gears::Memory().Translate<uint32_t>(kCarrier + 4));
-            lucent::info("probe", "  the global carrier at {:#x} is {} ({} bytes"
+            lucent::debug("probe", "  the global carrier at {:#x} is {} ({} bytes"
                 " at {:#x}) -- this is what gets copied into the object before"
                 " the read", kCarrier,
                 carrierData == 0 || carrierCount == 0 ? "EMPTY" : "populated",
                 carrierCount, carrierData);
-            lucent::info("probe", "FString deserialise #{}: archive array is {}"
+            lucent::debug("probe", "FString deserialise #{}: archive array is {}"
                 " ({} bytes at {:#x}); guest address 4 currently holds {:#x}",
                 reported.load(),
                 buffer == 0 || count == 0 ? "EMPTY -- nothing filled it"

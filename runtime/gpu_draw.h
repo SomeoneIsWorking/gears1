@@ -164,6 +164,11 @@ bool WaitForRendererGpuIdle();
 // matter".
 void ResetRendererForComparison();
 
+// Deterministically releases renderer-owned Vulkan objects. Offline tools call
+// this before process-static Vulkan layer teardown; the runtime's fatal-exit
+// path deliberately runs no destructors.
+void ShutdownRenderer();
+
 // The last frame RenderFrame read back, as tightly-packed R8G8B8A8 rows,
 // 1280x720, or empty if none. The presenter uploads this into the swapchain
 // when it cannot blit the drawn image directly (the two sides ended up on

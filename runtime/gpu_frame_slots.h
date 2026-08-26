@@ -67,11 +67,14 @@ class GpuFrameSlots
     GpuFrameSlots(const GpuFrameSlots &) = delete;
     GpuFrameSlots &operator=(const GpuFrameSlots &) = delete;
 
-    bool Initialize(VkDevice device, size_t capacity);
+    bool Initialize(VkPhysicalDevice physical, VkDevice device, uint32_t queueFamily,
+                    size_t capacity);
 
     // Waits only when every bounded slot is still in flight. With two slots and
     // CPU preparation longer than GPU execution, the steady path does not wait.
     std::optional<Lease> Acquire();
+    void BeginTiming(const Lease &lease, VkCommandBuffer commands);
+    void EndTiming(const Lease &lease, VkCommandBuffer commands);
     bool Submit(Lease lease, Completion completion);
     bool Cancel(Lease lease);
 

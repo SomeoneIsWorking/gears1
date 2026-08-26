@@ -53,6 +53,10 @@ struct GuestTex
     VkImage image = 0;
     VkDeviceMemory mem = 0;
     VkImageView view = 0;
+    uint32_t baseAddress = 0;
+    uint32_t baseGuestExtentBytes = 0;
+    uint32_t mipAddress = 0;
+    uint32_t mipGuestExtentBytes = 0;
 };
 struct StubTex
 {
@@ -403,6 +407,7 @@ struct Renderer
                          bool *completionPending = nullptr);
     void EnsurePersistentCapacity(uint32_t requiredWidth, uint32_t requiredHeight);
     void ReleasePersistent();
+    void Shutdown();
 };
 
 } // namespace gears::draw

@@ -453,11 +453,11 @@ bool RenderTargetCache::GetResolveTarget(uint32_t destBase, uint32_t sourceBase,
                 continue;
             rowOffsetOut = uint32_t(row);
             out = &r;
-            lucent::info("draw",
-                         "render-target cache: resolve destination"
-                         " {:#x} is row {} of the texture at {:#x} ({}x{}), not a"
-                         " target of its own",
-                         destBase, rowOffsetOut, r.base, r.pitch, r.height);
+            lucent::debug("draw",
+                          "render-target cache: resolve destination"
+                          " {:#x} is row {} of the texture at {:#x} ({}x{}), not a"
+                          " target of its own",
+                          destBase, rowOffsetOut, r.base, r.pitch, r.height);
             return true;
         }
     }
