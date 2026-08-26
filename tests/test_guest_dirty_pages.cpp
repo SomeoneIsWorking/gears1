@@ -84,9 +84,22 @@ void TestRealKernelDiscrimination()
           "the bit belongs to the PAGE: an untouched byte sharing a page with"
           " a written one still reads dirty -- over-hashing, never stale");
 
-    t.BeginFrame();
+    // Frame N consumed the current bits, then starts the NEXT observation
+    // period. A write landing after that frame but before frame N+1 begins is
+    // the production texture-staleness hazard: frame N+1 must query it BEFORE
+    // starting another period, or the clear erases the only evidence.
+    t.BeginObservationPeriod();
     Check(t.RangeCleanSinceLastClear(0, 8192),
           "after the next clear the same span reads clean again");
+
+    scratch[77] = 8; // a guest write between renderer frames
+    Check(!t.RangeCleanSinceLastClear(0, 100),
+          "an inter-frame write remains dirty until the next frame consumes it");
+
+    // Only after frame N+1 consumed the dirty answer may it arm frame N+2.
+    t.BeginObservationPeriod();
+    Check(t.RangeCleanSinceLastClear(0, 100),
+          "the consumed inter-frame write is clean in the following period");
 
     // Partial-page ends: dirtying the LAST byte of the span must be seen even
     // though the span starts mid-page.
@@ -94,7 +107,7 @@ void TestRealKernelDiscrimination()
     Check(!t.RangeCleanSinceLastClear(40, 8192 - 40),
           "a store on the final partial page is seen from a mid-page start");
 
-    t.BeginFrame();
+    t.BeginObservationPeriod();
     Check(t.RangeCleanSinceLastClear(0, 100), "first page clean after clear");
     ::munmap(scratch, 8192);
 }
@@ -158,7 +171,7 @@ void TestAliasWindows()
         Check(!t.RangeCleanSinceLastClear(0, kSize),
               "a write through the OTHER window marks the span dirty -- this"
               " is the stale-texture hazard, proven to fire");
-        t.BeginFrame();
+        t.BeginObservationPeriod();
         Check(t.RangeCleanSinceLastClear(0, kSize), "clean again after the next clear");
         a[100] = 6; // write through window A
         Check(!t.RangeCleanSinceLastClear(0, kSize),

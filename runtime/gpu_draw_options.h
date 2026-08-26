@@ -18,6 +18,7 @@ struct FrameOptions
 {
     bool applyDepthBias = true;
     bool applyTextureSigns = true;
+    bool trackTextureDirtyPages = true;
     uint64_t textureBindingsPsHash = 0;
 };
 

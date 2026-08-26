@@ -82,16 +82,20 @@ class GuestDirtyPages
     bool Supported() const { return fd_ >= 0 && clearFd_ >= 0 && probeOk_; }
 
     // Starts one observation period: bumps the generation, then clears every
-    // soft-dirty bit in the process, so the queries that follow answer "written
-    // since this call". A failed clear counts against support: bits that
-    // survive would over-report dirtiness forever, which is safe but useless,
-    // and repeated failure means the interface is not working on this host.
-    void BeginFrame();
+    // soft-dirty bit in the process, so LATER queries answer "written since
+    // this call". The texture policy calls this only AFTER consuming the
+    // previous period. Clearing at the start of the next frame would erase the
+    // inter-frame writes that the next query exists to detect.
+    //
+    // A failed clear counts against support: bits that survive would
+    // over-report dirtiness forever, which is safe but useless, and repeated
+    // failure means the interface is not working on this host.
+    void BeginObservationPeriod();
 
     uint64_t Generation() const { return generation_; }
 
     // Whether NO byte of [offsetFromBase, +bytes) in ANY window was stored to
-    // since the last BeginFrame. False -- hash -- on every doubt: unsupported,
+    // since the last BeginObservationPeriod. False -- hash -- on every doubt: unsupported,
     // short read, offset outside every mapping, zero-length span is true only
     // vacuously. Unmapped pages count clean: a page that was never faulted in
     // cannot have been stored to through this process.

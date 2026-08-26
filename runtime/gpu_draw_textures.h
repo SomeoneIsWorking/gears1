@@ -118,19 +118,24 @@ struct TextureUploader
 
     // --- soft-dirty texture staleness (catalog #137) ---------------------
 
-    // Opens the process tracker once and starts this frame's observation
-    // period. Runs whether or not THIS frame may skip, so generations advance
-    // uniformly under the interleaved A/B arm; `allowSkipThisFrame` is the arm
-    // permission, not the knob.
-    void BeginStalenessFrame(bool allowSkipThisFrame);
+    // Opens the process tracker and resolves the default/control/A-B policy
+    // while consuming the period that began after the previous frame's checks.
+    void BeginStalenessFrame(bool enabledByDefault, bool abEnabled, bool abArm);
+
+    // Clears soft-dirty bits only after the final texture check, beginning the
+    // period whose writes the next frame will consume. This ordering is the
+    // inter-frame staleness contract; clearing in BeginStalenessFrame loses the
+    // exact writes this mechanism exists to detect.
+    void EndStalenessFrame();
 
     // The frame report's texture-cache block, moved here so the counters it
     // names live beside the code that owns them.
     void Report();
 
-    // True when this frame may skip hashing a page-clean texture: the knob is
-    // on, the tracker proved itself at Open, and the A/B arm allows it.
+    // True when this frame may skip hashing a page-clean texture: policy allows
+    // it, the tracker proved itself at Open, and the A/B arm allows it.
     bool texDirtyEnabled = false;
+    bool texDirtyObservationActive = false;
     uint64_t texSkippedClean = 0; // textures served without re-hashing this frame
     uint64_t texSkippedBytes = 0; // ... and the bytes those hashes would have read
 };

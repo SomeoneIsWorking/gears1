@@ -97,7 +97,7 @@ bool GuestDirtyPages::Probe()
     const uintptr_t first = reinterpret_cast<uintptr_t>(probe);
     probe[0] = 1;
 
-    BeginFrame();
+    BeginObservationPeriod();
     bool ok = clearFailures == 0;
 
     std::vector<uint64_t> entries;
@@ -113,7 +113,7 @@ bool GuestDirtyPages::Probe()
         return false;
 
     // Leave the observation period consistent with a fresh clear.
-    BeginFrame();
+    BeginObservationPeriod();
     return clearFailures == 0;
 }
 
@@ -168,7 +168,7 @@ bool GuestDirtyPages::Open(const uint8_t *base, std::vector<uint64_t> windows, u
     return probeOk_;
 }
 
-void GuestDirtyPages::BeginFrame()
+void GuestDirtyPages::BeginObservationPeriod()
 {
     ++generation_;
     if (clearFd_ < 0)

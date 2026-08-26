@@ -12,6 +12,7 @@ FrameOptions ReadFrameOptions()
     FrameOptions out;
     out.applyDepthBias = !lucent::config::flag("DRAW_NODEPTHBIAS");
     out.applyTextureSigns = !lucent::config::flag("DRAW_NO_TEX_SIGNS");
+    out.trackTextureDirtyPages = !lucent::config::flag("DRAW_NO_TEX_DIRTY");
 
     const std::string &textureBindings = lucent::config::text("DRAW_TEX_BINDS");
     if (!textureBindings.empty())
