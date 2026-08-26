@@ -35,6 +35,7 @@
 #include <filesystem>
 #include <set>
 #include <string>
+#include <utility>
 #include <format>
 #include <vector>
 
@@ -43,6 +44,7 @@
 
 #include "gpu_device_features.h"
 #include "gpu_present_stage.h"
+#include "gpu_present_source.h"
 #include "gpu_shared_device.h"
 #include "gpu_queue_family.h"
 #include "gpu_queue_access.h"
@@ -100,7 +102,7 @@ const char *ResultName(VkResult r)
 
 struct Presenter
 {
-    static constexpr uint32_t kInFlight = 2;
+    static constexpr uint32_t kInFlight = gears::PresentSourceSlots::kCapacity;
 
     // --- host objects, touched only by the present thread -------------------
     SDL_Window *window = nullptr;
@@ -152,6 +154,7 @@ struct Presenter
     VkCommandBuffer commands[kInFlight]{};
     VkSemaphore acquired[kInFlight]{};
     VkFence submitted[kInFlight]{};
+    gears::PresentSourceSlots sources;
     std::vector<VkImage> images;
     // One semaphore per swapchain image: a present-wait semaphore stays in use
     // until the presentation engine is done with that image.
@@ -184,7 +187,6 @@ struct Presenter
     std::atomic<bool> running{false};
     std::atomic<bool> shuttingDown{false};
     bool presentedFrameChecked = false;
-    bool slotUsed[kInFlight]{};
 
     bool Start();
     void Stop();
@@ -881,8 +883,12 @@ bool Presenter::PresentOne(uint32_t sequence)
     const uint32_t slot = frameSlot;
     frameSlot = (frameSlot + 1) % kInFlight;
 
-    if (slotUsed[slot])
-        vkWaitForFences(device, 1, &submitted[slot], VK_TRUE, UINT64_MAX);
+    if (!sources.Begin(device, submitted[slot], slot))
+    {
+        gears::SharedGpuQueueAccess().WaitDeviceIdle(device);
+        sources.ResetAfterDeviceIdle();
+        return false;
+    }
 
     uint32_t imageIndex = 0;
     VkResult r = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX, acquired[slot],
@@ -893,8 +899,7 @@ bool Presenter::PresentOne(uint32_t sequence)
         // rather than presenting into a stale surface; the guest's next VdSwap
         // brings the next one.
         gears::SharedGpuQueueAccess().WaitDeviceIdle(device);
-        for (bool &used : slotUsed)
-            used = false;
+        sources.ResetAfterDeviceIdle();
         return CreateSwapchain();
     }
     if (r != VK_SUCCESS && r != VK_SUBOPTIMAL_KHR)
@@ -903,7 +908,6 @@ bool Presenter::PresentOne(uint32_t sequence)
         return false;
     }
 
-    slotUsed[slot] = true;
     vkResetFences(device, 1, &submitted[slot]);
     vkResetCommandBuffer(commands[slot], 0);
 
@@ -933,6 +937,7 @@ bool Presenter::PresentOne(uint32_t sequence)
     // copy through a staging buffer when it does not. Until the first frame is
     // drawn the swapchain image is cleared to black -- see the clear below.
     bool uploadedGuest = false;
+    gears::SharedFrameImage::Lease drawnLease;
 
     // PREFER A BLIT FROM THE DRAWN IMAGE. When the draw path adopted this device it
     // publishes the image it rendered into, already in TRANSFER_SRC_OPTIMAL and
@@ -944,64 +949,10 @@ bool Presenter::PresentOne(uint32_t sequence)
     // vkCmdBlitImage converts between formats component by component. If the colours
     // come out swapped, this comment is wrong and GEARS_PRESENT_DUMP will show it.
     {
-        // BLIT WHATEVER THE LATEST FRAME IS, even if it is the one already shown.
-        // The renderer runs on its own thread and produces frames more slowly than
-        // the guest swaps, so most presents have no NEW frame -- and a display does
-        // not go dark between two flips of the same picture, it keeps showing it.
-        // Skipping the blit here is what made the window flicker: roughly three of
-        // every four presents fell through to the clear below.
-        gears::SharedFrameImage drawn;
-        if (gears::AcquireSharedFrameImage(drawn) && drawn.width == extent.width &&
-            drawn.height == extent.height)
+        auto drawn = sources.RecordLatest(commands[slot], images[imageIndex], extent,
+                                          swapchainIsSrgb, srgbStage);
+        if (drawn.recorded)
         {
-            VkImageBlit blit{};
-            blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-            blit.srcOffsets[1] = {int32_t(drawn.width), int32_t(drawn.height), 1};
-            blit.dstOffsets[1] = {int32_t(extent.width), int32_t(extent.height), 1};
-            if (swapchainIsSrgb && srgbStage.Image() != VK_NULL_HANDLE)
-            {
-                // Two steps, and the second one converts nothing. Blit into the
-                // UNORM stage (channel order, no transfer function), then a
-                // size-compatible vkCmdCopyImage into the sRGB swapchain image,
-                // which moves bytes verbatim.
-                VkImageSubresourceRange one{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-                toDst.srcAccessMask = 0;
-                toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                toDst.srcQueueFamilyIndex = toDst.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-                toDst.image = srgbStage.Image();
-                toDst.subresourceRange = one;
-                vkCmdPipelineBarrier(commands[slot], VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                                     &toDst);
-                vkCmdBlitImage(commands[slot], drawn.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               srgbStage.Image(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
-                               VK_FILTER_NEAREST);
-                VkImageMemoryBarrier toSrc = toDst;
-                toSrc.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-                toSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
-                toSrc.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-                toSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
-                vkCmdPipelineBarrier(commands[slot], VK_PIPELINE_STAGE_TRANSFER_BIT,
-                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
-                                     &toSrc);
-                VkImageCopy copy{};
-                copy.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                copy.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-                copy.extent = {extent.width, extent.height, 1};
-                vkCmdCopyImage(commands[slot], srgbStage.Image(),
-                               VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, images[imageIndex],
-                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-            }
-            else
-            {
-                vkCmdBlitImage(commands[slot], drawn.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                               images[imageIndex], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
-                               VK_FILTER_NEAREST);
-            }
             if (drawn.sequence != lastBlittedFrame)
             {
                 ++freshFramesShown;
@@ -1015,6 +966,7 @@ bool Presenter::PresentOne(uint32_t sequence)
                 ++repeatedFramesShown;
             }
             uploadedGuest = true;
+            drawnLease = std::move(drawn.lease);
             if (!announcedBlit)
             {
                 announcedBlit = true;
@@ -1141,6 +1093,7 @@ bool Presenter::PresentOne(uint32_t sequence)
     submit.pSignalSemaphores = &presentReady[imageIndex];
     if (gears::SharedGpuQueueAccess().Submit(queue, 1, &submit, submitted[slot]) != VK_SUCCESS)
         return false;
+    sources.Submitted(slot, std::move(drawnLease));
 
     if (capturingThisFrame)
     {
@@ -1149,6 +1102,7 @@ bool Presenter::PresentOne(uint32_t sequence)
         // and is why it is not on by default.
         if (vkWaitForFences(device, 1, &submitted[slot], VK_TRUE, UINT64_MAX) == VK_SUCCESS)
         {
+            sources.Release(slot);
             if (selfCheckThisFrame)
                 CheckPresentedFrameLooksFinished(extent.width, extent.height, format);
             if (presentCaptureWanted > 0 && sequence >= presentCaptureAfter)
@@ -1164,6 +1118,8 @@ bool Presenter::PresentOne(uint32_t sequence)
                          " the fence wait failed, so nothing was written -- do not read the"
                          " absence of a file as an empty frame");
             presentCaptureWanted = 0;
+            gears::SharedGpuQueueAccess().WaitDeviceIdle(device);
+            sources.ResetAfterDeviceIdle();
         }
     }
 
@@ -1177,13 +1133,14 @@ bool Presenter::PresentOne(uint32_t sequence)
     if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR)
     {
         gears::SharedGpuQueueAccess().WaitDeviceIdle(device);
-        for (bool &used : slotUsed)
-            used = false;
+        sources.ResetAfterDeviceIdle();
         return CreateSwapchain();
     }
     if (r != VK_SUCCESS)
     {
         lucent::warn("present", "vkQueuePresentKHR ({})", ResultName(r));
+        gears::SharedGpuQueueAccess().WaitDeviceIdle(device);
+        sources.ResetAfterDeviceIdle();
         return false;
     }
     return true;

@@ -54,6 +54,11 @@ FrameContract g_frameContract;
 bool PublishSharedFrameImage(const SharedFrameImage &frame)
 {
     std::lock_guard<std::mutex> guard(g_frameMutex);
+    if (frame.image == VK_NULL_HANDLE || !frame.lease.Valid())
+    {
+        lucent::error("gpu", "shared frame publication rejected an unleased image");
+        return false;
+    }
     const FrameTransition transition = g_frameContract.Publish(FrameId{frame.sequence});
     if (transition != FrameTransition::kAdvanced)
     {
@@ -77,6 +82,12 @@ bool AcquireSharedFrameImage(SharedFrameImage &out)
     lucent::error("gpu", "shared frame acquisition rejected sequence {} (transition {})",
                   out.sequence, static_cast<unsigned>(transition));
     return false;
+}
+
+void ClearSharedFrameImage()
+{
+    std::lock_guard<std::mutex> guard(g_frameMutex);
+    g_frame = {};
 }
 
 bool SharedGpuPublished()

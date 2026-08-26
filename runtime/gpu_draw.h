@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -140,6 +141,17 @@ struct FrameDrawInputs
 // Reports per-frame: draws issued vs total, distinct shader pairs, and any draw
 // it could not issue with the reason. Returns true if the frame rendered.
 bool RenderFrame(const FrameDrawInputs &in);
+
+// Submits a live frame without making the render thread wait for the GPU. The
+// completion runs after the frame's fence and all resources it references have
+// retired. Diagnostic frames transparently take the synchronous path and still
+// obey the same completion contract.
+using FrameRenderCompletion = std::function<void(bool)>;
+bool SubmitFrameRender(const FrameDrawInputs &in, FrameRenderCompletion &&completion);
+
+// Waits for every frame accepted by SubmitFrameRender. Teardown, capture, and
+// renderer-reset boundaries use this; ordinary live frame progress does not.
+bool WaitForRendererGpuIdle();
 
 // Drops everything the renderer keeps between frames -- surfaces, pipelines,
 // shader translations, caches -- so the next RenderFrame rebuilds from nothing.

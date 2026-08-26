@@ -21,6 +21,8 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
+#include <utility>
 
 #include <vulkan/vulkan.h>
 
@@ -57,21 +59,38 @@ bool AdoptSharedGpu(SharedGpu &out);
 // own the image lives on a different device and is useless here, which is the
 // headless case.
 //
-// The image is left in TRANSFER_SRC_OPTIMAL by the draw path, which also waits on
-// its own fence before returning, so the contents are complete by the time this is
-// published. `sequence` is the original guest-present identity carried unchanged
-// through the renderer. The shared-frame contract rejects zero, duplicate, and
-// regressive publications rather than allowing scan-out to invent another clock.
+// The image is left in TRANSFER_SRC_OPTIMAL by the draw path and published only
+// from its ordered producer-fence completion. `sequence` is the executing swap
+// packet's original identity carried unchanged through the renderer. The shared-
+// frame contract rejects zero, duplicate, and regressive publications rather
+// than allowing scan-out to invent another clock.
 struct SharedFrameImage
 {
     VkImage image = VK_NULL_HANDLE;
     uint32_t width = 0;
     uint32_t height = 0;
     uint64_t sequence = 0;
+
+    // Retains the scan-out allocation independently of the renderer cache.
+    // Copies are intentional: the published latest frame and every presenter
+    // submission each keep one until their own lifetime boundary retires.
+    class Lease
+    {
+      public:
+        Lease() = default;
+        explicit Lease(std::shared_ptr<void> owner) : owner_(std::move(owner)) {}
+
+        [[nodiscard]] bool Valid() const { return owner_ != nullptr; }
+        void Reset() { owner_.reset(); }
+
+      private:
+        std::shared_ptr<void> owner_;
+    } lease;
 };
 
 bool PublishSharedFrameImage(const SharedFrameImage &frame);
 bool AcquireSharedFrameImage(SharedFrameImage &out);
+void ClearSharedFrameImage();
 
 // Whether anything has been published yet, without taking a copy. Used by the
 // teardown paths, which must destroy the device exactly once -- whoever adopted it

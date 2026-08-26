@@ -29,6 +29,8 @@ FORMATTED = [
     "runtime/gpu_device_features.h",
     "runtime/gpu_draw.cpp",
     "runtime/gpu_draw.h",
+    "runtime/gpu_draw_api.cpp",
+    "runtime/gpu_draw_arena.cpp",
     "runtime/gpu_draw_arena.h",
     "runtime/gpu_draw_indices.cpp",
     "runtime/gpu_draw_indices.h",
@@ -40,6 +42,7 @@ FORMATTED = [
     "runtime/gpu_draw_pipelines.h",
     "runtime/gpu_draw_point_geometry.cpp",
     "runtime/gpu_draw_prepared.h",
+    "runtime/gpu_draw_probe.h",
     "runtime/gpu_draw_reinterpret.cpp",
     "runtime/gpu_draw_renderer.h",
     "runtime/gpu_draw_resolve.cpp",
@@ -57,7 +60,14 @@ FORMATTED = [
     "runtime/gpu_draw_xlate.cpp",
     "runtime/gpu_draw_xlate.h",
     "runtime/gpu_surface_format_capacity.h",
+    "runtime/gpu_frame_capacity.h",
+    "runtime/gpu_frame_cleanup.cpp",
+    "runtime/gpu_frame_cleanup.h",
+    "runtime/gpu_frame_slots.cpp",
+    "runtime/gpu_frame_slots.h",
     "runtime/gpu_present.cpp",
+    "runtime/gpu_present_source.cpp",
+    "runtime/gpu_present_source.h",
     "runtime/gpu_present_stage.cpp",
     "runtime/gpu_present_stage.h",
     "runtime/gpu_queue_access.cpp",
@@ -71,6 +81,8 @@ FORMATTED = [
     "runtime/gpu_scanout.h",
     "runtime/gpu_scanout_gamma.cpp",
     "runtime/gpu_scanout_gamma.h",
+    "runtime/gpu_shared_device.cpp",
+    "runtime/gpu_shared_device.h",
     "runtime/gpu_renderer_lifetime.cpp",
     "runtime/graphics_probe.cpp",
     "runtime/graphics_probe.h",
@@ -106,6 +118,7 @@ FORMATTED = [
     "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_render_retirement.cpp",
+    "tests/test_shared_frame_image.cpp",
     "tests/test_scanout_gamma.cpp",
     "tests/test_spirv_clamp.cpp",
     "tests/test_swapchain_format.cpp",
@@ -125,6 +138,8 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/frame_contract.cpp",
     "runtime/frame_queue.cpp",
     "runtime/gpu_draw.cpp",
+    "runtime/gpu_draw_api.cpp",
+    "runtime/gpu_draw_arena.cpp",
     "runtime/gpu_draw_indices.cpp",
     "runtime/gpu_draw_options.cpp",
     "runtime/gpu_draw_pixels.cpp",
@@ -139,7 +154,10 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/gpu_draw_uniforms.cpp",
     "runtime/gpu_draw_vertexfetch.cpp",
     "runtime/gpu_draw_xlate.cpp",
+    "runtime/gpu_frame_cleanup.cpp",
+    "runtime/gpu_frame_slots.cpp",
     "runtime/gpu_present.cpp",
+    "runtime/gpu_present_source.cpp",
     "runtime/gpu_present_stage.cpp",
     "runtime/gpu_queue_access.cpp",
     "runtime/gpu_retirement.cpp",
@@ -147,6 +165,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/gpu_packet_memory.cpp",
     "runtime/gpu_scanout.cpp",
     "runtime/gpu_scanout_gamma.cpp",
+    "runtime/gpu_shared_device.cpp",
     "runtime/gpu_renderer_lifetime.cpp",
     "runtime/input.cpp",
     "runtime/native_pass.cpp",
@@ -170,6 +189,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_render_retirement.cpp",
+    "tests/test_shared_frame_image.cpp",
     "tests/test_scanout_gamma.cpp",
     "tests/test_spirv_clamp.cpp",
     "tests/test_swapchain_format.cpp",
@@ -243,6 +263,12 @@ def selftest():
         raise AssertionError("missing tools must be refused")
     assert "runtime/gpu_draw_reinterpret.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_targets.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_draw_api.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_draw_arena.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_frame_cleanup.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_frame_slots.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_present_source.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_shared_device.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_draw_sample_layout.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_draw_untile.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_surface_format_capacity.cpp" in TIDY_TRANSLATION_UNITS
@@ -254,6 +280,7 @@ def selftest():
     assert "runtime/gpu_renderer_capacity.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_queue_access.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_render_retirement.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_shared_frame_image.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/title_executable.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/generated_title_profile.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/guest_texture_hash.cpp" in TIDY_TRANSLATION_UNITS

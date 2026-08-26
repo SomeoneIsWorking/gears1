@@ -139,6 +139,8 @@ bool RenderTargetCache::GetSurfaceTarget(uint32_t base, const DrawSampleLayout &
                      "render-target cache: promoting persistent surface {:#x} from host"
                      " format {} to {} because a later frame added guest format capacity",
                      base, int(it->second.hostFormat), int(requiredHostFormat));
+        if (!R.frameSlots.WaitInFlight())
+            return false;
         ReleaseSurfaceTarget(R.device, it->second);
         targets.erase(it);
     }

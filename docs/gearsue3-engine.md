@@ -100,29 +100,22 @@ the renderer work through stale images. This bounds presentation latency and
 prevents an old completion from being mistaken for a newer frame. It does not
 increase GPU throughput and is not evidence of a higher frame rate.
 
-`GpuRetirement` is the tested owner intended for a bounded set of native frame
-resource slots. It polls completion during normal progress and waits only for an
-explicit teardown drain. It is not integrated into the Vulkan renderer yet.
-That integration requires per-slot command buffers, fences or timeline values,
-descriptor/arena/readback resources, and an explicit GPU-ready/consumer-complete
-contract for shared scan-out images. `GpuQueueAccess` now serializes every shared
-queue submission, presentation, queue-idle operation, and device-idle barrier as
-Vulkan requires, but it does not provide those per-image dependencies. The
-existing generation-tagged `RenderRetirement` remains the shipping
-mechanism that delays guest `EVENT_WRITE_SHD` publication; the two types solve
-different lifetime boundaries.
+`GpuRetirement` now backs two native Vulkan frame slots. Each slot owns its
+command buffer, fence, descriptors, arena, readback, and mapped guest SSBO; an
+autonomous completion pump retires them in submission order. Ordinary live
+frames return after CPU submission, while report/probe/replay frames explicitly
+wait for their readback. `GpuQueueAccess` remains the shared queue's external-
+synchronization owner. Generation-tagged `RenderRetirement` advances only from
+the ordered GPU completion, so guest `EVENT_WRITE_SHD` publication cannot race
+the memory its frame still reads.
 
-The required slot split is broader than command buffers and fences. Each slot
-must own the draw, resolve, reinterpret, and depth-alias descriptor pools; the
-arena and fallback allocations; readback; the mapped guest SSBO; and deferred
-texture/upload cleanup. The gamma LUT buffer is also mutable GPU input and must
-be image- or slot-local. Completion needs an autonomous pump because polling
-only when another frame arrives can deadlock a title waiting for its retired
-guest fence. Shared scan-out must publish a retained lease only after GPU
-completion, and presenter submission must retain that lease until its own fence
-retires. With two presenter frames in flight, retained-latest, recording, and
-presenter-held lifetimes require four scan-out images in the worst case; the
-current alternating pair cannot be reused safely by an overlapping renderer.
+Deferred texture/upload/fallback cleanup runs at the producer fence. Gamma LUT
+storage is image-local. Shared scan-out has five retained images: publication
+occurs only after producer completion, and each presenter slot retains its source
+lease until the presenter fence retires. The capacity is derived from two
+renderer slots, two presenter submissions, and the independently retained latest
+publication, so recording can continue without overwriting an image still in
+use. Device-idle transitions release presenter leases before teardown.
 
 ## Performance first, 60 fps override last
 

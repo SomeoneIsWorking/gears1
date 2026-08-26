@@ -160,10 +160,10 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 ### gpu-retirement — Publish guest GPU fences only after native rendering retires
 - status: re-verified
 - deps: cmd-processor, draw-backend-live
-- evidence: Catalog #118 and #120: the larger-room corruption disappears when EVENT_WRITE_SHD publication follows renderer completion, while the first synchronous wait implementation collapsed the same live heavy phase to 5 fps. Generation-tagged asynchronous publication preserves the ordering without blocking the command processor; test_render_retirement proves an older completion cannot publish the newer pending frame fence. The bounded one-frame queue reaches 17-21 fps in the measured transition path.
-- where: runtime/gpu_packet_memory.cpp; runtime/render_thread.cpp; runtime/render_retirement.h; tests/test_render_retirement.cpp
+- evidence: Catalog #118 and #120 established that EVENT_WRITE_SHD must follow renderer completion and that blocking the command processor collapses the heavy path to 5 fps. Catalog #139 integrates two Vulkan frame slots plus an autonomous ordered completion pump: guest retirement now advances from the producer fence rather than CPU submission. A 25-second real headless-present run crossed the 570-frame load transition, sustained 29.7-30.0 completed frames/s with zero queue drops after warm-up, and emitted no Vulkan validation, shared-image, or publication errors. test_render_retirement still proves that an older completion cannot publish a newer generation.
+- where: runtime/gpu_packet_memory.cpp; runtime/render_thread.cpp; runtime/render_retirement.h; runtime/gpu_frame_slots.*; tests/test_render_retirement.cpp
 - gap:
-- notes: This is generation-specific guest-fence publication, not global renderer idleness and not a timed stall. The separately unit-tested `runtime/gpu_retirement.*` slot owner is not integrated into Vulkan yet; it must not be cited as shipping retirement or performance evidence. The recompiled PM4 route is compatibility and oracle infrastructure for the shared GearsUE3 native RHI frontend.
+- notes: This is generation-specific guest-fence publication, not global renderer idleness and not a timed stall. Diagnostics remain synchronous by contract. The recompiled PM4 route is compatibility and oracle infrastructure for the shared GearsUE3 native RHI frontend.
 
 
 ## kernel
@@ -317,12 +317,12 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - notes: The identity record is the first boundary, not a provisioner completion claim. Generate every disc-derived artifact under the content-addressed ignored directory and write a tool/input receipt. Unknown revisions refuse.
 
 ### frame-delivery-contract — Carry one guest frame identity through a bounded latest-frame pipeline
-- status: in-progress
+- status: re-verified
 - deps: gpu-retirement
-- evidence: Production-interface synthetic tests cover `FrameQueue`'s one-active/latest-pending replacement and stale-completion refusal, `FrameContract`'s non-zero monotonic publication and no-stale/no-unpublished presentation rules, `GpuRetirement`'s bounded generation-checked leases, polling, teardown drain, error retention, and device-loss cleanup, and `GpuQueueAccess`'s serialization under concurrent callers. The guest present sequence is now passed into scan-out rather than replaced by a scan-out-local counter, and every shared renderer/presenter queue operation goes through the external-synchronization owner. A current 101-frame same-process replay, excluding 12 cold frames and the final report, measured median 53 ms total / 36.5 ms draw loop / 14 ms submit+wait. Texture safety re-hashed 49.39 MiB in 3.9 ms; removing it would reintroduce stale movies, so the stable submit wait remains the bounded overlap target.
-- where: runtime/frame_queue.*; runtime/frame_contract.*; runtime/gpu_queue_access.*; runtime/gpu_retirement.*; runtime/render_thread.*; runtime/gpu_scanout.*; runtime/gpu_shared_device.*; tests/test_frame_queue.cpp; tests/test_frame_contract.cpp; tests/test_gpu_queue_access.cpp; tests/test_gpu_retirement.cpp
-- gap: The new GPU slot retirement owner is not integrated into the Vulkan renderer. Command buffer/fence/descriptor/arena/readback and fallback cleanup remain single-frame resources, and shared images need explicit GPU-ready and consumer-complete signaling. No real-run performance or visual-glitch result has been measured for the latest-pending policy.
-- notes: Replacing stale pending CPU work bounds latency but cannot raise title production or GPU throughput. `RenderRetirement`'s verified generation-specific guest fence publication remains a separate shipping contract.
+- evidence: Production tests cover the latest-pending CPU queue, monotonic frame contract, bounded GPU retirement policy, queue serialization, and retained shared-frame ownership. Two Vulkan slots now own every frame-mutable renderer resource and defer transient cleanup to ordered producer-fence completion. Five scan-out images cover the exact bounded lifetime sum: two renderer slots, two presenter slots, and the independently retained latest publication. The first live run exposed that frame identity incorrectly sampled the latest global VdSwap count rather than the executing packet; after binding identity to that packet's sequence, a 25-second validated headless-present run emitted no duplicate/regressive publications or slot exhaustion, presented 596 new frames of its first 600, and sustained 29.7-30.0 completed frames/s with zero renderer-queue drops after warm-up. The synchronous chapter-45 replay remains pixel-identical at SHA-256 `3b34082ab05198fa4733a50c7fe6e671b32c3871be38f7b563154ec741f80c25`.
+- where: runtime/frame_queue.*; runtime/frame_contract.*; runtime/gpu_queue_access.*; runtime/gpu_retirement.*; runtime/gpu_frame_slots.*; runtime/gpu_frame_cleanup.*; runtime/render_thread.*; runtime/gpu_scanout.*; runtime/gpu_shared_device.*; runtime/gpu_present_source.*; tests/test_frame_queue.cpp; tests/test_frame_contract.cpp; tests/test_gpu_queue_access.cpp; tests/test_gpu_retirement.cpp; tests/test_shared_frame_image.cpp
+- gap: The live title remains capped near 30 produced frames/s, and this run does not establish a sub-16.67 ms GPU budget or 60 Hz title simulation.
+- notes: CPU queue replacement, GPU slot overlap, guest retirement, and presenter consumption are four distinct lifetime boundaries. Diagnostic report/probe/replay frames wait explicitly and do not use the deferred readback path.
 
 ### title-60hz-enhancement — Produce title simulation and frames at 60 Hz
 - status: todo
@@ -351,9 +351,9 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 ### renderer-60hz-budget — Render steady gameplay below 16.67 ms per produced frame
 - status: todo
 - deps: frame-delivery-contract, native-rhi-bypass
-- evidence: A current 101-frame same-process chapter-45 replay, after 12 cold frames and excluding the report frame, measured median 53 ms total, 36.5 ms CPU draw loop, and 14 ms submit+wait. The run was noisy (p10/p90 total 43/94 ms), so these are architecture-scale baselines, not a sub-millisecond optimization claim. The latest-frame queue changes latency policy, not throughput, and the unconditional one-frame fence wait prevents CPU/GPU overlap.
+- evidence: Before slot integration, a 101-frame chapter-45 replay measured median 53 ms total, 36.5 ms CPU draw loop, and 14 ms submit+wait. Catalog #139 removes that unconditional wait from ordinary live frames: the validated headless-present path sustains the title's current 29.7-30.0 frames/s production cap with 5-7 ms of renderer CPU preparation/submission and zero queue drops. This does not measure GPU duration and therefore does not prove a 60 fps budget.
 - where: runtime/gpu_draw*; runtime/frame_queue.*; runtime/gpu_retirement.*; native RHI frontend; headless frame-time reports
-- gap: Integrate bounded GPU resource slots and the native RHI path, then demonstrate a sustained sub-16.67 ms frame budget with correct retirement and no dropped evidence frames. No title currently passes this gate.
+- gap: Measure GPU duration independently, integrate the native RHI path, remove the separate title-side 30 Hz production limit, then demonstrate sustained gameplay below 16.67 ms with correct retirement and no dropped evidence frames. No title currently passes this gate.
 - notes: A 60 Hz vblank, a repeated presentation, or an average inflated by menu frames is not a 60 fps gameplay result. Measure produced gameplay frames and preserve the compatibility arm for parity.
 
 ### multi-title-conformance — Verify each Gears UE3 title independently
