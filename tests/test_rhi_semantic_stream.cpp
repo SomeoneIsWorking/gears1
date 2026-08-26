@@ -7,9 +7,14 @@
 
 int main()
 {
+    using gears::CompareRhiBindingState;
     using gears::CompareRhiDrawPacket;
+    using gears::RhiBindingEvidenceResult;
+    using gears::RhiBindingStateEvidence;
     using gears::RhiDrawEvidenceResult;
     using gears::RhiDrawPacketEvidence;
+    using gears::RhiSemanticBinding;
+    using gears::RhiSemanticBindingKind;
     using gears::RhiSemanticDraw;
     using gears::RhiSemanticDrawKind;
 
@@ -51,17 +56,45 @@ int main()
     altered.sourceSelect = 2;
     assert(CompareRhiDrawPacket(indexed, altered) == RhiDrawEvidenceResult::Mismatch);
 
+    const RhiSemanticBinding textureBinding{
+        .kind = RhiSemanticBindingKind::Texture,
+        .slot = 3,
+        .object = 0x40102030,
+    };
+    const RhiBindingStateEvidence matchingBinding{
+        .present = true,
+        .observedObject = 0x40102030,
+        .descriptor = {1, 2, 3, 4, 5, 6},
+        .descriptorDwords = 6,
+    };
+    assert(CompareRhiBindingState(textureBinding, matchingBinding) ==
+           RhiBindingEvidenceResult::Match);
+    RhiBindingStateEvidence alteredBinding = matchingBinding;
+    alteredBinding.observedObject ^= 4;
+    assert(CompareRhiBindingState(textureBinding, alteredBinding) ==
+           RhiBindingEvidenceResult::Mismatch);
+    alteredBinding = matchingBinding;
+    alteredBinding.present = false;
+    assert(CompareRhiBindingState(textureBinding, alteredBinding) ==
+           RhiBindingEvidenceResult::Missing);
+
     assert(setenv("GEARS_NATIVE_RHI_OBSERVE", "1", 1) == 0);
     lucent::config::set_prefix("GEARS_");
     gears::ObserveRhiSemanticDraw(autoIndexed, matchingAuto);
+    gears::ObserveRhiSemanticBinding(textureBinding, matchingBinding);
     gears::ObserveRhiSemanticDraw(indexed, altered);
     const gears::RhiSemanticFrame frame = gears::SealRhiSemanticFrame(17);
     assert(frame.frameSequence == 17);
     assert(frame.draws.size() == 2);
-    assert(frame.draws[0].sequence + 1 == frame.draws[1].sequence);
+    assert(frame.bindings.size() == 1);
+    assert(frame.draws[0].sequence + 1 == frame.bindings[0].sequence);
+    assert(frame.bindings[0].sequence + 1 == frame.draws[1].sequence);
     assert(frame.matched == 1);
     assert(frame.missing == 0);
     assert(frame.mismatched == 1);
+    assert(frame.bindingsMatched == 1);
+    assert(frame.bindingsMissing == 0);
+    assert(frame.bindingsMismatched == 0);
 
     return 0;
 }

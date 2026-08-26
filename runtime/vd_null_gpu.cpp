@@ -39,6 +39,7 @@
 #include "gpu_draw.h"
 #include "gpu_endian.h"
 #include "render_thread.h"
+#include "rhi_semantic_stream.h"
 #include "frame_capture.h"
 #include "frame_content.h"
 #include "hle_d3d.h"
@@ -1876,11 +1877,6 @@ struct CommandProcessor
                     (frameCount > 0 ? framesRendered >= frameCount : reportCadenceElapsed);
         if (in.report && frameCount <= 0 && reportEvery > 0)
             reportedAtPresent = guestPresents / uint64_t(reportEvery);
-        // The title's own texture-slot table, on exactly the frames the renderer
-        // censuses its own texture bases -- the two lines are meant to be read
-        // next to each other.
-        if (in.report)
-            gears::ReportTitleTextureSlots();
         // Carry guest-present identity through every frame; scan-out must not mint its own clock.
         in.sequence = long(guestPresents);
 
@@ -3204,7 +3200,7 @@ void __imp__VdSwap(PPCContext &__restrict ctx, uint8_t *)
     }
     gears::HleDumpCensus("swap");
     gears::HleWorkerCensus();
-    gears::HleShaderCaptureFrame(frame);
+    gears::ReportRhiSemanticFrame(frame);
     // Drawing is progress even when the guest is making no kernel calls, so the
     // stall detector does not report a busy renderer as a dead guest.
     gears::NoteGuestProgress("draw");

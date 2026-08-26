@@ -37,6 +37,14 @@ How they were found, in order:
    both (`lwz r31, 0x3084(r30)` / `lwz r29, 0x3080(r30)`) and emits the
    sequencer loads from them.
 
+The exhaustive `GEARS_SHADER_ARGSCAN` instrument was retired after establishing
+this result. Its dozens of strong wrappers no longer add branches to the normal
+runtime. `runtime/titles/gears1/rhi_bindings.cpp` now owns only the two exact
+setter bindings, preserves their `__imp__` bodies, and under
+`GEARS_NATIVE_RHI_OBSERVE=1` compares each requested object against the device
+field written by the original body. A headless run through frame 120 matched
+118/118 calls for each setter with no missing observations or mismatches.
+
 **The D3D shader object is NOT the bare container.** The container word sits at
 +0x28 inside a pixel-shader object and at +0x368 inside a vertex-shader one, and
 the object carries further fields past 0x380. A detector that expects the magic
