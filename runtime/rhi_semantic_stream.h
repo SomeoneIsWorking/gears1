@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -41,6 +42,35 @@ enum class RhiDrawEvidenceResult : std::uint8_t
     Mismatch,
 };
 
+enum class RhiSemanticBindingKind : std::uint8_t
+{
+    Texture,
+    PixelShader,
+    VertexShader,
+};
+
+struct RhiSemanticBinding
+{
+    RhiSemanticBindingKind kind = RhiSemanticBindingKind::Texture;
+    std::uint32_t slot = 0;
+    std::uint32_t object = 0;
+};
+
+struct RhiBindingStateEvidence
+{
+    bool present = false;
+    std::uint32_t observedObject = 0;
+    std::array<std::uint32_t, 6> descriptor{};
+    std::uint32_t descriptorDwords = 0;
+};
+
+enum class RhiBindingEvidenceResult : std::uint8_t
+{
+    Match,
+    Missing,
+    Mismatch,
+};
+
 struct RhiObservedDraw
 {
     std::uint64_t sequence = 0;
@@ -49,19 +79,35 @@ struct RhiObservedDraw
     RhiDrawEvidenceResult evidence = RhiDrawEvidenceResult::Missing;
 };
 
+struct RhiObservedBinding
+{
+    std::uint64_t sequence = 0;
+    RhiSemanticBinding binding;
+    RhiBindingStateEvidence state;
+    RhiBindingEvidenceResult evidence = RhiBindingEvidenceResult::Missing;
+};
+
 struct RhiSemanticFrame
 {
     std::uint64_t frameSequence = 0;
     std::vector<RhiObservedDraw> draws;
+    std::vector<RhiObservedBinding> bindings;
     std::uint64_t matched = 0;
     std::uint64_t missing = 0;
     std::uint64_t mismatched = 0;
+    std::uint64_t bindingsMatched = 0;
+    std::uint64_t bindingsMissing = 0;
+    std::uint64_t bindingsMismatched = 0;
 };
 
 [[nodiscard]] bool RhiSemanticObservationEnabled();
 [[nodiscard]] RhiDrawEvidenceResult CompareRhiDrawPacket(const RhiSemanticDraw &draw,
                                                          const RhiDrawPacketEvidence &packet);
+[[nodiscard]] RhiBindingEvidenceResult CompareRhiBindingState(const RhiSemanticBinding &binding,
+                                                              const RhiBindingStateEvidence &state);
 void ObserveRhiSemanticDraw(const RhiSemanticDraw &draw, const RhiDrawPacketEvidence &packet);
+void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
+                               const RhiBindingStateEvidence &state);
 [[nodiscard]] RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence);
 void ReportRhiSemanticFrame(std::uint64_t frameSequence);
 

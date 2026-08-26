@@ -1,6 +1,7 @@
 # The D3D seam — reconnaissance for the HLE graphics backend
 
-Status: reconnaissance only, no backend code. Everything below is either
+Status: reconnaissance plus a diagnostic semantic-observation seam; no native
+bypass. Everything below is either
 verified against raw disassembly / live runs (marked **V**) or explicitly
 flagged as unverified inference (**?**). Method and evidence trails are in
 catalog entries #12–#15.
@@ -59,10 +60,12 @@ Read out of `PPC_FUNC_IMPL(__imp__sub_82220858)`:
   `device + 13148` / `+ 13152` that spills through `sub_8222ECC0`, gated on
   `device + 10780` / `+ 10784`.
 
-Status: **observed, not replaced**. `runtime/hle_d3d.cpp` wraps it, super-calls the
-guest body unchanged, and records what the title put in each slot. The release
-bookkeeping is why it is not native yet -- a wrong release list corrupts the
-title's heap, and there is no payoff until something reads this state natively.
+Status: **observed, not replaced**. The exact-revision adapter in
+`runtime/titles/gears1/rhi_bindings.cpp` wraps it, super-calls the guest body
+unchanged, then validates the requested texture object against the post-call
+device slot and publishes the six-dword fetch shadow. The release bookkeeping is
+why it is not native yet -- a wrong release list corrupts the title's heap, and
+there is no payoff until something reads this state natively.
 
 CROSS-CHECKS SO FAR. Movie phase: the title's slots 0/1/2 hold `0x6f000 /
 0x7e000 / 0x83000`, and the renderer's `frame texture bases` line for that frame
@@ -87,7 +90,7 @@ points:
 | 0x8222DA48 | bound vertex streams | direct auto-index `DRAW_INDX`; commits through device+0x28 |
 | 0x8222DE50 | bound vertex and index buffers | direct DMA-index `DRAW_INDX`; commits through device+0x28 |
 
-`runtime/titles/gears1/rhi_draw_bindings.cpp` is the exact-revision binding.
+`runtime/titles/gears1/rhi_bindings.cpp` is the exact-revision binding.
 It preserves and calls every `__imp__sub_*` body, then publishes a typed draw
 to the title-neutral `runtime/rhi_semantic_stream.*` observation seam. With
 `GEARS_NATIVE_RHI_OBSERVE=1`, a headless menu walk through frame 1712 compared
@@ -211,9 +214,10 @@ The offline corpus above is a corpus of **templates**, and it is not what runs.
 Both questions left open — where shaders are bound, and which ones — are now
 answered by measurement. Full evidence in catalog entries #21 and #22.
 
-**Where they are bound.** Two D3D API setters, identified by probing all 51
-D3D-range functions reachable from the UE3 RHI zone and keeping the ones
-measurably handed a shader object (`GEARS_SHADER_ARGSCAN=1`):
+**Where they are bound.** Two D3D API setters were identified by historically
+probing all 51 D3D-range functions reachable from the UE3 RHI zone and keeping
+the ones measurably handed a shader object. That exhaustive argument scan is now
+retired; its result and method remain in catalog #21:
 
 | Address | Role | Device field | Dirty bit(s) at device+0x10 |
 |---|---|---|---|
@@ -226,6 +230,13 @@ only type-1 (vertex) ones. The flush emitter at 0x82234xxx reads both fields and
 emits the sequencer load. **The shader object is not the bare container**: the
 0x102A11tt word sits at +0x28 inside a pixel-shader object and +0x368 inside a
 vertex-shader one. **V**
+
+The Gears 1 adapter now super-calls both exact setters and compares their
+requested objects against device+0x3080/+0x3084 under
+`GEARS_NATIVE_RHI_OBSERVE=1`. A headless run through frame 120 matched all 118
+pixel-shader and 118 vertex-shader calls, with zero missing observations or
+mismatches. Together with 734/734 texture matches, this validates the binding
+offsets while leaving the authoritative patched-microcode path below intact.
 
 **The authoritative bind point is lower.** The GPU is not given the container's
 microcode; it is given a patched copy, via the PM4 sequencer loads

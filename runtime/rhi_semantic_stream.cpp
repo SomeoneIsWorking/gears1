@@ -15,7 +15,8 @@ namespace
 struct RhiSemanticStreamState
 {
     std::mutex mutex;
-    std::vector<RhiObservedDraw> pending;
+    std::vector<RhiObservedDraw> pendingDraws;
+    std::vector<RhiObservedBinding> pendingBindings;
     std::uint64_t nextSequence = 1;
 };
 
@@ -27,7 +28,12 @@ struct RhiSemanticReportTotals
     std::uint64_t matched = 0;
     std::uint64_t missing = 0;
     std::uint64_t mismatched = 0;
-    std::array<std::uint64_t, 4> kinds{};
+    std::array<std::uint64_t, 4> drawKinds{};
+    std::uint64_t bindings = 0;
+    std::uint64_t bindingsMatched = 0;
+    std::uint64_t bindingsMissing = 0;
+    std::uint64_t bindingsMismatched = 0;
+    std::array<std::uint64_t, 3> bindingKinds{};
 };
 
 RhiSemanticReportTotals g_reportTotals;
@@ -50,6 +56,20 @@ RhiSemanticReportTotals g_reportTotals;
         return "bound-vertices";
     case RhiSemanticDrawKind::BoundIndices:
         return "bound-indices";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] const char *BindingKindName(RhiSemanticBindingKind kind)
+{
+    switch (kind)
+    {
+    case RhiSemanticBindingKind::Texture:
+        return "texture";
+    case RhiSemanticBindingKind::PixelShader:
+        return "pixel-shader";
+    case RhiSemanticBindingKind::VertexShader:
+        return "vertex-shader";
     }
     return "unknown";
 }
@@ -80,16 +100,39 @@ RhiDrawEvidenceResult CompareRhiDrawPacket(const RhiSemanticDraw &draw,
     return RhiDrawEvidenceResult::Match;
 }
 
+RhiBindingEvidenceResult CompareRhiBindingState(const RhiSemanticBinding &binding,
+                                                const RhiBindingStateEvidence &state)
+{
+    if (!state.present)
+        return RhiBindingEvidenceResult::Missing;
+    if (state.observedObject != binding.object)
+        return RhiBindingEvidenceResult::Mismatch;
+    return RhiBindingEvidenceResult::Match;
+}
+
 void ObserveRhiSemanticDraw(const RhiSemanticDraw &draw, const RhiDrawPacketEvidence &packet)
 {
     if (!RhiSemanticObservationEnabled())
         return;
 
     std::lock_guard guard(g_stream.mutex);
-    g_stream.pending.push_back({.sequence = g_stream.nextSequence++,
-                                .draw = draw,
-                                .packet = packet,
-                                .evidence = CompareRhiDrawPacket(draw, packet)});
+    g_stream.pendingDraws.push_back({.sequence = g_stream.nextSequence++,
+                                     .draw = draw,
+                                     .packet = packet,
+                                     .evidence = CompareRhiDrawPacket(draw, packet)});
+}
+
+void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
+                               const RhiBindingStateEvidence &state)
+{
+    if (!RhiSemanticObservationEnabled())
+        return;
+
+    std::lock_guard guard(g_stream.mutex);
+    g_stream.pendingBindings.push_back({.sequence = g_stream.nextSequence++,
+                                        .binding = binding,
+                                        .state = state,
+                                        .evidence = CompareRhiBindingState(binding, state)});
 }
 
 RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
@@ -97,8 +140,10 @@ RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
     RhiSemanticFrame frame{.frameSequence = frameSequence};
     {
         std::lock_guard guard(g_stream.mutex);
-        frame.draws = std::move(g_stream.pending);
-        g_stream.pending.clear();
+        frame.draws = std::move(g_stream.pendingDraws);
+        frame.bindings = std::move(g_stream.pendingBindings);
+        g_stream.pendingDraws.clear();
+        g_stream.pendingBindings.clear();
     }
     for (const RhiObservedDraw &observed : frame.draws)
     {
@@ -115,6 +160,21 @@ RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
             break;
         }
     }
+    for (const RhiObservedBinding &observed : frame.bindings)
+    {
+        switch (observed.evidence)
+        {
+        case RhiBindingEvidenceResult::Match:
+            ++frame.bindingsMatched;
+            break;
+        case RhiBindingEvidenceResult::Missing:
+            ++frame.bindingsMissing;
+            break;
+        case RhiBindingEvidenceResult::Mismatch:
+            ++frame.bindingsMismatched;
+            break;
+        }
+    }
     return frame;
 }
 
@@ -125,25 +185,40 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
 
     const RhiSemanticFrame frame = SealRhiSemanticFrame(frameSequence);
     for (const RhiObservedDraw &observed : frame.draws)
-        ++g_reportTotals.kinds[static_cast<std::size_t>(observed.draw.kind)];
+        ++g_reportTotals.drawKinds[static_cast<std::size_t>(observed.draw.kind)];
+    for (const RhiObservedBinding &observed : frame.bindings)
+        ++g_reportTotals.bindingKinds[static_cast<std::size_t>(observed.binding.kind)];
     g_reportTotals.draws += frame.draws.size();
     g_reportTotals.matched += frame.matched;
     g_reportTotals.missing += frame.missing;
     g_reportTotals.mismatched += frame.mismatched;
+    g_reportTotals.bindings += frame.bindings.size();
+    g_reportTotals.bindingsMatched += frame.bindingsMatched;
+    g_reportTotals.bindingsMissing += frame.bindingsMissing;
+    g_reportTotals.bindingsMismatched += frame.bindingsMismatched;
 
     if (frame.frameSequence == 1 || frame.frameSequence % 60 == 0 || frame.missing != 0 ||
-        frame.mismatched != 0)
+        frame.mismatched != 0 || frame.bindingsMissing != 0 || frame.bindingsMismatched != 0)
     {
         lucent::Line line;
         line.add("native RHI semantic through frame {}: {} draw call(s), {} packet match(es),"
-                 " {} missing packet(s), {} mismatch(es)",
+                 " {} missing packet(s), {} mismatch(es); {} binding call(s), {} state"
+                 " match(es), {} missing state observation(s), {} mismatch(es)",
                  frame.frameSequence, g_reportTotals.draws, g_reportTotals.matched,
-                 g_reportTotals.missing, g_reportTotals.mismatched);
-        for (std::size_t index = 0; index < g_reportTotals.kinds.size(); ++index)
+                 g_reportTotals.missing, g_reportTotals.mismatched, g_reportTotals.bindings,
+                 g_reportTotals.bindingsMatched, g_reportTotals.bindingsMissing,
+                 g_reportTotals.bindingsMismatched);
+        for (std::size_t index = 0; index < g_reportTotals.drawKinds.size(); ++index)
         {
-            if (g_reportTotals.kinds[index] != 0)
+            if (g_reportTotals.drawKinds[index] != 0)
                 line.add("  {} x{}", DrawKindName(static_cast<RhiSemanticDrawKind>(index)),
-                         g_reportTotals.kinds[index]);
+                         g_reportTotals.drawKinds[index]);
+        }
+        for (std::size_t index = 0; index < g_reportTotals.bindingKinds.size(); ++index)
+        {
+            if (g_reportTotals.bindingKinds[index] != 0)
+                line.add("  {} x{}", BindingKindName(static_cast<RhiSemanticBindingKind>(index)),
+                         g_reportTotals.bindingKinds[index]);
         }
         line.flush_debug("rhi");
     }
@@ -161,6 +236,17 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
                       observed.packet.present, observed.packet.opcode,
                       observed.packet.primitiveType, observed.packet.sourceSelect,
                       observed.packet.elementCount);
+    }
+    for (const RhiObservedBinding &observed : frame.bindings)
+    {
+        if (observed.evidence == RhiBindingEvidenceResult::Match)
+            continue;
+        lucent::error("rhi",
+                      "semantic binding {} ({} slot {}) did not match guest device state:"
+                      " expected object {:#x}, observed present={} object={:#x}",
+                      observed.sequence, BindingKindName(observed.binding.kind),
+                      observed.binding.slot, observed.binding.object, observed.state.present,
+                      observed.state.observedObject);
     }
 }
 

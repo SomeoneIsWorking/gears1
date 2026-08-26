@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-27
 tags: native-rhi,draw
-depends: runtime/rhi_semantic_stream.cpp, runtime/titles/gears1/rhi_draw_bindings.cpp
+depends: runtime/rhi_semantic_stream.cpp, runtime/titles/gears1/rhi_bindings.cpp
 ---
 
 ## Claim

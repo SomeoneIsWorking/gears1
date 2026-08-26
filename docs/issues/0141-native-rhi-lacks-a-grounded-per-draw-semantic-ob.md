@@ -20,7 +20,7 @@ four normal entry points: `0x8222CFF8` (transient vertices), `0x8222D4F8`
 (transient vertices and indices), `0x8222DA48` (bound vertices), and
 `0x8222DE50` (bound indices).
 
-The exact Gears 1 bindings in `runtime/titles/gears1/rhi_draw_bindings.cpp`
+The exact Gears 1 bindings in `runtime/titles/gears1/rhi_bindings.cpp`
 retain and super-call every recompiled body. Only when
 `GEARS_NATIVE_RHI_OBSERVE=1` is enabled, they publish ordered typed draws to the
 title-neutral `runtime/rhi_semantic_stream.*`, which validates primitive type,
@@ -31,6 +31,17 @@ calls and produced 90,854 matches, zero missing packets, and zero mismatches:
 bound-index calls. The bound-vertex path remains statically grounded but was not
 reached by that walk. A focused negative control mutates the packet evidence and
 is rejected as a mismatch.
+
+The same adapter now owns the already-grounded `SetTexture`, `SetPixelShader`,
+and `SetVertexShader` addresses and device offsets. A headless run through frame
+120 observed 734 texture, 118 pixel-shader, and 118 vertex-shader calls; all 970
+requested objects matched the state written by the retained guest bodies, with
+zero missing observations and zero mismatches. The stream uses one sequence
+across draws and bindings, and focused controls prove both the binding mismatch
+answer and cross-kind ordering. The historical shader argument scanner,
+SetTexture census, and false `sub_82544148` draw probe were removed after their
+findings were recorded. Remaining D3D submission/queue collection is explicitly
+default-off, so ordinary runs no longer pay its atomics and table scans.
 
 ## Next falsifier
 

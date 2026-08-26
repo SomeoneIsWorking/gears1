@@ -7,11 +7,15 @@ created: 2026-08-27
 
 ## Instrument
 
-GEARS_NATIVE_RHI_OBSERVE semantic draw-to-emitted-PM4 comparator
+GEARS_NATIVE_RHI_OBSERVE semantic draw/binding comparator
 
 ## Validated by
 
-Focused test feeds a matching packet and a deliberately altered primitive/count packet, observing match and mismatch respectively; a headless menu walk through frame 1712 produced 90,854 matches with zero missing or mismatched packets.
+Focused tests feed matching and deliberately altered draw packets and binding
+state, observe both answers, and prove one global sequence across event kinds. A
+headless menu walk through frame 1712 produced 90,854 draw matches with zero
+missing or mismatched packets; a later headless run through frame 120 produced
+970 texture/shader binding matches with zero missing or mismatched state.
 
 ## Known failure modes
 
