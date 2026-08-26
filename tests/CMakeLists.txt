@@ -184,6 +184,18 @@ add_executable(test_gpu_frame_timing test_gpu_frame_timing.cpp)
 target_include_directories(test_gpu_frame_timing PRIVATE ../runtime)
 add_test(NAME gpu_frame_timing COMMAND test_gpu_frame_timing)
 
+add_executable(test_guest_write_watch
+    test_guest_write_watch.cpp
+    ../runtime/fault_report.cpp
+    ../runtime/guest_write_watch.cpp
+    ../runtime/guest_memory.cpp)
+target_include_directories(test_guest_write_watch PRIVATE
+    ../runtime
+    "${GEARS_PPC_DIR}"
+    "${THIRDPARTY_ROOT}/simde")
+target_link_libraries(test_guest_write_watch PRIVATE lucent::lucent)
+add_test(NAME guest_write_watch COMMAND test_guest_write_watch)
+
 add_executable(test_gpu_queue_access test_gpu_queue_access.cpp)
 target_link_libraries(test_gpu_queue_access PRIVATE gears_gpu_queue_access)
 add_test(NAME gpu_queue_access COMMAND test_gpu_queue_access)
@@ -277,6 +289,9 @@ add_test(NAME source_structure
 add_test(NAME source_structure_selftest
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py" --selftest)
+add_test(NAME re_frontier_selftest
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/re_frontier.py" selftest)
 add_test(NAME clean_distribution
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/check_distribution_clean.py")
@@ -577,6 +592,13 @@ add_executable(test_frame_contract
     ../runtime/frame_contract.cpp)
 target_include_directories(test_frame_contract PRIVATE ../runtime)
 add_test(NAME frame_contract COMMAND test_frame_contract)
+
+add_executable(test_rhi_semantic_stream
+    test_rhi_semantic_stream.cpp
+    ../runtime/rhi_semantic_stream.cpp)
+target_include_directories(test_rhi_semantic_stream PRIVATE ../runtime)
+target_link_libraries(test_rhi_semantic_stream PRIVATE lucent::lucent)
+add_test(NAME rhi_semantic_stream COMMAND test_rhi_semantic_stream)
 
 # The fragment-output clamp. A fixed-point render target clamps a shader's colour
 # output to [0,1] before blending and a floating-point one does not -- and this

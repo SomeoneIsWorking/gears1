@@ -3,6 +3,8 @@
 
 #include "gpu_draw_indices.h"
 
+#include "gpu_endian.h"
+
 #include <algorithm>
 #include <cstring>
 #include <vector>
@@ -15,39 +17,17 @@ namespace gears::draw
 namespace
 {
 
-constexpr uint16_t SwapIndex16(uint16_t value, uint32_t endian)
-{
-    // For 16-bit DMA, Xenia maps k8in32 to k8in16 and k16in32 to kNone.
-    return endian == 1 || endian == 2 ? uint16_t((value >> 8) | (value << 8)) : value;
-}
-
-constexpr uint32_t SwapIndex32(uint32_t value, uint32_t endian)
-{
-    switch (endian & 3u)
-    {
-    case 0:
-        return value;
-    case 1:
-        return ((value & 0x00FF00FFu) << 8) | ((value & 0xFF00FF00u) >> 8);
-    case 2:
-        return __builtin_bswap32(value);
-    case 3:
-        return (value << 16) | (value >> 16);
-    }
-    return value;
-}
-
 // Both answer classes are compile-time gates in the shipping implementation,
 // not a helper beside it. Uniform output here would corrupt mode 0 or 3 while
 // still producing perfectly plausible draw and primitive counts.
-static_assert(SwapIndex16(0x1234u, 0) == 0x1234u);
-static_assert(SwapIndex16(0x1234u, 1) == 0x3412u);
-static_assert(SwapIndex16(0x1234u, 2) == 0x3412u);
-static_assert(SwapIndex16(0x1234u, 3) == 0x1234u);
-static_assert(SwapIndex32(0x12345678u, 0) == 0x12345678u);
-static_assert(SwapIndex32(0x12345678u, 1) == 0x34127856u);
-static_assert(SwapIndex32(0x12345678u, 2) == 0x78563412u);
-static_assert(SwapIndex32(0x12345678u, 3) == 0x56781234u);
+static_assert(SwapGpuIndex16(0x1234u, 0) == 0x1234u);
+static_assert(SwapGpuIndex16(0x1234u, 1) == 0x3412u);
+static_assert(SwapGpuIndex16(0x1234u, 2) == 0x3412u);
+static_assert(SwapGpuIndex16(0x1234u, 3) == 0x1234u);
+static_assert(SwapGpuWord32(0x12345678u, 0) == 0x12345678u);
+static_assert(SwapGpuWord32(0x12345678u, 1) == 0x34127856u);
+static_assert(SwapGpuWord32(0x12345678u, 2) == 0x78563412u);
+static_assert(SwapGpuWord32(0x12345678u, 3) == 0x56781234u);
 
 // The guest's indices as 32-bit host values. A fetch that would read past the
 // guest-memory mirror yields ZERO rather than reading out of bounds -- the
@@ -65,13 +45,13 @@ void ReadGuestIndices(const FrameDrawInputs &in, const FrameDrawItem &d, uint32_
         if (inRange && d.indexIs32)
         {
             std::memcpy(&v, base + i * 4, 4);
-            v = SwapIndex32(v, d.indexEndian);
+            v = SwapGpuWord32(v, d.indexEndian);
         }
         else if (inRange)
         {
             uint16_t h = 0;
             std::memcpy(&h, base + i * 2, 2);
-            v = SwapIndex16(h, d.indexEndian);
+            v = SwapGpuIndex16(h, d.indexEndian);
         }
         dst[i] = v;
     }

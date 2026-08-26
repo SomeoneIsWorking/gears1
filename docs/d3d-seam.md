@@ -21,9 +21,9 @@ The 360's D3D is statically linked into the title. The surface is:
 - **Deferred-state model.** Setters do not touch the GPU: they write shadowed
   state into the device struct and OR bits into 64-bit dirty masks at
   device+0x10 / device+0x18 (seen throughout 0x8254ED40 and the setter
-  bodies). The draw call flushes dirty state as TYPE0 register writes into the
-  command buffer. The flush-and-draw emitter is **sub_82544148** (the largest
-  function in the render path — ~21k lines of recompiled code). **V**
+  bodies). The four normal draw entry points below emit `DRAW_INDX` packets
+  after flushing the relevant state. **sub_82544148 is not a draw call**:
+  catalog #58 measures it once per frame against 170-744 PM4 draws. **V**
 - Address ranges are NOT a reliable layer boundary: e.g. 0x8221CBA8 sits in
   the "D3D range" but is the UE3 render-command ring allocator (writes the
   ring control block at 0x82C0CB24). Classify per function, not per range. **V**
@@ -74,6 +74,36 @@ The same wrap falsified the draw-flush identification -- see 0x82544148 below an
 `catalog.py show 58`. That is what this seam is for: each function read here is
 either confirmed against the renderer's own account of the frame, or corrected.
 
+### Normal semantic draw family **V**
+
+Raw packet-construction scans, direct disassembly, scoped guest-memory write
+watches, and live super-call observation identify four title-facing draw entry
+points:
+
+| Address | Semantic contract | Packet source |
+|---|---|---|
+| 0x8222CFF8 | transient vertices | auto-index `DRAW_INDX`; reserves vertex data and stages the command end at device+0x3314 |
+| 0x8222D4F8 | transient vertices and indices | DMA-index `DRAW_INDX`; reserves both data regions and stages the command end at device+0x3314 |
+| 0x8222DA48 | bound vertex streams | direct auto-index `DRAW_INDX`; commits through device+0x28 |
+| 0x8222DE50 | bound vertex and index buffers | direct DMA-index `DRAW_INDX`; commits through device+0x28 |
+
+`runtime/titles/gears1/rhi_draw_bindings.cpp` is the exact-revision binding.
+It preserves and calls every `__imp__sub_*` body, then publishes a typed draw
+to the title-neutral `runtime/rhi_semantic_stream.*` observation seam. With
+`GEARS_NATIVE_RHI_OBSERVE=1`, a headless menu walk through frame 1712 compared
+90,854 semantic calls with the packets the original bodies emitted: 90,854
+matches, zero missing packets, and zero mismatches. The mix was 17,864
+transient-vertex, 60,465 transient-vertex-and-index, and 12,525 bound-index
+calls. The bound-vertex entry is statically grounded but was not exercised by
+that walk.
+
+The semantic count is intentionally lower than the renderer's PM4 draw count:
+the compatibility command processor replays predicated packets per Xenos EDRAM
+tile, while the title issues each logical draw once. Treating tile replay as
+additional RHI calls was the rate-comparison error that obscured these entry
+points. This is observation evidence only; state, resources, resolves,
+presentation, and retirement still need semantic parity before any bypass.
+
 ## 2. Entry points of one presented frame
 
 Measured with gdb ignore-count breakpoints over ~30 s of the movie phase
@@ -84,7 +114,7 @@ so this set IS the "first presented frame" target. **V**
 | Function | hits/swap | Identification (confidence) |
 |---|---|---|
 | 0x82220858 | 6.2 | SetTexture: copies fetch-constant words from a guest texture object (+0x1C..+0x30) into the device's fetch shadow (slot index r4, shadow at dev + (slot+0xBFC)*4) (high) |
-| 0x8222CFF8 | 1.02 | per-frame state set, writes dirty bit 0x8000000000000 (medium — viewport/scissor-shaped) |
+| 0x8222CFF8 | 1.02 in the movie sample | transient-vertex draw; auto-index `DRAW_INDX`, with vertex reservation and staged command end (high) |
 | 0x82221980 | 1.01 | ring segment flush / space wait (internal, high) |
 | 0x82222460 | 1.0 | dirty-mask OR helper + cache touch (high) |
 | 0x8221CBA8 | ~1 per render command | UE3 render-command ring alloc — NOT D3D (high) |

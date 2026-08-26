@@ -18,6 +18,8 @@ FORMATTED = [
     "runtime/guest_dirty_pages.h",
     "runtime/guest_texture_hash.cpp",
     "runtime/guest_texture_hash.h",
+    "runtime/guest_write_watch.cpp",
+    "runtime/guest_write_watch.h",
     "runtime/main.cpp",
     "runtime/debug_http.cpp",
     "runtime/debug_http.h",
@@ -59,6 +61,7 @@ FORMATTED = [
     "runtime/gpu_draw_vertexfetch.cpp",
     "runtime/gpu_draw_xlate.cpp",
     "runtime/gpu_draw_xlate.h",
+    "runtime/gpu_endian.h",
     "runtime/gpu_surface_format_capacity.h",
     "runtime/gpu_frame_capacity.h",
     "runtime/gpu_frame_cleanup.cpp",
@@ -74,6 +77,8 @@ FORMATTED = [
     "runtime/gpu_present_stage.h",
     "runtime/gpu_queue_access.cpp",
     "runtime/gpu_queue_access.h",
+    "runtime/gpu_register_watch.cpp",
+    "runtime/gpu_register_watch.h",
     "runtime/gpu_retirement.cpp",
     "runtime/gpu_retirement.h",
     "runtime/gpu_renderer_capacity.cpp",
@@ -97,12 +102,16 @@ FORMATTED = [
     "runtime/render_thread.cpp",
     "runtime/render_thread.h",
     "runtime/render_retirement.h",
+    "runtime/rhi_semantic_stream.cpp",
+    "runtime/rhi_semantic_stream.h",
     "runtime/scanout_gamma.cpp",
     "runtime/scanout_gamma.h",
     "runtime/title_executable.cpp",
     "runtime/title_executable.h",
     "runtime/title_profile.cpp",
     "runtime/title_profile.h",
+    "runtime/titles/gears1/rhi_draw_bindings.cpp",
+    "runtime/vd_null_gpu.cpp",
     "runtime/swapchain_format.h",
     "tests/test_depth_alias_shader_format.cpp",
     "tests/test_frame_probe_capture.cpp",
@@ -111,6 +120,7 @@ FORMATTED = [
     "tests/test_graphics_probe.cpp",
     "tests/test_guest_dirty_pages.cpp",
     "tests/test_guest_texture_hash.cpp",
+    "tests/test_guest_write_watch.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
     "tests/test_gpu_draw_untile.cpp",
     "tests/test_gpu_draw_options.cpp",
@@ -120,6 +130,7 @@ FORMATTED = [
     "tests/test_gpu_queue_access.cpp",
     "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_remote_input.cpp",
+    "tests/test_rhi_semantic_stream.cpp",
     "tests/test_render_retirement.cpp",
     "tests/test_shared_frame_image.cpp",
     "tests/test_scanout_gamma.cpp",
@@ -134,6 +145,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/generated_title_profile.cpp",
     "runtime/guest_filesystem.cpp",
     "runtime/guest_texture_hash.cpp",
+    "runtime/guest_write_watch.cpp",
     "runtime/main.cpp",
     "runtime/debug_http.cpp",
     "runtime/graphics_probe.cpp",
@@ -148,6 +160,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/gpu_draw_pixels.cpp",
     "runtime/gpu_draw_pipelines.cpp",
     "runtime/gpu_draw_point_geometry.cpp",
+    "runtime/gpu_register_watch.cpp",
     "runtime/gpu_draw_reinterpret.cpp",
     "runtime/gpu_draw_resolve.cpp",
     "runtime/gpu_draw_resolve_decode.cpp",
@@ -174,9 +187,11 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/input.cpp",
     "runtime/native_pass.cpp",
     "runtime/render_thread.cpp",
+    "runtime/rhi_semantic_stream.cpp",
     "runtime/scanout_gamma.cpp",
     "runtime/title_executable.cpp",
     "runtime/title_profile.cpp",
+    "runtime/titles/gears1/rhi_draw_bindings.cpp",
     "tests/test_depth_alias_shader_format.cpp",
     "tests/test_frame_probe_capture.cpp",
     "tests/test_frame_contract.cpp",
@@ -184,6 +199,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_graphics_probe.cpp",
     "tests/test_guest_dirty_pages.cpp",
     "tests/test_guest_texture_hash.cpp",
+    "tests/test_guest_write_watch.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
     "tests/test_gpu_draw_untile.cpp",
     "tests/test_gpu_draw_options.cpp",
@@ -193,6 +209,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_gpu_queue_access.cpp",
     "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_remote_input.cpp",
+    "tests/test_rhi_semantic_stream.cpp",
     "tests/test_render_retirement.cpp",
     "tests/test_shared_frame_image.cpp",
     "tests/test_scanout_gamma.cpp",
@@ -203,25 +220,13 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_title_profile.cpp",
 ]
 
-VD_FORMAT_RANGES = [
-    (35, 35),
-    (800, 800),
-    (817, 817),
-    (1336, 1336),
-    (1468, 1487),
-    (1846, 1856),
-    (1866, 1873),
-    (1916, 1916),
-    (1921, 1927),
-    (1939, 1939),
-    (1950, 1953),
-    (1955, 1955),
-    (1995, 1995),
-    (2028, 2029),
-    (2308, 2317),
+VD_TIDY_RANGES = [
+    [445, 456],
+    [815, 815],
+    [1005, 1053],
+    [1339, 1339],
+    [2621, 2696],
 ]
-
-VD_TIDY_RANGES = [[first, last] for first, last in VD_FORMAT_RANGES]
 
 
 def find_tool(name, override=None, finder=shutil.which):
@@ -322,12 +327,6 @@ def main(argv):
         return 1
 
     run([clang_format, "--dry-run", "--Werror", *FORMATTED], root)
-    vd_format = [clang_format, "--dry-run", "--Werror"]
-    vd_format.extend(
-        f"-lines={first}:{last}" for first, last in VD_FORMAT_RANGES
-    )
-    vd_format.append("runtime/vd_null_gpu.cpp")
-    run(vd_format, root)
 
     resource_dir = subprocess.run(
         [clang_cxx, "-print-resource-dir"], check=True, text=True,

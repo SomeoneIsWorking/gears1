@@ -27,14 +27,17 @@
 #include <lucent/log.h>
 
 #include "guest_heap.h"
+#include "guest_write_watch.h"
 #include "gpu_present.h"
 #include "gpu_packet_memory.h"
+#include "gpu_register_watch.h"
 #include "input.h"
 #include "debug_http.h"
 #include "graphics_probe.h"
 #include "graphics_probe_render.h"
 #include "frame_probe_capture.h"
 #include "gpu_draw.h"
+#include "gpu_endian.h"
 #include "render_thread.h"
 #include "frame_capture.h"
 #include "frame_content.h"
@@ -116,9 +119,8 @@ struct InterruptThreadState
         if (!ready || g_graphicsInterruptCallback == 0)
             return;
         std::lock_guard<std::mutex> lock(g_interruptMutex);
-        uint8_t* base = gears::Memory().Base();
-        *gears::Memory().Translate<uint8_t>(block.pcrAddress + kPcrCpuNumber) =
-            uint8_t(cpu);
+        uint8_t *base = gears::Memory().Base();
+        *gears::Memory().Translate<uint8_t>(block.pcrAddress + kPcrCpuNumber) = uint8_t(cpu);
         ctx.r1.u32 = block.stackBase - 0x100;
         ctx.r3.u32 = source;
         ctx.r4.u32 = g_graphicsInterruptContext;
@@ -135,8 +137,8 @@ struct InterruptThreadState
                 // The observed event array is per CPU within the graphics
                 // worker pool; include its selected slot in the diagnostic.
                 const uint32_t pool = ReadGuest32(ReadGuest32(0x82000868));
-                lucent::debug("gpu",
-                    "graphics ISR inner callback -> {:#x} (pool {:#x}, cpu{} event {:#x})",
+                lucent::debug(
+                    "gpu", "graphics ISR inner callback -> {:#x} (pool {:#x}, cpu{} event {:#x})",
                     inner, pool, cpu, pool + 0x2BDC + cpu * 0x38);
             }
         }
@@ -186,9 +188,9 @@ struct GuestDepthSampleCounts
     uint32_t stencilFailA, stencilFailB;
 };
 static_assert(sizeof(GuestDepthSampleCounts) == 0x20,
-    "the ZPD record is 0x20 bytes; the write below memsets that much");
+              "the ZPD record is 0x20 bytes; the write below memsets that much");
 static_assert(offsetof(GuestDepthSampleCounts, zpassA) == 16,
-    "D3D reads the occlusion result from ZPass, at +16 in this record");
+              "D3D reads the occlusion result from ZPass, at +16 in this record");
 
 // How much the reported ZPass counter grows per query under
 // GEARS_GPU_ZPD_VISIBLE. Only the SIGN of END-BEGIN matters to a visibility
@@ -289,9 +291,9 @@ constexpr uint32_t kConstBaseRegisters = 0x2000;
 // ---------------------------------------------------------------------------
 struct BoundShader
 {
-    uint32_t type = 0;      // xenos::ShaderType: 0 vertex, 1 pixel
+    uint32_t type = 0; // xenos::ShaderType: 0 vertex, 1 pixel
     uint32_t dwords = 0;
-    uint32_t address = 0;   // physical address (IM_LOAD) or 0 (immediate)
+    uint32_t address = 0; // physical address (IM_LOAD) or 0 (immediate)
     uint64_t loads = 0;
     bool immediate = false;
     // The microcode as big-endian bytes (as the GPU reads it, and as the Xenos
@@ -302,20 +304,20 @@ struct BoundShader
 
 struct ShaderCaptureState
 {
-    bool enabled = false;      // keep the microcode in memory (always: the renderer needs it)
-    bool writeFiles = false;   // also write it to cap.dir (GEARS_SHADER_CAPTURE)
+    bool enabled = false;    // keep the microcode in memory (always: the renderer needs it)
+    bool writeFiles = false; // also write it to cap.dir (GEARS_SHADER_CAPTURE)
     bool ready = false;
     std::string dir = "scratch/shaders/bound";
     std::map<uint64_t, BoundShader> shaders; // ucode hash -> record
     uint64_t imLoads = 0;
     uint64_t imLoadsImmediate = 0;
-    uint64_t truncated = 0;   // packet claimed more ucode than the buffer held
-    uint64_t rejected = 0;    // implausible size
+    uint64_t truncated = 0;        // packet claimed more ucode than the buffer held
+    uint64_t rejected = 0;         // implausible size
     uint64_t activeVertexHash = 0; // last vertex ucode bound (for the const dump)
     uint64_t activePixelHash = 0;  // last pixel ucode bound
 } g_shaderCapture;
 
-uint64_t Fnv1a64(const uint8_t* p, size_t n)
+uint64_t Fnv1a64(const uint8_t *p, size_t n)
 {
     uint64_t h = 0xCBF29CE484222325ull;
     for (size_t i = 0; i < n; ++i)
@@ -329,9 +331,9 @@ uint64_t Fnv1a64(const uint8_t* p, size_t n)
 // `ucode` holds the microcode as big-endian bytes, exactly as the GPU reads it,
 // which is also what tools/xenos_translate consumes (std::endian::big).
 void RecordBoundShader(uint32_t type, uint32_t address, bool immediate,
-    const std::vector<uint8_t>& ucode)
+                       const std::vector<uint8_t> &ucode)
 {
-    auto& cap = g_shaderCapture;
+    auto &cap = g_shaderCapture;
     const uint64_t hash = Fnv1a64(ucode.data(), ucode.size());
     (type == 0 ? cap.activeVertexHash : cap.activePixelHash) = hash;
     auto it = cap.shaders.find(hash);
@@ -351,9 +353,9 @@ void RecordBoundShader(uint32_t type, uint32_t address, bool immediate,
 
     if (!cap.writeFiles)
         return;
-    const std::string path = std::format("{}/{}_{:016x}.ucode",
-        cap.dir, type == 0 ? "vs" : "ps", hash);
-    if (FILE* f = std::fopen(path.c_str(), "wb"))
+    const std::string path =
+        std::format("{}/{}_{:016x}.ucode", cap.dir, type == 0 ? "vs" : "ps", hash);
+    if (FILE *f = std::fopen(path.c_str(), "wb"))
     {
         std::fwrite(ucode.data(), 1, ucode.size(), f);
         std::fclose(f);
@@ -366,25 +368,24 @@ void RecordBoundShader(uint32_t type, uint32_t address, bool immediate,
 
 void ShaderCaptureManifest()
 {
-    auto& cap = g_shaderCapture;
+    auto &cap = g_shaderCapture;
     if (!cap.writeFiles)
         return;
     const std::string path = cap.dir + "/manifest.csv";
-    FILE* f = std::fopen(path.c_str(), "w");
+    FILE *f = std::fopen(path.c_str(), "w");
     if (!f)
         return;
     std::fprintf(f, "file,type,ucode_dwords,address,immediate,loads\n");
-    for (const auto& [hash, s] : cap.shaders)
-        std::fprintf(f, "%s_%016llx.ucode,%s,%u,0x%08X,%d,%llu\n",
-            s.type == 0 ? "vs" : "ps", (unsigned long long)hash,
-            s.type == 0 ? "vs" : "ps", s.dwords, s.address, s.immediate ? 1 : 0,
-            (unsigned long long)s.loads);
+    for (const auto &[hash, s] : cap.shaders)
+        std::fprintf(f, "%s_%016llx.ucode,%s,%u,0x%08X,%d,%llu\n", s.type == 0 ? "vs" : "ps",
+                     (unsigned long long)hash, s.type == 0 ? "vs" : "ps", s.dwords, s.address,
+                     s.immediate ? 1 : 0, (unsigned long long)s.loads);
     std::fclose(f);
 }
 
 void ShaderCaptureInit()
 {
-    auto& cap = g_shaderCapture;
+    auto &cap = g_shaderCapture;
     if (cap.ready)
         return;
     cap.ready = true;
@@ -396,7 +397,7 @@ void ShaderCaptureInit()
     cap.writeFiles = lucent::config::flag("SHADER_CAPTURE");
     if (!cap.writeFiles)
         return;
-    const std::string& dir = lucent::config::text("SHADER_CAPTURE_DIR");
+    const std::string &dir = lucent::config::text("SHADER_CAPTURE_DIR");
     if (!dir.empty())
         cap.dir = dir;
     if (std::system(("mkdir -p '" + cap.dir + "'").c_str()) != 0)
@@ -418,8 +419,8 @@ struct GammaRamp
     uint32_t directWrites = 0;   // uploaded a whole entry at a time
     uint32_t pwlWrites = 0;      // the piecewise-linear form instead
     uint32_t rwComponent = 0;    // which channel a sequential write targets
-    bool reported = false;        // the "none by the first frame" line
-    uint32_t reportedWrites = 0;  // what the last summary covered
+    bool reported = false;       // the "none by the first frame" line
+    uint32_t reportedWrites = 0; // what the last summary covered
 
     // Linear, i.e. what the hardware does with no ramp programmed: entry i maps
     // to i scaled from 8 to 10 bits. Any pixel put through this comes out
@@ -437,88 +438,9 @@ struct GammaRamp
 };
 GammaRamp g_gammaRamp;
 
-// GEARS_GPU_REG_WATCH=<hex reg>[,<hex reg>...], parsed once. Kept at file scope
-// so the packet dispatch can skip its bookkeeping entirely when nothing is
-// watched -- the tag below is set on every packet, and this knob is off in
-// every normal run.
-const std::vector<uint32_t>& RegWatchList()
-{
-    static const std::vector<uint32_t> watch = [] {
-        std::vector<uint32_t> v;
-        const std::string& t = lucent::config::text("GPU_REG_WATCH");
-        size_t at = 0;
-        while (at < t.size())
-        {
-            size_t comma = t.find(',', at);
-            if (comma == std::string::npos) comma = t.size();
-            const std::string one = t.substr(at, comma - at);
-            if (!one.empty())
-                v.push_back(uint32_t(std::strtoul(one.c_str(), nullptr, 16)));
-            at = comma + 1;
-        }
-        if (!v.empty())
-            lucent::info("gpu", "watching {} GPU register(s) for writes", v.size());
-        return v;
-    }();
-    return watch;
-}
-
-// Hit census for the watch. A watched register that is NEVER written prints
-// nothing at all, which reads exactly like "the register is fine" -- so the
-// count per watched register is reported at exit, zeros included, and names
-// the registers that were watched and never seen.
-std::map<uint32_t, uint64_t> g_regWatchHits;
-
-// Reported PER FRAME, not at exit: a run under this knob is always ended by a
-// signal from the harness, so an exit-time report is one that never prints.
-void ReportRegWatchCensus()
-{
-    const std::vector<uint32_t>& watch = RegWatchList();
-    if (watch.empty())
-        return;
-    // Every 60th frame: often enough that a killed run still carries one, rare
-    // enough not to bury the per-write lines this knob exists to produce.
-    static uint64_t frames = 0;
-    if (frames++ % 60 != 0)
-        return;
-    lucent::Line line;
-    line.add("GPU_REG_WATCH census (cumulative):");
-    for (uint32_t reg : watch)
-    {
-        const auto it = g_regWatchHits.find(reg);
-        line.add(" {:#x}={}{}", reg, it == g_regWatchHits.end() ? 0 : it->second,
-                 it == g_regWatchHits.end() ? " (NEVER WRITTEN)" : "");
-    }
-    line.flush(lucent::Level::Info, "gpu");
-}
-
-// What the command processor is executing right now, for GEARS_GPU_REG_WATCH.
-// A register write is anonymous by the time it lands -- the value alone cannot
-// say whether it came from a plain TYPE0 write, a SET_CONSTANT payload or a
-// LOAD_ALU_CONSTANT DMA -- and that attribution is the whole question when a
-// constant holds the wrong thing. "?" means a write from outside the packet
-// dispatch (init, or a path that forgot to tag itself), which is itself an
-// answer, so the tag is never left blank.
-std::string g_regWriteSource = "?";
 // How many draws this frame had already been recorded when a watched register
 // was written. "Before draw N" is the attribution a shared constant needs.
 uint32_t g_regWatchDrawOrdinal = 0;
-struct RegWriteSource
-{
-    std::string prev;
-    bool active;
-    explicit RegWriteSource(std::string what) : active(!RegWatchList().empty())
-    {
-        if (active)
-        {
-            prev = std::move(g_regWriteSource);
-            g_regWriteSource = std::move(what);
-        }
-    }
-    ~RegWriteSource() { if (active) g_regWriteSource = std::move(prev); }
-    RegWriteSource(const RegWriteSource&) = delete;
-    RegWriteSource& operator=(const RegWriteSource&) = delete;
-};
 
 void WriteGpuRegister(uint32_t reg, uint32_t value)
 {
@@ -527,35 +449,11 @@ void WriteGpuRegister(uint32_t reg, uint32_t value)
     // stray write to either silently redirects the ISR's callback slot and the
     // stream's completion flags. Report every change to them.
     if ((reg == kRegScratchAddr || reg == kRegScratchUmsk) && g_gpuRegisters[reg] != value)
-        lucent::debug("gpu", "SCRATCH_{} {:#x} -> {:#x}",
-            reg == kRegScratchAddr ? "ADDR" : "UMSK", g_gpuRegisters[reg], value);
+        lucent::debug("gpu", "SCRATCH_{} {:#x} -> {:#x}", reg == kRegScratchAddr ? "ADDR" : "UMSK",
+                      g_gpuRegisters[reg], value);
     if (g_gpuRegisters[reg] != value)
         g_registersDirty = true;
-    // GEARS_GPU_REG_WATCH=<hex reg>[,<hex reg>...]: every write to those GPU
-    // registers, with the value and what it looks like as a float. A shader
-    // CONSTANT that holds the wrong thing cannot be chased from the draw path
-    // -- by then it is just a number -- and the question is always WHICH packet
-    // put it there and what was there before. Written for catalog #91: pixel
-    // float constant c14's w component holds a guest POINTER on this side
-    // (0xa004xxxx, walking) where the console holds a float.
-    // The list is parsed once; a watch that matches nothing says so at the end
-    // of the frame rather than being silently empty.
-    {
-        const std::vector<uint32_t>& watch = RegWatchList();
-        if (!watch.empty() &&
-            std::find(watch.begin(), watch.end(), reg) != watch.end())
-        {
-            float fNew, fOld;
-            std::memcpy(&fNew, &value, 4);
-            const uint32_t oldBits = g_gpuRegisters[reg];
-            std::memcpy(&fOld, &oldBits, 4);
-            ++g_regWatchHits[reg];
-            lucent::info("gpu", "reg {:#x} <- {:#010x} ({}), was {:#010x} ({}),"
-                         " from {}, before draw {} of this frame",
-                         reg, value, fNew, oldBits, fOld, g_regWriteSource,
-                         g_regWatchDrawOrdinal);
-        }
-    }
+    gears::ObserveGpuRegisterWrite(reg, value, g_gpuRegisters[reg], g_regWatchDrawOrdinal);
     g_gpuRegisters[reg] = value;
 
     // Gamma ramp uploads. The write enable mask is BLUE, GREEN, RED (bit 2 is
@@ -583,9 +481,12 @@ void WriteGpuRegister(uint32_t reg, uint32_t value)
         const uint32_t index = g_gpuRegisters[kRegDcLutRwIndex] & 0xFF;
         const uint32_t mask = g_gpuRegisters[kRegDcLutWriteEnMask];
         uint32_t entry = g_gammaRamp.table[index];
-        if (mask & 4) entry = (entry & ~(0x3FFu << 20)) | (((value >> 20) & 0x3FF) << 20);
-        if (mask & 2) entry = (entry & ~(0x3FFu << 10)) | (((value >> 10) & 0x3FF) << 10);
-        if (mask & 1) entry = (entry & ~0x3FFu) | (value & 0x3FF);
+        if (mask & 4)
+            entry = (entry & ~(0x3FFu << 20)) | (((value >> 20) & 0x3FF) << 20);
+        if (mask & 2)
+            entry = (entry & ~(0x3FFu << 10)) | (((value >> 10) & 0x3FF) << 10);
+        if (mask & 1)
+            entry = (entry & ~0x3FFu) | (value & 0x3FF);
         g_gammaRamp.table[index] = entry;
         ++g_gammaRamp.directWrites;
         // The index AUTO-INCREMENTS, as it does for the sequential form after a
@@ -612,7 +513,7 @@ void WriteGpuRegister(uint32_t reg, uint32_t value)
         const uint32_t component = g_gammaRamp.rwComponent;
         if (mask & (1u << (2 - component)))
         {
-            const uint32_t v = (value >> 6) & 0x3FF;   // bits 0:5 hardwired zero
+            const uint32_t v = (value >> 6) & 0x3FF; // bits 0:5 hardwired zero
             const uint32_t shift = component == 0 ? 20 : component == 1 ? 10 : 0;
             g_gammaRamp.table[index] =
                 (g_gammaRamp.table[index] & ~(0x3FFu << shift)) | (v << shift);
@@ -665,37 +566,68 @@ std::string OpcodeName(uint32_t op)
 {
     switch (op)
     {
-    case 0x10: return "NOP";
-    case 0x22: return "DRAW_INDX";
-    case 0x23: return "VIZ_QUERY";
-    case 0x25: return "SET_STATE";
-    case 0x26: return "WAIT_FOR_IDLE";
-    case 0x2D: return "SET_CONSTANT";
-    case 0x2F: return "LOAD_ALU_CONSTANT";
-    case 0x36: return "DRAW_INDX_2";
-    case 0x37: return "IB_PFD";
-    case 0x3B: return "INVALIDATE_STATE";
-    case 0x3C: return "WAIT_REG_MEM";
-    case 0x3D: return "MEM_WRITE";
-    case 0x3F: return "IB";
-    case 0x44: return "COND_EXEC";
-    case 0x45: return "COND_WRITE";
-    case 0x46: return "EVENT_WRITE";
-    case 0x4B: return "SET_BIN_BASE_OFFSET";
-    case 0x50: return "SET_BIN_MASK";
-    case 0x51: return "SET_BIN_SELECT";
-    case 0x54: return "INTERRUPT";
-    case 0x55: return "SET_CONSTANT2";
-    case 0x56: return "SET_SHADER_CONSTANTS";
-    case 0x58: return "EVENT_WRITE_SHD";
-    case 0x5A: return "EVENT_WRITE_EXT";
-    case 0x5B: return "EVENT_WRITE_ZPD";
-    case 0x60: return "SET_BIN_MASK_LO";
-    case 0x61: return "SET_BIN_MASK_HI";
-    case 0x62: return "SET_BIN_SELECT_LO";
-    case 0x63: return "SET_BIN_SELECT_HI";
-    case kOpRuntimeSwap: return "SWAP";
-    default: return std::format("op{:#x}", op);
+    case 0x10:
+        return "NOP";
+    case 0x22:
+        return "DRAW_INDX";
+    case 0x23:
+        return "VIZ_QUERY";
+    case 0x25:
+        return "SET_STATE";
+    case 0x26:
+        return "WAIT_FOR_IDLE";
+    case 0x2D:
+        return "SET_CONSTANT";
+    case 0x2F:
+        return "LOAD_ALU_CONSTANT";
+    case 0x36:
+        return "DRAW_INDX_2";
+    case 0x37:
+        return "IB_PFD";
+    case 0x3B:
+        return "INVALIDATE_STATE";
+    case 0x3C:
+        return "WAIT_REG_MEM";
+    case 0x3D:
+        return "MEM_WRITE";
+    case 0x3F:
+        return "IB";
+    case 0x44:
+        return "COND_EXEC";
+    case 0x45:
+        return "COND_WRITE";
+    case 0x46:
+        return "EVENT_WRITE";
+    case 0x4B:
+        return "SET_BIN_BASE_OFFSET";
+    case 0x50:
+        return "SET_BIN_MASK";
+    case 0x51:
+        return "SET_BIN_SELECT";
+    case 0x54:
+        return "INTERRUPT";
+    case 0x55:
+        return "SET_CONSTANT2";
+    case 0x56:
+        return "SET_SHADER_CONSTANTS";
+    case 0x58:
+        return "EVENT_WRITE_SHD";
+    case 0x5A:
+        return "EVENT_WRITE_EXT";
+    case 0x5B:
+        return "EVENT_WRITE_ZPD";
+    case 0x60:
+        return "SET_BIN_MASK_LO";
+    case 0x61:
+        return "SET_BIN_MASK_HI";
+    case 0x62:
+        return "SET_BIN_SELECT_LO";
+    case 0x63:
+        return "SET_BIN_SELECT_HI";
+    case kOpRuntimeSwap:
+        return "SWAP";
+    default:
+        return std::format("op{:#x}", op);
     }
 }
 
@@ -743,14 +675,14 @@ struct CommandProcessor
     // rather than assume it: SET_CONSTANT by type, the memory/raw variants, and
     // the plain TYPE0 register writes that land in the ALU/fetch ranges (the
     // stream also programs these files directly, so both paths must be seen).
-    uint64_t setConstantByType[8]{};   // SET_CONSTANT (0x2D) by type field
+    uint64_t setConstantByType[8]{};     // SET_CONSTANT (0x2D) by type field
     uint64_t loadAluConstantByType[8]{}; // LOAD_ALU_CONSTANT (0x2F) by type field
     uint64_t setConstant2Packets = 0;
     uint64_t setShaderConstantsPackets = 0;
-    uint64_t type0AluWrites = 0;        // TYPE0 dwords into 0x4000..0x47FF
-    uint64_t type0FetchWrites = 0;      // TYPE0 dwords into 0x4800..0x48FF
-    bool constDumpDone = false;         // one-shot verification dump latch
-    bool drawCaptureDone = false;       // one-shot hot-pair draw-param capture latch
+    uint64_t type0AluWrites = 0;   // TYPE0 dwords into 0x4000..0x47FF
+    uint64_t type0FetchWrites = 0; // TYPE0 dwords into 0x4800..0x48FF
+    bool constDumpDone = false;    // one-shot verification dump latch
+    bool drawCaptureDone = false;  // one-shot hot-pair draw-param capture latch
 
     // Per-run draw census (GEARS_DRAW_CENSUS): every DRAW_INDX/_2 the CP
     // executes, keyed by (vs,ps) hash, so the real distribution of draws a run
@@ -786,17 +718,17 @@ struct CommandProcessor
     bool contentGateOpen = false;
     uint32_t contentScans = 0;
     uint32_t contentBusiest = 0;
-    uint32_t contentWait = 0;   // GEARS_DRAW_FRAME_AFTER_GAMEPLAY, counted down
-    uint32_t contentCamHeld = 0;      // frames held by the camera gate
-    double contentCamBest = 1e30;     // closest any frame has come
+    uint32_t contentWait = 0;     // GEARS_DRAW_FRAME_AFTER_GAMEPLAY, counted down
+    uint32_t contentCamHeld = 0;  // frames held by the camera gate
+    double contentCamBest = 1e30; // closest any frame has come
     // GEARS_DRAW_FRAME_NEEDS: a CONTENT requirement on top of the draw count.
     // The frame this title reaches after N presents is not the same frame twice
     // running -- the shadow pass renders a different set of lights each time --
     // so a run aimed at a specific draw may simply not contain it, and a run
     // that does not contain it is SILENT about it rather than negative. This
     // holds the gate shut until a frame actually carries the draw in question.
-    uint32_t contentHeld = 0;      // frames rejected for want of the draw
-    uint32_t contentBestVerts = 0; // biggest matching-shader draw seen so far
+    uint32_t contentHeld = 0;       // frames rejected for want of the draw
+    uint32_t contentBestVerts = 0;  // biggest matching-shader draw seen so far
     uint32_t contentShaderSeen = 0; // frames that had the shader at all
     // EVERY DRAW THE GUEST ISSUED, AND EVERY REASON WE DROPPED ONE. Four paths
     // in CaptureFrameDraw discard a draw, and none of them was counted, so
@@ -836,16 +768,16 @@ struct CommandProcessor
 
     // Per-frame census of what predication WOULD change, kept separate from any
     // behavioural use so the effect can be predicted before it is applied.
-    std::map<uint32_t, uint64_t> predicatedSeen;   // opcode -> predicated packets
-    std::map<uint32_t, uint64_t> predicatedSkip;   // opcode -> would be skipped
-    uint64_t predicateOffPackets = 0;              // any packet while select&mask==0
+    std::map<uint32_t, uint64_t> predicatedSeen; // opcode -> predicated packets
+    std::map<uint32_t, uint64_t> predicatedSkip; // opcode -> would be skipped
+    uint64_t predicateOffPackets = 0;            // any packet while select&mask==0
 
     // The whole of the CP thread's wall time between frames, split into the
     // three places it can go. Anything unaccounted for is the guest's own
     // execution time, which is the point of the split: it says whether a slow
     // frame is our command processor or the title.
     std::chrono::steady_clock::time_point frameStart = std::chrono::steady_clock::now();
-    uint64_t idleUs = 0;      // ring empty: waiting for the title to submit
+    uint64_t idleUs = 0; // ring empty: waiting for the title to submit
     uint64_t idlePolls = 0;
     uint64_t regWaitUs = 0;   // inside WAIT_REG_MEM
     uint64_t interruptUs = 0; // inside the title's ISR
@@ -858,41 +790,44 @@ struct CommandProcessor
             std::chrono::duration_cast<std::chrono::microseconds>(now - frameStart).count());
         frameStart = now;
         lucent::debug("gpu",
-            "frame budget: {} ms total = {} ms ring-empty ({} polls) + {} ms WAIT_REG_MEM"
-            " + {} ms ISR ({} interrupts)",
-            frameUs / 1000, idleUs / 1000, idlePolls, regWaitUs / 1000,
-            interruptUs / 1000, interrupts);
-        for (const auto& [addr, stat] : waitStats)
+                      "frame budget: {} ms total = {} ms ring-empty ({} polls) + {} ms WAIT_REG_MEM"
+                      " + {} ms ISR ({} interrupts)",
+                      frameUs / 1000, idleUs / 1000, idlePolls, regWaitUs / 1000,
+                      interruptUs / 1000, interrupts);
+        for (const auto &[addr, stat] : waitStats)
         {
             if (stat.second > 1000)
-                lucent::debug("gpu", "  waits on {:#x}: {} times, {} ms",
-                    addr, stat.first, stat.second / 1000);
+                lucent::debug("gpu", "  waits on {:#x}: {} times, {} ms", addr, stat.first,
+                              stat.second / 1000);
         }
         uint64_t ibTotal = 0;
         uint64_t ibMax = 0;
-        for (const auto& [addr, n] : ibCounts)
+        for (const auto &[addr, n] : ibCounts)
         {
             ibTotal += n;
             ibMax = std::max(ibMax, n);
         }
-        lucent::debug("gpu", "frame packets: {} IB submissions of {} distinct buffers"
-            " (max {} each); ring dwords written {} consumed {}",
-            ibTotal, ibCounts.size(), ibMax, frameWptrAdvance, frameRptrAdvance);
+        lucent::debug("gpu",
+                      "frame packets: {} IB submissions of {} distinct buffers"
+                      " (max {} each); ring dwords written {} consumed {}",
+                      ibTotal, ibCounts.size(), ibMax, frameWptrAdvance, frameRptrAdvance);
         frameWptrAdvance = frameRptrAdvance = 0;
-        ReportRegWatchCensus();
+        gears::ReportGpuRegisterWatch();
         lucent::Line ring;
         ring.add("  ring TYPE3:");
-        for (const auto& [op, n] : ringOpcodes)
+        for (const auto &[op, n] : ringOpcodes)
             ring.add(" {}x{}", OpcodeName(op), n);
         ring.flush_debug("gpu");
         lucent::Line inner;
         inner.add("  IB TYPE3:");
-        for (const auto& [op, n] : innerOpcodes)
+        for (const auto &[op, n] : innerOpcodes)
             inner.add(" {}x{}", OpcodeName(op), n);
         inner.flush_debug("gpu");
 
         if (lucent::config::flag("CONST_DUMP"))
-            lucent::debug("gpu", "  constant feed (cumulative): SET_CONSTANT"
+            lucent::debug(
+                "gpu",
+                "  constant feed (cumulative): SET_CONSTANT"
                 "[alu {} fetch {} bool {} loop {} reg {}] LOAD_ALU_CONSTANT[alu {} fetch {}]"
                 " SET_CONSTANT2 {} SET_SHADER_CONSTANTS {} TYPE0[alu {} fetch {}]",
                 setConstantByType[0], setConstantByType[1], setConstantByType[2],
@@ -902,10 +837,11 @@ struct CommandProcessor
 
         lucent::Line pred;
         pred.add("  predication: select {:#x} mask {:#x}; packets seen while OFF {};"
-            " predicated packets", binSelect, binMask, predicateOffPackets);
-        for (const auto& [op, n] : predicatedSeen)
+                 " predicated packets",
+                 binSelect, binMask, predicateOffPackets);
+        for (const auto &[op, n] : predicatedSeen)
             pred.add(" {}x{}(skip {})", OpcodeName(op), n,
-                predicatedSkip.count(op) ? predicatedSkip[op] : 0);
+                     predicatedSkip.count(op) ? predicatedSkip[op] : 0);
         pred.flush_debug("gpu");
         predicatedSeen.clear();
         predicatedSkip.clear();
@@ -914,24 +850,26 @@ struct CommandProcessor
         if (lucent::config::flag("DRAW_CENSUS"))
         {
             lucent::Line dc;
-            dc.add("  draw census (cumulative): {} draws, {} distinct (vs,ps) pairs;",
-                drawsSeen, drawPairs.size());
-            for (const auto& [key, n] : drawPairs)
+            dc.add("  draw census (cumulative): {} draws, {} distinct (vs,ps) pairs;", drawsSeen,
+                   drawPairs.size());
+            for (const auto &[key, n] : drawPairs)
                 dc.add(" [{:#018x}/{:#018x}]x{}", key.first, key.second, n);
             dc.flush(lucent::Level::Info, "gpu");
         }
 
         if (g_shaderCapture.enabled)
         {
-            const auto& cap = g_shaderCapture;
+            const auto &cap = g_shaderCapture;
             size_t vs = 0, ps = 0;
             uint64_t maxLoads = 0;
-            for (const auto& [hash, s] : cap.shaders)
+            for (const auto &[hash, s] : cap.shaders)
             {
                 (s.type == 0 ? vs : ps)++;
                 maxLoads = std::max(maxLoads, s.loads);
             }
-            lucent::debug("gpu", "shader capture: {} IM_LOAD + {} IM_LOAD_IMMEDIATE, "
+            lucent::debug(
+                "gpu",
+                "shader capture: {} IM_LOAD + {} IM_LOAD_IMMEDIATE, "
                 "{} distinct microcode payloads ({} vertex, {} pixel), hottest bound {}x, "
                 "{} rejected, {} truncated",
                 cap.imLoads, cap.imLoadsImmediate, cap.shaders.size(), vs, ps, maxLoads,
@@ -952,9 +890,9 @@ struct CommandProcessor
     //                     data[1] = (start << 16) | sizeDwords
     //                     data[2..] = the microcode itself
     template <typename Fetch>
-    void CaptureShaderLoad(uint32_t opcode, Fetch&& fetch, uint32_t usable, uint32_t count)
+    void CaptureShaderLoad(uint32_t opcode, Fetch &&fetch, uint32_t usable, uint32_t count)
     {
-        auto& cap = g_shaderCapture;
+        auto &cap = g_shaderCapture;
         if (!cap.enabled || usable < 2)
             return;
         const uint32_t word0 = fetch(0);
@@ -968,8 +906,7 @@ struct CommandProcessor
         // Xenos ucode instructions are 3 dwords; a load that is not a whole
         // number of them, or that starts part-way in, is not something this can
         // reconstruct, and is counted rather than guessed at.
-        if (type > 1 || start != 0 || sizeDwords == 0 || sizeDwords % 3 != 0 ||
-            sizeDwords > 0x4000)
+        if (type > 1 || start != 0 || sizeDwords == 0 || sizeDwords % 3 != 0 || sizeDwords > 0x4000)
         {
             ++cap.rejected;
             return;
@@ -1012,16 +949,27 @@ struct CommandProcessor
     // register index of the target constant file. Mirrors Xenia's
     // WriteALURangeFromRing / WriteFetchRangeFromRing / ... in
     // src/xenia/gpu/command_processor.cc. Returns false for an unknown type.
-    static bool ConstFileBase(uint32_t type, uint32_t& base)
+    static bool ConstFileBase(uint32_t type, uint32_t &base)
     {
         switch (type)
         {
-        case 0: base = kConstBaseAlu; return true;       // ALU float
-        case 1: base = kConstBaseFetch; return true;     // vertex/texture fetch
-        case 2: base = kConstBaseBool; return true;      // bool
-        case 3: base = kConstBaseLoop; return true;      // loop
-        case 4: base = kConstBaseRegisters; return true; // general registers
-        default: return false;
+        case 0:
+            base = kConstBaseAlu;
+            return true; // ALU float
+        case 1:
+            base = kConstBaseFetch;
+            return true; // vertex/texture fetch
+        case 2:
+            base = kConstBaseBool;
+            return true; // bool
+        case 3:
+            base = kConstBaseLoop;
+            return true; // loop
+        case 4:
+            base = kConstBaseRegisters;
+            return true; // general registers
+        default:
+            return false;
         }
     }
 
@@ -1034,7 +982,7 @@ struct CommandProcessor
     // _SET_SHADER_CONSTANTS). Uses fetch() rather than HandleType3's 20-word
     // copy because a constant load can carry the whole 1024-dword ALU file.
     template <typename Fetch>
-    void TrackConstantLoad(uint32_t opcode, Fetch&& fetch, uint32_t usable, uint32_t count)
+    void TrackConstantLoad(uint32_t opcode, Fetch &&fetch, uint32_t usable, uint32_t count)
     {
         switch (opcode)
         {
@@ -1049,13 +997,15 @@ struct CommandProcessor
             uint32_t base;
             if (!ConstFileBase(type, base))
             {
-                lucent::warn("gpu", "SET_CONSTANT unknown type {} (offset_type {:#x})",
-                    type, offsetType);
+                lucent::warn("gpu", "SET_CONSTANT unknown type {} (offset_type {:#x})", type,
+                             offsetType);
                 return;
             }
             const uint32_t n = count - 1; // constant dwords after offset_type
-            RegWriteSource src(RegWatchList().empty() ? std::string()
-                : std::format("SET_CONSTANT type {} index {} x{}", type, index, n));
+            gears::GpuRegisterWriteScope src(
+                !gears::GpuRegisterWatchEnabled()
+                    ? std::string()
+                    : std::format("SET_CONSTANT type {} index {} x{}", type, index, n));
             for (uint32_t i = 0; i < n && (1 + i) < usable; ++i)
                 WriteGpuRegister(base + index + i, fetch(1 + i));
             break;
@@ -1073,13 +1023,15 @@ struct CommandProcessor
             uint32_t base;
             if (!ConstFileBase(type, base))
             {
-                lucent::warn("gpu", "LOAD_ALU_CONSTANT unknown type {} (offset_type {:#x})",
-                    type, offsetType);
+                lucent::warn("gpu", "LOAD_ALU_CONSTANT unknown type {} (offset_type {:#x})", type,
+                             offsetType);
                 return;
             }
-            RegWriteSource src(RegWatchList().empty() ? std::string()
-                : std::format("LOAD_ALU_CONSTANT from {:#x} type {} index {} x{}",
-                              address, type, index, sizeDwords));
+            gears::GpuRegisterWriteScope src(
+                !gears::GpuRegisterWatchEnabled()
+                    ? std::string()
+                    : std::format("LOAD_ALU_CONSTANT from {:#x} type {} index {} x{}", address,
+                                  type, index, sizeDwords));
             for (uint32_t i = 0; i < sizeDwords; ++i)
                 WriteGpuRegister(base + index + i, ReadGuest32(address + i * 4));
             break;
@@ -1091,11 +1043,12 @@ struct CommandProcessor
             if (usable < 1)
                 return;
             const uint32_t index = fetch(0) & 0xFFFF;
-            (opcode == kOpSetConstant2 ? setConstant2Packets
-                                       : setShaderConstantsPackets)++;
+            (opcode == kOpSetConstant2 ? setConstant2Packets : setShaderConstantsPackets)++;
             const uint32_t n = count - 1;
-            RegWriteSource src(RegWatchList().empty() ? std::string()
-                : std::format("{} index {:#x} x{}", OpcodeName(opcode), index, n));
+            gears::GpuRegisterWriteScope src(
+                !gears::GpuRegisterWatchEnabled()
+                    ? std::string()
+                    : std::format("{} index {:#x} x{}", OpcodeName(opcode), index, n));
             for (uint32_t i = 0; i < n && (1 + i) < usable; ++i)
                 WriteGpuRegister(index + i, fetch(1 + i));
             break;
@@ -1132,16 +1085,16 @@ struct CommandProcessor
         constDumpDone = true;
 
         lucent::info("gpu", "bound shaders at dump: vertex {:#018x} pixel {:#018x}",
-            g_shaderCapture.activeVertexHash, g_shaderCapture.activePixelHash);
-        lucent::info("gpu", "constant dump at {} -- feed census:"
-            " SET_CONSTANT[alu {} fetch {} bool {} loop {} reg {}]"
-            " LOAD_ALU_CONSTANT[alu {} fetch {}] SET_CONSTANT2 {} SET_SHADER_CONSTANTS {}"
-            " TYPE0[alu {} fetch {}]",
-            OpcodeName(drawOpcode), setConstantByType[0], setConstantByType[1],
-            setConstantByType[2], setConstantByType[3], setConstantByType[4],
-            loadAluConstantByType[0], loadAluConstantByType[1],
-            setConstant2Packets, setShaderConstantsPackets,
-            type0AluWrites, type0FetchWrites);
+                     g_shaderCapture.activeVertexHash, g_shaderCapture.activePixelHash);
+        lucent::info("gpu",
+                     "constant dump at {} -- feed census:"
+                     " SET_CONSTANT[alu {} fetch {} bool {} loop {} reg {}]"
+                     " LOAD_ALU_CONSTANT[alu {} fetch {}] SET_CONSTANT2 {} SET_SHADER_CONSTANTS {}"
+                     " TYPE0[alu {} fetch {}]",
+                     OpcodeName(drawOpcode), setConstantByType[0], setConstantByType[1],
+                     setConstantByType[2], setConstantByType[3], setConstantByType[4],
+                     loadAluConstantByType[0], loadAluConstantByType[1], setConstant2Packets,
+                     setShaderConstantsPackets, type0AluWrites, type0FetchWrites);
 
         // Raw fetch register block (0x4800.., 96 dwords = 32 six-dword slots),
         // so the whole file can be inspected. The vertex and texture fetch
@@ -1170,23 +1123,24 @@ struct CommandProcessor
         uint32_t vertexConsts = 0, textureSlots = 0;
         for (uint32_t slot = 0; slot < 32; ++slot)
         {
-            const uint32_t* s = &g_gpuRegisters[kConstBaseFetch + slot * 6];
+            const uint32_t *s = &g_gpuRegisters[kConstBaseFetch + slot * 6];
             const uint32_t slotType = s[0] & 3;
             if (slotType == 2) // xe_gpu_texture_fetch_t
             {
                 ++textureSlots;
                 const uint32_t base = (s[1] >> 12) << 12;
                 const uint32_t pitch = ((s[0] >> 22) & 0x1FF) << 5;
-                const uint32_t width = (s[2] & 0x1FFF) + 1;   // size_2d.width
+                const uint32_t width = (s[2] & 0x1FFF) + 1;          // size_2d.width
                 const uint32_t height = ((s[2] >> 13) & 0x1FFF) + 1; // size_2d.height
                 const uint32_t format = s[1] & 0x3F;
                 const uint32_t tiled = s[0] >> 31;
                 const uint32_t endian = (s[1] >> 6) & 3;
                 if (textureSlots <= 12)
-                    lucent::info("gpu", "  texfetch[slot {}] (reg {:#x}): base {:#x} {}x{}"
-                        " pitch {} px format {:#x} tiled {} endian {}", slot,
-                        kConstBaseFetch + slot * 6, base, width, height, pitch, format,
-                        tiled, endian);
+                    lucent::info("gpu",
+                                 "  texfetch[slot {}] (reg {:#x}): base {:#x} {}x{}"
+                                 " pitch {} px format {:#x} tiled {} endian {}",
+                                 slot, kConstBaseFetch + slot * 6, base, width, height, pitch,
+                                 format, tiled, endian);
             }
             else if (slotType == 3) // xe_gpu_vertex_fetch_t (up to 3 per slot)
             {
@@ -1200,15 +1154,18 @@ struct CommandProcessor
                     const uint32_t byteAddr = (d0 >> 2) << 2;
                     const uint32_t endian = d1 & 3;
                     const uint32_t sizeWords = (d1 >> 2) & 0xFFFFFF;
-                    lucent::info("gpu", "  vfetch const #{} (reg {:#x}): {:#010x} {:#010x} ->"
-                        " base {:#x} size {} words ({} bytes) endian {}",
-                        slot * 3 + j, kConstBaseFetch + slot * 6 + j * 2, d0, d1,
-                        byteAddr, sizeWords, sizeWords * 4, endian);
+                    lucent::info("gpu",
+                                 "  vfetch const #{} (reg {:#x}): {:#010x} {:#010x} ->"
+                                 " base {:#x} size {} words ({} bytes) endian {}",
+                                 slot * 3 + j, kConstBaseFetch + slot * 6 + j * 2, d0, d1, byteAddr,
+                                 sizeWords, sizeWords * 4, endian);
                 }
             }
         }
-        lucent::info("gpu", "  fetch file: {} texture slots, {} vertex-fetch constants"
-            " (type 3)", textureSlots, vertexConsts);
+        lucent::info("gpu",
+                     "  fetch file: {} texture slots, {} vertex-fetch constants"
+                     " (type 3)",
+                     textureSlots, vertexConsts);
 
         // ALU float constants: 256 vec4 at 0x4000. Count non-zero dwords and show
         // the first few vec4 so the transform matrices are visibly present.
@@ -1219,12 +1176,12 @@ struct CommandProcessor
         lucent::info("gpu", "  ALU float constants non-zero: {} of 1024 dwords", nonZeroAlu);
         for (uint32_t v = 0; v < 6; ++v)
         {
-            const uint32_t* p = &g_gpuRegisters[kConstBaseAlu + v * 4];
+            const uint32_t *p = &g_gpuRegisters[kConstBaseAlu + v * 4];
             float f[4];
             for (int k = 0; k < 4; ++k)
                 std::memcpy(&f[k], &p[k], 4);
             lucent::info("gpu", "  c[{}] = {} {} {} {}  (raw {:#010x} {:#010x} {:#010x} {:#010x})",
-                v, f[0], f[1], f[2], f[3], p[0], p[1], p[2], p[3]);
+                         v, f[0], f[1], f[2], f[3], p[0], p[1], p[2], p[3]);
         }
 
         // Bool/loop files.
@@ -1234,7 +1191,7 @@ struct CommandProcessor
         for (uint32_t i = 0; i < 32; ++i)
             nonZeroLoop += g_gpuRegisters[kConstBaseLoop + i] != 0;
         lucent::info("gpu", "  bool file non-zero dwords: {}/8; loop file non-zero: {}/32",
-            nonZeroBool, nonZeroLoop);
+                     nonZeroBool, nonZeroLoop);
 
         // Raw register-file snapshot for the offline system-constants verifier
         // (tools/system_constants). It reloads these dwords into a Xenia
@@ -1245,7 +1202,7 @@ struct CommandProcessor
         // Xenia's RegisterFile only spans the first 0x5003, which is a prefix.
         {
             namespace fs = std::filesystem;
-            const char* dir = std::getenv("GEARS_CONST_DUMP_DIR");
+            const char *dir = std::getenv("GEARS_CONST_DUMP_DIR");
             fs::path outdir = dir ? fs::path(dir) : fs::path("scratch/bin");
             std::error_code ec;
             fs::create_directories(outdir, ec);
@@ -1253,10 +1210,10 @@ struct CommandProcessor
             std::ofstream f(out, std::ios::binary);
             if (f)
             {
-                f.write(reinterpret_cast<const char*>(g_gpuRegisters.data()),
-                    std::streamsize(g_gpuRegisters.size() * sizeof(uint32_t)));
+                f.write(reinterpret_cast<const char *>(g_gpuRegisters.data()),
+                        std::streamsize(g_gpuRegisters.size() * sizeof(uint32_t)));
                 lucent::info("gpu", "  wrote register-file snapshot ({} dwords) to {}",
-                    g_gpuRegisters.size(), out.string());
+                             g_gpuRegisters.size(), out.string());
             }
             else
             {
@@ -1297,8 +1254,7 @@ struct CommandProcessor
     // draws) plus the bound shader pair and the index-buffer parameters. Nothing
     // is invented -- shaders come from the capture map, geometry from the fetch
     // constants in the snapshot, indices from the packet's DMA words.
-    void CaptureFrameDraw(uint32_t opcode, const uint32_t* raw, uint32_t usable,
-                          uint32_t initiator)
+    void CaptureFrameDraw(uint32_t opcode, const uint32_t *raw, uint32_t usable, uint32_t initiator)
     {
         if (!frameProbeCapture.AcceptDraws(frameRenderDone))
         {
@@ -1310,10 +1266,9 @@ struct CommandProcessor
         auto vsIt = g_shaderCapture.shaders.find(vsHash);
         auto psIt = g_shaderCapture.shaders.find(psHash);
         ++drawsOffered;
-        if (vsIt == g_shaderCapture.shaders.end() ||
-            psIt == g_shaderCapture.shaders.end() ||
-            vsIt->second.type != 0 || psIt->second.type != 1 ||
-            vsIt->second.ucode.empty() || psIt->second.ucode.empty())
+        if (vsIt == g_shaderCapture.shaders.end() || psIt == g_shaderCapture.shaders.end() ||
+            vsIt->second.type != 0 || psIt->second.type != 1 || vsIt->second.ucode.empty() ||
+            psIt->second.ucode.empty())
         {
             // "Skip honestly" was the intent, but skipping SILENTLY is not
             // honest: this and the three returns below discard a draw the guest
@@ -1429,7 +1384,7 @@ struct CommandProcessor
     // every shader and building every pipeline, and says nothing about the
     // steady state.
     void SetFrontBuffer(uint32_t address) { frontBufferAddress = address; }
-    void SetFrontBufferFetch(const uint32_t* six)
+    void SetFrontBufferFetch(const uint32_t *six)
     {
         std::memcpy(frontBufferFetch, six, sizeof(frontBufferFetch));
     }
@@ -1496,22 +1451,29 @@ struct CommandProcessor
                 // <16-hex shader hash>[:<minimum vertices>], matched against a
                 // draw's VERTEX or PIXEL shader -- the caller knows one of the
                 // two and should not have to know which.
-                struct Need { uint64_t hash = 0; uint32_t verts = 0;
-                              uint32_t maxVerts = 0xFFFFFFFFu; };
-                static const Need need = [] {
+                struct Need
+                {
+                    uint64_t hash = 0;
+                    uint32_t verts = 0;
+                    uint32_t maxVerts = 0xFFFFFFFFu;
+                };
+                static const Need need = []
+                {
                     Need n;
-                    const std::string& t = lucent::config::text("DRAW_FRAME_NEEDS");
+                    const std::string &t = lucent::config::text("DRAW_FRAME_NEEDS");
                     if (t.empty())
                         return n;
                     const size_t colon = t.find(':');
                     const std::string hex = t.substr(0, colon);
-                    char* end = nullptr;
+                    char *end = nullptr;
                     n.hash = std::strtoull(hex.c_str(), &end, 16);
                     if (end == hex.c_str() || n.hash == 0)
                     {
-                        lucent::warn("gpu", "GEARS_DRAW_FRAME_NEEDS: cannot parse"
-                            " '{}' as a 16-hex shader hash. NO content requirement"
-                            " is applied and the next frame will be captured", hex);
+                        lucent::warn("gpu",
+                                     "GEARS_DRAW_FRAME_NEEDS: cannot parse"
+                                     " '{}' as a 16-hex shader hash. NO content requirement"
+                                     " is applied and the next frame will be captured",
+                                     hex);
                         n.hash = 0;
                         return n;
                     }
@@ -1523,24 +1485,26 @@ struct CommandProcessor
                         // marking draw is 30,876 vertices when it rasterises and
                         // 19,776 when it clips away, so ">= N" would happily
                         // select the working frame every time.
-                        const char* p = t.c_str() + colon + 1;
-                        char* e2 = nullptr;
+                        const char *p = t.c_str() + colon + 1;
+                        char *e2 = nullptr;
                         n.verts = uint32_t(std::strtoul(p, &e2, 10));
                         if (e2 && *e2 == '-')
                             n.maxVerts = uint32_t(std::strtoul(e2 + 1, nullptr, 10));
                     }
-                    lucent::info("gpu", "guest-draw: the capture also REQUIRES a"
-                        " draw of shader {:#018x} with {}..{} vertices; frames"
-                        " without one are skipped, not captured", n.hash, n.verts,
-                        n.maxVerts == 0xFFFFFFFFu ? std::string("any")
-                                                  : std::to_string(n.maxVerts));
+                    lucent::info("gpu",
+                                 "guest-draw: the capture also REQUIRES a"
+                                 " draw of shader {:#018x} with {}..{} vertices; frames"
+                                 " without one are skipped, not captured",
+                                 n.hash, n.verts,
+                                 n.maxVerts == 0xFFFFFFFFu ? std::string("any")
+                                                           : std::to_string(n.maxVerts));
                     return n;
                 }();
                 uint32_t matchVerts = 0;
                 bool shaderPresent = false;
                 if (need.hash != 0)
                 {
-                    for (const auto& fd : frameDraws)
+                    for (const auto &fd : frameDraws)
                     {
                         if (fd.vsHash != need.hash && fd.psHash != need.hash)
                             continue;
@@ -1558,15 +1522,17 @@ struct CommandProcessor
                         // and "nobody looked" are otherwise the same silence.
                         ++contentHeld;
                         if (contentHeld == 1 || contentHeld % 60 == 0)
-                            lucent::info("gpu", "guest-draw: {} frame(s) past the"
-                                " draw-count gate held for content -- {} of them"
-                                " carried shader {:#018x} at all, and the biggest"
-                                " such draw was {} vertices against the {}..{}"
-                                " required. NOTHING has been captured",
-                                contentHeld, contentShaderSeen, need.hash,
-                                contentBestVerts, need.verts,
-                                need.maxVerts == 0xFFFFFFFFu ? std::string("any")
-                                    : std::to_string(need.maxVerts));
+                            lucent::info("gpu",
+                                         "guest-draw: {} frame(s) past the"
+                                         " draw-count gate held for content -- {} of them"
+                                         " carried shader {:#018x} at all, and the biggest"
+                                         " such draw was {} vertices against the {}..{}"
+                                         " required. NOTHING has been captured",
+                                         contentHeld, contentShaderSeen, need.hash,
+                                         contentBestVerts, need.verts,
+                                         need.maxVerts == 0xFFFFFFFFu
+                                             ? std::string("any")
+                                             : std::to_string(need.maxVerts));
                         drawsOffered = drawsNoShaderPair = drawsZeroIndices = 0;
                         drawsImmediateIndex = drawsAfterFrameDone = 0;
                         ++frameSwaps;
@@ -1608,9 +1574,10 @@ struct CommandProcessor
                     uint32_t constBase = 230;
                     float m[16] = {};
                 };
-                static const Cam cam = [] {
+                static const Cam cam = []
+                {
                     Cam c;
-                    const std::string& t = lucent::config::text("DRAW_FRAME_CAMERA");
+                    const std::string &t = lucent::config::text("DRAW_FRAME_CAMERA");
                     if (t.empty())
                         return c;
                     // <file>[:<translation fraction>[:<rotation absolute>
@@ -1627,57 +1594,61 @@ struct CommandProcessor
                             c.rotNear = std::strtod(t.c_str() + c2 + 1, nullptr);
                             const size_t c3 = t.find(':', c2 + 1);
                             if (c3 != std::string::npos)
-                                c.constBase = uint32_t(std::strtoul(
-                                    t.c_str() + c3 + 1, nullptr, 10));
+                                c.constBase =
+                                    uint32_t(std::strtoul(t.c_str() + c3 + 1, nullptr, 10));
                         }
                     }
                     std::ifstream f(path);
                     if (!f)
                     {
-                        lucent::warn("gpu", "GEARS_DRAW_FRAME_CAMERA: cannot open"
-                            " '{}'. NO camera gate is running and the capture"
-                            " falls back to the content predicate, which pairs"
-                            " the two sides badly", path);
+                        lucent::warn("gpu",
+                                     "GEARS_DRAW_FRAME_CAMERA: cannot open"
+                                     " '{}'. NO camera gate is running and the capture"
+                                     " falls back to the content predicate, which pairs"
+                                     " the two sides badly",
+                                     path);
                         return c;
                     }
                     int found = 0;
-                    for (std::string line; std::getline(f, line); )
+                    for (std::string line; std::getline(f, line);)
                     {
-                        int idx = 0; float v[4] = {};
-                        if (std::sscanf(line.c_str(), "c[%d]=(%f, %f, %f, %f)",
-                                        &idx, &v[0], &v[1], &v[2], &v[3]) != 5)
+                        int idx = 0;
+                        float v[4] = {};
+                        if (std::sscanf(line.c_str(), "c[%d]=(%f, %f, %f, %f)", &idx, &v[0], &v[1],
+                                        &v[2], &v[3]) != 5)
                             continue;
                         if (idx < int(c.constBase) || idx > int(c.constBase + 3))
                             continue;
-                        std::memcpy(&c.m[(idx - int(c.constBase)) * 4], v,
-                                    sizeof(v));
+                        std::memcpy(&c.m[(idx - int(c.constBase)) * 4], v, sizeof(v));
                         ++found;
                     }
                     if (found != 4)
                     {
-                        lucent::warn("gpu", "GEARS_DRAW_FRAME_CAMERA: '{}' has"
-                            " {} of the 4 view-projection rows c{}..c{}. NO"
-                            " camera gate is running", path, found, c.constBase,
-                            c.constBase + 3);
+                        lucent::warn("gpu",
+                                     "GEARS_DRAW_FRAME_CAMERA: '{}' has"
+                                     " {} of the 4 view-projection rows c{}..c{}. NO"
+                                     " camera gate is running",
+                                     path, found, c.constBase, c.constBase + 3);
                         return c;
                     }
                     c.on = true;
                     c.vs = need.hash;
-                    lucent::info("gpu", "guest-draw: the capture also REQUIRES a"
-                        " view-projection c{}..c{} within {} of the console's,"
-                        " read from {} and compared against the register file"
-                        " of every draw of {:#018x}", c.constBase,
-                        c.constBase + 3, c.near, path, c.vs);
+                    lucent::info("gpu",
+                                 "guest-draw: the capture also REQUIRES a"
+                                 " view-projection c{}..c{} within {} of the console's,"
+                                 " read from {} and compared against the register file"
+                                 " of every draw of {:#018x}",
+                                 c.constBase, c.constBase + 3, c.near, path, c.vs);
                     return c;
                 }();
                 if (cam.on && cam.vs != 0)
                 {
                     double bestDist = 1e30, bestRot = 0.0, bestTransRel = 0.0;
-                    for (const auto& fd : frameDraws)
+                    for (const auto &fd : frameDraws)
                     {
                         if (fd.vsHash != cam.vs || !fd.registerFile)
                             continue;
-                        const uint32_t* R = fd.registerFile->data();
+                        const uint32_t *R = fd.registerFile->data();
                         // ROTATION AND TRANSLATION ARE MEASURED SEPARATELY, and
                         // that is the whole point of this loop rather than a
                         // refinement. A single max-abs over all 16 components
@@ -1697,30 +1668,26 @@ struct CommandProcessor
                         for (int i = 0; i < 16; ++i)
                         {
                             float f;
-                            std::memcpy(&f,
-                                &R[0x4000 + cam.constBase * 4 + i], sizeof f);
+                            std::memcpy(&f, &R[0x4000 + cam.constBase * 4 + i], sizeof f);
                             const double diff = std::fabs(f - cam.m[i]);
                             if (i < 12)
                                 dRot = std::max(dRot, diff);
                             else
                             {
                                 dTrans = std::max(dTrans, diff);
-                                transScale =
-                                    std::max(transScale, double(std::fabs(cam.m[i])));
+                                transScale = std::max(transScale, double(std::fabs(cam.m[i])));
                             }
                         }
                         // The translation row is judged RELATIVE to its own
                         // magnitude, so the threshold means the same thing
                         // wherever in the level the camera stands.
-                        const double dTransRel =
-                            transScale > 1e-6 ? dTrans / transScale : dTrans;
+                        const double dTransRel = transScale > 1e-6 ? dTrans / transScale : dTrans;
                         // One number for the caller, but only after each half
                         // has been scaled to its own threshold: a draw passes
                         // when BOTH are within their limits, so the combined
                         // distance is the worse of the two in units of "how
                         // many thresholds away".
-                        const double d = std::max(dRot / cam.rotNear,
-                                                  dTransRel / cam.near);
+                        const double d = std::max(dRot / cam.rotNear, dTransRel / cam.near);
                         if (d < bestDist)
                         {
                             bestDist = d;
@@ -1742,76 +1709,84 @@ struct CommandProcessor
                         // hold cannot tell them apart.
                         ++contentCamHeld;
                         if (contentCamHeld == 1 || contentCamHeld % 60 == 0)
-                            lucent::info("gpu", "guest-draw: {} frame(s) held for"
+                            lucent::info(
+                                "gpu",
+                                "guest-draw: {} frame(s) held for"
                                 " the CAMERA -- this frame's closest draw of"
                                 " {:#018x} is {}, the closest any frame has come"
                                 " is {}, and 1.00 is required. NOTHING has been"
                                 " captured",
                                 contentCamHeld, cam.vs,
-                                bestDist > 1e29
-                                    ? std::string("no such draw")
-                                    : std::format("rotation {:.4f}/{} and"
-                                                  " translation {:.5f}/{} -> {:.2f}"
-                                                  " thresholds away",
-                                                  bestRot, cam.rotNear,
-                                                  bestTransRel, cam.near, bestDist),
+                                bestDist > 1e29 ? std::string("no such draw")
+                                                : std::format("rotation {:.4f}/{} and"
+                                                              " translation {:.5f}/{} -> {:.2f}"
+                                                              " thresholds away",
+                                                              bestRot, cam.rotNear, bestTransRel,
+                                                              cam.near, bestDist),
                                 contentCamBest > 1e29 ? std::string("nothing")
-                                                : std::format("{:.2f}", contentCamBest));
+                                                      : std::format("{:.2f}", contentCamBest));
                         drawsOffered = drawsNoShaderPair = drawsZeroIndices = 0;
                         drawsImmediateIndex = drawsAfterFrameDone = 0;
                         ++frameSwaps;
                         frameDraws.clear();
                         return;
                     }
-                    lucent::info("gpu", "guest-draw: CAMERA MATCHED -- rotation"
-                        " {:.4f} (limit {}) and translation {:.5f} of its own"
-                        " magnitude (limit {}), i.e. {:.2f} thresholds, after {}"
-                        " frame(s) held. THIS matched frame is the capture; any"
-                        " remaining temporal residual is world/animation state,"
-                        " not an intentional one-frame capture delay",
-                        bestRot, cam.rotNear, bestTransRel, cam.near, bestDist,
-                        contentCamHeld);
+                    lucent::info("gpu",
+                                 "guest-draw: CAMERA MATCHED -- rotation"
+                                 " {:.4f} (limit {}) and translation {:.5f} of its own"
+                                 " magnitude (limit {}), i.e. {:.2f} thresholds, after {}"
+                                 " frame(s) held. THIS matched frame is the capture; any"
+                                 " remaining temporal residual is world/animation state,"
+                                 " not an intentional one-frame capture delay",
+                                 bestRot, cam.rotNear, bestTransRel, cam.near, bestDist,
+                                 contentCamHeld);
                 }
                 contentGateOpen = true;
-                lucent::info("gpu", "guest-draw: frame {} is the capture -- it"
-                    " follows the first frame with >= {} draws, after {} frames"
-                    " scanned{}", frameSwaps, minDraws, contentScans,
-                    need.hash == 0 ? std::string()
-                        : std::format(", and is the first of {} frame(s) checked"
-                                      " to carry a draw of {:#018x} with {}"
-                                      " vertices ({}..{} required)",
-                                      contentHeld + 1, need.hash, matchVerts,
-                                      need.verts,
-                                      need.maxVerts == 0xFFFFFFFFu
-                                          ? std::string("any")
-                                          : std::to_string(need.maxVerts)));
+                lucent::info("gpu",
+                             "guest-draw: frame {} is the capture -- it"
+                             " follows the first frame with >= {} draws, after {} frames"
+                             " scanned{}",
+                             frameSwaps, minDraws, contentScans,
+                             need.hash == 0
+                                 ? std::string()
+                                 : std::format(", and is the first of {} frame(s) checked"
+                                               " to carry a draw of {:#018x} with {}"
+                                               " vertices ({}..{} required)",
+                                               contentHeld + 1, need.hash, matchVerts, need.verts,
+                                               need.maxVerts == 0xFFFFFFFFu
+                                                   ? std::string("any")
+                                                   : std::to_string(need.maxVerts)));
             }
             else
             {
                 if (long(frameDraws.size()) >= minDraws)
                 {
                     contentArmed = true;
-                    contentWait = uint32_t(std::max<long>(0,
-                        lucent::config::number("DRAW_FRAME_AFTER_GAMEPLAY", 0)));
-                    lucent::info("gpu", "guest-draw: frame {} has {} draws (>= {})"
-                        " after {} frames scanned; capturing {} frame(s) later",
-                        frameSwaps, frameDraws.size(), minDraws, contentScans,
-                        contentWait + 1);
+                    contentWait = uint32_t(
+                        std::max<long>(0, lucent::config::number("DRAW_FRAME_AFTER_GAMEPLAY", 0)));
+                    lucent::info("gpu",
+                                 "guest-draw: frame {} has {} draws (>= {})"
+                                 " after {} frames scanned; capturing {} frame(s) later",
+                                 frameSwaps, frameDraws.size(), minDraws, contentScans,
+                                 contentWait + 1);
                 }
                 else if (contentScans == 1 || contentScans % 300 == 0)
                 {
                     // The periodic NEGATIVE with its denominator: a run that
                     // never reaches the threshold must not be silent, or it
                     // reads as a run that rendered gameplay and dumped nothing.
-                    lucent::info("gpu", "guest-draw: {} frames scanned, none with"
-                        " >= {} draws yet (busiest so far: {} draws). NOTHING has"
-                        " been rendered or captured.",
-                        contentScans, minDraws, contentBusiest);
+                    lucent::info("gpu",
+                                 "guest-draw: {} frames scanned, none with"
+                                 " >= {} draws yet (busiest so far: {} draws). NOTHING has"
+                                 " been rendered or captured.",
+                                 contentScans, minDraws, contentBusiest);
                 }
                 if (target > 0)
-                    lucent::warn("gpu", "GEARS_DRAW_FRAME_AT={} is set but"
-                        " GEARS_DRAW_FRAME_MIN_DRAWS={} selects the frame; the"
-                        " index is IGNORED", target, minDraws);
+                    lucent::warn("gpu",
+                                 "GEARS_DRAW_FRAME_AT={} is set but"
+                                 " GEARS_DRAW_FRAME_MIN_DRAWS={} selects the frame; the"
+                                 " index is IGNORED",
+                                 target, minDraws);
                 drawsOffered = drawsNoShaderPair = drawsZeroIndices = 0;
                 drawsImmediateIndex = drawsAfterFrameDone = 0;
                 ++frameSwaps;
@@ -1823,12 +1798,12 @@ struct CommandProcessor
         {
             // Info, not debug: this line IS the draws-per-frame profile used to
             // choose which frame to capture. One line per frame, no other cost.
-            lucent::info("gpu", "guest-draw: frame {} has {} draws of {} the guest"
-                " issued (dropped: {} no shader pair, {} zero indices, {}"
-                " immediate-index, {} after frame done) (waiting for {})",
-                frameSwaps, frameDraws.size(), drawsOffered, drawsNoShaderPair,
-                drawsZeroIndices, drawsImmediateIndex, drawsAfterFrameDone,
-                target);
+            lucent::info("gpu",
+                         "guest-draw: frame {} has {} draws of {} the guest"
+                         " issued (dropped: {} no shader pair, {} zero indices, {}"
+                         " immediate-index, {} after frame done) (waiting for {})",
+                         frameSwaps, frameDraws.size(), drawsOffered, drawsNoShaderPair,
+                         drawsZeroIndices, drawsImmediateIndex, drawsAfterFrameDone, target);
             drawsOffered = drawsNoShaderPair = drawsZeroIndices = 0;
             drawsImmediateIndex = drawsAfterFrameDone = 0;
             ++frameSwaps;
@@ -1968,11 +1943,12 @@ struct CommandProcessor
         if (frameCount > 0)
         {
             lucent::info("gpu", "guest-draw: rendering whole frame ({} draws captured)",
-                in.draws.size());
+                         in.draws.size());
             const auto t0 = std::chrono::steady_clock::now();
             gears::RenderFrameWithGraphicsProbe(in);
             const uint64_t ms = uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - t0).count());
+                                             std::chrono::steady_clock::now() - t0)
+                                             .count());
             if (diagnosticProbe)
                 lucent::info("gpu",
                              "guest-draw: HTTP probe rendered without"
@@ -2038,35 +2014,37 @@ struct CommandProcessor
         drawCaptureDone = true;
 
         namespace fs = std::filesystem;
-        const char* dir = std::getenv("GEARS_DRAW_CAPTURE_DIR");
+        const char *dir = std::getenv("GEARS_DRAW_CAPTURE_DIR");
         fs::path outdir = dir ? fs::path(dir) : fs::path("scratch/draw-params");
         std::error_code ec;
         fs::create_directories(outdir, ec);
         std::ofstream rep(outdir / "hot_draw.txt");
 
-        auto emit = [&](const std::string& s) {
+        auto emit = [&](const std::string &s)
+        {
             lucent::info("gpu", "{}", s);
-            if (rep) rep << s << '\n';
+            if (rep)
+                rep << s << '\n';
         };
 
-        static const char* kPrim[16] = {
-            "none", "point_list", "line_list", "line_strip", "triangle_list",
-            "triangle_fan", "triangle_strip", "triangle_w_wflags",
-            "rectangle_list", "unused1", "unused2", "unused3", "line_loop",
-            "quad_list", "quad_strip", "polygon"};
-        static const char* kSrc[4] = {"kDMA(indexed)", "kImmediate(inline)",
-                                      "kAutoIndex", "invalid"};
+        static const char *kPrim[16] = {
+            "none",           "point_list",   "line_list",      "line_strip",
+            "triangle_list",  "triangle_fan", "triangle_strip", "triangle_w_wflags",
+            "rectangle_list", "unused1",      "unused2",        "unused3",
+            "line_loop",      "quad_list",    "quad_strip",     "polygon"};
+        static const char *kSrc[4] = {"kDMA(indexed)", "kImmediate(inline)", "kAutoIndex",
+                                      "invalid"};
 
         emit(std::format("=== hot-pair {} draw parameters ===", OpcodeName(opcode)));
         emit(std::format("bound shaders: vertex {:#018x} pixel {:#018x}",
-            g_shaderCapture.activeVertexHash, g_shaderCapture.activePixelHash));
+                         g_shaderCapture.activeVertexHash, g_shaderCapture.activePixelHash));
         emit(std::format("VGT_DRAW_INITIATOR = {:#010x}", initiator));
         emit(std::format("  prim_type       = {:#x} ({})", primType,
-            primType < 16 ? kPrim[primType] : "explicit/other"));
+                         primType < 16 ? kPrim[primType] : "explicit/other"));
         emit(std::format("  source_select   = {} ({})", sourceSelect, kSrc[sourceSelect]));
         emit(std::format("  major_mode      = {}", majorMode));
         emit(std::format("  index_size      = {} ({})", indexSizeBit,
-            indexSizeBit ? "int32" : "int16"));
+                         indexSizeBit ? "int32" : "int16"));
         emit(std::format("  num_indices     = {}", numIndices));
 
         uint32_t dmaBase = 0, dmaSize = 0, dmaNumWords = 0, dmaSwap = 0;
@@ -2086,10 +2064,12 @@ struct CommandProcessor
                 indexLenBytes = dmaNumWords * indexSizeBytes;
             }
             emit(std::format("VGT_DMA_BASE = {:#010x}  VGT_DMA_SIZE = {:#010x}"
-                " (num_words {}, swap_mode {})", dmaBase, dmaSize, dmaNumWords, dmaSwap));
+                             " (num_words {}, swap_mode {})",
+                             dmaBase, dmaSize, dmaNumWords, dmaSwap));
             emit(std::format("  index buffer: guest_base {:#x}, {} indices,"
-                " {}-bit, {} bytes, endian {}", indexGuestBase, numIndices,
-                indexSizeBytes * 8, indexLenBytes, dmaSwap));
+                             " {}-bit, {} bytes, endian {}",
+                             indexGuestBase, numIndices, indexSizeBytes * 8, indexLenBytes,
+                             dmaSwap));
         }
         else if (sourceSelect == 2)
         {
@@ -2102,12 +2082,12 @@ struct CommandProcessor
         const uint32_t vfEndian = vf1 & 0x3;
         const uint32_t vfSizeWords = (vf1 >> 2) & 0xFFFFFF;
         const uint32_t strideBytes = kHotVertexStrideDwords * 4;
-        emit(std::format("vertex fetch constant #95 (reg {:#x}): {:#010x} {:#010x}",
-            fetchBase, vf0, vf1));
+        emit(std::format("vertex fetch constant #95 (reg {:#x}): {:#010x} {:#010x}", fetchBase, vf0,
+                         vf1));
         emit(std::format("  type {} vertex_base {:#x} (dword addr {:#x}) stride {} dwords"
-            " ({} bytes) endian {} size {} words ({} bytes)", vfType, vertexBaseBytes,
-            vf0 >> 2, kHotVertexStrideDwords, strideBytes, vfEndian, vfSizeWords,
-            vfSizeWords * 4));
+                         " ({} bytes) endian {} size {} words ({} bytes)",
+                         vfType, vertexBaseBytes, vf0 >> 2, kHotVertexStrideDwords, strideBytes,
+                         vfEndian, vfSizeWords, vfSizeWords * 4));
 
         // First N indices from guest memory.
         const uint32_t nIdx = std::min(numIndices, 32u);
@@ -2126,13 +2106,16 @@ struct CommandProcessor
                     // load<uint16_t> from its physical buffer), then apply the
                     // GpuSwap the swap_mode selects (k8in16 == byte swap), exactly
                     // as Xenia's xenos::GpuSwap(uint16_t, endian) does.
-                    const uint16_t* p = gears::Memory().Translate<uint16_t>(
-                        indexGuestBase + i * 2);
+                    const uint16_t *p = gears::Memory().Translate<uint16_t>(indexGuestBase + i * 2);
                     idx = SwapIndex16(*p, dmaSwap);
                 }
                 else
                     idx = ReadGuest32(indexGuestBase + i * 4);
-                if (i < nIdx) { indices.push_back(idx); line.add(" {}", idx); }
+                if (i < nIdx)
+                {
+                    indices.push_back(idx);
+                    line.add(" {}", idx);
+                }
                 minI = std::min(minI, idx);
                 maxI = std::max(maxI, idx);
             }
@@ -2140,26 +2123,30 @@ struct CommandProcessor
             if (rep)
             {
                 rep << "first " << nIdx << " indices:";
-                for (uint32_t v : indices) rep << ' ' << v;
+                for (uint32_t v : indices)
+                    rep << ' ' << v;
                 rep << "\n";
             }
             emit(std::format("  index range: min {} max {} (vertex-buffer size {} bytes"
-                " admits index < {})", minI, maxI, vfSizeWords * 4,
-                strideBytes ? vfSizeWords * 4 / strideBytes : 0));
+                             " admits index < {})",
+                             minI, maxI, vfSizeWords * 4,
+                             strideBytes ? vfSizeWords * 4 / strideBytes : 0));
         }
 
         // First few vertices from the shared-memory source. The captured stream
         // descriptor exposes a four-component float position at byte offset 0.
         const uint32_t nVtx = 6;
         emit(std::format("first {} vertices (dwords 0..3 = FMT_32_32_32_32_FLOAT"
-            " position attribute):", nVtx));
+                         " position attribute):",
+                         nVtx));
         // Which vertices to sample: the first few referenced indices, or 0..n.
         std::vector<uint32_t> sampleVerts;
         if (!indices.empty())
             for (uint32_t i = 0; i < nVtx && i < indices.size(); ++i)
                 sampleVerts.push_back(indices[i]);
         else
-            for (uint32_t i = 0; i < nVtx; ++i) sampleVerts.push_back(i);
+            for (uint32_t i = 0; i < nVtx; ++i)
+                sampleVerts.push_back(i);
 
         for (uint32_t vi : sampleVerts)
         {
@@ -2169,38 +2156,22 @@ struct CommandProcessor
             {
                 const uint32_t w = ReadGuest32(vaddr + k * 4); // k8in32 == full swap
                 // vf endian: 2 (k8in32) matches ReadGuest32's full byteswap.
-                d[k] = (vfEndian == 2) ? w : ReadGuest32Raw(vaddr + k * 4, vfEndian);
+                d[k] = (vfEndian == 2)
+                           ? w
+                           : gears::LoadGpuWord32(gears::Memory().Translate<uint8_t>(vaddr + k * 4),
+                                                  vfEndian);
             }
             float pos[4];
-            for (int k = 0; k < 4; ++k) std::memcpy(&pos[k], &d[k], 4);
+            for (int k = 0; k < 4; ++k)
+                std::memcpy(&pos[k], &d[k], 4);
             emit(std::format("  v[{}] @ {:#x}: pos ({}, {}, {}, {})  raw"
-                " {:#010x} {:#010x} {:#010x} {:#010x}", vi, vaddr,
-                pos[0], pos[1], pos[2], pos[3], d[0], d[1], d[2], d[3]));
+                             " {:#010x} {:#010x} {:#010x} {:#010x}",
+                             vi, vaddr, pos[0], pos[1], pos[2], pos[3], d[0], d[1], d[2], d[3]));
         }
         emit(std::format("(wrote to {})", (outdir / "hot_draw.txt").string()));
     }
 
-    // Read a guest dword applying an explicit xenos::Endian swap, for vertex
-    // data whose fetch-constant endian differs from the ring's default.
-    static uint32_t ReadGuest32Raw(uint32_t addr, uint32_t endian)
-    {
-        const uint8_t* p = gears::Memory().Translate<uint8_t>(addr);
-        const uint32_t b = uint32_t(p[0]) | (uint32_t(p[1]) << 8) |
-                           (uint32_t(p[2]) << 16) | (uint32_t(p[3]) << 24);
-        switch (endian)
-        {
-        case 1: // k8in16
-            return ((b & 0x00FF00FF) << 8) | ((b & 0xFF00FF00) >> 8);
-        case 2: // k8in32
-            return __builtin_bswap32(b);
-        case 3: // k16in32
-            return ((b & 0x0000FFFF) << 16) | ((b & 0xFFFF0000) >> 16);
-        default:
-            return b;
-        }
-    }
-
-    void HandleType3(uint32_t opcode, const uint32_t* data, uint32_t count, int depth)
+    void HandleType3(uint32_t opcode, const uint32_t *data, uint32_t count, int depth)
     {
         ++(depth == 0 ? ringOpcodes : innerOpcodes)[opcode];
         // The bin registers are the tiling controls: on a predicated-tiling
@@ -2209,10 +2180,10 @@ struct CommandProcessor
         // count (if any) is observable rather than assumed.
         if (opcode >= 0x50 && opcode <= 0x51)
             lucent::debug("gpu", "{} data {:#x} {:#x} (depth {})", OpcodeName(opcode),
-                count >= 1 ? data[0] : 0u, count >= 2 ? data[1] : 0u, depth);
+                          count >= 1 ? data[0] : 0u, count >= 2 ? data[1] : 0u, depth);
         if (opcode >= 0x60 && opcode <= 0x63)
             lucent::debug("gpu", "{} data {:#x} (depth {})", OpcodeName(opcode),
-                count >= 1 ? data[0] : 0u, depth);
+                          count >= 1 ? data[0] : 0u, depth);
 
         switch (opcode)
         {
@@ -2229,16 +2200,20 @@ struct CommandProcessor
                 binSelect = (uint64_t(data[0]) << 32) | data[1];
             break;
         case 0x60:
-            if (count >= 1) binMask = (binMask & 0xFFFFFFFF00000000ull) | data[0];
+            if (count >= 1)
+                binMask = (binMask & 0xFFFFFFFF00000000ull) | data[0];
             break;
         case 0x61:
-            if (count >= 1) binMask = (binMask & 0xFFFFFFFFull) | (uint64_t(data[0]) << 32);
+            if (count >= 1)
+                binMask = (binMask & 0xFFFFFFFFull) | (uint64_t(data[0]) << 32);
             break;
         case 0x62:
-            if (count >= 1) binSelect = (binSelect & 0xFFFFFFFF00000000ull) | data[0];
+            if (count >= 1)
+                binSelect = (binSelect & 0xFFFFFFFF00000000ull) | data[0];
             break;
         case 0x63:
-            if (count >= 1) binSelect = (binSelect & 0xFFFFFFFFull) | (uint64_t(data[0]) << 32);
+            if (count >= 1)
+                binSelect = (binSelect & 0xFFFFFFFFull) | (uint64_t(data[0]) << 32);
             break;
 
         case kOpIndirectBuffer:
@@ -2257,8 +2232,8 @@ struct CommandProcessor
                     if (depth == 0)
                     {
                         ++ibCounts[address];
-                        lucent::debug("gpu", "IB {:#x} ({} words) from ring dword {:#x}",
-                            address, words, sourceIndex);
+                        lucent::debug("gpu", "IB {:#x} ({} words) from ring dword {:#x}", address,
+                                      words, sourceIndex);
                     }
                     ExecuteLinear(address, words, depth + 1);
                 }
@@ -2301,6 +2276,7 @@ struct CommandProcessor
                     lucent::debug("gpu", "swap packet: front buffer {:#x} (seq {})", data[0],
                                   data[1]);
                     ReportWaitStats();
+                    gears::ReportDrawPacketWriteWatch();
                     // Whenever the ramp changes, say what it now is. Once per
                     // swap at most, and only on a change, so a title that
                     // uploads once says it once.
@@ -2325,20 +2301,20 @@ struct CommandProcessor
                                 // of the linear table this compares against, and
                                 // those call for opposite conclusions.
                                 if (differing <= 4)
-                                    diff.add(" [{}] {:#010x} vs linear {:#010x}",
-                                        i, g_gammaRamp.table[i], linear);
+                                    diff.add(" [{}] {:#010x} vs linear {:#010x}", i,
+                                             g_gammaRamp.table[i], linear);
                             }
                             if (differing)
                                 diff.flush(lucent::Level::Info, "gpu");
-                            lucent::info("gpu", "gamma ramp CHANGED: {} write(s)"
-                                " ({} whole-entry DC_LUT_30_COLOR, {} per-channel"
-                                " DC_LUT_SEQ_COLOR, {} PWL); {} of 256 entries now"
-                                " differ from linear, so scan-out is NOT the"
-                                " identity and a frame presented without it is"
-                                " brighter than the console's",
-                                writes, g_gammaRamp.directWrites,
-                                g_gammaRamp.seqWrites, g_gammaRamp.pwlWrites,
-                                differing);
+                            lucent::info("gpu",
+                                         "gamma ramp CHANGED: {} write(s)"
+                                         " ({} whole-entry DC_LUT_30_COLOR, {} per-channel"
+                                         " DC_LUT_SEQ_COLOR, {} PWL); {} of 256 entries now"
+                                         " differ from linear, so scan-out is NOT the"
+                                         " identity and a frame presented without it is"
+                                         " brighter than the console's",
+                                         writes, g_gammaRamp.directWrites, g_gammaRamp.seqWrites,
+                                         g_gammaRamp.pwlWrites, differing);
                         }
                     }
                     // Whole-frame guest-draw backend: at the first swap that has
@@ -2355,8 +2331,8 @@ struct CommandProcessor
                     if (!g_gammaRamp.reported)
                     {
                         g_gammaRamp.reported = true;
-                        const uint32_t writes = g_gammaRamp.directWrites +
-                            g_gammaRamp.seqWrites + g_gammaRamp.pwlWrites;
+                        const uint32_t writes = g_gammaRamp.directWrites + g_gammaRamp.seqWrites +
+                                                g_gammaRamp.pwlWrites;
                         if (!writes)
                         {
                             // Not the end of the story, and the line says so:
@@ -2365,9 +2341,9 @@ struct CommandProcessor
                             // question and read as a settled negative.
                             (void)0;
                             lucent::info("gpu", "gamma ramp: NONE programmed by"
-                                " the first presented frame. This title uploads one"
-                                " later, so this is a starting state, not a"
-                                " conclusion -- watch for the follow-up line");
+                                                " the first presented frame. This title uploads one"
+                                                " later, so this is a starting state, not a"
+                                                " conclusion -- watch for the follow-up line");
                         }
                         else
                         {
@@ -2381,15 +2357,15 @@ struct CommandProcessor
                                 if (g_gammaRamp.table[i] != (v | (v << 10) | (v << 20)))
                                     ++differing;
                             }
-                            lucent::info("gpu", "gamma ramp: {} entry write(s)"
-                                " ({} whole-entry via DC_LUT_30_COLOR, {} per-channel"
-                                " via DC_LUT_SEQ_COLOR, {} PWL), and {} of 256 entries"
-                                " differ from linear. Xenia implements only the"
-                                " SEQ_COLOR path, so a ramp uploaded the other way"
-                                " is one the reference is NOT applying either",
-                                writes, g_gammaRamp.directWrites,
-                                g_gammaRamp.seqWrites, g_gammaRamp.pwlWrites,
-                                differing);
+                            lucent::info("gpu",
+                                         "gamma ramp: {} entry write(s)"
+                                         " ({} whole-entry via DC_LUT_30_COLOR, {} per-channel"
+                                         " via DC_LUT_SEQ_COLOR, {} PWL), and {} of 256 entries"
+                                         " differ from linear. Xenia implements only the"
+                                         " SEQ_COLOR path, so a ramp uploaded the other way"
+                                         " is one the reference is NOT applying either",
+                                         writes, g_gammaRamp.directWrites, g_gammaRamp.seqWrites,
+                                         g_gammaRamp.pwlWrites, differing);
                         }
                     }
                     // data[2..7] is the front buffer's fetch constant, written by
@@ -2409,8 +2385,8 @@ struct CommandProcessor
                 }
                 else
                 {
-                    lucent::debug("gpu", "stale swap packet ignored (seq {} <= {})",
-                        data[1], lastSwapSequence);
+                    lucent::debug("gpu", "stale swap packet ignored (seq {} <= {})", data[1],
+                                  lastSwapSequence);
                 }
             }
             break;
@@ -2461,12 +2437,11 @@ struct CommandProcessor
                 const uint32_t recordBase = reportAddress & ~0x1Fu;
                 if (recordBase != 0)
                 {
-                    uint8_t* record = gears::Memory().Translate<uint8_t>(recordBase);
+                    uint8_t *record = gears::Memory().Translate<uint8_t>(recordBase);
                     // The zero-fill stays: it is what clears D3D's 0xFFFFFEED
                     // sentinel, which is how GetData learns the query is done.
                     memset(record, 0, 0x20);
-                    static const bool reportVisible =
-                        !lucent::config::flag("GPU_ZPD_ZERO");
+                    static const bool reportVisible = !lucent::config::flag("GPU_ZPD_ZERO");
                     if (reportVisible)
                     {
                         // Per query, not per pixel: the value only has to grow
@@ -2475,18 +2450,17 @@ struct CommandProcessor
                         // host's own order here, so a plain store is correct.
                         static std::atomic<uint32_t> zpassCounter{0};
                         const uint32_t samples =
-                            zpassCounter.fetch_add(kZpdSamplesPerQuery,
-                                std::memory_order_relaxed) + kZpdSamplesPerQuery;
-                        std::memcpy(record + offsetof(GuestDepthSampleCounts,
-                                                      zpassA), &samples, 4);
-                        std::memcpy(record + offsetof(GuestDepthSampleCounts,
-                                                      total_A), &samples, 4);
+                            zpassCounter.fetch_add(kZpdSamplesPerQuery, std::memory_order_relaxed) +
+                            kZpdSamplesPerQuery;
+                        std::memcpy(record + offsetof(GuestDepthSampleCounts, zpassA), &samples, 4);
+                        std::memcpy(record + offsetof(GuestDepthSampleCounts, total_A), &samples,
+                                    4);
                     }
-                    lucent::debug("gpu", "EVENT_WRITE_ZPD: {} -> {:#x}"
-                        " (initiator {:#x})",
-                        reportVisible ? "visible (monotonic ZPass)"
-                                      : "zero samples",
-                        recordBase, count >= 1 ? data[0] : 0u);
+                    lucent::debug("gpu",
+                                  "EVENT_WRITE_ZPD: {} -> {:#x}"
+                                  " (initiator {:#x})",
+                                  reportVisible ? "visible (monotonic ZPass)" : "zero samples",
+                                  recordBase, count >= 1 ? data[0] : 0u);
                 }
             }
             break;
@@ -2503,14 +2477,14 @@ struct CommandProcessor
             {
                 const uint32_t address = data[1] & ~3u;
                 const uint16_t extents[6] = {
-                    0,            // min x (in 8px blocks)
-                    8192 >> 3,    // max x
-                    0,            // min y
-                    8192 >> 3,    // max y
-                    0,            // min z
-                    1,            // max z
+                    0,         // min x (in 8px blocks)
+                    8192 >> 3, // max x
+                    0,         // min y
+                    8192 >> 3, // max y
+                    0,         // min z
+                    1,         // max z
                 };
-                auto* out = gears::Memory().Translate<uint16_t>(address);
+                auto *out = gears::Memory().Translate<uint16_t>(address);
                 for (int i = 0; i < 6; i++)
                     out[i] = uint16_t(extents[i] << 8 | extents[i] >> 8);
                 lucent::debug("gpu", "EVENT_WRITE_EXT -> {:#x}", address);
@@ -2529,9 +2503,10 @@ struct CommandProcessor
                         lucent::debug("gpu", "INTERRUPT -> cpu {}", cpu);
                         const auto isrStart = std::chrono::steady_clock::now();
                         interruptState.Dispatch(1, cpu);
-                        interruptUs += uint64_t(
-                            std::chrono::duration_cast<std::chrono::microseconds>(
-                                std::chrono::steady_clock::now() - isrStart).count());
+                        interruptUs +=
+                            uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
+                                         std::chrono::steady_clock::now() - isrStart)
+                                         .count());
                         ++interrupts;
                     }
                 }
@@ -2543,7 +2518,7 @@ struct CommandProcessor
         }
     }
 
-    void WaitRegMem(const uint32_t* data)
+    void WaitRegMem(const uint32_t *data)
     {
         const uint32_t waitInfo = data[0];
         const uint32_t poll = data[1];
@@ -2631,7 +2606,7 @@ struct CommandProcessor
     // Executes one packet whose header has been consumed; `fetch(w)` reads
     // data word w. Returns the number of data words consumed.
     template <typename Fetch>
-    uint32_t ExecutePacket(uint32_t header, Fetch&& fetch, uint32_t available, int depth)
+    uint32_t ExecutePacket(uint32_t header, Fetch &&fetch, uint32_t available, int depth)
     {
         const uint32_t type = header >> 30;
         if (header == 0 || type == 2)
@@ -2643,9 +2618,11 @@ struct CommandProcessor
         if (type == 0)
         {
             const uint32_t baseRegister = header & 0x7FFF;
-            RegWriteSource src(RegWatchList().empty() ? std::string()
-                : std::format("TYPE0 base {:#x} x{}{}", baseRegister, usable,
-                              (header & 0x8000) ? " one-reg" : ""));
+            gears::GpuRegisterWriteScope src(
+                !gears::GpuRegisterWatchEnabled()
+                    ? std::string()
+                    : std::format("TYPE0 base {:#x} x{}{}", baseRegister, usable,
+                                  (header & 0x8000) ? " one-reg" : ""));
             const bool oneRegister = (header & 0x8000) != 0;
             for (uint32_t w = 0; w < usable; w++)
             {
@@ -2667,10 +2644,10 @@ struct CommandProcessor
             // the pointer, a misparse reads as command words. Capped by novelty
             // (first three), and the cap is stated so a silent stop is not read
             // as "it stopped happening".
-            if (!RegWatchList().empty() && !oneRegister)
+            if (gears::GpuRegisterWatchEnabled() && !oneRegister)
             {
                 static uint32_t dumped = 0;
-                for (uint32_t reg : RegWatchList())
+                for (uint32_t reg : gears::GpuRegisterWatchRegisters())
                 {
                     if (reg < baseRegister || reg - baseRegister >= usable)
                         continue;
@@ -2682,8 +2659,8 @@ struct CommandProcessor
                     line.add("GPU_REG_WATCH payload dump {}/3: header {:08x} (TYPE0 base"
                              " {:#x} x{}) at {:#x}+{}, watched {:#x} got {:#010x} at word"
                              " {}; payload then 8 words past it:",
-                             dumped, header, baseRegister, usable, sourceBase, sourceIndex,
-                             reg, v, reg - baseRegister);
+                             dumped, header, baseRegister, usable, sourceBase, sourceIndex, reg, v,
+                             reg - baseRegister);
                     for (uint32_t w = 0; w < usable; ++w)
                         line.add(" {:08x}", fetch(w));
                     line.add(" |");
@@ -2704,16 +2681,19 @@ struct CommandProcessor
         }
         if (type == 1)
         {
-            RegWriteSource src("TYPE1");
-            if (usable >= 1) WriteGpuRegister(header & 0x7FF, fetch(0));
-            if (usable >= 2) WriteGpuRegister((header >> 11) & 0x7FF, fetch(1));
+            gears::GpuRegisterWriteScope src("TYPE1");
+            if (usable >= 1)
+                WriteGpuRegister(header & 0x7FF, fetch(0));
+            if (usable >= 2)
+                WriteGpuRegister((header >> 11) & 0x7FF, fetch(1));
             return count;
         }
 
         // TYPE3. The handled opcodes carry at most 18 words; larger packets
         // are state uploads, skipped without copying.
         const uint32_t opcode = (header >> 8) & 0x7F;
-        RegWriteSource src(RegWatchList().empty() ? std::string() : OpcodeName(opcode));
+        gears::GpuRegisterWriteScope src(!gears::GpuRegisterWatchEnabled() ? std::string()
+                                                                           : OpcodeName(opcode));
         uint32_t data[20];
         const uint32_t copy = std::min<uint32_t>(usable, 20);
         for (uint32_t w = 0; w < copy; w++)
@@ -2747,13 +2727,15 @@ struct CommandProcessor
         // Constant-file loads are likewise handled from fetch(): a SET_CONSTANT
         // can carry the whole 1024-dword ALU file, far past the 20-word copy.
         // This populates the register file the translated shaders read as UBOs.
-        if (opcode == kOpSetConstant || opcode == kOpLoadAluConstant ||
-            opcode == kOpSetConstant2 || opcode == kOpSetShaderConstants)
+        if (opcode == kOpSetConstant || opcode == kOpLoadAluConstant || opcode == kOpSetConstant2 ||
+            opcode == kOpSetShaderConstants)
             TrackConstantLoad(opcode, fetch, usable, count);
 
         // Verification hook: dump the constant files at the first real draw.
         if (opcode == 0x22 || opcode == 0x36) // DRAW_INDX / DRAW_INDX_2
         {
+            gears::MaybeArmDrawPacketWriteWatch(sourceBase, sourceIndex, depth, lastSwapSequence);
+
             // Mirror VGT_DRAW_INITIATOR from the packet into the register file so
             // prim_type / index_size are live for the system-constants
             // derivation (DRAW_INDX carries a viz token before the initiator,
@@ -2770,12 +2752,13 @@ struct CommandProcessor
                 const auto key = std::make_pair(g_shaderCapture.activeVertexHash,
                                                 g_shaderCapture.activePixelHash);
                 ++drawPairs[key];
-                lucent::info("draw", "draw #{} {} prim {:#x} src {} idx32 {} indices {}"
-                    " vs {:#018x} ps {:#018x}",
-                    drawsSeen, OpcodeName(opcode), initiator & 0x3F,
-                    (initiator >> 6) & 0x3, (initiator >> 11) & 0x1,
-                    (initiator >> 16) & 0xFFFF,
-                    g_shaderCapture.activeVertexHash, g_shaderCapture.activePixelHash);
+                lucent::info("draw",
+                             "draw #{} {} prim {:#x} src {} idx32 {} indices {}"
+                             " vs {:#018x} ps {:#018x}",
+                             drawsSeen, OpcodeName(opcode), initiator & 0x3F,
+                             (initiator >> 6) & 0x3, (initiator >> 11) & 0x1,
+                             (initiator >> 16) & 0xFFFF, g_shaderCapture.activeVertexHash,
+                             g_shaderCapture.activePixelHash);
             }
 
             DumpConstantFiles(opcode);
@@ -2798,8 +2781,8 @@ struct CommandProcessor
             return;
         }
 
-        lucent::info("gpu", "command processor consuming ring {:#x} ({} bytes)",
-            g_ringBuffer.base, g_ringBuffer.Bytes());
+        lucent::info("gpu", "command processor consuming ring {:#x} ({} bytes)", g_ringBuffer.base,
+                     g_ringBuffer.Bytes());
 
         constexpr uint32_t kCpRbWptr = 0x7FC80714;
         const uint32_t dwords = g_ringBuffer.Dwords();
@@ -2822,7 +2805,8 @@ struct CommandProcessor
                 const auto idleStart = std::chrono::steady_clock::now();
                 std::this_thread::sleep_for(std::chrono::microseconds(500));
                 idleUs += uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(
-                    std::chrono::steady_clock::now() - idleStart).count());
+                                       std::chrono::steady_clock::now() - idleStart)
+                                       .count());
                 ++idlePolls;
                 continue;
             }
@@ -2840,9 +2824,10 @@ struct CommandProcessor
             // packet runs would report the last packet inside the IB instead.
             const uint32_t ringIndex = rptr;
             rptr = (rptr + 1) & (dwords - 1);
-            const uint32_t consumed = ExecutePacket(header, [&](uint32_t w) {
-                return ReadGuest32(g_ringBuffer.base + ((rptr + w) & (dwords - 1)) * 4);
-            }, dwords, 0);
+            const uint32_t consumed = ExecutePacket(
+                header, [&](uint32_t w)
+                { return ReadGuest32(g_ringBuffer.base + ((rptr + w) & (dwords - 1)) * 4); },
+                dwords, 0);
 
             if (consumed + 1 > available)
             {
@@ -2857,9 +2842,10 @@ struct CommandProcessor
                 // Reported at error level with the header, because clamping
                 // hides the misparse that caused it and the misparse is the
                 // real defect.
-                lucent::error("gpu", "packet at ring dword {:#x} claims {} dwords with only"
-                    " {} written (header {:#010x}); resynchronising to the write pointer",
-                    sourceIndex, consumed + 1, available, header);
+                lucent::error("gpu",
+                              "packet at ring dword {:#x} claims {} dwords with only"
+                              " {} written (header {:#010x}); resynchronising to the write pointer",
+                              sourceIndex, consumed + 1, available, header);
                 rptr = wptr;
             }
             else
@@ -2871,18 +2857,18 @@ struct CommandProcessor
             // charged for it. The consumer must account for every dword the
             // title wrote, so any shortfall shows up as a gap between one
             // packet's index+length and the next packet's index.
-            lucent::debug("ring", "{:#06x} {:#010x} +{} wptr {:#06x}->{:#06x}",
-                ringIndex, header, consumed + 1, wptr,
-                ReadGuest32(kCpRbWptr) & (dwords - 1));
+            lucent::debug("ring", "{:#06x} {:#010x} +{} wptr {:#06x}->{:#06x}", ringIndex, header,
+                          consumed + 1, wptr, ReadGuest32(kCpRbWptr) & (dwords - 1));
 
             rptrTotal += consumed + 1;
             frameRptrAdvance += consumed + 1;
             if (!overshootReported && rptrTotal > wptrTotal)
             {
                 overshootReported = true;
-                lucent::error("gpu", "ring overshoot: consumed {} dwords but only {} written;"
-                    " packet at dword {:#x} header {:#010x} claimed {} dwords",
-                    rptrTotal, wptrTotal, sourceIndex, header, consumed + 1);
+                lucent::error("gpu",
+                              "ring overshoot: consumed {} dwords but only {} written;"
+                              " packet at dword {:#x} header {:#010x} claimed {} dwords",
+                              rptrTotal, wptrTotal, sourceIndex, header, consumed + 1);
             }
 
             StoreGuest32(g_ringBuffer.readPtrWriteBackAddress, rptr);
@@ -2929,12 +2915,16 @@ namespace gears
 // different point in the game on each. Keyed to this, "frame 1500" is the same
 // game moment on both sides. The oracle exposes the same thing
 // (CommandProcessor::guest_swap_count) and counts the same event.
-uint64_t GuestFramesPresented() { return g_frameCount.load(std::memory_order_relaxed); }
+uint64_t GuestFramesPresented()
+{
+    return g_frameCount.load(std::memory_order_relaxed);
+}
 
 // Registered at static init: the pointer is all input.cpp needs, and handing it
 // over here keeps the dependency one-way (GPU -> input), so the kernel tests
 // still link input.cpp without this file.
-const bool g_frameSourceRegistered = [] {
+const bool g_frameSourceRegistered = []
+{
     gears::SetGuestFrameSource(&GuestFramesPresented);
     return true;
 }();
@@ -2949,7 +2939,7 @@ const bool g_frameSourceRegistered = [] {
 // just lands in the memory. That is also how submission works: the title's
 // store of the ring write pointer to CP_RB_WPTR (0x7FC80714) is read back from
 // this window by the command processor thread.
-bool CommitDeviceWindow(GuestMemory& memory)
+bool CommitDeviceWindow(GuestMemory &memory)
 {
     constexpr uint32_t kDeviceWindowBase = 0x7FC00000;
     constexpr uint32_t kDeviceWindowSize = 0x00400000;
@@ -2981,33 +2971,32 @@ bool CommitDeviceWindow(GuestMemory& memory)
     *memory.Translate<uint32_t>(kVerticalTotalRegister) = ByteSwap(750u);
 
     lucent::info("gpu", "device MMIO window {:#x}..{:#x} committed; vblank status set",
-        kDeviceWindowBase, kDeviceWindowBase + kDeviceWindowSize);
+                 kDeviceWindowBase, kDeviceWindowBase + kDeviceWindowSize);
     return true;
 }
 
 } // namespace gears
 
-void __imp__VdInitializeEngines(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdInitializeEngines(PPCContext &__restrict ctx, uint8_t *)
 {
-    if (const char* watch = getenv("GEARS_PM4_WATCH"))
+    if (const char *watch = getenv("GEARS_PM4_WATCH"))
     {
         g_pm4WatchAddress = uint32_t(strtoul(watch, nullptr, 16));
-        lucent::info("gpu", "command stream will be traced for writes to {:#x}",
-            g_pm4WatchAddress);
+        lucent::info("gpu", "command stream will be traced for writes to {:#x}", g_pm4WatchAddress);
     }
 
     lucent::info("gpu", "VdInitializeEngines -- command processor up; the frame's"
-        " draws are rendered by the guest-draw backend at each swap");
+                        " draws are rendered by the guest-draw backend at each swap");
     ctx.r3.u64 = 1;
 }
 
-void __imp__VdShutdownEngines(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdShutdownEngines(PPCContext &__restrict ctx, uint8_t *)
 {
     lucent::info("gpu", "VdShutdownEngines after {} submitted frames", g_frameCount.load());
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdInitializeRingBuffer(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdInitializeRingBuffer(PPCContext &__restrict ctx, uint8_t *)
 {
     g_ringBuffer.base = ctx.r3.u32;
     g_ringBuffer.sizeLog2 = ctx.r4.u32;
@@ -3016,17 +3005,17 @@ void __imp__VdInitializeRingBuffer(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdEnableRingBufferRPtrWriteBack(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdEnableRingBufferRPtrWriteBack(PPCContext &__restrict ctx, uint8_t *)
 {
     g_ringBuffer.readPtrWriteBackAddress = ctx.r3.u32;
     g_ringBuffer.readPtrWriteBackBlockSize = ctx.r4.u32;
     lucent::info("gpu", "ring buffer read-pointer write-back at {:#x}",
-        g_ringBuffer.readPtrWriteBackAddress);
+                 g_ringBuffer.readPtrWriteBackAddress);
     StartCommandProcessor();
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdSetSystemCommandBufferGpuIdentifierAddress(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdSetSystemCommandBufferGpuIdentifierAddress(PPCContext &__restrict ctx, uint8_t *)
 {
     g_systemCommandBufferGpuIdentifier = ctx.r3.u32;
     lucent::info("gpu", "system command buffer GPU identifier at {:#x}", ctx.r3.u32);
@@ -3052,7 +3041,7 @@ void VblankThread()
     }
 
     lucent::info("gpu", "vblank thread driving interrupt callback {:#x} at 60 Hz",
-        g_graphicsInterruptCallback);
+                 g_graphicsInterruptCallback);
 
     uint32_t tick = 0;
     uint64_t vblanksDelivered = 0;
@@ -3088,8 +3077,7 @@ void VblankThread()
             }
             else
             {
-                const uint64_t budget =
-                    presents + gears::GuestClockVblankSlack();
+                const uint64_t budget = presents + gears::GuestClockVblankSlack();
                 // yield, not sleep: waiting on the guest to present is waiting on
                 // GUEST progress, and putting a host duration here would be the
                 // real time this whole mode exists to keep out.
@@ -3102,15 +3090,16 @@ void VblankThread()
                        g_frameCount.load(std::memory_order_relaxed) == presents)
                 {
                     if (++spins == 20000000ull)
-                        lucent::warn("time", "vblank-paced is STARVED: {} vblanks"
-                            " delivered since the first present, budget {} ({}"
-                            " presents + {} slack), and the guest has not"
-                            " presented again. The title needs more vblanks per"
-                            " present than this gate allows -- which it"
-                            " legitimately does while loading, when it presents"
-                            " rarely and still expects time to pass",
-                            vblanksDelivered - paceBase, budget, presents,
-                            gears::GuestClockVblankSlack());
+                        lucent::warn("time",
+                                     "vblank-paced is STARVED: {} vblanks"
+                                     " delivered since the first present, budget {} ({}"
+                                     " presents + {} slack), and the guest has not"
+                                     " presented again. The title needs more vblanks per"
+                                     " present than this gate allows -- which it"
+                                     " legitimately does while loading, when it presents"
+                                     " rarely and still expects time to pass",
+                                     vblanksDelivered - paceBase, budget, presents,
+                                     gears::GuestClockVblankSlack());
                     std::this_thread::yield();
                 }
             }
@@ -3150,8 +3139,7 @@ void VblankThread()
         // after that first submission.
         if (g_pm4WatchAddress != 0 && g_ringBuffer.base != 0 && ++tick % 60 == 0)
         {
-            gears::TraceCommandStream(g_ringBuffer.base,
-                g_ringBuffer.Dwords(), g_pm4WatchAddress);
+            gears::TraceCommandStream(g_ringBuffer.base, g_ringBuffer.Dwords(), g_pm4WatchAddress);
         }
 
         state.Dispatch(0, 0);
@@ -3159,7 +3147,7 @@ void VblankThread()
 }
 } // namespace
 
-void __imp__VdSetGraphicsInterruptCallback(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdSetGraphicsInterruptCallback(PPCContext &__restrict ctx, uint8_t *)
 {
     g_graphicsInterruptCallback = ctx.r3.u32;
     g_graphicsInterruptContext = ctx.r4.u32;
@@ -3167,7 +3155,7 @@ void __imp__VdSetGraphicsInterruptCallback(PPCContext& __restrict ctx, uint8_t*)
     if (getenv("GEARS_NO_VBLANK") != nullptr)
     {
         lucent::warn("gpu", "GEARS_NO_VBLANK set: interrupt callback {:#x} will never fire",
-            g_graphicsInterruptCallback);
+                     g_graphicsInterruptCallback);
     }
     else if (g_graphicsInterruptCallback != 0)
     {
@@ -3187,7 +3175,7 @@ void __imp__VdSetGraphicsInterruptCallback(PPCContext& __restrict ctx, uint8_t*)
 // lock). The fill is one runtime-private packet spanning the whole
 // reservation, carrying the front buffer address for when presentation
 // becomes real.
-void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdSwap(PPCContext &__restrict ctx, uint8_t *)
 {
     const uint64_t frame = g_frameCount.fetch_add(1) + 1;
     // The guest's clock advances HERE only when the trigger is `present`.
@@ -3202,10 +3190,10 @@ void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
     // reproducible. Two runs, same script, diff the files -- that is the whole
     // experiment, and it costs one atomic read per frame.
     {
-        static const std::string& workTrace = lucent::config::text("WORK_TRACE");
+        static const std::string &workTrace = lucent::config::text("WORK_TRACE");
         if (!workTrace.empty())
         {
-            static std::FILE* f = std::fopen(workTrace.c_str(), "wb");
+            static std::FILE *f = std::fopen(workTrace.c_str(), "wb");
             if (f)
             {
                 std::fprintf(f, "%llu %llu\n", (unsigned long long)frame,
@@ -3228,24 +3216,22 @@ void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
         // line counts (the log has no timestamps).
         static std::chrono::steady_clock::time_point last;
         const auto now = std::chrono::steady_clock::now();
-        const double seconds =
-            frame == 1 ? 0.0 : std::chrono::duration<double>(now - last).count();
+        const double seconds = frame == 1 ? 0.0 : std::chrono::duration<double>(now - last).count();
         last = now;
         // Cheap, once per sixty frames, and it answers a question that cost six
         // runs: is the crash reporter still the one installed?
         gears::VerifyFaultReporterStillInstalled();
-        lucent::info("gpu", "VdSwap: {} frames submitted, last 60 in {:.2f}s ({:.2f} fps)",
-            frame, seconds, seconds > 0 ? 60.0 / seconds : 0.0);
+        lucent::info("gpu", "VdSwap: {} frames submitted, last 60 in {:.2f}s ({:.2f} fps)", frame,
+                     seconds, seconds > 0 ? 60.0 / seconds : 0.0);
     }
 
     const uint32_t block = ctx.r3.u32;
     if (block != 0)
     {
-        const uint32_t frontBuffer =
-            ctx.r8.u32 != 0 ? ReadGuest32(ctx.r8.u32) : 0;
+        const uint32_t frontBuffer = ctx.r8.u32 != 0 ? ReadGuest32(ctx.r8.u32) : 0;
 
-        StoreGuest32(block, (3u << 30) | ((kSwapReservationDwords - 2) << 16)
-            | (kOpRuntimeSwap << 8));
+        StoreGuest32(block,
+                     (3u << 30) | ((kSwapReservationDwords - 2) << 16) | (kOpRuntimeSwap << 8));
         StoreGuest32(block + 4, frontBuffer);
         StoreGuest32(block + 8, uint32_t(frame)); // sequence, see kOpRuntimeSwap
         // r4 is the front buffer's Direct3D 9 texture header fetch constant, six
@@ -3256,32 +3242,31 @@ void __imp__VdSwap(PPCContext& __restrict ctx, uint8_t*)
         // keeps that statement of the guest's alongside the address it belongs
         // to, and behind the same stale-sequence filter.
         for (uint32_t i = 0; i < 6; i++)
-            StoreGuest32(block + 12 + i * 4,
-                ctx.r4.u32 != 0 ? ReadGuest32(ctx.r4.u32 + i * 4) : 0);
+            StoreGuest32(block + 12 + i * 4, ctx.r4.u32 != 0 ? ReadGuest32(ctx.r4.u32 + i * 4) : 0);
         for (uint32_t i = 9; i < kSwapReservationDwords; i++)
             StoreGuest32(block + i * 4, 0);
 
-        lucent::debug("gpu", "VdSwap: swap packet at {:#x}, front buffer {:#x}",
-            block, frontBuffer);
+        lucent::debug("gpu", "VdSwap: swap packet at {:#x}, front buffer {:#x}", block,
+                      frontBuffer);
     }
 
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdQueryVideoFlags(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdQueryVideoFlags(PPCContext &__restrict ctx, uint8_t *)
 {
     // Widescreen | HD, matching the 1280x720 mode XGetVideoMode reports.
     ctx.r3.u64 = 0x00000006;
 }
 
-void __imp__VdGetCurrentDisplayGamma(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdGetCurrentDisplayGamma(PPCContext &__restrict ctx, uint8_t *)
 {
     StoreGuest32(ctx.r3.u32, 2);
     StoreGuest32(ctx.r4.u32, 0x40000000); // 2.0f
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdGetCurrentDisplayInformation(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdGetCurrentDisplayInformation(PPCContext &__restrict ctx, uint8_t *)
 {
     const uint32_t p = ctx.r3.u32;
     if (p == 0)
@@ -3299,47 +3284,47 @@ void __imp__VdGetCurrentDisplayInformation(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdSetDisplayMode(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdSetDisplayMode(PPCContext &__restrict ctx, uint8_t *)
 {
     lucent::debug("gpu", "VdSetDisplayMode({:#x})", ctx.r3.u32);
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdIsHSIOTrainingSucceeded(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdIsHSIOTrainingSucceeded(PPCContext &__restrict ctx, uint8_t *)
 {
     // The high-speed IO link between CPU and GPU. There is no link to train.
     ctx.r3.u64 = 1;
 }
 
-void __imp__VdPersistDisplay(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdPersistDisplay(PPCContext &__restrict ctx, uint8_t *)
 {
     StoreGuest32(ctx.r4.u32, 0);
     ctx.r3.u64 = 1;
 }
 
-void __imp__VdRetrainEDRAM(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdRetrainEDRAM(PPCContext &__restrict ctx, uint8_t *)
 {
     // EDRAM is physical memory on the console's GPU daughter die; there is no
     // equivalent here and nothing to retrain.
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdRetrainEDRAMWorker(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdRetrainEDRAMWorker(PPCContext &__restrict ctx, uint8_t *)
 {
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdEnableDisableClockGating(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdEnableDisableClockGating(PPCContext &__restrict ctx, uint8_t *)
 {
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdCallGraphicsNotificationRoutines(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdCallGraphicsNotificationRoutines(PPCContext &__restrict ctx, uint8_t *)
 {
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdQueryVideoMode(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__VdQueryVideoMode(PPCContext &__restrict ctx, uint8_t *base)
 {
     // Same mode XGetVideoMode reports; the two must not disagree.
     __imp__XGetVideoMode(ctx, base);
@@ -3350,14 +3335,14 @@ void __imp__VdQueryVideoMode(PPCContext& __restrict ctx, uint8_t* base)
 // It is handed out as real, committed memory; the packets the title writes
 // into it (scratch write-back setup among them) are executed when the stream
 // points an indirect buffer at it.
-void __imp__VdGetSystemCommandBuffer(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdGetSystemCommandBuffer(PPCContext &__restrict ctx, uint8_t *)
 {
     static uint32_t s_commandBuffer = 0;
     if (s_commandBuffer == 0)
     {
         uint32_t size = 0x10000;
-        s_commandBuffer = gears::PhysicalHeap().Allocate(
-            0, size, gears::kMemCommit | gears::kMemLargePages);
+        s_commandBuffer =
+            gears::PhysicalHeap().Allocate(0, size, gears::kMemCommit | gears::kMemLargePages);
         lucent::info("gpu", "system command buffer at {:#x}", s_commandBuffer);
     }
 
@@ -3366,7 +3351,7 @@ void __imp__VdGetSystemCommandBuffer(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = 0;
 }
 
-void __imp__VdInitializeScalerCommandBuffer(PPCContext& __restrict ctx, uint8_t*)
+void __imp__VdInitializeScalerCommandBuffer(PPCContext &__restrict ctx, uint8_t *)
 {
     // Returns the number of command words written. Writing none is truthful.
     ctx.r3.u64 = 0;
