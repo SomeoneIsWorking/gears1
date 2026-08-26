@@ -16,6 +16,7 @@
 #include <vulkan/vulkan.h>
 
 #include "gpu_draw.h"
+#include "gpu_frame_slots.h"
 #include "gpu_draw_formats.h"
 #include "gpu_draw_pixels.h"
 #include "gpu_draw_xlate.h"
@@ -39,6 +40,10 @@
 
 namespace gears::draw
 {
+
+inline constexpr uint32_t kWidth = 1280;
+inline constexpr uint32_t kHeight = 720;
+extern std::vector<uint8_t> g_frame;
 
 // A host image owned for the whole run: the guest's decoded textures, and the
 // 1x1 stand-ins a binding falls back to when its fetch constant cannot be
@@ -278,8 +283,6 @@ struct RendererPersistent
     VkDescriptorSetLayout resolveSetLayout = VK_NULL_HANDLE;
     VkPipelineLayout resolveLayout = VK_NULL_HANDLE;
     VkPipeline resolvePipeline = VK_NULL_HANDLE;
-    VkDescriptorPool resolveDescPool = VK_NULL_HANDLE;
-    uint32_t resolveDescCapacity = 0;
     // EDRAM format reinterpretation: the pass run when a frame re-declares one
     // base under a different colour format, converting the stored values
     // through the bits the console would hold. See gpu_draw_reinterpret.cpp.
@@ -296,9 +299,6 @@ struct RendererPersistent
     VkPipelineLayout depthAliasLayout = VK_NULL_HANDLE;
     VkPipeline depthAliasPipeline = VK_NULL_HANDLE;
     VkSampler depthAliasSampler = VK_NULL_HANDLE;
-    VkDescriptorPool depthAliasDescPool = VK_NULL_HANDLE;
-    VkDescriptorPool reinterpretDescPool = VK_NULL_HANDLE;
-    uint32_t reinterpretDescCapacity = 0;
     bool reinterpretSelfTested = false;
     // The DEPTH resolve: its own pipeline, because its source is a sampled
     // image (a depth image cannot be a storage image) rather than a storage one.
@@ -342,40 +342,9 @@ struct RendererPersistent
 
     GpuScanout scanout;
 
-    // The guest-memory mirror the translated shaders fetch through. The buffer
-    // is persistent; its CONTENTS are refreshed every frame, because guest
-    // memory is exactly what changes between frames.
-    VkBuffer ssbo = VK_NULL_HANDLE;
-    VkDeviceMemory ssboMem = VK_NULL_HANDLE;
-    VkDeviceSize ssboBytes = 0;
-
-    // One persistently-mapped buffer the per-draw uniform blocks and expanded
-    // index buffers are suballocated from, reset at the start of every frame.
-    // They used to be a VkBuffer plus a VkDeviceMemory each -- five uniform
-    // blocks per draw, created and destroyed every frame, which is 870
-    // allocations on a 174-draw frame and where ~40 ms of a warm frame went.
-    // It grows to the previous frame's high-water mark; a frame that outgrows
-    // it mid-way falls back to standalone buffers for the remainder rather than
-    // dropping draws, and the next frame is sized to fit.
-    VkBuffer arena = VK_NULL_HANDLE;
-    VkDeviceMemory arenaMem = VK_NULL_HANDLE;
-    void *arenaMapped = nullptr;
-    VkDeviceSize arenaBytes = 0;
+    // Shared demand mark; each bounded frame slot owns an arena grown to this
+    // capacity before it records.
     VkDeviceSize arenaHighWater = 0;
-
-    // The frame's own command recording and pixel readback. These were created
-    // and destroyed every frame too; the descriptor pool is RESET each frame
-    // rather than rebuilt.
-    VkCommandPool cmdPool = VK_NULL_HANDLE;
-    VkCommandBuffer cmd = VK_NULL_HANDLE;
-    VkFence fence = VK_NULL_HANDLE;
-    VkDescriptorPool descriptorPool = VK_NULL_HANDLE;
-    uint32_t descriptorPoolDraws = 0; // what it was sized for
-    VkBuffer readback = VK_NULL_HANDLE;
-    VkDeviceMemory readbackMem = VK_NULL_HANDLE;
-    void *readbackMapped = nullptr;
-    VkDeviceSize readbackBytes = 0;
-    void *ssboMapped = nullptr;
 };
 
 // -------------------------------------------------------------------------
@@ -384,6 +353,8 @@ struct RendererPersistent
 // justify keeping the device alive.
 struct Renderer
 {
+    ~Renderer();
+
     VkInstance instance = VK_NULL_HANDLE;
     VkPhysicalDevice physical = VK_NULL_HANDLE;
     VkDevice device = VK_NULL_HANDLE;
@@ -422,12 +393,14 @@ struct Renderer
     // incomplete here: it names OutputMergerState and the texture structs,
     // which are declared further down.
     struct RendererPersistent *persistent = nullptr;
+    GpuFrameSlots frameSlots;
 
     bool Init();
     bool FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_t &out);
     bool MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer &buf, VkDeviceMemory &mem,
                     bool wantCached = false);
-    bool RenderFrameImpl(const FrameDrawInputs &in);
+    bool RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion completion = {},
+                         bool *completionPending = nullptr);
     void EnsurePersistentCapacity(uint32_t requiredWidth, uint32_t requiredHeight);
     void ReleasePersistent();
 };

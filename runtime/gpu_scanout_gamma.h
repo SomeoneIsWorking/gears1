@@ -4,6 +4,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include "gpu_frame_capacity.h"
 #include "scanout_gamma.h"
 
 namespace gears::draw
@@ -16,20 +17,22 @@ struct Renderer;
 class GpuScanoutGamma
 {
   public:
-    bool Initialize(Renderer &renderer, const VkImage images[2]);
+    static constexpr uint32_t kImageCount = kSharedScanoutImageCount;
+
+    bool Initialize(Renderer &renderer, const VkImage images[kImageCount]);
     bool Apply(Renderer &renderer, VkCommandBuffer commands, uint32_t imageIndex, uint32_t width,
                uint32_t height, const ScanoutGammaLut &lut);
     void Release(VkDevice device);
 
   private:
-    VkImage images_[2]{};
-    VkImageView views_[2]{};
-    VkBuffer lutBuffer_ = VK_NULL_HANDLE;
-    VkDeviceMemory lutMemory_ = VK_NULL_HANDLE;
-    void *lutMapped_ = nullptr;
+    VkImage images_[kImageCount]{};
+    VkImageView views_[kImageCount]{};
+    VkBuffer lutBuffers_[kImageCount]{};
+    VkDeviceMemory lutMemory_[kImageCount]{};
+    void *lutMapped_[kImageCount]{};
     VkDescriptorSetLayout setLayout_ = VK_NULL_HANDLE;
     VkDescriptorPool descriptorPool_ = VK_NULL_HANDLE;
-    VkDescriptorSet descriptorSets_[2]{};
+    VkDescriptorSet descriptorSets_[kImageCount]{};
     VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
     VkPipeline pipeline_ = VK_NULL_HANDLE;
     VkShaderModule shader_ = VK_NULL_HANDLE;

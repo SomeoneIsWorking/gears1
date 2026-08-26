@@ -1897,10 +1897,10 @@ struct CommandProcessor
         // unless GEARS_DRAW_FRAME_REPORT_EVERY=N asks for a periodic census and
         // screenshot -- it costs ~40 ms, so it is a visible hitch by design.
         const long reportEvery = lucent::config::number("DRAW_FRAME_REPORT_EVERY", 0);
-        // Cadence and filenames use the guest present counter. Rendered-frame
-        // count can lag it badly, while the oracle and input scripts also name
-        // moments by guest presents; using another clock silently mispairs them.
-        const uint64_t guestPresents = g_frameCount.load(std::memory_order_relaxed);
+        // Use THIS packet's sequence: the global VdSwap count can already be newer
+        // when the CP catches up, assigning two packets one identity. This is also
+        // the ID used to reject stale packets and drive presentation.
+        const uint64_t guestPresents = lastSwapSequence;
         const bool reportCadenceElapsed =
             reportEvery > 0 && guestPresents / uint64_t(reportEvery) > reportedAtPresent;
         in.report = !diagnosticProbe &&

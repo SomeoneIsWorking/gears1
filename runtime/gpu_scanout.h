@@ -1,10 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 
 #include <vulkan/vulkan.h>
 
 #include "gpu_scanout_gamma.h"
+#include "gpu_shared_device.h"
 
 namespace gears::draw
 {
@@ -14,10 +16,11 @@ struct Renderer;
 struct GpuScanoutResult
 {
     VkImage image = VK_NULL_HANDLE;
+    SharedFrameImage::Lease lease;
     bool gammaApplied = false;
 };
 
-// Owns the alternating RGBA8 images that decouple rendering from presentation,
+// Owns the leased RGBA8 images that decouple rendering from presentation,
 // including the guest display-LUT transform that belongs at scan-out.
 class GpuScanout
 {
@@ -30,8 +33,9 @@ class GpuScanout
     void Release(Renderer &renderer);
 
   private:
-    VkImage images_[2]{};
-    VkDeviceMemory memory_[2]{};
+    struct ImageLifetime;
+    static constexpr uint32_t kImageCount = GpuScanoutGamma::kImageCount;
+    std::shared_ptr<ImageLifetime> images_[kImageCount];
     uint32_t nextImage_ = 0;
     GpuScanoutGamma gamma_;
 };

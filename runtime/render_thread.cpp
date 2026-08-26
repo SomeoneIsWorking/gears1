@@ -1,6 +1,7 @@
 #include "render_thread.h"
 
 #include "frame_queue.h"
+#include "gpu_draw.h"
 #include "graphics_probe_render.h"
 
 #include <atomic>
@@ -11,6 +12,7 @@
 #include <exception>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 #include <sys/resource.h>
 #include <sys/syscall.h>
@@ -94,30 +96,37 @@ void RenderThreadMain()
         const auto t0 = std::chrono::steady_clock::now();
         const uint64_t cpu0 = ThreadCpuNanos();
         const uint64_t rq0 = ThreadRunqueueNanos();
-        RenderFrameWithGraphicsProbe(work->inputs);
+        const uint64_t retirementGeneration = work->retirementGeneration;
+        auto retire = [retirementGeneration](bool rendered)
+        {
+            if (rendered)
+                g_rendered.fetch_add(1);
+
+            // GPU completion is ordered by the frame-slot owner. Advancing the
+            // guest generation here, rather than after CPU submission, keeps
+            // EVENT_WRITE_SHD from recycling memory still read by the GPU.
+            for (;;)
+            {
+                RenderRetirement::FinishBatch batch;
+                {
+                    std::lock_guard<std::mutex> lock(g_stateMutex);
+                    batch = g_retirement.Finish(retirementGeneration);
+                    if (batch.generationComplete)
+                        break;
+                }
+                for (RenderRetirement::Completion &completion : batch.completions)
+                    completion();
+            }
+        };
+        if (work->inputs.probe)
+            retire(RenderFrameWithGraphicsProbe(work->inputs));
+        else
+            SubmitFrameRender(work->inputs, std::move(retire));
         g_busyMillis.fetch_add(uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
                                             std::chrono::steady_clock::now() - t0)
                                             .count()));
         g_cpuMillis.fetch_add((ThreadCpuNanos() - cpu0) / 1000000ull);
         g_runqueueMillis.fetch_add((ThreadRunqueueNanos() - rq0) / 1000000ull);
-        g_rendered.fetch_add(1);
-
-        // A retirement belongs to the accepted frame that preceded it, not to
-        // global renderer idleness. A one-frame pending queue may already hold
-        // newer work here; publishing that newer generation now would let the
-        // guest recycle its inputs before they have been read.
-        for (;;)
-        {
-            RenderRetirement::FinishBatch batch;
-            {
-                std::lock_guard<std::mutex> lock(g_stateMutex);
-                batch = g_retirement.Finish(work->retirementGeneration);
-                if (batch.generationComplete)
-                    break;
-            }
-            for (RenderRetirement::Completion &completion : batch.completions)
-                completion();
-        }
         if (!g_frames.Complete(work->frameId))
         {
             lucent::error("draw", "render thread rejected completion for stale frame {}",
@@ -189,6 +198,7 @@ void DeferUntilAcceptedRenderRetires(std::function<void()> completion)
 void WaitForRenderIdle()
 {
     g_frames.WaitIdle();
+    WaitForRendererGpuIdle();
 }
 
 void StopRenderThread()
@@ -202,6 +212,7 @@ void StopRenderThread()
     }
     if (g_thread.joinable())
         g_thread.join();
+    WaitForRendererGpuIdle();
 }
 
 } // namespace gears

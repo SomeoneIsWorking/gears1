@@ -29,12 +29,14 @@
 #include <bit>
 #include <cmath>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <deque>
 #include <filesystem>
 #include <string>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <set>
 #include <tuple>
 #include <vector>
@@ -51,6 +53,7 @@
 #include "gpu_draw_textures.h"
 #include "gpu_draw_targets.h"
 #include "gpu_draw_arena.h"
+#include "gpu_frame_cleanup.h"
 #include "gpu_draw_census.h"
 #include "gpu_draw_descriptors.h"
 #include "gpu_draw_pipelines.h"
@@ -74,9 +77,6 @@ namespace gears
 // file-local objects, with `static`.
 namespace draw
 {
-
-constexpr uint32_t kWidth = 1280;
-constexpr uint32_t kHeight = 720;
 
 // Accumulates the time a scope took into `sink`, HOWEVER the scope is left.
 //
@@ -103,8 +103,6 @@ class ScopedMs
     double &sink_;
     std::chrono::steady_clock::time_point begin_;
 };
-
-std::vector<uint8_t> g_frame; // last rendered R8G8B8A8 frame (file-local)
 
 // VK_CHECK is in gpu_draw_renderer.h, shared with the renderer's other files.
 
@@ -171,7 +169,7 @@ bool Renderer::Init()
                          " device, so the frame reaches the window by BLIT rather than through"
                          " host memory",
                          adoptedProps.deviceName, queueFamily);
-            return true;
+            return frameSlots.Initialize(device, kRendererFramesInFlight);
         }
     }
 
@@ -329,7 +327,7 @@ bool Renderer::Init()
     }
     lucent::info("draw", "headless Vulkan device \"{}\" (queue family {})", p.deviceName,
                  queueFamily);
-    return true;
+    return frameSlots.Initialize(device, kRendererFramesInFlight);
 }
 
 bool Renderer::FindMemory(uint32_t typeBits, VkMemoryPropertyFlags want, uint32_t &out)
@@ -381,8 +379,11 @@ bool Renderer::MakeBuffer(VkDeviceSize size, VkBufferUsageFlags usage, VkBuffer 
 // the geometry accumulates. Each draw carries its own register-file snapshot
 // (constants live at that draw) and its own bound shader pair; distinct shader
 // pairs are translated and their pipelines/modules cached across the frame.
-bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
+bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion completion,
+                               bool *completionPending)
 {
+    if (completionPending)
+        *completionPending = false;
     const uint32_t W = in.width ? in.width : kWidth;
     const uint32_t H = in.height ? in.height : kHeight;
     const draw::FrameOptions options = draw::ReadFrameOptions();
@@ -532,6 +533,21 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // frames. gpu_renderer_capacity.cpp owns its cross-thread lifetime rule.
     EnsurePersistentCapacity(SW, SH);
     RendererPersistent &P = *persistent;
+    std::optional<GpuFrameSlots::Lease> frameLease = frameSlots.Acquire();
+    if (!frameLease)
+        return false;
+    struct CancelFrameLease
+    {
+        GpuFrameSlots &slots;
+        GpuFrameSlots::Lease &lease;
+        bool active = true;
+        ~CancelFrameLease()
+        {
+            if (active)
+                slots.Cancel(lease);
+        }
+    } cancelFrameLease{frameSlots, *frameLease};
+    GpuFrameResources &F = *frameLease->resources;
     const bool firstFrame = !P.built;
 
     // Shader translation and its cache live in gpu_draw_shaders.{h,cpp}: the
@@ -557,23 +573,27 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // Deferring is safe because the SSBO's CONTENTS are only read by the GPU at
     // submit: the preparation loop reads indices from guestBase directly on the
     // CPU, and descriptor sets reference the buffer handle, not its bytes.
-    if (P.ssbo != VK_NULL_HANDLE && P.ssboBytes != in.guestPhysicalMirrorBytes)
+    if (F.guestMemory != VK_NULL_HANDLE && F.guestMemoryBytes != in.guestPhysicalMirrorBytes)
     {
-        vkDestroyBuffer(device, P.ssbo, nullptr);
-        vkFreeMemory(device, P.ssboMem, nullptr);
-        P.ssbo = VK_NULL_HANDLE;
-        P.ssboMem = VK_NULL_HANDLE;
+        if (F.guestMemoryMapped)
+            vkUnmapMemory(device, F.guestMemoryAllocation);
+        vkDestroyBuffer(device, F.guestMemory, nullptr);
+        vkFreeMemory(device, F.guestMemoryAllocation, nullptr);
+        F.guestMemory = VK_NULL_HANDLE;
+        F.guestMemoryAllocation = VK_NULL_HANDLE;
+        F.guestMemoryMapped = nullptr;
     }
-    if (P.ssbo == VK_NULL_HANDLE)
+    if (F.guestMemory == VK_NULL_HANDLE)
     {
-        if (!MakeBuffer(in.guestPhysicalMirrorBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, P.ssbo,
-                        P.ssboMem))
+        if (!MakeBuffer(in.guestPhysicalMirrorBytes, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                        F.guestMemory, F.guestMemoryAllocation))
             return false;
-        P.ssboBytes = in.guestPhysicalMirrorBytes;
+        F.guestMemoryBytes = in.guestPhysicalMirrorBytes;
     }
-    VkBuffer ssbo = P.ssbo;
-    if (!P.ssboMapped)
-        VK_CHECK(vkMapMemory(device, P.ssboMem, 0, in.guestPhysicalMirrorBytes, 0, &P.ssboMapped));
+    VkBuffer ssbo = F.guestMemory;
+    if (!F.guestMemoryMapped)
+        VK_CHECK(vkMapMemory(device, F.guestMemoryAllocation, 0, in.guestPhysicalMirrorBytes, 0,
+                             &F.guestMemoryMapped));
     // The ranges this frame's draws actually fetch, filled in by the preparation
     // loop and uploaded after it. Byte ranges into the guest window.
     std::vector<std::pair<uint64_t, uint64_t>> fetchRanges;
@@ -706,8 +726,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // --- descriptor pool sized for every draw ----------------------------
     msSetup = sinceStartMs();
     const uint32_t nDraws = uint32_t(in.draws.size());
-    VkDescriptorPool &pool = P.descriptorPool;
-    if (pool != VK_NULL_HANDLE && P.descriptorPoolDraws < nDraws)
+    VkDescriptorPool &pool = F.drawDescriptors;
+    if (pool != VK_NULL_HANDLE && F.drawDescriptorCapacity < nDraws)
     {
         vkDestroyDescriptorPool(device, pool, nullptr);
         pool = VK_NULL_HANDLE;
@@ -731,14 +751,14 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
         ci.poolSizeCount = 4;
         ci.pPoolSizes = sizes;
         VK_CHECK(vkCreateDescriptorPool(device, &ci, nullptr, &pool));
-        P.descriptorPoolDraws = nDraws;
+        F.drawDescriptorCapacity = nDraws;
     }
 
     // The per-draw arena -- uniform blocks and expanded index buffers
     // suballocated from one persistently-mapped buffer -- lives in
     // gpu_draw_arena.{h,cpp}, with the fallback a frame takes when it outgrows
     // it and the high-water mark that sizes the next one.
-    draw::FrameArena AR(*this, P);
+    draw::FrameArena AR(*this, P, F);
     if (!AR.Build(nDraws))
         return false;
 
@@ -821,10 +841,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     if (P.resolvePipeline != VK_NULL_HANDLE)
     {
         const uint32_t want = std::max<uint32_t>(8, plan.drawCount + 4);
-        if (P.resolveDescPool == VK_NULL_HANDLE || P.resolveDescCapacity < want)
+        if (F.resolveDescriptors == VK_NULL_HANDLE || F.resolveDescriptorCapacity < want)
         {
-            vkDestroyDescriptorPool(device, P.resolveDescPool, nullptr);
-            P.resolveDescPool = VK_NULL_HANDLE;
+            vkDestroyDescriptorPool(device, F.resolveDescriptors, nullptr);
+            F.resolveDescriptors = VK_NULL_HANDLE;
             const VkDescriptorPoolSize ps[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
                                                  want * 3}, // colour sets use 2 each, depth sets 1
                                                 {VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, want}};
@@ -832,28 +852,29 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             pi.maxSets = want * 2; // colour sets and depth sets
             pi.poolSizeCount = 2;
             pi.pPoolSizes = ps;
-            if (vkCreateDescriptorPool(device, &pi, nullptr, &P.resolveDescPool) == VK_SUCCESS)
-                P.resolveDescCapacity = want;
+            if (vkCreateDescriptorPool(device, &pi, nullptr, &F.resolveDescriptors) == VK_SUCCESS)
+                F.resolveDescriptorCapacity = want;
         }
-        if (P.resolveDescPool != VK_NULL_HANDLE)
+        if (F.resolveDescriptors != VK_NULL_HANDLE)
         {
-            vkResetDescriptorPool(device, P.resolveDescPool, 0);
-            std::vector<VkDescriptorSetLayout> layouts(P.resolveDescCapacity, P.resolveSetLayout);
-            RT.resolveSets.resize(P.resolveDescCapacity);
+            vkResetDescriptorPool(device, F.resolveDescriptors, 0);
+            std::vector<VkDescriptorSetLayout> layouts(F.resolveDescriptorCapacity,
+                                                       P.resolveSetLayout);
+            RT.resolveSets.resize(F.resolveDescriptorCapacity);
             VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-            ai.descriptorPool = P.resolveDescPool;
-            ai.descriptorSetCount = P.resolveDescCapacity;
+            ai.descriptorPool = F.resolveDescriptors;
+            ai.descriptorSetCount = F.resolveDescriptorCapacity;
             ai.pSetLayouts = layouts.data();
             if (vkAllocateDescriptorSets(device, &ai, RT.resolveSets.data()) != VK_SUCCESS)
                 RT.resolveSets.clear();
             if (P.resolveDepthSetLayout != VK_NULL_HANDLE)
             {
-                std::vector<VkDescriptorSetLayout> dlayouts(P.resolveDescCapacity,
+                std::vector<VkDescriptorSetLayout> dlayouts(F.resolveDescriptorCapacity,
                                                             P.resolveDepthSetLayout);
-                RT.resolveDepthSets.resize(P.resolveDescCapacity);
+                RT.resolveDepthSets.resize(F.resolveDescriptorCapacity);
                 VkDescriptorSetAllocateInfo dai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-                dai.descriptorPool = P.resolveDescPool;
-                dai.descriptorSetCount = P.resolveDescCapacity;
+                dai.descriptorPool = F.resolveDescriptors;
+                dai.descriptorSetCount = F.resolveDescriptorCapacity;
                 dai.pSetLayouts = dlayouts.data();
                 if (vkAllocateDescriptorSets(device, &dai, RT.resolveDepthSets.data()) !=
                     VK_SUCCESS)
@@ -869,27 +890,28 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     if (P.reinterpretPipeline != VK_NULL_HANDLE)
     {
         const uint32_t want = std::max<uint32_t>(32, plan.drawCount / 8 + 8);
-        if (P.reinterpretDescPool == VK_NULL_HANDLE || P.reinterpretDescCapacity < want)
+        if (F.reinterpretDescriptors == VK_NULL_HANDLE || F.reinterpretDescriptorCapacity < want)
         {
-            vkDestroyDescriptorPool(device, P.reinterpretDescPool, nullptr);
-            P.reinterpretDescPool = VK_NULL_HANDLE;
+            vkDestroyDescriptorPool(device, F.reinterpretDescriptors, nullptr);
+            F.reinterpretDescriptors = VK_NULL_HANDLE;
             const VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, want};
             VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
             pi.maxSets = want;
             pi.poolSizeCount = 1;
             pi.pPoolSizes = &ps;
-            if (vkCreateDescriptorPool(device, &pi, nullptr, &P.reinterpretDescPool) == VK_SUCCESS)
-                P.reinterpretDescCapacity = want;
+            if (vkCreateDescriptorPool(device, &pi, nullptr, &F.reinterpretDescriptors) ==
+                VK_SUCCESS)
+                F.reinterpretDescriptorCapacity = want;
         }
-        if (P.reinterpretDescPool != VK_NULL_HANDLE)
+        if (F.reinterpretDescriptors != VK_NULL_HANDLE)
         {
-            vkResetDescriptorPool(device, P.reinterpretDescPool, 0);
-            std::vector<VkDescriptorSetLayout> layouts(P.reinterpretDescCapacity,
+            vkResetDescriptorPool(device, F.reinterpretDescriptors, 0);
+            std::vector<VkDescriptorSetLayout> layouts(F.reinterpretDescriptorCapacity,
                                                        P.reinterpretSetLayout);
-            RT.reinterpretSets.resize(P.reinterpretDescCapacity);
+            RT.reinterpretSets.resize(F.reinterpretDescriptorCapacity);
             VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-            ai.descriptorPool = P.reinterpretDescPool;
-            ai.descriptorSetCount = P.reinterpretDescCapacity;
+            ai.descriptorPool = F.reinterpretDescriptors;
+            ai.descriptorSetCount = F.reinterpretDescriptorCapacity;
             ai.pSetLayouts = layouts.data();
             if (vkAllocateDescriptorSets(device, &ai, RT.reinterpretSets.data()) != VK_SUCCESS)
                 RT.reinterpretSets.clear();
@@ -901,7 +923,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     if (P.depthAliasPipeline != VK_NULL_HANDLE)
     {
         const uint32_t want = 16;
-        if (P.depthAliasDescPool == VK_NULL_HANDLE)
+        if (F.depthAliasDescriptors == VK_NULL_HANDLE)
         {
             const VkDescriptorPoolSize ps[2] = {
                 {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, want * 2},
@@ -910,15 +932,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
             pi.maxSets = want;
             pi.poolSizeCount = 2;
             pi.pPoolSizes = ps;
-            vkCreateDescriptorPool(device, &pi, nullptr, &P.depthAliasDescPool);
+            vkCreateDescriptorPool(device, &pi, nullptr, &F.depthAliasDescriptors);
         }
-        if (P.depthAliasDescPool != VK_NULL_HANDLE)
+        if (F.depthAliasDescriptors != VK_NULL_HANDLE)
         {
-            vkResetDescriptorPool(device, P.depthAliasDescPool, 0);
+            vkResetDescriptorPool(device, F.depthAliasDescriptors, 0);
             std::vector<VkDescriptorSetLayout> layouts(want, P.depthAliasSetLayout);
             RT.depthAliasSets.resize(want);
             VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-            ai.descriptorPool = P.depthAliasDescPool;
+            ai.descriptorPool = F.depthAliasDescriptors;
             ai.descriptorSetCount = want;
             ai.pSetLayouts = layouts.data();
             if (vkAllocateDescriptorSets(device, &ai, RT.depthAliasSets.data()) != VK_SUCCESS)
@@ -1561,8 +1583,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
                 end = std::max(end, fetchRanges[j].second);
             if (end > begin)
             {
-                std::memcpy(static_cast<uint8_t *>(P.ssboMapped) + begin, in.guestBase + begin,
-                            size_t(end - begin));
+                std::memcpy(static_cast<uint8_t *>(F.guestMemoryMapped) + begin,
+                            in.guestBase + begin, size_t(end - begin));
                 uploadedBytesSsbo += end - begin;
                 ++spans;
             }
@@ -1578,25 +1600,25 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
 
     // --- readback buffer -------------------------------------------------
     const VkDeviceSize rbBytes = VkDeviceSize(SW) * SH * 4;
-    if (P.readback == VK_NULL_HANDLE)
+    if (F.readback == VK_NULL_HANDLE)
     {
-        if (!MakeBuffer(rbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, P.readback, P.readbackMem,
+        if (!MakeBuffer(rbBytes, VK_BUFFER_USAGE_TRANSFER_DST_BIT, F.readback, F.readbackMemory,
                         /*wantCached=*/true))
             return false;
-        P.readbackBytes = rbBytes;
-        VK_CHECK(vkMapMemory(device, P.readbackMem, 0, rbBytes, 0, &P.readbackMapped));
+        F.readbackBytes = rbBytes;
+        VK_CHECK(vkMapMemory(device, F.readbackMemory, 0, rbBytes, 0, &F.readbackMapped));
     }
-    VkBuffer readback = P.readback;
+    VkBuffer readback = F.readback;
 
     // --- command buffer: clear once, draw all in order -------------------
-    VkCommandPool &cmdPool = P.cmdPool;
+    VkCommandPool &cmdPool = F.commandPool;
     if (cmdPool == VK_NULL_HANDLE)
     {
         VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
         ci.queueFamilyIndex = queueFamily;
         VK_CHECK(vkCreateCommandPool(device, &ci, nullptr, &cmdPool));
     }
-    VkCommandBuffer &cmd = P.cmd;
+    VkCommandBuffer &cmd = F.commands;
     if (cmd == VK_NULL_HANDLE)
     {
         VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
@@ -2824,21 +2846,58 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     AR.EndFrame();
     msDrawLoop = sinceStartMs() - msSetup;
     const auto tSubmit = Clock::now();
-    VkFence &fence = P.fence;
-    if (fence == VK_NULL_HANDLE)
-    {
-        VkFenceCreateInfo fi{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
-        VK_CHECK(vkCreateFence(device, &fi, nullptr, &fence));
-    }
-    else
-    {
-        VK_CHECK(vkResetFences(device, 1, &fence));
-    }
+    VkFence fence = F.fence;
     VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submit.commandBufferCount = 1;
     submit.pCommandBuffers = &cmd;
     VK_CHECK(SharedGpuQueueAccess().Submit(queue, 1, &submit, fence));
-    VK_CHECK(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
+
+    static const std::string &streamPath = lucent::config::text("DRAW_STREAM");
+    const bool deferred = completion && completionPending && !needHostPixels && surfDumps.empty() &&
+                          resolveDumps.empty() && !PB.RequiresGpuCompletion() && !DS.Enabled() &&
+                          streamPath.empty() && !wantRawStream && !ab.Enabled() &&
+                          !abUntile.Enabled() && !abTexDirty.Enabled();
+    if (deferred)
+    {
+        GpuFrameSlots::Completion cleanup = MakeFrameCleanup(
+            *this, std::move(scanoutResult), W, H, in.sequence, std::move(TX.stagingBufs),
+            std::move(TX.stagingMems), std::move(AR.keepBuffers), std::move(AR.keepMem),
+            std::move(TX.texRetired), std::move(completion));
+        *completionPending = true;
+        if (!frameSlots.Submit(*frameLease, cleanup))
+        {
+            VK_CHECK(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
+            cleanup(false);
+            return false;
+        }
+        cancelFrameLease.active = false;
+        P.built = true;
+        return true;
+    }
+
+    std::mutex completionMutex;
+    std::condition_variable completionChanged;
+    bool completionReady = false;
+    bool completionSucceeded = false;
+    if (!frameSlots.Submit(*frameLease,
+                           [&](bool success)
+                           {
+                               std::lock_guard<std::mutex> lock(completionMutex);
+                               completionSucceeded = success;
+                               completionReady = true;
+                               completionChanged.notify_one();
+                           }))
+    {
+        VK_CHECK(vkWaitForFences(device, 1, &fence, VK_TRUE, UINT64_MAX));
+        return false;
+    }
+    cancelFrameLease.active = false;
+    {
+        std::unique_lock<std::mutex> lock(completionMutex);
+        completionChanged.wait(lock, [&] { return completionReady; });
+    }
+    if (!completionSucceeded)
+        return false;
     accumulate(msSubmit, tSubmit);
 
     for (const SurfDump &sd : surfDumps)
@@ -3143,7 +3202,6 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     // The Xenia fork emits the identical format at its own swap, and
     // tools/draw_stream_compare.py reads both.
     {
-        static const std::string &streamPath = lucent::config::text("DRAW_STREAM");
         if (!streamPath.empty())
         {
             static std::FILE *sf = std::fopen(streamPath.c_str(), "wb");
@@ -3230,7 +3288,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
     {
         // The readback allocation may include MSAA rows; the host contract is W x H RGBA.
         g_frame.resize(size_t(W) * H * 4);
-        std::memcpy(g_frame.data(), P.readbackMapped, g_frame.size());
+        std::memcpy(g_frame.data(), F.readbackMapped, g_frame.size());
         // Scan-out gamma. The console puts every presented pixel through the
         // guest's DC_LUT ramp; without it the image is brighter than the
         // console's, and this title's ramp is markedly non-linear (measured: 254
@@ -3750,84 +3808,5 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in)
 }
 
 } // namespace draw
-
-using draw::kHeight;
-using draw::kWidth;
-using draw::Renderer;
-
-// The renderer is built once and kept. Rebuilding it per frame was what made a
-// frame cost ~300 ms; the device, render target, shader translations, pipelines
-// and textures all survive from one frame to the next now.
-Renderer &FrameRenderer()
-{
-    static Renderer r;
-    static bool initialised = r.Init();
-    (void)initialised;
-    return r;
-}
-
-bool RenderFrame(const FrameDrawInputs &in)
-{
-    Renderer &r = FrameRenderer();
-    if (r.device == VK_NULL_HANDLE)
-    {
-        draw::g_frame.clear();
-        return false;
-    }
-    const bool ok = r.RenderFrameImpl(in);
-    if (!ok)
-        draw::g_frame.clear();
-    return ok;
-}
-
-void ResetRendererForComparison()
-{
-    Renderer &r = FrameRenderer();
-    if (r.device != VK_NULL_HANDLE)
-    {
-        SharedGpuQueueAccess().WaitDeviceIdle(r.device);
-        r.ReleasePersistent();
-    }
-}
-
-const std::vector<uint8_t> &GuestFramePixels()
-{
-    return draw::g_frame;
-}
-uint32_t GuestFrameWidth()
-{
-    return kWidth;
-}
-uint32_t GuestFrameHeight()
-{
-    return kHeight;
-}
-
 } // namespace gears
-
-#else // GEARS_HAVE_GUEST_DRAW
-
-namespace gears
-{
-bool RenderFrame(const FrameDrawInputs &)
-{
-    lucent::warn("draw", "built without the guest-draw backend"
-                         " (needs Vulkan + the Xenos translator)");
-    return false;
-}
-const std::vector<uint8_t> &GuestFramePixels()
-{
-    static std::vector<uint8_t> empty;
-    return empty;
-}
-uint32_t GuestFrameWidth()
-{
-    return 0;
-}
-uint32_t GuestFrameHeight()
-{
-    return 0;
-}
-} // namespace gears
-
 #endif

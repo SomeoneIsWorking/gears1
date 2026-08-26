@@ -22,7 +22,9 @@ namespace gears::draw
 
 struct FrameArena
 {
-    FrameArena(Renderer &r, RendererPersistent &p) : R(r), P(p) {}
+    FrameArena(Renderer &r, RendererPersistent &p, GpuFrameResources &frame) : R(r), P(p), F(frame)
+    {
+    }
 
     // Sizes (and if necessary regrows) the arena for a frame of nDraws draws.
     // False means the buffer could not be created or mapped; there is no
@@ -32,6 +34,7 @@ struct FrameArena
 
     Renderer &R;
     RendererPersistent &P;
+    GpuFrameResources &F;
 
     VkDeviceSize cursor = 0;
     uint32_t overflows = 0;

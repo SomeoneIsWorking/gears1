@@ -20,7 +20,7 @@ struct ScanoutGammaPushConstants
 
 } // namespace
 
-bool GpuScanoutGamma::Initialize(Renderer &renderer, const VkImage images[2])
+bool GpuScanoutGamma::Initialize(Renderer &renderer, const VkImage images[kImageCount])
 {
     VkFormatProperties formatProperties{};
     vkGetPhysicalDeviceFormatProperties(renderer.physical, VK_FORMAT_R8G8B8A8_UNORM,
@@ -38,7 +38,7 @@ bool GpuScanoutGamma::Initialize(Renderer &renderer, const VkImage images[2])
         return false;
     };
 
-    for (uint32_t i = 0; i < 2; ++i)
+    for (uint32_t i = 0; i < kImageCount; ++i)
     {
         images_[i] = images[i];
         VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
@@ -48,13 +48,12 @@ bool GpuScanoutGamma::Initialize(Renderer &renderer, const VkImage images[2])
         viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
         if (vkCreateImageView(renderer.device, &viewInfo, nullptr, &views_[i]) != VK_SUCCESS)
             return fail();
+        if (!renderer.MakeBuffer(sizeof(ScanoutGammaLut), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                 lutBuffers_[i], lutMemory_[i]) ||
+            vkMapMemory(renderer.device, lutMemory_[i], 0, sizeof(ScanoutGammaLut), 0,
+                        &lutMapped_[i]) != VK_SUCCESS)
+            return fail();
     }
-
-    if (!renderer.MakeBuffer(sizeof(ScanoutGammaLut), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                             lutBuffer_, lutMemory_) ||
-        vkMapMemory(renderer.device, lutMemory_, 0, sizeof(ScanoutGammaLut), 0, &lutMapped_) !=
-            VK_SUCCESS)
-        return fail();
 
     const VkDescriptorSetLayoutBinding bindings[2] = {
         {0, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 1, VK_SHADER_STAGE_COMPUTE_BIT, nullptr},
@@ -95,27 +94,29 @@ bool GpuScanoutGamma::Initialize(Renderer &renderer, const VkImage images[2])
         return fail();
 
     const VkDescriptorPoolSize poolSizes[2] = {
-        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2},
-        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 2},
+        {VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kImageCount},
+        {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kImageCount},
     };
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    poolInfo.maxSets = 2;
+    poolInfo.maxSets = kImageCount;
     poolInfo.poolSizeCount = 2;
     poolInfo.pPoolSizes = poolSizes;
     if (vkCreateDescriptorPool(renderer.device, &poolInfo, nullptr, &descriptorPool_) != VK_SUCCESS)
         return fail();
 
-    const VkDescriptorSetLayout layouts[2] = {setLayout_, setLayout_};
+    VkDescriptorSetLayout layouts[kImageCount]{};
+    for (VkDescriptorSetLayout &layout : layouts)
+        layout = setLayout_;
     VkDescriptorSetAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     allocateInfo.descriptorPool = descriptorPool_;
-    allocateInfo.descriptorSetCount = 2;
+    allocateInfo.descriptorSetCount = kImageCount;
     allocateInfo.pSetLayouts = layouts;
     if (vkAllocateDescriptorSets(renderer.device, &allocateInfo, descriptorSets_) != VK_SUCCESS)
         return fail();
 
-    const VkDescriptorBufferInfo bufferInfo{lutBuffer_, 0, sizeof(ScanoutGammaLut)};
-    for (uint32_t i = 0; i < 2; ++i)
+    for (uint32_t i = 0; i < kImageCount; ++i)
     {
+        const VkDescriptorBufferInfo bufferInfo{lutBuffers_[i], 0, sizeof(ScanoutGammaLut)};
         const VkDescriptorImageInfo imageInfo{VK_NULL_HANDLE, views_[i], VK_IMAGE_LAYOUT_GENERAL};
         const VkWriteDescriptorSet writes[2] = {
             {VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, descriptorSets_[i], 0, 0, 1,
@@ -133,15 +134,15 @@ bool GpuScanoutGamma::Initialize(Renderer &renderer, const VkImage images[2])
 bool GpuScanoutGamma::Apply(Renderer &, VkCommandBuffer commands, uint32_t imageIndex,
                             uint32_t width, uint32_t height, const ScanoutGammaLut &lut)
 {
-    if (imageIndex >= 2 || pipeline_ == VK_NULL_HANDLE || !lutMapped_)
+    if (imageIndex >= kImageCount || pipeline_ == VK_NULL_HANDLE || !lutMapped_[imageIndex])
         return false;
-    std::memcpy(lutMapped_, lut.data(), sizeof(lut));
+    std::memcpy(lutMapped_[imageIndex], lut.data(), sizeof(lut));
 
     VkBufferMemoryBarrier lutBarrier{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
     lutBarrier.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT;
     lutBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
     lutBarrier.srcQueueFamilyIndex = lutBarrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-    lutBarrier.buffer = lutBuffer_;
+    lutBarrier.buffer = lutBuffers_[imageIndex];
     lutBarrier.size = sizeof(ScanoutGammaLut);
     vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                          0, 0, nullptr, 1, &lutBarrier, 0, nullptr);
@@ -178,28 +179,28 @@ bool GpuScanoutGamma::Apply(Renderer &, VkCommandBuffer commands, uint32_t image
 
 void GpuScanoutGamma::Release(VkDevice device)
 {
-    if (lutMapped_)
-        vkUnmapMemory(device, lutMemory_);
-    lutMapped_ = nullptr;
     vkDestroyDescriptorPool(device, descriptorPool_, nullptr);
     vkDestroyPipeline(device, pipeline_, nullptr);
     vkDestroyShaderModule(device, shader_, nullptr);
     vkDestroyPipelineLayout(device, pipelineLayout_, nullptr);
     vkDestroyDescriptorSetLayout(device, setLayout_, nullptr);
-    vkDestroyBuffer(device, lutBuffer_, nullptr);
-    vkFreeMemory(device, lutMemory_, nullptr);
-    for (VkImageView &view : views_)
+    for (uint32_t i = 0; i < kImageCount; ++i)
     {
-        vkDestroyImageView(device, view, nullptr);
-        view = VK_NULL_HANDLE;
+        if (lutMapped_[i])
+            vkUnmapMemory(device, lutMemory_[i]);
+        vkDestroyBuffer(device, lutBuffers_[i], nullptr);
+        vkFreeMemory(device, lutMemory_[i], nullptr);
+        vkDestroyImageView(device, views_[i], nullptr);
+        lutMapped_[i] = nullptr;
+        lutBuffers_[i] = VK_NULL_HANDLE;
+        lutMemory_[i] = VK_NULL_HANDLE;
+        views_[i] = VK_NULL_HANDLE;
     }
     descriptorPool_ = VK_NULL_HANDLE;
     pipeline_ = VK_NULL_HANDLE;
     shader_ = VK_NULL_HANDLE;
     pipelineLayout_ = VK_NULL_HANDLE;
     setLayout_ = VK_NULL_HANDLE;
-    lutBuffer_ = VK_NULL_HANDLE;
-    lutMemory_ = VK_NULL_HANDLE;
 }
 
 } // namespace gears::draw

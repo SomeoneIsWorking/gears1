@@ -5,9 +5,18 @@
 namespace gears::draw
 {
 
+Renderer::~Renderer()
+{
+    frameSlots.Drain();
+    ReleasePersistent();
+    frameSlots.Release();
+}
+
 void Renderer::ReleasePersistent()
 {
     if (!persistent)
+        return;
+    if (!frameSlots.Drain())
         return;
     RendererPersistent &P = *persistent;
     for (auto &[k, p] : P.pipelines)
@@ -69,7 +78,6 @@ void Renderer::ReleasePersistent()
     // destroyed here; doing so would destroy each handle twice.
 
     vkDestroySampler(device, P.depthAliasSampler, nullptr);
-    vkDestroyDescriptorPool(device, P.depthAliasDescPool, nullptr);
     vkDestroyPipeline(device, P.depthAliasPipeline, nullptr);
     vkDestroyPipelineLayout(device, P.depthAliasLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, P.depthAliasSetLayout, nullptr);
@@ -78,7 +86,6 @@ void Renderer::ReleasePersistent()
     vkDestroyPipelineLayout(device, P.resolveLayout, nullptr);
     vkDestroyDescriptorSetLayout(device, P.resolveSetLayout, nullptr);
     vkDestroyShaderModule(device, P.resolveModule, nullptr);
-    vkDestroyDescriptorPool(device, P.resolveDescPool, nullptr);
     auto releaseDepthTargets = [&](auto &targets)
     {
         for (auto &[db, d] : targets)
@@ -102,21 +109,6 @@ void Renderer::ReleasePersistent()
     P.boundDepthBase = UINT32_MAX;
     P.boundDepthSamples = VK_SAMPLE_COUNT_1_BIT;
     P.scanout.Release(*this);
-    if (P.ssboMapped)
-        vkUnmapMemory(device, P.ssboMem);
-    vkDestroyBuffer(device, P.ssbo, nullptr);
-    vkFreeMemory(device, P.ssboMem, nullptr);
-    if (P.arenaMapped)
-        vkUnmapMemory(device, P.arenaMem);
-    vkDestroyBuffer(device, P.arena, nullptr);
-    vkFreeMemory(device, P.arenaMem, nullptr);
-    if (P.readbackMapped)
-        vkUnmapMemory(device, P.readbackMem);
-    vkDestroyBuffer(device, P.readback, nullptr);
-    vkFreeMemory(device, P.readbackMem, nullptr);
-    vkDestroyDescriptorPool(device, P.descriptorPool, nullptr);
-    vkDestroyFence(device, P.fence, nullptr);
-    vkDestroyCommandPool(device, P.cmdPool, nullptr);
     delete persistent;
     persistent = nullptr;
 }

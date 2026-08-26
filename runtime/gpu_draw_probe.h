@@ -27,9 +27,9 @@ namespace gears::draw
 
 struct FrameProbe
 {
-    FrameProbe(Renderer& r, uint32_t w, uint32_t h) : R(r), W(w), H(h) {}
+    FrameProbe(Renderer &r, uint32_t w, uint32_t h) : R(r), W(w), H(h) {}
 
-    Renderer& R;
+    Renderer &R;
     const uint32_t W, H;
 
     // Reads the knobs and creates what each enabled probe needs. nDraws is the
@@ -64,7 +64,7 @@ struct FrameProbe
     // because 800 full-surface readbacks a frame is not a tool anyone runs.
     bool Comparing() const { return !tracePath.empty(); }
     void TraceAll(VkCommandBuffer cmd, uint32_t drawsSoFar, uint32_t prepIndex,
-                  const SurfaceTarget* t, uint32_t surfaceBase);
+                  const SurfaceTarget *t, uint32_t surfaceBase);
     static constexpr uint32_t kThumbW = 32, kThumbH = 18;
 
     // GEARS_DRAW_SURFACE=<hex>: restrict BOTH probes to one EDRAM surface.
@@ -89,7 +89,12 @@ struct FrameProbe
     // rows early wherever a resolve has gone past. That mislabelled the central
     // row of catalog #62 for six iterations -- it named a colour-masked draw as
     // the writer when the writer was an ordinary composite three rows later.
-    struct ThumbSample { uint32_t draws; uint32_t prepIndex; uint32_t surface; };
+    struct ThumbSample
+    {
+        uint32_t draws;
+        uint32_t prepIndex;
+        uint32_t surface;
+    };
     std::vector<ThumbSample> thumbs;
     int64_t onlySurface = -1;
     // The surface a caller must sample when a filter is set, or -1 for "whatever
@@ -130,9 +135,8 @@ struct FrameProbe
     // shader hash, so a row cannot be silently about a different draw.
     bool Dumping() const { return !dumpWanted.empty() || dumpPsHash != 0; }
     void DumpSurface(VkCommandBuffer cmd, uint32_t drawsSoFar, uint32_t prepIndex,
-                     uint32_t diagIndex, const SurfaceTarget* t,
-                     uint32_t surfaceBase, uint64_t psHash = 0,
-                     uint32_t colorMask = 0);
+                     uint32_t diagIndex, const SurfaceTarget *t, uint32_t surfaceBase,
+                     uint64_t psHash = 0, uint32_t colorMask = 0);
 
     // ---- the DEPTH buffer, depth and stencil, after a NAMED draw ----------
     //
@@ -153,29 +157,32 @@ struct FrameProbe
     // far-cleared buffer changes nothing visible in depth while changing every
     // stencil byte it covers.
     bool DumpingDepth() const { return !depthWanted.empty() || depthPsHash != 0; }
-    void DumpDepth(VkCommandBuffer cmd, uint32_t drawsSoFar, uint32_t prepIndex,
-                   uint32_t diagIndex, VkImage depthImage, VkFormat depthFormat,
-                   uint64_t psHash = 0, uint32_t colorMask = 0);
+    bool RequiresGpuCompletion() const
+    {
+        return stepEvery > 0 || Tracing() || Comparing() || Dumping() || DumpingDepth();
+    }
+    void DumpDepth(VkCommandBuffer cmd, uint32_t drawsSoFar, uint32_t prepIndex, uint32_t diagIndex,
+                   VkImage depthImage, VkFormat depthFormat, uint64_t psHash = 0,
+                   uint32_t colorMask = 0);
 
     // Both must be called with NO render pass open -- an image copy cannot
     // happen inside one -- and with the target read BEFORE the pass was ended,
     // since ending it nulls the caller's openTarget.
-    void Checkpoint(VkCommandBuffer cmd, uint32_t drawsSoFar, const SurfaceTarget* t,
+    void Checkpoint(VkCommandBuffer cmd, uint32_t drawsSoFar, const SurfaceTarget *t,
                     uint32_t surfaceBase);
     void TracePixel(VkCommandBuffer cmd, uint32_t drawsSoFar, uint32_t prepIndex,
-                    const SurfaceTarget* t,
-                    uint32_t surfaceBase);
+                    const SurfaceTarget *t, uint32_t surfaceBase);
 
     // Writes the checkpoint images and prints the trace. Call after the frame's
     // fence has been waited on; `prepared` names the draw behind each sample.
-    void Report(const std::vector<PreparedDraw>& prepared);
+    void Report(const std::vector<PreparedDraw> &prepared);
 
     // Frees everything Build created. After Report, and after the fence.
     void Release();
 
-private:
-    void ReportSurfaceDumps(const std::vector<PreparedDraw>& prepared);
-    void ReportDepthDumps(const std::vector<PreparedDraw>& prepared);
+  private:
+    void ReportSurfaceDumps(const std::vector<PreparedDraw> &prepared);
+    void ReportDepthDumps(const std::vector<PreparedDraw> &prepared);
 
     // Each checkpoint costs a full-frame readback buffer, so STEP=1 on a
     // 170-draw frame is capped rather than allocating 170 of them.
@@ -187,8 +194,19 @@ private:
     // goes from 900k non-black pixels to zero reads as "something wiped the
     // frame" when it is only the render target changing to a small bloom buffer
     // -- which is exactly how it was misread once.
-    struct Checkpt { uint32_t draws; VkBuffer buffer; uint32_t surface; };
-    struct PixelSample { uint32_t draws; uint32_t prepIndex; uint32_t surface; VkFormat format; };
+    struct Checkpt
+    {
+        uint32_t draws;
+        VkBuffer buffer;
+        uint32_t surface;
+    };
+    struct PixelSample
+    {
+        uint32_t draws;
+        uint32_t prepIndex;
+        uint32_t surface;
+        VkFormat format;
+    };
 
     long stepEvery = 0, stepFrom = 0;
     VkDeviceSize rbBytes = 0;
@@ -245,14 +263,14 @@ private:
     // pair (colour mask 0), which is the state the shading draw then tests.
     uint64_t depthPsHash = 0;
     bool depthPsMaskedOnly = false;
-    uint32_t depthPsMatches = 0;   // draws that matched the hash
-    uint32_t depthPsHashSeen = 0;  // draws that matched hash AND mask rule
+    uint32_t depthPsMatches = 0;  // draws that matched the hash
+    uint32_t depthPsHashSeen = 0; // draws that matched hash AND mask rule
     struct DepthDump
     {
         uint32_t draws, prepIndex, diagIndex;
         VkBuffer buffer;
         VkDeviceMemory mem;
-        VkDeviceSize bytes;   // W*H*4 of depth, then W*H of stencil
+        VkDeviceSize bytes; // W*H*4 of depth, then W*H of stencil
     };
     std::vector<DepthDump> depthDumps;
 };
@@ -267,9 +285,9 @@ private:
 // fragment invocations (it ran and shaded/blended to nothing).
 struct DrawStats
 {
-    DrawStats(Renderer& r) : R(r) {}
+    DrawStats(Renderer &r) : R(r) {}
 
-    Renderer& R;
+    Renderer &R;
 
     // GEARS_DRAW_CLIP_WATCH=<16-hex vertex shader hash>: per frame, how many
     // draws of that shader assembled primitives and then lost EVERY one to
@@ -306,9 +324,9 @@ struct DrawStats
 
     // Reads the results back, prints the frame summary and writes the table.
     // `drawn` is how many queries were actually recorded. Destroys the pool.
-    void Report(uint32_t drawn, const std::vector<PreparedDraw>& prepared);
+    void Report(uint32_t drawn, const std::vector<PreparedDraw> &prepared);
 
-private:
+  private:
     // One row per issued draw, joining what the draw WAS (surface, EDRAM mode,
     // primitive, shaders) with what it DID (pipeline statistics) and with every
     // piece of state that can silently zero it. This table replaces guessing:
@@ -317,8 +335,8 @@ private:
     // clip+cull, and every one has depth func GEQUAL against a cleared 1.0
     // depth buffer" names the defect. Grouping and filtering belong to whatever
     // reads the TSV, so the renderer stays out of the analysis business.
-    void WriteTable(uint32_t drawn, const std::vector<PreparedDraw>& prepared,
-                    const std::vector<uint64_t>& st);
+    void WriteTable(uint32_t drawn, const std::vector<PreparedDraw> &prepared,
+                    const std::vector<uint64_t> &st);
 
     static constexpr uint32_t kCounters = 4;
     VkQueryPool pool = VK_NULL_HANDLE;

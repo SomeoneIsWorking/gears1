@@ -8,6 +8,19 @@
 namespace gears::draw
 {
 
+struct GpuScanout::ImageLifetime
+{
+    VkDevice device = VK_NULL_HANDLE;
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+
+    ~ImageLifetime()
+    {
+        vkDestroyImage(device, image, nullptr);
+        vkFreeMemory(device, memory, nullptr);
+    }
+};
+
 bool GpuScanout::Initialize(Renderer &renderer, uint32_t width, uint32_t height)
 {
     VkImageCreateInfo imageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
@@ -22,12 +35,15 @@ bool GpuScanout::Initialize(Renderer &renderer, uint32_t width, uint32_t height)
     if (!renderer.ownsDevice)
         imageInfo.usage |= VK_IMAGE_USAGE_STORAGE_BIT;
 
-    for (uint32_t i = 0; i < 2; ++i)
+    VkImage gammaImages[kImageCount]{};
+    for (uint32_t i = 0; i < kImageCount; ++i)
     {
-        if (vkCreateImage(renderer.device, &imageInfo, nullptr, &images_[i]) != VK_SUCCESS)
+        auto lifetime = std::make_shared<ImageLifetime>();
+        lifetime->device = renderer.device;
+        if (vkCreateImage(renderer.device, &imageInfo, nullptr, &lifetime->image) != VK_SUCCESS)
             return false;
         VkMemoryRequirements requirements{};
-        vkGetImageMemoryRequirements(renderer.device, images_[i], &requirements);
+        vkGetImageMemoryRequirements(renderer.device, lifetime->image, &requirements);
         uint32_t memoryType = 0;
         if (!renderer.FindMemory(requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                                  memoryType) &&
@@ -36,12 +52,15 @@ bool GpuScanout::Initialize(Renderer &renderer, uint32_t width, uint32_t height)
         VkMemoryAllocateInfo allocation{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
         allocation.allocationSize = requirements.size;
         allocation.memoryTypeIndex = memoryType;
-        if (vkAllocateMemory(renderer.device, &allocation, nullptr, &memory_[i]) != VK_SUCCESS ||
-            vkBindImageMemory(renderer.device, images_[i], memory_[i], 0) != VK_SUCCESS)
+        if (vkAllocateMemory(renderer.device, &allocation, nullptr, &lifetime->memory) !=
+                VK_SUCCESS ||
+            vkBindImageMemory(renderer.device, lifetime->image, lifetime->memory, 0) != VK_SUCCESS)
             return false;
+        gammaImages[i] = lifetime->image;
+        images_[i] = std::move(lifetime);
     }
 
-    if (!renderer.ownsDevice && !gamma_.Initialize(renderer, images_))
+    if (!renderer.ownsDevice && !gamma_.Initialize(renderer, gammaImages))
         return false;
     return true;
 }
@@ -50,11 +69,26 @@ bool GpuScanout::Record(Renderer &renderer, VkCommandBuffer commands, VkImage so
                         uint32_t width, uint32_t height, const uint32_t *guestGammaRamp,
                         VkBuffer readback, bool copyToHost, GpuScanoutResult &result)
 {
-    const uint32_t imageIndex = nextImage_;
-    nextImage_ ^= 1u;
-    VkImage destination = images_[imageIndex];
-    if (destination == VK_NULL_HANDLE)
+    result = {};
+    uint32_t imageIndex = kImageCount;
+    for (uint32_t offset = 0; offset < kImageCount; ++offset)
+    {
+        const uint32_t candidate = (nextImage_ + offset) % kImageCount;
+        if (images_[candidate] && images_[candidate].use_count() == 1)
+        {
+            imageIndex = candidate;
+            nextImage_ = (candidate + 1) % kImageCount;
+            break;
+        }
+    }
+    if (imageIndex == kImageCount)
+    {
+        lucent::error("draw",
+                      "scan-out has no unleased image; refusing to overwrite a frame still in use");
         return false;
+    }
+    const std::shared_ptr<ImageLifetime> lifetime = images_[imageIndex];
+    const VkImage destination = lifetime->image;
 
     VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     barrier.srcAccessMask = 0;
@@ -109,19 +143,21 @@ bool GpuScanout::Record(Renderer &renderer, VkCommandBuffer commands, VkImage so
                                readback, 1, &region);
     }
     result.image = destination;
+    result.lease = SharedFrameImage::Lease(lifetime);
     return true;
 }
 
 bool GpuScanout::Publish(const GpuScanoutResult &result, uint32_t width, uint32_t height,
                          long frameId)
 {
-    if (result.image == VK_NULL_HANDLE || frameId <= 0)
+    if (result.image == VK_NULL_HANDLE || !result.lease.Valid() || frameId <= 0)
     {
         lucent::error("draw", "refusing shared scan-out without a valid guest frame identity");
         return false;
     }
     SharedFrameImage frame;
     frame.image = result.image;
+    frame.lease = result.lease;
     frame.width = width;
     frame.height = height;
     frame.sequence = static_cast<uint64_t>(frameId);
@@ -130,14 +166,10 @@ bool GpuScanout::Publish(const GpuScanoutResult &result, uint32_t width, uint32_
 
 void GpuScanout::Release(Renderer &renderer)
 {
+    ClearSharedFrameImage();
     gamma_.Release(renderer.device);
-    for (uint32_t i = 0; i < 2; ++i)
-    {
-        vkDestroyImage(renderer.device, images_[i], nullptr);
-        vkFreeMemory(renderer.device, memory_[i], nullptr);
-        images_[i] = VK_NULL_HANDLE;
-        memory_[i] = VK_NULL_HANDLE;
-    }
+    for (std::shared_ptr<ImageLifetime> &image : images_)
+        image.reset();
 }
 
 } // namespace gears::draw

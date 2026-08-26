@@ -197,6 +197,7 @@ add_executable(gears1
     pm4_trace.cpp
     vd_null_gpu.cpp
     gpu_present.cpp
+    gpu_present_source.cpp
     gpu_present_stage.cpp
     debug_http.cpp
     graphics_probe.cpp
@@ -267,6 +268,7 @@ add_library(gears_draw STATIC
     frame_contract.cpp
     gpu_device_features.cpp
     gpu_draw.cpp
+    gpu_draw_api.cpp
     gpu_draw_arena.cpp
     gpu_draw_census.cpp
     gpu_draw_descriptors.cpp
@@ -287,6 +289,8 @@ add_library(gears_draw STATIC
     gpu_draw_uniforms.cpp
     gpu_draw_untile.cpp
     gpu_draw_vertexfetch.cpp
+    gpu_frame_cleanup.cpp
+    gpu_frame_slots.cpp
     gpu_instance.cpp
     gpu_queue_family.cpp
     gpu_retirement.cpp

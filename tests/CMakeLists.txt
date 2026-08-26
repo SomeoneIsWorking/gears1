@@ -184,6 +184,14 @@ add_executable(test_gpu_queue_access test_gpu_queue_access.cpp)
 target_link_libraries(test_gpu_queue_access PRIVATE gears_gpu_queue_access)
 add_test(NAME gpu_queue_access COMMAND test_gpu_queue_access)
 
+add_executable(test_shared_frame_image
+    test_shared_frame_image.cpp
+    ../runtime/frame_contract.cpp
+    ../runtime/gpu_shared_device.cpp)
+target_include_directories(test_shared_frame_image PRIVATE ../runtime)
+target_link_libraries(test_shared_frame_image PRIVATE lucent::lucent)
+add_test(NAME shared_frame_image COMMAND test_shared_frame_image)
+
 add_executable(test_gpu_draw_options
     test_gpu_draw_options.cpp
     ../runtime/gpu_draw_options.cpp)
