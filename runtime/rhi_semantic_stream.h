@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <variant>
 #include <vector>
 
 namespace gears
@@ -73,7 +74,6 @@ enum class RhiBindingEvidenceResult : std::uint8_t
 
 struct RhiObservedDraw
 {
-    std::uint64_t sequence = 0;
     RhiSemanticDraw draw;
     RhiDrawPacketEvidence packet;
     RhiDrawEvidenceResult evidence = RhiDrawEvidenceResult::Missing;
@@ -81,17 +81,25 @@ struct RhiObservedDraw
 
 struct RhiObservedBinding
 {
-    std::uint64_t sequence = 0;
     RhiSemanticBinding binding;
     RhiBindingStateEvidence state;
     RhiBindingEvidenceResult evidence = RhiBindingEvidenceResult::Missing;
 };
 
+using RhiSemanticEventPayload = std::variant<RhiObservedDraw, RhiObservedBinding>;
+
+struct RhiSemanticEvent
+{
+    std::uint64_t sequence = 0;
+    RhiSemanticEventPayload payload;
+};
+
 struct RhiSemanticFrame
 {
     std::uint64_t frameSequence = 0;
-    std::vector<RhiObservedDraw> draws;
-    std::vector<RhiObservedBinding> bindings;
+    std::vector<RhiSemanticEvent> events;
+    std::uint64_t draws = 0;
+    std::uint64_t bindings = 0;
     std::uint64_t matched = 0;
     std::uint64_t missing = 0;
     std::uint64_t mismatched = 0;

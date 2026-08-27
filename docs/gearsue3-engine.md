@@ -1,9 +1,10 @@
 # GearsUE3 engine-port architecture
 
-GearsUE3 is a clean-code, multi-title engine port built around static
-recompilation and native overrides. It does not compile or redistribute Unreal
-Engine 3 source. The user supplies an owned Gears disc/image; everything derived
-from that image is generated locally into ignored storage.
+GearsUE3 is a clean-code native engine for the Gears UE3 family. Static
+recompilation is its retained compatibility, ABI, and migration-oracle substrate;
+native engine owners are the shipping architecture. It does not compile or
+redistribute Unreal Engine 3 source. The user supplies an owned Gears disc/image;
+everything derived from that image is generated locally into ignored storage.
 
 ## Product shape
 

@@ -91,8 +91,10 @@ points:
 | 0x8222DE50 | bound vertex and index buffers | direct DMA-index `DRAW_INDX`; commits through device+0x28 |
 
 `runtime/titles/gears1/rhi_bindings.cpp` is the exact-revision draw/texture binding.
-It preserves and calls every owned `__imp__sub_*` body, then publishes a typed draw
-to the title-neutral `runtime/rhi_semantic_stream.*` observation seam. With
+It preserves and calls every owned `__imp__sub_*` body, then publishes typed
+operations to the title-neutral `runtime/rhi_semantic_stream.*` observation seam.
+Draws and bindings share one event vector, so a future native consumer receives
+their exact interleaving without merging independent queues. With
 `GEARS_NATIVE_RHI_OBSERVE=1`, a headless menu walk through frame 1712 compared
 90,854 semantic calls with the packets the original bodies emitted: 90,854
 matches, zero missing packets, and zero mismatches. The mix was 17,864

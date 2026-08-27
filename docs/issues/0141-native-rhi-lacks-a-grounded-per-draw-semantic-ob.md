@@ -36,9 +36,13 @@ The same adapter now owns the already-grounded `SetTexture`, `SetPixelShader`,
 and `SetVertexShader` addresses and device offsets. A headless run through frame
 120 observed 734 texture, 118 pixel-shader, and 118 vertex-shader calls; all 970
 requested objects matched the state written by the retained guest bodies, with
-zero missing observations and zero mismatches. The stream uses one sequence
-across draws and bindings, and focused controls prove both the binding mismatch
-answer and cross-kind ordering. The historical shader argument scanner,
+zero missing observations and zero mismatches. The stream now stores both
+operation types in one typed event vector rather than separate queues, so the
+cross-kind order needed by a native consumer is preserved directly. Focused
+controls prove both the binding mismatch answer and interleaved draw/binding/draw
+ordering. A post-refactor headless run through frame 60 matched 58/58 draw
+packets and 490/490 binding updates with zero missing observations or mismatches.
+The historical shader argument scanner,
 SetTexture census, and false `sub_82544148` draw probe were removed after their
 findings were recorded. Remaining D3D submission/queue collection is explicitly
 default-off, so ordinary runs no longer pay its atomics and table scans.
