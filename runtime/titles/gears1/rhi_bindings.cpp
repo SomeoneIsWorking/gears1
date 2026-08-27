@@ -13,6 +13,8 @@ namespace
 
 [[nodiscard]] std::vector<gears::RhiSemanticVertexStream>
 CaptureBoundVertexStreams(std::uint32_t device);
+[[nodiscard]] std::vector<gears::RhiSemanticRenderTarget>
+CaptureBoundRenderTargets(std::uint32_t device);
 
 [[nodiscard]] std::uint32_t ReadGuestBe32(std::uint32_t address)
 {
@@ -106,6 +108,8 @@ CaptureBoundVertexStreams(std::uint32_t device);
             evidence.vertexStreamsPresent = device != 0;
             evidence.vertexStreams = CaptureBoundVertexStreams(device);
         }
+        evidence.renderTargetsPresent = device != 0;
+        evidence.renderTargets = CaptureBoundRenderTargets(device);
         return evidence;
     }
     return {};
@@ -231,6 +235,33 @@ std::vector<gears::RhiSemanticVertexStream> CaptureBoundVertexStreams(std::uint3
                        ReadGuestBe32(device + kDepthDescriptorWord1Offset)},
         .descriptorDwords = 2,
     };
+}
+
+[[nodiscard]] gears::RhiSemanticRenderTarget
+MakeObservedRenderTarget(bool depthStencil, std::uint32_t slot,
+                         const gears::RhiBindingStateEvidence &state)
+{
+    return {
+        .depthStencil = depthStencil,
+        .slot = slot,
+        .object = state.observedObject,
+    };
+}
+
+std::vector<gears::RhiSemanticRenderTarget> CaptureBoundRenderTargets(std::uint32_t device)
+{
+    constexpr std::uint32_t kColorRenderTargetCount = 4;
+    std::vector<gears::RhiSemanticRenderTarget> targets;
+    for (std::uint32_t slot = 0; slot < kColorRenderTargetCount; ++slot)
+    {
+        const gears::RhiBindingStateEvidence state = CaptureColorRenderTargetBinding(device, slot);
+        if (state.observedObject != 0)
+            targets.push_back(MakeObservedRenderTarget(false, slot, state));
+    }
+    const gears::RhiBindingStateEvidence depth = CaptureDepthStencilTargetBinding(device);
+    if (depth.observedObject != 0)
+        targets.push_back(MakeObservedRenderTarget(true, 0, depth));
+    return targets;
 }
 
 void ObserveAfterSuper(const gears::RhiSemanticDraw &draw, std::uint32_t device, bool staged)

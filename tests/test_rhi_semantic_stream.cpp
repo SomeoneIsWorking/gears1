@@ -10,6 +10,7 @@ int main()
 {
     using gears::CompareRhiBindingState;
     using gears::CompareRhiDrawPacket;
+    using gears::CompareRhiDrawRenderTargetState;
     using gears::CompareRhiDrawVertexState;
     using gears::RhiBindingEvidenceResult;
     using gears::RhiBindingStateEvidence;
@@ -35,6 +36,7 @@ int main()
         .sourceSelect = 2,
         .elementCount = 300,
         .vertexStreamsPresent = true,
+        .renderTargetsPresent = true,
     };
     assert(CompareRhiDrawPacket(autoIndexed, matchingAuto) == RhiDrawEvidenceResult::Match);
 
@@ -70,6 +72,7 @@ int main()
         .indexStrideBytes = 2,
         .indexEndianSwap = 1,
         .vertexStreamsPresent = true,
+        .renderTargetsPresent = true,
     };
     assert(CompareRhiDrawPacket(indexed, matchingIndexed) == RhiDrawEvidenceResult::Match);
     altered = matchingIndexed;
@@ -200,6 +203,21 @@ int main()
            RhiDrawEvidenceResult::Mismatch);
     matchingVertexState.vertexStreamsPresent = false;
     assert(CompareRhiDrawVertexState(boundDrawState, matchingVertexState) ==
+           RhiDrawEvidenceResult::Missing);
+
+    const gears::RhiSemanticDrawState targetDrawState{
+        .draw = indexed,
+        .renderTargets = {{.slot = 2, .object = colorTargetBinding.object}},
+    };
+    RhiDrawPacketEvidence matchingTargetState = matchingIndexed;
+    matchingTargetState.renderTargets = targetDrawState.renderTargets;
+    assert(CompareRhiDrawRenderTargetState(targetDrawState, matchingTargetState) ==
+           RhiDrawEvidenceResult::Match);
+    matchingTargetState.renderTargets[0].object ^= 1;
+    assert(CompareRhiDrawRenderTargetState(targetDrawState, matchingTargetState) ==
+           RhiDrawEvidenceResult::Mismatch);
+    matchingTargetState.renderTargetsPresent = false;
+    assert(CompareRhiDrawRenderTargetState(targetDrawState, matchingTargetState) ==
            RhiDrawEvidenceResult::Missing);
 
     const RhiSemanticBinding depthTargetBinding{

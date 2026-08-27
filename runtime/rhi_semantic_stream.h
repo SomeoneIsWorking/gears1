@@ -36,6 +36,15 @@ struct RhiSemanticVertexStream
     RhiSemanticBufferView view;
 };
 
+struct RhiSemanticRenderTarget
+{
+    // Binding identity only. Target descriptors can be mutated after binding by
+    // separate render-state setters and must enter draw state through that owner.
+    bool depthStencil = false;
+    std::uint32_t slot = 0;
+    std::uint32_t object = 0;
+};
+
 struct RhiSemanticDraw
 {
     RhiSemanticDrawKind kind = RhiSemanticDrawKind::BoundVertices;
@@ -55,6 +64,7 @@ struct RhiSemanticDrawState
 {
     RhiSemanticDraw draw;
     std::vector<RhiSemanticVertexStream> vertexStreams;
+    std::vector<RhiSemanticRenderTarget> renderTargets;
 };
 
 struct RhiDrawPacketEvidence
@@ -72,6 +82,8 @@ struct RhiDrawPacketEvidence
     std::uint32_t indexEndianSwap = 0;
     bool vertexStreamsPresent = false;
     std::vector<RhiSemanticVertexStream> vertexStreams;
+    bool renderTargetsPresent = false;
+    std::vector<RhiSemanticRenderTarget> renderTargets;
 };
 
 enum class RhiDrawEvidenceResult : std::uint8_t
@@ -196,6 +208,9 @@ struct RhiSemanticFrame
                                                          const RhiDrawPacketEvidence &packet);
 [[nodiscard]] RhiDrawEvidenceResult CompareRhiDrawVertexState(const RhiSemanticDrawState &state,
                                                               const RhiDrawPacketEvidence &packet);
+[[nodiscard]] RhiDrawEvidenceResult
+CompareRhiDrawRenderTargetState(const RhiSemanticDrawState &state,
+                                const RhiDrawPacketEvidence &packet);
 [[nodiscard]] RhiBindingEvidenceResult CompareRhiBindingState(const RhiSemanticBinding &binding,
                                                               const RhiBindingStateEvidence &state);
 [[nodiscard]] RhiPresentEvidenceResult

@@ -66,6 +66,14 @@ the same run all 24,239 draws, 86,061 bindings, and 780 presents matched, with
 zero missing observations and zero mismatches. Focused tests separately force
 a changed stride, a missing snapshot, and a different stream count.
 
+The render-target identity arm likewise demonstrated both answers. Persisting
+bind-time descriptors produced 3,141 draw mismatches by frame 630 while object
+identities still agreed; one repeated transition was `0x302D0` to `0xC02D0`
+without another target bind. After restricting binding state to its proven
+ownership, a headless run through frame 600 matched ordered active color/depth
+objects for all 3,786 draws, including 482 bound-index draws, with zero missing
+or mismatched observations across 15,698 bindings and 600 presents.
+
 ## Known failure modes
 
 Colour-target descriptors are setter outputs, not always verbatim input object

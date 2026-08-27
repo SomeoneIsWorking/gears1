@@ -132,6 +132,16 @@ all 24,239 draw packets, 86,061 bindings, and 780 presents with no missing or
 mismatched observation. Its first run rejected a false 18-slot snapshot,
 exposing the slot-17/stride-table overlap before the adapter was corrected.
 
+The same state owner now snapshots ordered active color/depth target object
+identities at every draw. A headless run through frame 600 matched all 3,786
+draw snapshots, including 482 bound-index draws, against a fresh read of the
+four color slots and depth slot; all 15,698 bindings and 600 presents also
+matched. The first arm intentionally carried bind-time descriptors forward and
+was rejected 3,141 times by frame 630: the object remained identical while a
+color descriptor changed from `0x302D0` to `0xC02D0` without a target rebind.
+Descriptor-at-draw state therefore belongs to another render-state setter, not
+to the target binding contract.
+
 With `GEARS_NATIVE_RHI_OBSERVE=1`, a headless menu walk through frame 1980
 compared 153,214 semantic calls with the packets and transient-buffer state the
 original bodies emitted: 153,214 matches, zero missing observations, and zero

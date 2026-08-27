@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <map>
+#include <optional>
 
 namespace gears
 {
@@ -17,6 +18,8 @@ class RhiSemanticStateTracker
 
   private:
     std::map<std::uint32_t, RhiSemanticVertexStream> vertexStreams_;
+    std::map<std::uint32_t, RhiSemanticRenderTarget> colorTargets_;
+    std::optional<RhiSemanticRenderTarget> depthStencilTarget_;
 };
 
 } // namespace gears

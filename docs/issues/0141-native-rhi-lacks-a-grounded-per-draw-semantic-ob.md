@@ -119,10 +119,21 @@ packets, 86,061 bindings, and 780 presents; no observation was missing or
 mismatched. Focused controls reject a changed vertex stride, missing state, and
 different stream counts, and the state test proves slot ordering and unbinding.
 
+Per-draw state also carries the ordered active color/depth target object
+identities. A frame-600 headless run matched all 3,786 draw snapshots, including
+482 bound-index draws, against independent reads of the four color slots and
+depth slot; all 15,698 bindings and 600 presents matched too. The first arm
+persisted bind-time descriptors and was rejected 3,141 times by frame 630 even
+though target objects still agreed. In the repeated case the color descriptor
+changed from `0x302D0` to `0xC02D0` without a target rebind, proving descriptor
+state has a different setter owner that must be grounded before resolve views
+can be called complete.
+
 ## Next falsifier
 
 Exercise the separate bound-vertex entry dynamically if the title reaches it.
-Then add resource creation/lifetime, resolve, and retirement events and
+Ground the setter that mutates target descriptors after binding. Then add
+resource creation/lifetime, resolve, and retirement events and
 compare the complete ordered stream with the PM4-derived `FrameDrawInputs` and
 output. Keep the recompiled compatibility bodies available and super-called
 until a deliberately wrong semantic control is rejected and a same-run

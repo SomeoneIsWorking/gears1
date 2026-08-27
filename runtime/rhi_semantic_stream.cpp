@@ -33,6 +33,8 @@ struct RhiSemanticReportTotals
     std::array<std::uint64_t, 4> drawKinds{};
     std::uint64_t boundDrawsWithVertexStreams = 0;
     std::uint64_t boundDrawsWithoutVertexStreams = 0;
+    std::uint64_t drawsWithRenderTargets = 0;
+    std::uint64_t drawsWithoutRenderTargets = 0;
     std::uint64_t bindings = 0;
     std::uint64_t bindingsMatched = 0;
     std::uint64_t bindingsMissing = 0;
@@ -89,6 +91,20 @@ VertexStreamOrEmpty(const std::vector<RhiSemanticVertexStream> &streams, std::si
 {
     static const RhiSemanticVertexStream empty;
     return index < streams.size() ? streams[index] : empty;
+}
+
+[[nodiscard]] bool SameRenderTarget(const RhiSemanticRenderTarget &left,
+                                    const RhiSemanticRenderTarget &right)
+{
+    return left.depthStencil == right.depthStencil && left.slot == right.slot &&
+           left.object == right.object;
+}
+
+[[nodiscard]] const RhiSemanticRenderTarget &
+RenderTargetOrEmpty(const std::vector<RhiSemanticRenderTarget> &targets, std::size_t index)
+{
+    static const RhiSemanticRenderTarget empty;
+    return index < targets.size() ? targets[index] : empty;
 }
 
 [[nodiscard]] const char *DrawKindName(RhiSemanticDrawKind kind)
@@ -197,6 +213,21 @@ RhiDrawEvidenceResult CompareRhiDrawVertexState(const RhiSemanticDrawState &stat
     return RhiDrawEvidenceResult::Match;
 }
 
+RhiDrawEvidenceResult CompareRhiDrawRenderTargetState(const RhiSemanticDrawState &state,
+                                                      const RhiDrawPacketEvidence &packet)
+{
+    if (!packet.renderTargetsPresent)
+        return RhiDrawEvidenceResult::Missing;
+    if (state.renderTargets.size() != packet.renderTargets.size())
+        return RhiDrawEvidenceResult::Mismatch;
+    for (std::size_t index = 0; index < state.renderTargets.size(); ++index)
+    {
+        if (!SameRenderTarget(state.renderTargets[index], packet.renderTargets[index]))
+            return RhiDrawEvidenceResult::Mismatch;
+    }
+    return RhiDrawEvidenceResult::Match;
+}
+
 RhiBindingEvidenceResult CompareRhiBindingState(const RhiSemanticBinding &binding,
                                                 const RhiBindingStateEvidence &state)
 {
@@ -246,6 +277,8 @@ void ObserveRhiSemanticDraw(const RhiSemanticDraw &draw, const RhiDrawPacketEvid
     RhiDrawEvidenceResult evidence = CompareRhiDrawPacket(draw, packet);
     if (evidence == RhiDrawEvidenceResult::Match)
         evidence = CompareRhiDrawVertexState(state, packet);
+    if (evidence == RhiDrawEvidenceResult::Match)
+        evidence = CompareRhiDrawRenderTargetState(state, packet);
     g_stream.pendingEvents.push_back(
         {.sequence = g_stream.nextSequence++,
          .payload =
@@ -362,6 +395,10 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
                 else
                     ++g_reportTotals.boundDrawsWithVertexStreams;
             }
+            if (observed->state.renderTargets.empty())
+                ++g_reportTotals.drawsWithoutRenderTargets;
+            else
+                ++g_reportTotals.drawsWithRenderTargets;
             continue;
         }
         if (const auto *observed = std::get_if<RhiObservedBinding>(&event.payload))
@@ -413,6 +450,8 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
         line.add("  bound-draw-state with-streams={} without-streams={}",
                  g_reportTotals.boundDrawsWithVertexStreams,
                  g_reportTotals.boundDrawsWithoutVertexStreams);
+        line.add("  draw-target-state with-targets={} without-targets={}",
+                 g_reportTotals.drawsWithRenderTargets, g_reportTotals.drawsWithoutRenderTargets);
         line.flush_debug("rhi");
     }
 
@@ -430,6 +469,10 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
                     VertexStreamOrEmpty(observed->packet.vertexStreams, 0);
                 const RhiSemanticVertexStream &actual1 =
                     VertexStreamOrEmpty(observed->packet.vertexStreams, 1);
+                const RhiSemanticRenderTarget &expectedTarget =
+                    RenderTargetOrEmpty(observed->state.renderTargets, 0);
+                const RhiSemanticRenderTarget &actualTarget =
+                    RenderTargetOrEmpty(observed->packet.renderTargets, 0);
                 lucent::error(
                     "rhi",
                     "semantic draw {} ({}) did not match its guest PM4 emission:"
@@ -439,7 +482,9 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
                     " index={:#x}+{}; bound index view present={} base={:#x}+{} stride={}"
                     " endian={}, observed DMA present={} index={:#x}+{} stride={} endian={};"
                     " expected active vertex streams={} first=({},{:#x}) second=({},{:#x}),"
-                    " observed present={} streams={} first=({},{:#x}) second=({},{:#x})",
+                    " observed present={} streams={} first=({},{:#x}) second=({},{:#x});"
+                    " expected targets={} first=(depth={} slot={} object={:#x}), observed"
+                    " present={} targets={} first=(depth={} slot={} object={:#x})",
                     event.sequence, DrawKindName(observed->state.draw.kind),
                     observed->state.draw.primitiveType, observed->state.draw.elementCount,
                     observed->packet.present, observed->packet.opcode,
@@ -460,7 +505,10 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
                     observed->state.vertexStreams.size(), expected0.slot, expected0.object,
                     expected1.slot, expected1.object, observed->packet.vertexStreamsPresent,
                     observed->packet.vertexStreams.size(), actual0.slot, actual0.object,
-                    actual1.slot, actual1.object);
+                    actual1.slot, actual1.object, observed->state.renderTargets.size(),
+                    expectedTarget.depthStencil, expectedTarget.slot, expectedTarget.object,
+                    observed->packet.renderTargetsPresent, observed->packet.renderTargets.size(),
+                    actualTarget.depthStencil, actualTarget.slot, actualTarget.object);
             }
             continue;
         }
