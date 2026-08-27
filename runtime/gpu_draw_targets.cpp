@@ -115,6 +115,15 @@ bool RenderTargetCache::GetPasses(VkFormat colorFormat, VkSampleCountFlagBits sa
 bool RenderTargetCache::GetSurfaceTarget(uint32_t base, const DrawSampleLayout &layout,
                                          SurfaceTarget *&out)
 {
+    if (reuseFrameSurfaceTargets)
+    {
+        if (SurfaceTarget *cached = frameSurfaceTargets.Find(base, layout.IsNativeMultisample()))
+        {
+            out = cached;
+            return true;
+        }
+    }
+
     auto &targets = layout.IsNativeMultisample() ? P.surfaceTargets2x : P.surfaceTargets;
     auto fmts = formatsPerBase.find(base);
     if (fmts == formatsPerBase.end())
@@ -132,6 +141,8 @@ bool RenderTargetCache::GetSurfaceTarget(uint32_t base, const DrawSampleLayout &
         {
             it->second.guestFormats = std::move(requiredFormats);
             out = &it->second;
+            if (reuseFrameSurfaceTargets)
+                frameSurfaceTargets.Remember(base, layout.IsNativeMultisample(), out);
             return true;
         }
 
@@ -273,6 +284,8 @@ bool RenderTargetCache::GetSurfaceTarget(uint32_t base, const DrawSampleLayout &
                      " -1..1 is wrong. This path has never been exercised before now",
                      base);
     out = &targets.emplace(base, s).first->second;
+    if (reuseFrameSurfaceTargets)
+        frameSurfaceTargets.Remember(base, layout.IsNativeMultisample(), out);
     return true;
 }
 

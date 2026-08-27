@@ -169,6 +169,8 @@ Each isolates one cause by comparison against the default.
 | `GEARS_DRAW_NOCULL=1`, `GEARS_DRAW_CULL_INVERT=1` | Culling, and the winding convention |
 | `GEARS_DRAW_FIXEDVP=1` | The guest's viewport/scissor |
 | `GEARS_DRAW_AB_CENSUS=1` | Restores all map/set-backed per-draw report censuses on **alternate silent frames** so the reporting boundary is measured in one run. The normal path collects them only for a frame that will report. On `chapter45_recovered`, census-on costs a resolved **+1.23 ms** draw-loop time (31.77 vs 30.54 ms over 94/94 frames, 1.05 ms resolution floor). Separate runs cannot resolve this reliably — see `runtime/frame_ab.h` |
+| `GEARS_DRAW_NO_TARGET_LOOKUP_CACHE=1` | Restores the old per-draw surface-capacity validation as a rendering control. The default uses `RenderTargetCache`'s frame-local lookup because the frame's complete base/format plan is built before draw preparation |
+| `GEARS_DRAW_AB_TARGET_LOOKUP=1` | Alternates the old per-draw validation with the frame-local lookup. On `chapter45_recovered`, the lookup saved a resolved **4.21 ms** (20.42 vs 24.63 ms over 94/94 frames, 1.05 ms floor); the final extracted A/B owner reconfirmed it at **6.27 ms** (39.91 vs 46.17 ms, 3.58 ms floor). Mutually exclusive with the other `GEARS_DRAW_AB_*` timing knobs |
 | `GEARS_DRAW_DEPTH_CLEAR=<float>` | The depth clear value (the guest's own is used by default) |
 | `GEARS_DRAW_SLATE_CLEAR=1` | Restores the diagnostic slate clear. **It is not the guest's colour** — it lifted the HDR surface off zero and hazed the whole frame (catalog #37) |
 | `GEARS_DRAW_DEPTHONLY_PS=1` | Runs the pixel shader on depth-only draws, against the hardware contract |
