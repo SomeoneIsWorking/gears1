@@ -3,6 +3,7 @@
 #include "import_stub.h"
 #include "rhi_index_buffer.h"
 #include "rhi_semantic_stream.h"
+#include "rhi_target_descriptor_watch.h"
 #include "rhi_vertex_buffer.h"
 
 #include <cstdint>
@@ -267,6 +268,7 @@ std::vector<gears::RhiSemanticRenderTarget> CaptureBoundRenderTargets(std::uint3
 void ObserveAfterSuper(const gears::RhiSemanticDraw &draw, std::uint32_t device, bool staged)
 {
     gears::ObserveRhiSemanticDraw(draw, CaptureLastDrawPacket(device, staged, draw.kind));
+    gears::gears1::ReportRhiTargetDescriptorWriteWatch();
 }
 
 } // namespace
@@ -359,6 +361,7 @@ PPC_FUNC(sub_8222B068)
         .slot = slot,
         .object = ctx.r5.u32,
     };
+    gears::gears1::PauseRhiTargetDescriptorWriteWatch();
     __imp__sub_8222B068(ctx, base);
     if (binding.object != 0)
     {
@@ -367,6 +370,7 @@ PPC_FUNC(sub_8222B068)
         binding.descriptorDwords = 1;
     }
     gears::ObserveRhiSemanticBinding(binding, CaptureColorRenderTargetBinding(device, slot));
+    gears::gears1::MaybeArmRhiTargetDescriptorWriteWatch(device, slot);
 }
 
 extern "C" PPC_FUNC(__imp__sub_8222B398);

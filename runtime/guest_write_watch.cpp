@@ -59,6 +59,8 @@ const char *OwnerName(GuestWriteWatchOwner owner)
         return "queue";
     case GuestWriteWatchOwner::kDrawPacket:
         return "draw-packet";
+    case GuestWriteWatchOwner::kRhiTargetDescriptor:
+        return "RHI target-descriptor";
     }
     return "unknown";
 }
@@ -251,6 +253,25 @@ bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
     return true;
 }
 
+bool PauseGuestWriteWatch(GuestWriteWatchOwner owner)
+{
+    if (g_watch.aliasCount == 0 || g_watch.owner != owner ||
+        !g_watch.armed.exchange(false, std::memory_order_acq_rel))
+        return false;
+    ProtectWatchPages(PROT_READ | PROT_WRITE);
+    return true;
+}
+
+bool ResumeGuestWriteWatch(GuestWriteWatchOwner owner)
+{
+    if (g_watch.aliasCount == 0 || g_watch.owner != owner || g_watch.reported ||
+        g_watch.hits.load(std::memory_order_relaxed) >= g_watch.targetSampleLimit)
+        return false;
+    ProtectWatchPages(PROT_READ);
+    g_watch.armed.store(true, std::memory_order_release);
+    return true;
+}
+
 bool ReportGuestWriteWatch(GuestWriteWatchOwner owner, bool rearm)
 {
     if (g_watch.aliasCount == 0 || g_watch.owner != owner || (g_watch.reported && !rearm))
@@ -268,8 +289,8 @@ bool ReportGuestWriteWatch(GuestWriteWatchOwner owner, bool rearm)
         const uintptr_t instruction = slot.instruction.load(std::memory_order_relaxed);
         if (instruction == 0)
             break;
-        line.add("  rip {:#x} (+{:#x}) x{}", instruction, instruction - g_watch.moduleBase,
-                 slot.count.load(std::memory_order_relaxed));
+        line.add("  rip {:#x} (module-relative {:#x}) x{}", instruction,
+                 instruction - g_watch.moduleBase, slot.count.load(std::memory_order_relaxed));
     }
     line.flush(rearm ? lucent::Level::Debug : lucent::Level::Info, "hle");
 

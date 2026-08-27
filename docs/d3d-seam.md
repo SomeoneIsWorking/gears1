@@ -190,7 +190,8 @@ so this set IS the "first presented frame" target. **V**
 | 0x82221980 | 1.01 | ring segment flush / space wait (internal, high) |
 | 0x82222460 | 1.0 | dirty-mask OR helper + cache touch (high) |
 | 0x8221CBA8 | ~1 per render command | UE3 render-command ring alloc — NOT D3D (high) |
-| 0x82228998 + 8 siblings (0x82229B28, 0x82228A28, AB8, B48, D28, BD8, C48, CB8) | 0.4 each | sampler-state setter family, applied as a 9-field block by 0x8254ED40 (high) |
+| 0x82229B28 | ~167 per scene frame | color-write gamma/sRGB state: stores the requested mode, maps bound-target format pairs 2↔10 and 3↔12, mirrors the format nibble into the slot-zero descriptor, and marks dirty bit 37 (high) |
+| 0x82228998 + 7 siblings (0x82228A28, AB8, B48, D28, BD8, C48, CB8) | not remeasured | adjacent render-state setters applied with 0x82229B28 by the state block at 0x8254ED40; the former sampler-state label was unsupported (low) |
 | 0x82222350 | 0.38 | state setter (unidentified) |
 | 0x822193D8 / 0x822193B0 | 0.28 / — | free / alloc utility pair (575/420 static callers) (medium) |
 | 0x8222ABF8 / 0x8222AB30 | 0.15 | paired begin/end-shaped calls (per movie frame) (low) |
