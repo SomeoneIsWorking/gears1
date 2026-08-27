@@ -600,6 +600,17 @@ target_include_directories(test_rhi_semantic_stream PRIVATE ../runtime)
 target_link_libraries(test_rhi_semantic_stream PRIVATE lucent::lucent)
 add_test(NAME rhi_semantic_stream COMMAND test_rhi_semantic_stream)
 
+add_executable(test_shader_setter_state test_shader_setter_state.cpp)
+target_include_directories(test_shader_setter_state PRIVATE ../runtime)
+add_test(NAME shader_setter_state COMMAND test_shader_setter_state)
+
+add_executable(test_gpu_draw_census
+    test_gpu_draw_census.cpp
+    ../runtime/gpu_draw_census.cpp)
+target_include_directories(test_gpu_draw_census PRIVATE ../runtime)
+target_link_libraries(test_gpu_draw_census PRIVATE lucent::lucent)
+add_test(NAME gpu_draw_census COMMAND test_gpu_draw_census)
+
 # The fragment-output clamp. A fixed-point render target clamps a shader's colour
 # output to [0,1] before blending and a floating-point one does not -- and this
 # renderer gives a reinterpreted surface ONE float host image, so every draw into

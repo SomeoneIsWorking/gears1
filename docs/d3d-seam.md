@@ -90,8 +90,8 @@ points:
 | 0x8222DA48 | bound vertex streams | direct auto-index `DRAW_INDX`; commits through device+0x28 |
 | 0x8222DE50 | bound vertex and index buffers | direct DMA-index `DRAW_INDX`; commits through device+0x28 |
 
-`runtime/titles/gears1/rhi_bindings.cpp` is the exact-revision binding.
-It preserves and calls every `__imp__sub_*` body, then publishes a typed draw
+`runtime/titles/gears1/rhi_bindings.cpp` is the exact-revision draw/texture binding.
+It preserves and calls every owned `__imp__sub_*` body, then publishes a typed draw
 to the title-neutral `runtime/rhi_semantic_stream.*` observation seam. With
 `GEARS_NATIVE_RHI_OBSERVE=1`, a headless menu walk through frame 1712 compared
 90,854 semantic calls with the packets the original bodies emitted: 90,854
@@ -99,6 +99,16 @@ matches, zero missing packets, and zero mismatches. The mix was 17,864
 transient-vertex, 60,465 transient-vertex-and-index, and 12,525 bound-index
 calls. The bound-vertex entry is statically grounded but was not exercised by
 that walk.
+
+`runtime/titles/gears1/shader_setter_state.h` and
+`shader_setter_override.cpp` own the two shader setters. Their native arm
+applies the exact dirty masks, binding fields, patch records, vertex-mode bit,
+and safe retirement-fence stamp; deferred-release queue insertion still
+super-calls the retained body. A transactional live audit matched 240/240
+eligible calls with zero fallbacks. The native arm remains
+diagnostic-only because the warm same-run timing gate measured it slower than
+the retained implementation (1273 vs 1232 ns median over 176/176 calls), and
+the title calls these setters only about twice per frame.
 
 The semantic count is intentionally lower than the renderer's PM4 draw count:
 the compatibility command processor replays predicated packets per Xenos EDRAM
