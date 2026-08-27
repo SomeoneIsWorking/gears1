@@ -1,5 +1,7 @@
 #include "rhi_semantic_stream.h"
 
+#include "rhi_semantic_state.h"
+
 #include <array>
 #include <mutex>
 #include <utility>
@@ -17,6 +19,7 @@ struct RhiSemanticStreamState
     std::mutex mutex;
     std::vector<RhiSemanticEvent> pendingEvents;
     std::uint64_t nextSequence = 1;
+    RhiSemanticStateTracker semanticState;
 };
 
 RhiSemanticStreamState g_stream;
@@ -28,6 +31,8 @@ struct RhiSemanticReportTotals
     std::uint64_t missing = 0;
     std::uint64_t mismatched = 0;
     std::array<std::uint64_t, 4> drawKinds{};
+    std::uint64_t boundDrawsWithVertexStreams = 0;
+    std::uint64_t boundDrawsWithoutVertexStreams = 0;
     std::uint64_t bindings = 0;
     std::uint64_t bindingsMatched = 0;
     std::uint64_t bindingsMissing = 0;
@@ -53,6 +58,11 @@ RhiSemanticReportTotals g_reportTotals;
            kind == RhiSemanticDrawKind::TransientVerticesAndIndices;
 }
 
+[[nodiscard]] bool ExpectsBoundVertexState(RhiSemanticDrawKind kind)
+{
+    return kind == RhiSemanticDrawKind::BoundVertices || kind == RhiSemanticDrawKind::BoundIndices;
+}
+
 [[nodiscard]] bool SameBufferRange(const RhiSemanticBufferRange &left,
                                    const RhiSemanticBufferRange &right)
 {
@@ -65,6 +75,20 @@ RhiSemanticReportTotals g_reportTotals;
     return SameBufferRange(left.allocation, right.allocation) &&
            left.elementStrideBytes == right.elementStrideBytes &&
            left.endianSwap == right.endianSwap;
+}
+
+[[nodiscard]] bool SameVertexStream(const RhiSemanticVertexStream &left,
+                                    const RhiSemanticVertexStream &right)
+{
+    return left.slot == right.slot && left.object == right.object &&
+           SameBufferView(left.view, right.view);
+}
+
+[[nodiscard]] const RhiSemanticVertexStream &
+VertexStreamOrEmpty(const std::vector<RhiSemanticVertexStream> &streams, std::size_t index)
+{
+    static const RhiSemanticVertexStream empty;
+    return index < streams.size() ? streams[index] : empty;
 }
 
 [[nodiscard]] const char *DrawKindName(RhiSemanticDrawKind kind)
@@ -156,6 +180,23 @@ RhiDrawEvidenceResult CompareRhiDrawPacket(const RhiSemanticDraw &draw,
     return RhiDrawEvidenceResult::Match;
 }
 
+RhiDrawEvidenceResult CompareRhiDrawVertexState(const RhiSemanticDrawState &state,
+                                                const RhiDrawPacketEvidence &packet)
+{
+    if (!ExpectsBoundVertexState(state.draw.kind))
+        return RhiDrawEvidenceResult::Match;
+    if (!packet.vertexStreamsPresent)
+        return RhiDrawEvidenceResult::Missing;
+    if (state.vertexStreams.size() != packet.vertexStreams.size())
+        return RhiDrawEvidenceResult::Mismatch;
+    for (std::size_t index = 0; index < state.vertexStreams.size(); ++index)
+    {
+        if (!SameVertexStream(state.vertexStreams[index], packet.vertexStreams[index]))
+            return RhiDrawEvidenceResult::Mismatch;
+    }
+    return RhiDrawEvidenceResult::Match;
+}
+
 RhiBindingEvidenceResult CompareRhiBindingState(const RhiSemanticBinding &binding,
                                                 const RhiBindingStateEvidence &state)
 {
@@ -201,10 +242,14 @@ void ObserveRhiSemanticDraw(const RhiSemanticDraw &draw, const RhiDrawPacketEvid
         return;
 
     std::lock_guard guard(g_stream.mutex);
+    RhiSemanticDrawState state = g_stream.semanticState.SnapshotDraw(draw);
+    RhiDrawEvidenceResult evidence = CompareRhiDrawPacket(draw, packet);
+    if (evidence == RhiDrawEvidenceResult::Match)
+        evidence = CompareRhiDrawVertexState(state, packet);
     g_stream.pendingEvents.push_back(
         {.sequence = g_stream.nextSequence++,
-         .payload = RhiObservedDraw{
-             .draw = draw, .packet = packet, .evidence = CompareRhiDrawPacket(draw, packet)}});
+         .payload =
+             RhiObservedDraw{.state = std::move(state), .packet = packet, .evidence = evidence}});
 }
 
 void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
@@ -219,6 +264,7 @@ void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
          .payload = RhiObservedBinding{.binding = binding,
                                        .state = state,
                                        .evidence = CompareRhiBindingState(binding, state)}});
+    g_stream.semanticState.ApplyBinding(binding);
 }
 
 void ObserveRhiSemanticPresent(const RhiSemanticPresent &present,
@@ -308,7 +354,14 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
     {
         if (const auto *observed = std::get_if<RhiObservedDraw>(&event.payload))
         {
-            ++g_reportTotals.drawKinds[static_cast<std::size_t>(observed->draw.kind)];
+            ++g_reportTotals.drawKinds[static_cast<std::size_t>(observed->state.draw.kind)];
+            if (ExpectsBoundVertexState(observed->state.draw.kind))
+            {
+                if (observed->state.vertexStreams.empty())
+                    ++g_reportTotals.boundDrawsWithoutVertexStreams;
+                else
+                    ++g_reportTotals.boundDrawsWithVertexStreams;
+            }
             continue;
         }
         if (const auto *observed = std::get_if<RhiObservedBinding>(&event.payload))
@@ -357,6 +410,9 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
                 line.add("  {} x{}", BindingKindName(static_cast<RhiSemanticBindingKind>(index)),
                          g_reportTotals.bindingKinds[index]);
         }
+        line.add("  bound-draw-state with-streams={} without-streams={}",
+                 g_reportTotals.boundDrawsWithVertexStreams,
+                 g_reportTotals.boundDrawsWithoutVertexStreams);
         line.flush_debug("rhi");
     }
 
@@ -366,6 +422,14 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
         {
             if (observed->evidence != RhiDrawEvidenceResult::Match)
             {
+                const RhiSemanticVertexStream &expected0 =
+                    VertexStreamOrEmpty(observed->state.vertexStreams, 0);
+                const RhiSemanticVertexStream &expected1 =
+                    VertexStreamOrEmpty(observed->state.vertexStreams, 1);
+                const RhiSemanticVertexStream &actual0 =
+                    VertexStreamOrEmpty(observed->packet.vertexStreams, 0);
+                const RhiSemanticVertexStream &actual1 =
+                    VertexStreamOrEmpty(observed->packet.vertexStreams, 1);
                 lucent::error(
                     "rhi",
                     "semantic draw {} ({}) did not match its guest PM4 emission:"
@@ -373,22 +437,30 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
                     " prim={:#x} source={} count={}; expected vertex={:#x}+{}"
                     " index={:#x}+{}, observed resources present={} vertex={:#x}+{}"
                     " index={:#x}+{}; bound index view present={} base={:#x}+{} stride={}"
-                    " endian={}, observed DMA present={} index={:#x}+{} stride={} endian={}",
-                    event.sequence, DrawKindName(observed->draw.kind), observed->draw.primitiveType,
-                    observed->draw.elementCount, observed->packet.present, observed->packet.opcode,
+                    " endian={}, observed DMA present={} index={:#x}+{} stride={} endian={};"
+                    " expected active vertex streams={} first=({},{:#x}) second=({},{:#x}),"
+                    " observed present={} streams={} first=({},{:#x}) second=({},{:#x})",
+                    event.sequence, DrawKindName(observed->state.draw.kind),
+                    observed->state.draw.primitiveType, observed->state.draw.elementCount,
+                    observed->packet.present, observed->packet.opcode,
                     observed->packet.primitiveType, observed->packet.sourceSelect,
-                    observed->packet.elementCount, observed->draw.vertexData.guestAddress,
-                    observed->draw.vertexData.sizeBytes, observed->draw.indexData.guestAddress,
-                    observed->draw.indexData.sizeBytes, observed->packet.transientDataPresent,
+                    observed->packet.elementCount, observed->state.draw.vertexData.guestAddress,
+                    observed->state.draw.vertexData.sizeBytes,
+                    observed->state.draw.indexData.guestAddress,
+                    observed->state.draw.indexData.sizeBytes, observed->packet.transientDataPresent,
                     observed->packet.vertexData.guestAddress, observed->packet.vertexData.sizeBytes,
                     observed->packet.indexData.guestAddress, observed->packet.indexData.sizeBytes,
-                    observed->draw.indexBufferViewPresent,
-                    observed->draw.indexBuffer.allocation.guestAddress,
-                    observed->draw.indexBuffer.allocation.sizeBytes,
-                    observed->draw.indexBuffer.elementStrideBytes,
-                    observed->draw.indexBuffer.endianSwap, observed->packet.indexDataPresent,
+                    observed->state.draw.indexBufferViewPresent,
+                    observed->state.draw.indexBuffer.allocation.guestAddress,
+                    observed->state.draw.indexBuffer.allocation.sizeBytes,
+                    observed->state.draw.indexBuffer.elementStrideBytes,
+                    observed->state.draw.indexBuffer.endianSwap, observed->packet.indexDataPresent,
                     observed->packet.indexData.guestAddress, observed->packet.indexData.sizeBytes,
-                    observed->packet.indexStrideBytes, observed->packet.indexEndianSwap);
+                    observed->packet.indexStrideBytes, observed->packet.indexEndianSwap,
+                    observed->state.vertexStreams.size(), expected0.slot, expected0.object,
+                    expected1.slot, expected1.object, observed->packet.vertexStreamsPresent,
+                    observed->packet.vertexStreams.size(), actual0.slot, actual0.object,
+                    actual1.slot, actual1.object);
             }
             continue;
         }

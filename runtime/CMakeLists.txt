@@ -204,6 +204,7 @@ add_executable(gears1
     graphics_probe_render.cpp
     input.cpp
     hle_d3d.cpp
+    rhi_semantic_state.cpp
     rhi_semantic_stream.cpp
     titles/gears1/rhi_bindings.cpp
     titles/gears1/rhi_index_buffer.cpp

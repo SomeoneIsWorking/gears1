@@ -29,6 +29,13 @@ struct RhiSemanticBufferView
     std::uint32_t endianSwap = 0;
 };
 
+struct RhiSemanticVertexStream
+{
+    std::uint32_t slot = 0;
+    std::uint32_t object = 0;
+    RhiSemanticBufferView view;
+};
+
 struct RhiSemanticDraw
 {
     RhiSemanticDrawKind kind = RhiSemanticDrawKind::BoundVertices;
@@ -44,6 +51,12 @@ struct RhiSemanticDraw
     RhiSemanticBufferView indexBuffer;
 };
 
+struct RhiSemanticDrawState
+{
+    RhiSemanticDraw draw;
+    std::vector<RhiSemanticVertexStream> vertexStreams;
+};
+
 struct RhiDrawPacketEvidence
 {
     bool present = false;
@@ -57,6 +70,8 @@ struct RhiDrawPacketEvidence
     bool indexDataPresent = false;
     std::uint32_t indexStrideBytes = 0;
     std::uint32_t indexEndianSwap = 0;
+    bool vertexStreamsPresent = false;
+    std::vector<RhiSemanticVertexStream> vertexStreams;
 };
 
 enum class RhiDrawEvidenceResult : std::uint8_t
@@ -130,7 +145,7 @@ enum class RhiPresentEvidenceResult : std::uint8_t
 
 struct RhiObservedDraw
 {
-    RhiSemanticDraw draw;
+    RhiSemanticDrawState state;
     RhiDrawPacketEvidence packet;
     RhiDrawEvidenceResult evidence = RhiDrawEvidenceResult::Missing;
 };
@@ -179,6 +194,8 @@ struct RhiSemanticFrame
 [[nodiscard]] bool RhiSemanticObservationEnabled();
 [[nodiscard]] RhiDrawEvidenceResult CompareRhiDrawPacket(const RhiSemanticDraw &draw,
                                                          const RhiDrawPacketEvidence &packet);
+[[nodiscard]] RhiDrawEvidenceResult CompareRhiDrawVertexState(const RhiSemanticDrawState &state,
+                                                              const RhiDrawPacketEvidence &packet);
 [[nodiscard]] RhiBindingEvidenceResult CompareRhiBindingState(const RhiSemanticBinding &binding,
                                                               const RhiBindingStateEvidence &state);
 [[nodiscard]] RhiPresentEvidenceResult

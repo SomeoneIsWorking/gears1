@@ -46,11 +46,25 @@ object-derived allocation view, with zero missing or mismatched observations
 among 24,233 draws and 80,023 bindings.
 
 The actual vertex-stream binder is `0x8222AE20`. Its retained body and callers
-independently establish 18 slots carrying an object, offset-adjusted fetch
+independently establish 16 slots carrying an object, offset-adjusted fetch
 address, remaining byte range, and dword-encoded stride. Focused controls reject
 an altered stride and invalid source ranges. A live headless run through frame
 780 matched all 2,463 vertex-stream updates with zero missing or mismatched
 observations among 86,002 total bindings.
+
+The first bound-draw comparison validated the instrument's mismatch answer live:
+an 18-slot snapshot reported a second stream at slot 17 with object
+`0x09000000` or `0x0A000000`, while the ordered setter state contained only
+slot 0. Static reinspection showed that the reset loop stops at slot 16 and
+that the supposed slot-17 object overlaps the stride-byte table. Restricting
+the independent snapshot to the proven 16-slot contract removes the false
+resource rather than suppressing the mismatch.
+
+With the corrected contract, a headless run through frame 780 matched all
+3,715 bound-index draw snapshots against their ordered active vertex views. In
+the same run all 24,239 draws, 86,061 bindings, and 780 presents matched, with
+zero missing observations and zero mismatches. Focused tests separately force
+a changed stride, a missing snapshot, and a different stream count.
 
 ## Known failure modes
 

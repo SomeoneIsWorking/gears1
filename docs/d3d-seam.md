@@ -117,12 +117,20 @@ and 3,555 depth-target updates with zero missing observations or mismatches.
 
 The actual vertex-stream binder is `0x8222AE20`, not either target binder. Its
 callers pass `(device, slot, buffer, byte offset, byte stride, dirty bit)` and
-its retained body owns 18 object slots at `+0x2F9C`, reverse-ordered two-word
+its retained body owns 16 object slots at `+0x2F9C`, reverse-ordered two-word
 fetch descriptors ending at `+0x6F8`, and quarter-stride bytes at `+0x2FE0`.
 `rhi_vertex_buffer.*` independently derives the offset-adjusted GPU address,
 remaining byte range, and stride from the call and compares them with those
 post-call shadows. A headless run through frame 780 matched all 2,463 updates
 with zero errors across 86,002 total bindings.
+
+`rhi_semantic_state.*` now preserves those bindings as the ordered active
+vertex state consumed by each bound draw. The title adapter snapshots the same
+16 device slots independently after the retained draw emits its packet. A
+headless run through frame 780 matched all 3,715 bound-index draw snapshots,
+all 24,239 draw packets, 86,061 bindings, and 780 presents with no missing or
+mismatched observation. Its first run rejected a false 18-slot snapshot,
+exposing the slot-17/stride-table overlap before the adapter was corrected.
 
 With `GEARS_NATIVE_RHI_OBSERVE=1`, a headless menu walk through frame 1980
 compared 153,214 semantic calls with the packets and transient-buffer state the

@@ -95,7 +95,7 @@ DMA evidence.
 
 The actual vertex-stream binder is `0x8222AE20`. Its callers provide device,
 slot, buffer object, byte offset, byte stride, and a dirty bit; the retained
-body writes one of 18 object slots plus an offset-adjusted address, remaining
+body writes one of 16 object slots plus an offset-adjusted address, remaining
 byte range, and quarter-stride shadow. The focused `rhi_vertex_buffer.*` title
 adapter validates ranges and derives the expected view independently from the
 call, while the binding observer decodes the post-call device state. A headless
@@ -103,13 +103,28 @@ run through frame 780 matched all 2,463 vertex-stream updates with zero missing
 or mismatched observations across 86,002 bindings. Focused controls reject an
 altered stride and out-of-range offsets.
 
+The initial 18-slot interpretation was false. The retained reset loop increments
+the slot from zero and exits when it reaches 16. The object table begins at
+`+0x2F9C`, so its 16 entries end before the stride-byte table at `+0x2FE0`;
+attempting to decode slot 17 reads four stride bytes as an object pointer. The
+first bound-draw state comparison exposed exactly that phantom `0x09000000` or
+`0x0A000000` object in slot 17.
+
+The shared `rhi_semantic_state.*` owner now applies each vertex-stream binding
+to an ordered slot map and snapshots the complete active views at each bound
+draw. The Gears 1 adapter independently reads the proven 16 device slots after
+the retained draw emits its packet. A subsequent headless run through frame
+780 matched all 3,715 bound-index vertex-state snapshots, all 24,239 draw
+packets, 86,061 bindings, and 780 presents; no observation was missing or
+mismatched. Focused controls reject a changed vertex stride, missing state, and
+different stream counts, and the state test proves slot ordering and unbinding.
+
 ## Next falsifier
 
-Exercise the bound-vertex draw path dynamically and connect each draw to the
-complete ordered vertex-buffer views it consumes. Then add resource
-creation/lifetime, resolve, and retirement events and
+Exercise the separate bound-vertex entry dynamically if the title reaches it.
+Then add resource creation/lifetime, resolve, and retirement events and
 compare the complete ordered stream with the PM4-derived `FrameDrawInputs` and
 output. Keep the recompiled compatibility bodies available and super-called
 until a deliberately wrong semantic control is rejected and a same-run
-complete-stream and pixel-parity gate agrees. Transient buffer agreement alone
-does not authorize a native bypass.
+complete-stream and pixel-parity gate agrees. Transient and bound-buffer
+agreement alone does not authorize a native bypass.
