@@ -59,6 +59,8 @@ enum class RhiSemanticBindingKind : std::uint8_t
     Texture,
     PixelShader,
     VertexShader,
+    IndexBuffer,
+    VertexStream,
 };
 
 struct RhiSemanticBinding
@@ -66,6 +68,8 @@ struct RhiSemanticBinding
     RhiSemanticBindingKind kind = RhiSemanticBindingKind::Texture;
     std::uint32_t slot = 0;
     std::uint32_t object = 0;
+    std::array<std::uint32_t, 6> descriptor{};
+    std::uint32_t descriptorDwords = 0;
 };
 
 struct RhiBindingStateEvidence
