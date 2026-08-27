@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdlib>
+#include <variant>
 
 #include <lucent/config.h>
 
@@ -85,10 +86,17 @@ int main()
     gears::ObserveRhiSemanticDraw(indexed, altered);
     const gears::RhiSemanticFrame frame = gears::SealRhiSemanticFrame(17);
     assert(frame.frameSequence == 17);
-    assert(frame.draws.size() == 2);
-    assert(frame.bindings.size() == 1);
-    assert(frame.draws[0].sequence + 1 == frame.bindings[0].sequence);
-    assert(frame.bindings[0].sequence + 1 == frame.draws[1].sequence);
+    assert(frame.events.size() == 3);
+    assert(frame.draws == 2);
+    assert(frame.bindings == 1);
+    assert(frame.events[0].sequence + 1 == frame.events[1].sequence);
+    assert(frame.events[1].sequence + 1 == frame.events[2].sequence);
+    assert(std::holds_alternative<gears::RhiObservedDraw>(frame.events[0].payload));
+    assert(std::holds_alternative<gears::RhiObservedBinding>(frame.events[1].payload));
+    assert(std::holds_alternative<gears::RhiObservedDraw>(frame.events[2].payload));
+    assert(std::get<gears::RhiObservedDraw>(frame.events[0].payload).draw.elementCount == 300);
+    assert(std::get<gears::RhiObservedBinding>(frame.events[1].payload).binding.slot == 3);
+    assert(std::get<gears::RhiObservedDraw>(frame.events[2].payload).draw.elementCount == 42);
     assert(frame.matched == 1);
     assert(frame.missing == 0);
     assert(frame.mismatched == 1);

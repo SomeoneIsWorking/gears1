@@ -15,8 +15,7 @@ namespace
 struct RhiSemanticStreamState
 {
     std::mutex mutex;
-    std::vector<RhiObservedDraw> pendingDraws;
-    std::vector<RhiObservedBinding> pendingBindings;
+    std::vector<RhiSemanticEvent> pendingEvents;
     std::uint64_t nextSequence = 1;
 };
 
@@ -116,10 +115,10 @@ void ObserveRhiSemanticDraw(const RhiSemanticDraw &draw, const RhiDrawPacketEvid
         return;
 
     std::lock_guard guard(g_stream.mutex);
-    g_stream.pendingDraws.push_back({.sequence = g_stream.nextSequence++,
-                                     .draw = draw,
-                                     .packet = packet,
-                                     .evidence = CompareRhiDrawPacket(draw, packet)});
+    g_stream.pendingEvents.push_back(
+        {.sequence = g_stream.nextSequence++,
+         .payload = RhiObservedDraw{
+             .draw = draw, .packet = packet, .evidence = CompareRhiDrawPacket(draw, packet)}});
 }
 
 void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
@@ -129,10 +128,11 @@ void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
         return;
 
     std::lock_guard guard(g_stream.mutex);
-    g_stream.pendingBindings.push_back({.sequence = g_stream.nextSequence++,
-                                        .binding = binding,
-                                        .state = state,
-                                        .evidence = CompareRhiBindingState(binding, state)});
+    g_stream.pendingEvents.push_back(
+        {.sequence = g_stream.nextSequence++,
+         .payload = RhiObservedBinding{.binding = binding,
+                                       .state = state,
+                                       .evidence = CompareRhiBindingState(binding, state)}});
 }
 
 RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
@@ -140,28 +140,31 @@ RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
     RhiSemanticFrame frame{.frameSequence = frameSequence};
     {
         std::lock_guard guard(g_stream.mutex);
-        frame.draws = std::move(g_stream.pendingDraws);
-        frame.bindings = std::move(g_stream.pendingBindings);
-        g_stream.pendingDraws.clear();
-        g_stream.pendingBindings.clear();
+        frame.events = std::move(g_stream.pendingEvents);
+        g_stream.pendingEvents.clear();
     }
-    for (const RhiObservedDraw &observed : frame.draws)
+    for (const RhiSemanticEvent &event : frame.events)
     {
-        switch (observed.evidence)
+        if (const auto *observed = std::get_if<RhiObservedDraw>(&event.payload))
         {
-        case RhiDrawEvidenceResult::Match:
-            ++frame.matched;
-            break;
-        case RhiDrawEvidenceResult::Missing:
-            ++frame.missing;
-            break;
-        case RhiDrawEvidenceResult::Mismatch:
-            ++frame.mismatched;
-            break;
+            ++frame.draws;
+            switch (observed->evidence)
+            {
+            case RhiDrawEvidenceResult::Match:
+                ++frame.matched;
+                break;
+            case RhiDrawEvidenceResult::Missing:
+                ++frame.missing;
+                break;
+            case RhiDrawEvidenceResult::Mismatch:
+                ++frame.mismatched;
+                break;
+            }
+            continue;
         }
-    }
-    for (const RhiObservedBinding &observed : frame.bindings)
-    {
+
+        const auto &observed = std::get<RhiObservedBinding>(event.payload);
+        ++frame.bindings;
         switch (observed.evidence)
         {
         case RhiBindingEvidenceResult::Match:
@@ -184,15 +187,21 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
         return;
 
     const RhiSemanticFrame frame = SealRhiSemanticFrame(frameSequence);
-    for (const RhiObservedDraw &observed : frame.draws)
-        ++g_reportTotals.drawKinds[static_cast<std::size_t>(observed.draw.kind)];
-    for (const RhiObservedBinding &observed : frame.bindings)
+    for (const RhiSemanticEvent &event : frame.events)
+    {
+        if (const auto *observed = std::get_if<RhiObservedDraw>(&event.payload))
+        {
+            ++g_reportTotals.drawKinds[static_cast<std::size_t>(observed->draw.kind)];
+            continue;
+        }
+        const auto &observed = std::get<RhiObservedBinding>(event.payload);
         ++g_reportTotals.bindingKinds[static_cast<std::size_t>(observed.binding.kind)];
-    g_reportTotals.draws += frame.draws.size();
+    }
+    g_reportTotals.draws += frame.draws;
     g_reportTotals.matched += frame.matched;
     g_reportTotals.missing += frame.missing;
     g_reportTotals.mismatched += frame.mismatched;
-    g_reportTotals.bindings += frame.bindings.size();
+    g_reportTotals.bindings += frame.bindings;
     g_reportTotals.bindingsMatched += frame.bindingsMatched;
     g_reportTotals.bindingsMissing += frame.bindingsMissing;
     g_reportTotals.bindingsMismatched += frame.bindingsMismatched;
@@ -223,29 +232,33 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
         line.flush_debug("rhi");
     }
 
-    for (const RhiObservedDraw &observed : frame.draws)
+    for (const RhiSemanticEvent &event : frame.events)
     {
-        if (observed.evidence == RhiDrawEvidenceResult::Match)
+        if (const auto *observed = std::get_if<RhiObservedDraw>(&event.payload))
+        {
+            if (observed->evidence != RhiDrawEvidenceResult::Match)
+            {
+                lucent::error("rhi",
+                              "semantic draw {} ({}) did not match its guest PM4 emission:"
+                              " expected prim {:#x} count {}, observed present={} opcode={:#x}"
+                              " prim={:#x} source={} count={}",
+                              event.sequence, DrawKindName(observed->draw.kind),
+                              observed->draw.primitiveType, observed->draw.elementCount,
+                              observed->packet.present, observed->packet.opcode,
+                              observed->packet.primitiveType, observed->packet.sourceSelect,
+                              observed->packet.elementCount);
+            }
             continue;
-        lucent::error("rhi",
-                      "semantic draw {} ({}) did not match its guest PM4 emission:"
-                      " expected prim {:#x} count {}, observed present={} opcode={:#x}"
-                      " prim={:#x} source={} count={}",
-                      observed.sequence, DrawKindName(observed.draw.kind),
-                      observed.draw.primitiveType, observed.draw.elementCount,
-                      observed.packet.present, observed.packet.opcode,
-                      observed.packet.primitiveType, observed.packet.sourceSelect,
-                      observed.packet.elementCount);
-    }
-    for (const RhiObservedBinding &observed : frame.bindings)
-    {
+        }
+
+        const auto &observed = std::get<RhiObservedBinding>(event.payload);
         if (observed.evidence == RhiBindingEvidenceResult::Match)
             continue;
         lucent::error("rhi",
                       "semantic binding {} ({} slot {}) did not match guest device state:"
                       " expected object {:#x}, observed present={} object={:#x}",
-                      observed.sequence, BindingKindName(observed.binding.kind),
-                      observed.binding.slot, observed.binding.object, observed.state.present,
+                      event.sequence, BindingKindName(observed.binding.kind), observed.binding.slot,
+                      observed.binding.object, observed.state.present,
                       observed.state.observedObject);
     }
 }
