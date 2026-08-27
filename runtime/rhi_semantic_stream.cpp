@@ -32,7 +32,7 @@ struct RhiSemanticReportTotals
     std::uint64_t bindingsMatched = 0;
     std::uint64_t bindingsMissing = 0;
     std::uint64_t bindingsMismatched = 0;
-    std::array<std::uint64_t, 3> bindingKinds{};
+    std::array<std::uint64_t, 5> bindingKinds{};
     std::uint64_t presents = 0;
     std::uint64_t presentsMatched = 0;
     std::uint64_t presentsMissing = 0;
@@ -79,6 +79,10 @@ RhiSemanticReportTotals g_reportTotals;
         return "pixel-shader";
     case RhiSemanticBindingKind::VertexShader:
         return "vertex-shader";
+    case RhiSemanticBindingKind::IndexBuffer:
+        return "index-buffer";
+    case RhiSemanticBindingKind::VertexStream:
+        return "vertex-stream";
     }
     return "unknown";
 }
@@ -128,6 +132,15 @@ RhiBindingEvidenceResult CompareRhiBindingState(const RhiSemanticBinding &bindin
         return RhiBindingEvidenceResult::Missing;
     if (state.observedObject != binding.object)
         return RhiBindingEvidenceResult::Mismatch;
+    if (binding.descriptorDwords == 0)
+        return RhiBindingEvidenceResult::Match;
+    if (state.descriptorDwords != binding.descriptorDwords)
+        return RhiBindingEvidenceResult::Mismatch;
+    for (std::uint32_t index = 0; index < binding.descriptorDwords; ++index)
+    {
+        if (state.descriptor[index] != binding.descriptor[index])
+            return RhiBindingEvidenceResult::Mismatch;
+    }
     return RhiBindingEvidenceResult::Match;
 }
 
@@ -342,10 +355,13 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
             {
                 lucent::error("rhi",
                               "semantic binding {} ({} slot {}) did not match guest device state:"
-                              " expected object {:#x}, observed present={} object={:#x}",
+                              " expected object {:#x} descriptor {}:{:#x}, observed present={}"
+                              " object={:#x} descriptor {}:{:#x}",
                               event.sequence, BindingKindName(observed->binding.kind),
                               observed->binding.slot, observed->binding.object,
-                              observed->state.present, observed->state.observedObject);
+                              observed->binding.descriptorDwords, observed->binding.descriptor[0],
+                              observed->state.present, observed->state.observedObject,
+                              observed->state.descriptorDwords, observed->state.descriptor[0]);
             }
             continue;
         }

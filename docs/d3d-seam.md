@@ -103,6 +103,18 @@ the vertex address through its ninth stack argument, and records both ranges at
 arguments, while the comparator independently reads those recorded ranges from
 post-call device state.
 
+The same adapter wraps the grounded index-buffer binder at `0x8222AFD8` and
+vertex-stream binder at `0x8222B068`. They publish ordered `(object)` and
+`(slot, object, fetch word)` operations before bound draws consume them. The
+vertex fetch word is an output of the setter, not a verbatim object field: for
+four formats the retained body conditionally normalizes format bits using
+device mode. An initial pre-call comparison correctly failed despite matching
+objects; the event now captures the normalized object word after the call and
+checks it against the separate device descriptor shadow. A fast headless run
+through frame 780 matched 3,924 index-buffer and 6,481 vertex-stream updates,
+including every normalized fetch word, with zero missing observations or
+mismatches.
+
 With `GEARS_NATIVE_RHI_OBSERVE=1`, a headless menu walk through frame 1980
 compared 153,214 semantic calls with the packets and transient-buffer state the
 original bodies emitted: 153,214 matches, zero missing observations, and zero
@@ -125,8 +137,9 @@ The semantic count is intentionally lower than the renderer's PM4 draw count:
 the compatibility command processor replays predicated packets per Xenos EDRAM
 tile, while the title issues each logical draw once. Treating tile replay as
 additional RHI calls was the rate-comparison error that obscured these entry
-points. This is observation evidence only; bound resource state, resource
-lifetime, resolves, and retirement still need semantic parity before any bypass.
+points. This is observation evidence only; resource creation/lifetime, complete
+buffer view data, resolves, and retirement still need semantic parity before
+any bypass.
 
 `VdSwap` now appends the terminal semantic present to that same frame stream
 after encoding the compatibility transport's private swap packet. The extracted

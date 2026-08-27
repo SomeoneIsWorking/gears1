@@ -65,10 +65,22 @@ and 102,353 transient-indexed allocation pairs, with zero missing observations
 or mismatches. Focused negative controls reject missing resource evidence,
 wrong addresses, and wrong sizes.
 
+The retained bodies also grounded `0x8222AFD8` as the index-buffer binder and
+`0x8222B068` as the vertex-stream binder. Both are now ordered binding events.
+Index-buffer objects are checked against device `+0x2F84`; vertex-stream
+objects are checked against the table at `+0x2F88`, and their normalized fetch
+words against the descriptor shadow beginning at `+0x2804`. The first live
+attempt falsified the assumption that `object+0x1C` was copied verbatim: the
+body conditionally rewrites four formats according to device mode. Capturing
+the body result after the call and comparing it with the independent shadow
+matches the actual setter contract. A fast headless run through frame 780
+matched 3,924 index-buffer and 6,481 vertex-stream updates, with zero missing or
+mismatched observations across 79,955 total bindings.
+
 ## Next falsifier
 
-Exercise the bound-vertex path dynamically and recover the bound stream/index
-resource state, then add resource lifetime, resolve, and retirement events and
+Exercise the bound-vertex draw path dynamically and recover complete buffer
+view data, then add resource creation/lifetime, resolve, and retirement events and
 compare the complete ordered stream with the PM4-derived `FrameDrawInputs` and
 output. Keep the recompiled compatibility bodies available and super-called
 until a deliberately wrong semantic control is rejected and a same-run

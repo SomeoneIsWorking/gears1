@@ -112,6 +112,26 @@ int main()
     assert(CompareRhiBindingState(textureBinding, alteredBinding) ==
            RhiBindingEvidenceResult::Missing);
 
+    const RhiSemanticBinding vertexStreamBinding{
+        .kind = RhiSemanticBindingKind::VertexStream,
+        .slot = 2,
+        .object = 0x40104000,
+        .descriptor = {0x00097813},
+        .descriptorDwords = 1,
+    };
+    const RhiBindingStateEvidence matchingVertexStream{
+        .present = true,
+        .observedObject = 0x40104000,
+        .descriptor = {0x00097813},
+        .descriptorDwords = 1,
+    };
+    assert(CompareRhiBindingState(vertexStreamBinding, matchingVertexStream) ==
+           RhiBindingEvidenceResult::Match);
+    RhiBindingStateEvidence alteredVertexStream = matchingVertexStream;
+    alteredVertexStream.descriptor[0] ^= 1;
+    assert(CompareRhiBindingState(vertexStreamBinding, alteredVertexStream) ==
+           RhiBindingEvidenceResult::Mismatch);
+
     const RhiSemanticPresent present{
         .frameSequence = 17,
         .frontBuffer = 0xA0311000,

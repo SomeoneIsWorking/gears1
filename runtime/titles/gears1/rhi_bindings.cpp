@@ -98,6 +98,35 @@ namespace
     return state;
 }
 
+[[nodiscard]] gears::RhiBindingStateEvidence CaptureIndexBufferBinding(std::uint32_t device)
+{
+    constexpr std::uint32_t kIndexBufferObjectOffset = 0x2F84;
+    if (device == 0)
+        return {};
+    return {
+        .present = true,
+        .observedObject = ReadGuestBe32(device + kIndexBufferObjectOffset),
+    };
+}
+
+[[nodiscard]] gears::RhiBindingStateEvidence CaptureVertexStreamBinding(std::uint32_t device,
+                                                                        std::uint32_t slot)
+{
+    constexpr std::uint32_t kVertexStreamObjectTableOffset = 0x2F88;
+    constexpr std::uint32_t kVertexStreamDescriptorOffset = 0x2804;
+    if (device == 0)
+        return {};
+    const std::uint32_t descriptorIndex = slot == 0 ? 0 : slot + 1;
+    return {
+        .present = true,
+        .observedObject =
+            ReadGuestBe32(device + kVertexStreamObjectTableOffset + slot * sizeof(std::uint32_t)),
+        .descriptor = {ReadGuestBe32(device + kVertexStreamDescriptorOffset +
+                                     descriptorIndex * sizeof(std::uint32_t))},
+        .descriptorDwords = 1,
+    };
+}
+
 void ObserveAfterSuper(const gears::RhiSemanticDraw &draw, std::uint32_t device, bool staged)
 {
     gears::ObserveRhiSemanticDraw(draw, CaptureLastDrawPacket(device, staged, draw.kind));
@@ -122,6 +151,48 @@ PPC_FUNC(sub_82220858)
     };
     __imp__sub_82220858(ctx, base);
     gears::ObserveRhiSemanticBinding(binding, CaptureTextureBinding(device, slot));
+}
+
+extern "C" PPC_FUNC(__imp__sub_8222AFD8);
+PPC_FUNC(sub_8222AFD8)
+{
+    if (!gears::RhiSemanticObservationEnabled())
+    {
+        __imp__sub_8222AFD8(ctx, base);
+        return;
+    }
+    const std::uint32_t device = ctx.r3.u32;
+    const gears::RhiSemanticBinding binding{
+        .kind = gears::RhiSemanticBindingKind::IndexBuffer,
+        .object = ctx.r4.u32,
+    };
+    __imp__sub_8222AFD8(ctx, base);
+    gears::ObserveRhiSemanticBinding(binding, CaptureIndexBufferBinding(device));
+}
+
+extern "C" PPC_FUNC(__imp__sub_8222B068);
+PPC_FUNC(sub_8222B068)
+{
+    if (!gears::RhiSemanticObservationEnabled())
+    {
+        __imp__sub_8222B068(ctx, base);
+        return;
+    }
+    const std::uint32_t device = ctx.r3.u32;
+    const std::uint32_t slot = ctx.r4.u32;
+    gears::RhiSemanticBinding binding{
+        .kind = gears::RhiSemanticBindingKind::VertexStream,
+        .slot = slot,
+        .object = ctx.r5.u32,
+    };
+    __imp__sub_8222B068(ctx, base);
+    if (binding.object != 0)
+    {
+        constexpr std::uint32_t kVertexBufferFetchWordOffset = 0x1C;
+        binding.descriptor = {ReadGuestBe32(binding.object + kVertexBufferFetchWordOffset)};
+        binding.descriptorDwords = 1;
+    }
+    gears::ObserveRhiSemanticBinding(binding, CaptureVertexStreamBinding(device, slot));
 }
 
 extern "C" PPC_FUNC(__imp__sub_8222CFF8);
