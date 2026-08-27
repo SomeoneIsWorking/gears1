@@ -5,7 +5,7 @@ status: investigating
 symptom: Per-draw semantics are now observed and packet-checked, but complete state, resource, resolve, presentation, and retirement semantics are not yet mirrored, so native execution cannot safely bypass PM4
 tags: performance,native-rhi,d3d,re,draw,seam
 created: 2026-08-27
-updated: 2026-08-27
+updated: 2026-08-28
 ---
 
 ## Root cause
@@ -126,14 +126,23 @@ depth slot; all 15,698 bindings and 600 presents matched too. The first arm
 persisted bind-time descriptors and was rejected 3,141 times by frame 630 even
 though target objects still agreed. In the repeated case the color descriptor
 changed from `0x302D0` to `0xC02D0` without a target rebind, proving descriptor
-state has a different setter owner that must be grounded before resolve views
-can be called complete.
+state has a different setter owner. An alias-aware write watch first proved its
+positive path by catching the retained target binder at host `0xE88B93`. The
+corrected title adapter pauses the watch around that known binder; it then
+caught retained guest function `0x82229B28` at host `0xE837CE` changing only
+the slot-zero color descriptor. The body stores the requested mode, maps
+surface-format pairs 2↔10 and 3↔12 in both the bound object and device shadow,
+and marks dirty bit 37. A focused native implementation covers the exact state
+transition and keeps the retained body callable. Its 256-call transactional
+audit matched every owned byte and callee-saved register, including two live
+format transitions. A clean alternating timing run rejected default native
+execution: 40 ns native versus 30 ns retained median over 5,000/5,000 calls;
+the retained body therefore remains the shipping path.
 
 ## Next falsifier
 
 Exercise the separate bound-vertex entry dynamically if the title reaches it.
-Ground the setter that mutates target descriptors after binding. Then add
-resource creation/lifetime, resolve, and retirement events and
+Then add resource creation/lifetime, resolve, and retirement events and
 compare the complete ordered stream with the PM4-derived `FrameDrawInputs` and
 output. Keep the recompiled compatibility bodies available and super-called
 until a deliberately wrong semantic control is rejected and a same-run

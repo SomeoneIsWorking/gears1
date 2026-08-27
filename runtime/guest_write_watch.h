@@ -10,6 +10,7 @@ enum class GuestWriteWatchOwner : uint8_t
 {
     kQueue,
     kDrawPacket,
+    kRhiTargetDescriptor,
 };
 
 struct GuestWriteWatchStats
@@ -43,6 +44,11 @@ constexpr bool GuestWriteWatchContains(uintptr_t target, size_t targetBytes, uin
 // without being mistaken for writes to the exact target.
 bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
                         uint64_t targetSampleLimit);
+
+// Temporarily opens the watched pages for an owner-known write, preserving all
+// samples already captured. Resume refuses after the sample limit was reached.
+bool PauseGuestWriteWatch(GuestWriteWatchOwner owner);
+bool ResumeGuestWriteWatch(GuestWriteWatchOwner owner);
 
 // Publishes the captured host instruction offsets. With rearm=true the counts
 // are per-report interval. A one-shot watch remains armed across empty reports

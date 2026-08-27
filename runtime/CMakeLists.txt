@@ -206,8 +206,10 @@ add_executable(gears1
     hle_d3d.cpp
     rhi_semantic_state.cpp
     rhi_semantic_stream.cpp
+    titles/gears1/color_write_gamma_override.cpp
     titles/gears1/rhi_bindings.cpp
     titles/gears1/rhi_index_buffer.cpp
+    titles/gears1/rhi_target_descriptor_watch.cpp
     titles/gears1/rhi_vertex_buffer.cpp
     titles/gears1/shader_setter_override.cpp
     guest_write_watch.cpp

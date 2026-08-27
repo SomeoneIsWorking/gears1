@@ -632,6 +632,10 @@ add_executable(test_shader_setter_state test_shader_setter_state.cpp)
 target_include_directories(test_shader_setter_state PRIVATE ../runtime)
 add_test(NAME shader_setter_state COMMAND test_shader_setter_state)
 
+add_executable(test_color_write_gamma_state test_color_write_gamma_state.cpp)
+target_include_directories(test_color_write_gamma_state PRIVATE ../runtime)
+add_test(NAME color_write_gamma_state COMMAND test_color_write_gamma_state)
+
 add_executable(test_gpu_draw_census
     test_gpu_draw_census.cpp
     ../runtime/gpu_draw_census.cpp)
