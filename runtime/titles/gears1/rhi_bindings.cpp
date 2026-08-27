@@ -2,6 +2,7 @@
 #include "guest_stack_argument.h"
 #include "import_stub.h"
 #include "rhi_semantic_stream.h"
+#include "rhi_index_buffer.h"
 
 #include <cstdint>
 
@@ -52,6 +53,24 @@ namespace
             .sourceSelect = (initiator >> 6) & 0x3,
             .elementCount = initiator >> 16,
         };
+        if (kind == gears::RhiSemanticDrawKind::BoundIndices && evidence.sourceSelect == 0)
+        {
+            const std::uint32_t dmaBaseIndex = initiatorIndex + 1;
+            const std::uint32_t dmaSizeIndex = initiatorIndex + 2;
+            if (payloadDwords <= dmaSizeIndex)
+                return evidence;
+
+            const std::uint32_t strideBytes = ((initiator >> 11) & 1) != 0 ? 4u : 2u;
+            const std::uint32_t dmaBase = ReadGuestBe32(headerAddress + (dmaBaseIndex + 1) * 4);
+            const std::uint32_t dmaSize = ReadGuestBe32(headerAddress + (dmaSizeIndex + 1) * 4);
+            evidence.indexDataPresent = true;
+            evidence.indexData = {
+                .guestAddress = dmaBase & ~(strideBytes - 1),
+                .sizeBytes = (dmaSize & 0x00FFFFFFu) * 2,
+            };
+            evidence.indexStrideBytes = strideBytes;
+            evidence.indexEndianSwap = dmaSize >> 30;
+        }
         if (HasTransientData(kind))
         {
             constexpr std::uint32_t kVertexAddressOffset = 13080;
@@ -98,15 +117,31 @@ namespace
     return state;
 }
 
+[[nodiscard]] gears::RhiSemanticBufferView CaptureIndexBufferView(std::uint32_t object)
+{
+    constexpr std::uint32_t kCommonFlagsOffset = 0;
+    constexpr std::uint32_t kGuestAddressOffset = 24;
+    constexpr std::uint32_t kSizeBytesOffset = 28;
+    return gears::gears1::DecodeIndexBufferView(ReadGuestBe32(object + kCommonFlagsOffset),
+                                                ReadGuestBe32(object + kGuestAddressOffset),
+                                                ReadGuestBe32(object + kSizeBytesOffset));
+}
+
 [[nodiscard]] gears::RhiBindingStateEvidence CaptureIndexBufferBinding(std::uint32_t device)
 {
     constexpr std::uint32_t kIndexBufferObjectOffset = 0x2F84;
     if (device == 0)
         return {};
-    return {
+    gears::RhiBindingStateEvidence state{
         .present = true,
         .observedObject = ReadGuestBe32(device + kIndexBufferObjectOffset),
     };
+    if (state.observedObject != 0)
+    {
+        state.bufferViewPresent = true;
+        state.bufferView = CaptureIndexBufferView(state.observedObject);
+    }
+    return state;
 }
 
 [[nodiscard]] gears::RhiBindingStateEvidence CaptureVertexStreamBinding(std::uint32_t device,
@@ -162,10 +197,15 @@ PPC_FUNC(sub_8222AFD8)
         return;
     }
     const std::uint32_t device = ctx.r3.u32;
-    const gears::RhiSemanticBinding binding{
+    gears::RhiSemanticBinding binding{
         .kind = gears::RhiSemanticBindingKind::IndexBuffer,
         .object = ctx.r4.u32,
     };
+    if (binding.object != 0)
+    {
+        binding.bufferViewPresent = true;
+        binding.bufferView = CaptureIndexBufferView(binding.object);
+    }
     __imp__sub_8222AFD8(ctx, base);
     gears::ObserveRhiSemanticBinding(binding, CaptureIndexBufferBinding(device));
 }
@@ -282,7 +322,7 @@ PPC_FUNC(sub_8222DE50)
         __imp__sub_8222DE50(ctx, base);
         return;
     }
-    const gears::RhiSemanticDraw draw{
+    gears::RhiSemanticDraw draw{
         .kind = gears::RhiSemanticDrawKind::BoundIndices,
         .primitiveType = ctx.r4.u32,
         .elementCount = ctx.r7.u32,
@@ -290,6 +330,16 @@ PPC_FUNC(sub_8222DE50)
         .startIndex = ctx.r6.u32,
     };
     const std::uint32_t device = ctx.r3.u32;
+    const gears::RhiBindingStateEvidence indexBinding = CaptureIndexBufferBinding(device);
+    if (indexBinding.bufferViewPresent)
+    {
+        draw.indexBufferViewPresent = true;
+        draw.indexBuffer = indexBinding.bufferView;
+        const auto slice =
+            gears::gears1::IndexBufferSlice(draw.indexBuffer, draw.startIndex, draw.elementCount);
+        if (slice.has_value())
+            draw.indexData = *slice;
+    }
     __imp__sub_8222DE50(ctx, base);
     ObserveAfterSuper(draw, device, false);
 }

@@ -22,6 +22,13 @@ struct RhiSemanticBufferRange
     std::uint32_t sizeBytes = 0;
 };
 
+struct RhiSemanticBufferView
+{
+    RhiSemanticBufferRange allocation;
+    std::uint32_t elementStrideBytes = 0;
+    std::uint32_t endianSwap = 0;
+};
+
 struct RhiSemanticDraw
 {
     RhiSemanticDrawKind kind = RhiSemanticDrawKind::BoundVertices;
@@ -33,6 +40,8 @@ struct RhiSemanticDraw
     std::uint32_t indexFormatFlags = 0;
     RhiSemanticBufferRange vertexData;
     RhiSemanticBufferRange indexData;
+    bool indexBufferViewPresent = false;
+    RhiSemanticBufferView indexBuffer;
 };
 
 struct RhiDrawPacketEvidence
@@ -45,6 +54,9 @@ struct RhiDrawPacketEvidence
     bool transientDataPresent = false;
     RhiSemanticBufferRange vertexData;
     RhiSemanticBufferRange indexData;
+    bool indexDataPresent = false;
+    std::uint32_t indexStrideBytes = 0;
+    std::uint32_t indexEndianSwap = 0;
 };
 
 enum class RhiDrawEvidenceResult : std::uint8_t
@@ -70,6 +82,8 @@ struct RhiSemanticBinding
     std::uint32_t object = 0;
     std::array<std::uint32_t, 6> descriptor{};
     std::uint32_t descriptorDwords = 0;
+    bool bufferViewPresent = false;
+    RhiSemanticBufferView bufferView;
 };
 
 struct RhiBindingStateEvidence
@@ -78,6 +92,8 @@ struct RhiBindingStateEvidence
     std::uint32_t observedObject = 0;
     std::array<std::uint32_t, 6> descriptor{};
     std::uint32_t descriptorDwords = 0;
+    bool bufferViewPresent = false;
+    RhiSemanticBufferView bufferView;
 };
 
 enum class RhiBindingEvidenceResult : std::uint8_t

@@ -47,6 +47,15 @@ int main()
         .kind = RhiSemanticDrawKind::BoundIndices,
         .primitiveType = 3,
         .elementCount = 42,
+        .startIndex = 8,
+        .indexData = {.guestAddress = 0x2010, .sizeBytes = 84},
+        .indexBufferViewPresent = true,
+        .indexBuffer =
+            {
+                .allocation = {.guestAddress = 0x2000, .sizeBytes = 256},
+                .elementStrideBytes = 2,
+                .endianSwap = 1,
+            },
     };
     const RhiDrawPacketEvidence matchingIndexed{
         .present = true,
@@ -54,11 +63,24 @@ int main()
         .primitiveType = 3,
         .sourceSelect = 0,
         .elementCount = 42,
+        .indexData = {.guestAddress = 0x2010, .sizeBytes = 84},
+        .indexDataPresent = true,
+        .indexStrideBytes = 2,
+        .indexEndianSwap = 1,
     };
     assert(CompareRhiDrawPacket(indexed, matchingIndexed) == RhiDrawEvidenceResult::Match);
     altered = matchingIndexed;
     altered.sourceSelect = 2;
     assert(CompareRhiDrawPacket(indexed, altered) == RhiDrawEvidenceResult::Mismatch);
+    altered = matchingIndexed;
+    altered.indexData.guestAddress += 2;
+    assert(CompareRhiDrawPacket(indexed, altered) == RhiDrawEvidenceResult::Mismatch);
+    altered = matchingIndexed;
+    altered.indexStrideBytes = 4;
+    assert(CompareRhiDrawPacket(indexed, altered) == RhiDrawEvidenceResult::Mismatch);
+    altered = matchingIndexed;
+    altered.indexDataPresent = false;
+    assert(CompareRhiDrawPacket(indexed, altered) == RhiDrawEvidenceResult::Missing);
 
     const RhiSemanticDraw transient{
         .kind = RhiSemanticDrawKind::TransientVerticesAndIndices,
@@ -132,6 +154,35 @@ int main()
     assert(CompareRhiBindingState(vertexStreamBinding, alteredVertexStream) ==
            RhiBindingEvidenceResult::Mismatch);
 
+    const RhiSemanticBinding indexBufferBinding{
+        .kind = RhiSemanticBindingKind::IndexBuffer,
+        .object = 0x40105000,
+        .bufferViewPresent = true,
+        .bufferView =
+            {
+                .allocation = {.guestAddress = 0x00978000, .sizeBytes = 0x1000},
+                .elementStrideBytes = 4,
+                .endianSwap = 2,
+            },
+    };
+    const RhiBindingStateEvidence matchingIndexBuffer{
+        .present = true,
+        .observedObject = 0x40105000,
+        .bufferViewPresent = true,
+        .bufferView =
+            {
+                .allocation = {.guestAddress = 0x00978000, .sizeBytes = 0x1000},
+                .elementStrideBytes = 4,
+                .endianSwap = 2,
+            },
+    };
+    assert(CompareRhiBindingState(indexBufferBinding, matchingIndexBuffer) ==
+           RhiBindingEvidenceResult::Match);
+    RhiBindingStateEvidence alteredIndexBuffer = matchingIndexBuffer;
+    alteredIndexBuffer.bufferView.allocation.sizeBytes -= 4;
+    assert(CompareRhiBindingState(indexBufferBinding, alteredIndexBuffer) ==
+           RhiBindingEvidenceResult::Mismatch);
+
     const RhiSemanticPresent present{
         .frameSequence = 17,
         .frontBuffer = 0xA0311000,
@@ -159,6 +210,8 @@ int main()
     lucent::config::set_prefix("GEARS_");
     gears::ObserveRhiSemanticDraw(autoIndexed, matchingAuto);
     gears::ObserveRhiSemanticBinding(textureBinding, matchingBinding);
+    altered = matchingIndexed;
+    altered.sourceSelect = 2;
     gears::ObserveRhiSemanticDraw(indexed, altered);
     gears::ObserveRhiSemanticPresent(present, matchingPresent);
     const gears::RhiSemanticFrame frame = gears::SealRhiSemanticFrame(17);
