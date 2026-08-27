@@ -1,8 +1,9 @@
 #include "guest_memory.h"
 #include "guest_stack_argument.h"
 #include "import_stub.h"
-#include "rhi_semantic_stream.h"
 #include "rhi_index_buffer.h"
+#include "rhi_semantic_stream.h"
+#include "rhi_vertex_buffer.h"
 
 #include <cstdint>
 
@@ -12,6 +13,11 @@ namespace
 [[nodiscard]] std::uint32_t ReadGuestBe32(std::uint32_t address)
 {
     return __builtin_bswap32(*gears::Memory().Translate<std::uint32_t>(address));
+}
+
+[[nodiscard]] std::uint8_t ReadGuestU8(std::uint32_t address)
+{
+    return *gears::Memory().Translate<std::uint8_t>(address);
 }
 
 [[nodiscard]] bool HasTransientData(gears::RhiSemanticDrawKind kind)
@@ -144,6 +150,33 @@ namespace
     return state;
 }
 
+[[nodiscard]] gears::RhiBindingStateEvidence CaptureVertexStreamBinding(std::uint32_t device,
+                                                                        std::uint32_t slot)
+{
+    constexpr std::uint32_t kMaximumVertexStream = 17;
+    constexpr std::uint32_t kVertexStreamObjectTableOffset = 0x2F9C;
+    constexpr std::uint32_t kVertexFetchDescriptorOffset = 0x6F8;
+    constexpr std::uint32_t kVertexStreamStrideOffset = 0x2FE0;
+    if (device == 0 || slot > kMaximumVertexStream)
+        return {};
+
+    gears::RhiBindingStateEvidence state{
+        .present = true,
+        .observedObject =
+            ReadGuestBe32(device + kVertexStreamObjectTableOffset + slot * sizeof(std::uint32_t)),
+    };
+    if (state.observedObject != 0)
+    {
+        const std::uint32_t descriptor =
+            device + kVertexFetchDescriptorOffset - slot * 2 * sizeof(std::uint32_t);
+        state.bufferViewPresent = true;
+        state.bufferView = gears::gears1::DecodeVertexBufferState(
+            ReadGuestBe32(descriptor), ReadGuestBe32(descriptor + sizeof(std::uint32_t)),
+            ReadGuestU8(device + kVertexStreamStrideOffset + slot));
+    }
+    return state;
+}
+
 [[nodiscard]] gears::RhiBindingStateEvidence CaptureColorRenderTargetBinding(std::uint32_t device,
                                                                              std::uint32_t slot)
 {
@@ -202,6 +235,38 @@ PPC_FUNC(sub_82220858)
     };
     __imp__sub_82220858(ctx, base);
     gears::ObserveRhiSemanticBinding(binding, CaptureTextureBinding(device, slot));
+}
+
+extern "C" PPC_FUNC(__imp__sub_8222AE20);
+PPC_FUNC(sub_8222AE20)
+{
+    if (!gears::RhiSemanticObservationEnabled())
+    {
+        __imp__sub_8222AE20(ctx, base);
+        return;
+    }
+    const std::uint32_t device = ctx.r3.u32;
+    const std::uint32_t slot = ctx.r4.u32;
+    gears::RhiSemanticBinding binding{
+        .kind = gears::RhiSemanticBindingKind::VertexStream,
+        .slot = slot,
+        .object = ctx.r5.u32,
+    };
+    if (binding.object != 0)
+    {
+        constexpr std::uint32_t kGuestAddressOffset = 0x18;
+        constexpr std::uint32_t kSizeBytesOffset = 0x1C;
+        const auto view = gears::gears1::DecodeVertexBufferView(
+            ReadGuestBe32(binding.object + kGuestAddressOffset),
+            ReadGuestBe32(binding.object + kSizeBytesOffset), ctx.r6.u32, ctx.r7.u32);
+        if (view.has_value())
+        {
+            binding.bufferViewPresent = true;
+            binding.bufferView = *view;
+        }
+    }
+    __imp__sub_8222AE20(ctx, base);
+    gears::ObserveRhiSemanticBinding(binding, CaptureVertexStreamBinding(device, slot));
 }
 
 extern "C" PPC_FUNC(__imp__sub_8222AFD8);

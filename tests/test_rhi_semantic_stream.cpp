@@ -154,6 +154,34 @@ int main()
     assert(CompareRhiBindingState(colorTargetBinding, alteredColorTarget) ==
            RhiBindingEvidenceResult::Mismatch);
 
+    const RhiSemanticBinding vertexStreamBinding{
+        .kind = RhiSemanticBindingKind::VertexStream,
+        .slot = 3,
+        .object = 0x40102000,
+        .bufferViewPresent = true,
+        .bufferView =
+            {
+                .allocation = {.guestAddress = 0x00102040, .sizeBytes = 0x2FC0},
+                .elementStrideBytes = 20,
+            },
+    };
+    const RhiBindingStateEvidence matchingVertexStream{
+        .present = true,
+        .observedObject = 0x40102000,
+        .bufferViewPresent = true,
+        .bufferView =
+            {
+                .allocation = {.guestAddress = 0x00102040, .sizeBytes = 0x2FC0},
+                .elementStrideBytes = 20,
+            },
+    };
+    assert(CompareRhiBindingState(vertexStreamBinding, matchingVertexStream) ==
+           RhiBindingEvidenceResult::Match);
+    RhiBindingStateEvidence alteredVertexStream = matchingVertexStream;
+    alteredVertexStream.bufferView.elementStrideBytes = 16;
+    assert(CompareRhiBindingState(vertexStreamBinding, alteredVertexStream) ==
+           RhiBindingEvidenceResult::Mismatch);
+
     const RhiSemanticBinding depthTargetBinding{
         .kind = RhiSemanticBindingKind::DepthStencilTarget,
         .object = 0x40104800,

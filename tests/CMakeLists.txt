@@ -606,6 +606,12 @@ add_executable(test_rhi_index_buffer
 target_include_directories(test_rhi_index_buffer PRIVATE ../runtime)
 add_test(NAME rhi_index_buffer COMMAND test_rhi_index_buffer)
 
+add_executable(test_rhi_vertex_buffer
+    test_rhi_vertex_buffer.cpp
+    ../runtime/titles/gears1/rhi_vertex_buffer.cpp)
+target_include_directories(test_rhi_vertex_buffer PRIVATE ../runtime)
+add_test(NAME rhi_vertex_buffer COMMAND test_rhi_vertex_buffer)
+
 add_executable(test_gpu_swap_packet
     test_gpu_swap_packet.cpp
     ../runtime/gpu_swap_packet.cpp
