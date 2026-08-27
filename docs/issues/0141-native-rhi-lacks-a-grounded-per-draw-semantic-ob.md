@@ -139,10 +139,21 @@ format transitions. A clean alternating timing run rejected default native
 execution: 40 ns native versus 30 ns retained median over 5,000/5,000 calls;
 the retained body therefore remains the shipping path.
 
+The logical resolve owner is `0x82235528`. Its Gears 1 adapter now decodes the
+source colour/depth target, six-word destination texture descriptor, source
+rectangle, destination point, physical address, pitch, and remaining height
+before super-calling the retained body. It then inspects only the command span
+emitted by that call and requires a three-element auto-index rectangle-list
+copy whose post-call destination shadows agree. The first live arm exposed a
+shared decoder defect rather than a title-offset defect: EXPAND formats 27, 28,
+and 29 were absent from `ColorFormatBytesPerPixel`. After adding their 2/4/8-byte
+sizes, a headless run through frame 540 matched 540/540 resolves with zero
+missing or mismatched observations alongside every draw, binding, and present.
+
 ## Next falsifier
 
 Exercise the separate bound-vertex entry dynamically if the title reaches it.
-Then add resource creation/lifetime, resolve, and retirement events and
+Then add resource creation/lifetime and retirement events and
 compare the complete ordered stream with the PM4-derived `FrameDrawInputs` and
 output. Keep the recompiled compatibility bodies available and super-called
 until a deliberately wrong semantic control is rejected and a same-run

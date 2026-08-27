@@ -40,6 +40,10 @@ struct RhiSemanticReportTotals
     std::uint64_t bindingsMissing = 0;
     std::uint64_t bindingsMismatched = 0;
     std::array<std::uint64_t, 7> bindingKinds{};
+    std::uint64_t resolves = 0;
+    std::uint64_t resolvesMatched = 0;
+    std::uint64_t resolvesMissing = 0;
+    std::uint64_t resolvesMismatched = 0;
     std::uint64_t presents = 0;
     std::uint64_t presentsMatched = 0;
     std::uint64_t presentsMissing = 0;
@@ -267,6 +271,30 @@ RhiPresentEvidenceResult CompareRhiPresentPacket(const RhiSemanticPresent &prese
     return RhiPresentEvidenceResult::Match;
 }
 
+RhiResolveEvidenceResult CompareRhiResolvePacket(const RhiSemanticResolve &resolve,
+                                                 const RhiResolvePacketEvidence &packet)
+{
+    if (!packet.present)
+        return RhiResolveEvidenceResult::Missing;
+
+    constexpr std::uint32_t kDrawIndx = 0x22;
+    constexpr std::uint32_t kDrawIndx2 = 0x36;
+    constexpr std::uint32_t kRectangleList = 8;
+    constexpr std::uint32_t kAutoIndex = 2;
+    constexpr std::uint32_t kRectangleVertices = 3;
+    const bool drawOpcode = packet.drawOpcode == kDrawIndx || packet.drawOpcode == kDrawIndx2;
+    if (packet.observedSourceObject != resolve.sourceObject ||
+        packet.destinationAddress != resolve.destinationAddress ||
+        packet.destinationPitch != resolve.destinationPitch ||
+        packet.destinationHeight != resolve.destinationHeight || !drawOpcode ||
+        packet.primitiveType != kRectangleList || packet.sourceSelect != kAutoIndex ||
+        packet.elementCount != kRectangleVertices)
+    {
+        return RhiResolveEvidenceResult::Mismatch;
+    }
+    return RhiResolveEvidenceResult::Match;
+}
+
 void ObserveRhiSemanticDraw(const RhiSemanticDraw &draw, const RhiDrawPacketEvidence &packet)
 {
     if (!RhiSemanticObservationEnabled())
@@ -314,6 +342,20 @@ void ObserveRhiSemanticPresent(const RhiSemanticPresent &present,
                                        .evidence = CompareRhiPresentPacket(present, packet)}});
 }
 
+void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,
+                               const RhiResolvePacketEvidence &packet)
+{
+    if (!RhiSemanticObservationEnabled())
+        return;
+
+    std::lock_guard guard(g_stream.mutex);
+    g_stream.pendingEvents.push_back(
+        {.sequence = g_stream.nextSequence++,
+         .payload = RhiObservedResolve{.resolve = resolve,
+                                       .packet = packet,
+                                       .evidence = CompareRhiResolvePacket(resolve, packet)}});
+}
+
 RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
 {
     RhiSemanticFrame frame{.frameSequence = frameSequence};
@@ -354,6 +396,23 @@ RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
                 break;
             case RhiBindingEvidenceResult::Mismatch:
                 ++frame.bindingsMismatched;
+                break;
+            }
+            continue;
+        }
+        if (const auto *observed = std::get_if<RhiObservedResolve>(&event.payload))
+        {
+            ++frame.resolves;
+            switch (observed->evidence)
+            {
+            case RhiResolveEvidenceResult::Match:
+                ++frame.resolvesMatched;
+                break;
+            case RhiResolveEvidenceResult::Missing:
+                ++frame.resolvesMissing;
+                break;
+            case RhiResolveEvidenceResult::Mismatch:
+                ++frame.resolvesMismatched;
                 break;
             }
             continue;
@@ -415,6 +474,10 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
     g_reportTotals.bindingsMatched += frame.bindingsMatched;
     g_reportTotals.bindingsMissing += frame.bindingsMissing;
     g_reportTotals.bindingsMismatched += frame.bindingsMismatched;
+    g_reportTotals.resolves += frame.resolves;
+    g_reportTotals.resolvesMatched += frame.resolvesMatched;
+    g_reportTotals.resolvesMissing += frame.resolvesMissing;
+    g_reportTotals.resolvesMismatched += frame.resolvesMismatched;
     g_reportTotals.presents += frame.presents;
     g_reportTotals.presentsMatched += frame.presentsMatched;
     g_reportTotals.presentsMissing += frame.presentsMissing;
@@ -422,17 +485,21 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
 
     if (frame.frameSequence == 1 || frame.frameSequence % 60 == 0 || frame.missing != 0 ||
         frame.mismatched != 0 || frame.bindingsMissing != 0 || frame.bindingsMismatched != 0 ||
-        frame.presentsMissing != 0 || frame.presentsMismatched != 0)
+        frame.resolvesMissing != 0 || frame.resolvesMismatched != 0 || frame.presentsMissing != 0 ||
+        frame.presentsMismatched != 0)
     {
         lucent::Line line;
         line.add("native RHI semantic through frame {}: {} draw call(s), {} packet match(es),"
                  " {} missing packet(s), {} mismatch(es); {} binding call(s), {} state"
-                 " match(es), {} missing state observation(s), {} mismatch(es); {} present call(s),"
+                 " match(es), {} missing state observation(s), {} mismatch(es); {} resolve call(s),"
+                 " {} packet match(es), {} missing packet(s), {} mismatch(es); {} present call(s),"
                  " {} packet match(es), {} missing packet(s), {} mismatch(es)",
                  frame.frameSequence, g_reportTotals.draws, g_reportTotals.matched,
                  g_reportTotals.missing, g_reportTotals.mismatched, g_reportTotals.bindings,
                  g_reportTotals.bindingsMatched, g_reportTotals.bindingsMissing,
-                 g_reportTotals.bindingsMismatched, g_reportTotals.presents,
+                 g_reportTotals.bindingsMismatched, g_reportTotals.resolves,
+                 g_reportTotals.resolvesMatched, g_reportTotals.resolvesMissing,
+                 g_reportTotals.resolvesMismatched, g_reportTotals.presents,
                  g_reportTotals.presentsMatched, g_reportTotals.presentsMissing,
                  g_reportTotals.presentsMismatched);
         for (std::size_t index = 0; index < g_reportTotals.drawKinds.size(); ++index)
@@ -537,6 +604,30 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
                     observed->state.bufferView.allocation.sizeBytes,
                     observed->state.bufferView.elementStrideBytes,
                     observed->state.bufferView.endianSwap);
+            }
+            continue;
+        }
+
+        if (const auto *observed = std::get_if<RhiObservedResolve>(&event.payload))
+        {
+            if (observed->evidence != RhiResolveEvidenceResult::Match)
+            {
+                lucent::error(
+                    "rhi",
+                    "semantic resolve {} ({} source slot {}) did not match its guest kCopy:"
+                    " expected source object {:#x}, destination object {:#x} at {:#x}"
+                    " pitch={} height={} format={}; observed present={} source object={:#x}"
+                    " destination={:#x} pitch={} height={} opcode={:#x} primitive={}"
+                    " source={} count={}",
+                    event.sequence, observed->resolve.sourceDepthStencil ? "depth" : "color",
+                    observed->resolve.sourceSlot, observed->resolve.sourceObject,
+                    observed->resolve.destinationObject, observed->resolve.destinationAddress,
+                    observed->resolve.destinationPitch, observed->resolve.destinationHeight,
+                    observed->resolve.destinationFormat, observed->packet.present,
+                    observed->packet.observedSourceObject, observed->packet.destinationAddress,
+                    observed->packet.destinationPitch, observed->packet.destinationHeight,
+                    observed->packet.drawOpcode, observed->packet.primitiveType,
+                    observed->packet.sourceSelect, observed->packet.elementCount);
             }
             continue;
         }

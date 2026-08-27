@@ -18,11 +18,14 @@ int main()
     using gears::RhiDrawPacketEvidence;
     using gears::RhiPresentEvidenceResult;
     using gears::RhiPresentPacketEvidence;
+    using gears::RhiResolveEvidenceResult;
+    using gears::RhiResolvePacketEvidence;
     using gears::RhiSemanticBinding;
     using gears::RhiSemanticBindingKind;
     using gears::RhiSemanticDraw;
     using gears::RhiSemanticDrawKind;
     using gears::RhiSemanticPresent;
+    using gears::RhiSemanticResolve;
 
     const RhiSemanticDraw autoIndexed{
         .kind = RhiSemanticDrawKind::BoundVertices,
@@ -291,32 +294,71 @@ int main()
     assert(gears::CompareRhiPresentPacket(present, alteredPresent) ==
            RhiPresentEvidenceResult::Missing);
 
+    const RhiSemanticResolve resolve{
+        .sourceDepthStencil = false,
+        .sourceSlot = 0,
+        .sourceObject = 0x40106000,
+        .destinationObject = 0x40107000,
+        .destinationAddress = 0x0BCC0000,
+        .destinationPitch = 1280,
+        .destinationHeight = 208,
+        .destinationFormat = 23,
+    };
+    const RhiResolvePacketEvidence matchingResolve{
+        .present = true,
+        .observedSourceObject = 0x40106000,
+        .destinationAddress = 0x0BCC0000,
+        .destinationPitch = 1280,
+        .destinationHeight = 208,
+        .drawOpcode = 0x22,
+        .primitiveType = 8,
+        .sourceSelect = 2,
+        .elementCount = 3,
+    };
+    assert(gears::CompareRhiResolvePacket(resolve, matchingResolve) ==
+           RhiResolveEvidenceResult::Match);
+    RhiResolvePacketEvidence alteredResolve = matchingResolve;
+    alteredResolve.destinationAddress += 0x1000;
+    assert(gears::CompareRhiResolvePacket(resolve, alteredResolve) ==
+           RhiResolveEvidenceResult::Mismatch);
+    alteredResolve = matchingResolve;
+    alteredResolve.present = false;
+    assert(gears::CompareRhiResolvePacket(resolve, alteredResolve) ==
+           RhiResolveEvidenceResult::Missing);
+
     assert(setenv("GEARS_NATIVE_RHI_OBSERVE", "1", 1) == 0);
     lucent::config::set_prefix("GEARS_");
     gears::ObserveRhiSemanticDraw(autoIndexed, matchingAuto);
     gears::ObserveRhiSemanticBinding(textureBinding, matchingBinding);
+    gears::ObserveRhiSemanticResolve(resolve, matchingResolve);
     altered = matchingIndexed;
     altered.sourceSelect = 2;
     gears::ObserveRhiSemanticDraw(indexed, altered);
     gears::ObserveRhiSemanticPresent(present, matchingPresent);
     const gears::RhiSemanticFrame frame = gears::SealRhiSemanticFrame(17);
     assert(frame.frameSequence == 17);
-    assert(frame.events.size() == 4);
+    assert(frame.events.size() == 5);
     assert(frame.draws == 2);
     assert(frame.bindings == 1);
+    assert(frame.resolves == 1);
     assert(frame.presents == 1);
     assert(frame.events[0].sequence + 1 == frame.events[1].sequence);
     assert(frame.events[1].sequence + 1 == frame.events[2].sequence);
     assert(frame.events[2].sequence + 1 == frame.events[3].sequence);
+    assert(frame.events[3].sequence + 1 == frame.events[4].sequence);
     assert(std::holds_alternative<gears::RhiObservedDraw>(frame.events[0].payload));
     assert(std::holds_alternative<gears::RhiObservedBinding>(frame.events[1].payload));
-    assert(std::holds_alternative<gears::RhiObservedDraw>(frame.events[2].payload));
-    assert(std::holds_alternative<gears::RhiObservedPresent>(frame.events[3].payload));
+    assert(std::holds_alternative<gears::RhiObservedResolve>(frame.events[2].payload));
+    assert(std::holds_alternative<gears::RhiObservedDraw>(frame.events[3].payload));
+    assert(std::holds_alternative<gears::RhiObservedPresent>(frame.events[4].payload));
     assert(std::get<gears::RhiObservedDraw>(frame.events[0].payload).state.draw.elementCount ==
            300);
     assert(std::get<gears::RhiObservedBinding>(frame.events[1].payload).binding.slot == 3);
-    assert(std::get<gears::RhiObservedDraw>(frame.events[2].payload).state.draw.elementCount == 42);
-    assert(std::get<gears::RhiObservedPresent>(frame.events[3].payload).present.frontBuffer ==
+    assert(
+        std::get<gears::RhiObservedResolve>(frame.events[2].payload).resolve.destinationAddress ==
+        0x0BCC0000);
+    assert(std::get<gears::RhiObservedDraw>(frame.events[3].payload).state.draw.elementCount == 42);
+    assert(std::get<gears::RhiObservedPresent>(frame.events[4].payload).present.frontBuffer ==
            0xA0311000);
     assert(frame.matched == 1);
     assert(frame.missing == 0);
@@ -324,6 +366,9 @@ int main()
     assert(frame.bindingsMatched == 1);
     assert(frame.bindingsMissing == 0);
     assert(frame.bindingsMismatched == 0);
+    assert(frame.resolvesMatched == 1);
+    assert(frame.resolvesMissing == 0);
+    assert(frame.resolvesMismatched == 0);
     assert(frame.presentsMatched == 1);
     assert(frame.presentsMissing == 0);
     assert(frame.presentsMismatched == 0);

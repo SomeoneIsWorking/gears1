@@ -209,6 +209,8 @@ add_executable(gears1
     titles/gears1/color_write_gamma_override.cpp
     titles/gears1/rhi_bindings.cpp
     titles/gears1/rhi_index_buffer.cpp
+    titles/gears1/rhi_resolve.cpp
+    titles/gears1/rhi_resolve_binding.cpp
     titles/gears1/rhi_target_descriptor_watch.cpp
     titles/gears1/rhi_vertex_buffer.cpp
     titles/gears1/shader_setter_override.cpp

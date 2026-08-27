@@ -2,6 +2,7 @@
 #include "guest_stack_argument.h"
 #include "import_stub.h"
 #include "rhi_index_buffer.h"
+#include "rhi_packet_evidence.h"
 #include "rhi_semantic_stream.h"
 #include "rhi_target_descriptor_watch.h"
 #include "rhi_vertex_buffer.h"
@@ -38,44 +39,43 @@ CaptureBoundRenderTargets(std::uint32_t device);
 {
     constexpr std::uint32_t kCommandWritePointerOffset = 0x28;
     constexpr std::uint32_t kStagedCommandEndOffset = 0x3314;
-    constexpr std::uint32_t kDrawIndx = 0x22;
-    constexpr std::uint32_t kDrawIndx2 = 0x36;
     constexpr std::uint32_t kSearchDwords = 32;
 
     const std::uint32_t end =
         ReadGuestBe32(device + (staged ? kStagedCommandEndOffset : kCommandWritePointerOffset));
-    for (std::uint32_t distance = 0; distance < kSearchDwords && end >= distance * 4; ++distance)
+    const std::uint32_t lowerAddress = end >= kSearchDwords * sizeof(std::uint32_t)
+                                           ? end - kSearchDwords * sizeof(std::uint32_t)
+                                           : 0;
+    const gears::RhiBasicDrawPacketEvidence draw =
+        gears::FindLastRhiDrawPacket(end, lowerAddress, kSearchDwords,
+                                     [](std::uint32_t address) { return ReadGuestBe32(address); });
+    if (draw.present)
     {
-        const std::uint32_t headerAddress = end - distance * 4;
-        const std::uint32_t header = ReadGuestBe32(headerAddress);
-        if ((header >> 30) != 3)
-            continue;
-        const std::uint32_t opcode = (header >> 8) & 0x7F;
-        if (opcode != kDrawIndx && opcode != kDrawIndx2)
-            continue;
-
-        const std::uint32_t payloadDwords = ((header >> 16) & 0x3FFF) + 1;
-        const std::uint32_t initiatorIndex = opcode == kDrawIndx ? 1u : 0u;
-        if (payloadDwords <= initiatorIndex || headerAddress + payloadDwords * 4 > end)
-            continue;
-        const std::uint32_t initiator = ReadGuestBe32(headerAddress + (initiatorIndex + 1) * 4);
         gears::RhiDrawPacketEvidence evidence{
             .present = true,
-            .opcode = opcode,
-            .primitiveType = initiator & 0x3F,
-            .sourceSelect = (initiator >> 6) & 0x3,
-            .elementCount = initiator >> 16,
+            .opcode = draw.opcode,
+            .primitiveType = draw.primitiveType,
+            .sourceSelect = draw.sourceSelect,
+            .elementCount = draw.elementCount,
         };
         if (kind == gears::RhiSemanticDrawKind::BoundIndices && evidence.sourceSelect == 0)
         {
+            constexpr std::uint32_t kDrawIndx = 0x22;
+            const std::uint32_t initiatorIndex = draw.opcode == kDrawIndx ? 1u : 0u;
             const std::uint32_t dmaBaseIndex = initiatorIndex + 1;
             const std::uint32_t dmaSizeIndex = initiatorIndex + 2;
+            const std::uint32_t header = ReadGuestBe32(draw.headerAddress);
+            const std::uint32_t payloadDwords = ((header >> 16) & 0x3FFF) + 1;
             if (payloadDwords <= dmaSizeIndex)
                 return evidence;
 
+            const std::uint32_t initiator =
+                ReadGuestBe32(draw.headerAddress + (initiatorIndex + 1) * sizeof(std::uint32_t));
             const std::uint32_t strideBytes = ((initiator >> 11) & 1) != 0 ? 4u : 2u;
-            const std::uint32_t dmaBase = ReadGuestBe32(headerAddress + (dmaBaseIndex + 1) * 4);
-            const std::uint32_t dmaSize = ReadGuestBe32(headerAddress + (dmaSizeIndex + 1) * 4);
+            const std::uint32_t dmaBase =
+                ReadGuestBe32(draw.headerAddress + (dmaBaseIndex + 1) * sizeof(std::uint32_t));
+            const std::uint32_t dmaSize =
+                ReadGuestBe32(draw.headerAddress + (dmaSizeIndex + 1) * sizeof(std::uint32_t));
             evidence.indexDataPresent = true;
             evidence.indexData = {
                 .guestAddress = dmaBase & ~(strideBytes - 1),
