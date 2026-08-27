@@ -134,24 +134,43 @@ int main()
     assert(CompareRhiBindingState(textureBinding, alteredBinding) ==
            RhiBindingEvidenceResult::Missing);
 
-    const RhiSemanticBinding vertexStreamBinding{
-        .kind = RhiSemanticBindingKind::VertexStream,
+    const RhiSemanticBinding colorTargetBinding{
+        .kind = RhiSemanticBindingKind::ColorRenderTarget,
         .slot = 2,
         .object = 0x40104000,
         .descriptor = {0x00097813},
         .descriptorDwords = 1,
     };
-    const RhiBindingStateEvidence matchingVertexStream{
+    const RhiBindingStateEvidence matchingColorTarget{
         .present = true,
         .observedObject = 0x40104000,
         .descriptor = {0x00097813},
         .descriptorDwords = 1,
     };
-    assert(CompareRhiBindingState(vertexStreamBinding, matchingVertexStream) ==
+    assert(CompareRhiBindingState(colorTargetBinding, matchingColorTarget) ==
            RhiBindingEvidenceResult::Match);
-    RhiBindingStateEvidence alteredVertexStream = matchingVertexStream;
-    alteredVertexStream.descriptor[0] ^= 1;
-    assert(CompareRhiBindingState(vertexStreamBinding, alteredVertexStream) ==
+    RhiBindingStateEvidence alteredColorTarget = matchingColorTarget;
+    alteredColorTarget.descriptor[0] ^= 1;
+    assert(CompareRhiBindingState(colorTargetBinding, alteredColorTarget) ==
+           RhiBindingEvidenceResult::Mismatch);
+
+    const RhiSemanticBinding depthTargetBinding{
+        .kind = RhiSemanticBindingKind::DepthStencilTarget,
+        .object = 0x40104800,
+        .descriptor = {0x000002D0, 0x00000001},
+        .descriptorDwords = 2,
+    };
+    const RhiBindingStateEvidence matchingDepthTarget{
+        .present = true,
+        .observedObject = 0x40104800,
+        .descriptor = {0x000002D0, 0x00000001},
+        .descriptorDwords = 2,
+    };
+    assert(CompareRhiBindingState(depthTargetBinding, matchingDepthTarget) ==
+           RhiBindingEvidenceResult::Match);
+    RhiBindingStateEvidence alteredDepthTarget = matchingDepthTarget;
+    alteredDepthTarget.descriptor[1] ^= 1;
+    assert(CompareRhiBindingState(depthTargetBinding, alteredDepthTarget) ==
            RhiBindingEvidenceResult::Mismatch);
 
     const RhiSemanticBinding indexBufferBinding{

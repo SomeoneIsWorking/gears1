@@ -103,17 +103,17 @@ the vertex address through its ninth stack argument, and records both ranges at
 arguments, while the comparator independently reads those recorded ranges from
 post-call device state.
 
-The same adapter wraps the grounded index-buffer binder at `0x8222AFD8` and
-vertex-stream binder at `0x8222B068`. They publish ordered `(object)` and
-`(slot, object, fetch word)` operations before bound draws consume them. The
-vertex fetch word is an output of the setter, not a verbatim object field: for
-four formats the retained body conditionally normalizes format bits using
-device mode. An initial pre-call comparison correctly failed despite matching
-objects; the event now captures the normalized object word after the call and
-checks it against the separate device descriptor shadow. A fast headless run
-through frame 780 matched 3,924 index-buffer and 6,481 vertex-stream updates,
-including every normalized fetch word, with zero missing observations or
-mismatches.
+The same adapter wraps the grounded index-buffer binder at `0x8222AFD8`, the
+colour-render-target binder at `0x8222B068`, and the depth-stencil-target binder
+at `0x8222B398`. The earlier vertex-stream label for `0x8222B068` was
+falsified: its retained body writes one of four colour-target object slots and
+an interleaved colour descriptor, while `0x8222B398` writes the adjacent fifth
+object slot and two depth descriptor words. A live slot-zero object carried
+EDRAM base `0x2d0`, independently confirming target ownership. The colour
+descriptor is an output of the setter, not always a verbatim pre-call object
+field: four formats are conditionally normalized using device mode. A fast
+headless run through frame 780 matched 3,924 index-buffer, 6,481 colour-target,
+and 3,555 depth-target updates with zero missing observations or mismatches.
 
 With `GEARS_NATIVE_RHI_OBSERVE=1`, a headless menu walk through frame 1980
 compared 153,214 semantic calls with the packets and transient-buffer state the
@@ -168,7 +168,7 @@ so this set IS the "first presented frame" target. **V**
 | 0x822193D8 / 0x822193B0 | 0.28 / — | free / alloc utility pair (575/420 static callers) (medium) |
 | 0x8222ABF8 / 0x8222AB30 | 0.15 | paired begin/end-shaped calls (per movie frame) (low) |
 | 0x8222E8E0 | 0.12 | setter with 99 static callers incl. thunk arrays (unidentified) |
-| 0x8222B068 / 0x8222B398 | 0.08 | paired (set/unset-shaped) (low) |
+| 0x8222B068 / 0x8222B398 | 0.08 | colour-render-target / depth-stencil-target binders (high) |
 | 0x8221D9B8 | 0.07 | async/block-wait helper (appears in movie + resource paths) (low) |
 | 0x82544148 | **exactly 1 per frame, measured in both menus and gameplay** | State flush, NOT the draw emitter. It was labelled "THE draw flush (state → TYPE0 packets + draw)" from a static read; wrapping it and counting against the renderer's own per-frame draw count gives one call per frame against 744 draws (`catalog.py show 58`). The movie path draws via 0x8221D3A8 |
 | present chain | 1.0 | UE3 wrapper 0x824A5170 → 0x8223E860 → 0x8223E3E0 → VdSwap (high) **V** |

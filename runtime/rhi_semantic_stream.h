@@ -72,7 +72,8 @@ enum class RhiSemanticBindingKind : std::uint8_t
     PixelShader,
     VertexShader,
     IndexBuffer,
-    VertexStream,
+    ColorRenderTarget,
+    DepthStencilTarget,
 };
 
 struct RhiSemanticBinding

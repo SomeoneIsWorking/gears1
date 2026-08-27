@@ -26,13 +26,16 @@ draws (including 28,550 transient-vertex and 102,353 transient-indexed range
 pairs), 430,563/430,563 bindings, and 1,980/1,980 presents with no missing or
 mismatched observation.
 
-After adding index-buffer and vertex-stream bindings, a fast headless run
-through frame 780 matched 3,924 index-buffer and 6,481 vertex-stream updates,
-with zero errors across 79,955 bindings. The vertex-stream descriptor arm first
-demonstrated its mismatch answer live: comparing the pre-call object word
-failed because the retained body conditionally normalizes four formats. The
-corrected arm compares the post-call normalized object word with the separate
-device descriptor shadow.
+The first label assigned to `0x8222B068`, vertex stream, was falsified by the
+retained body and a live debugger sample. The function writes one of four
+colour-target object slots and its interleaved descriptor; `0x8222B398` writes
+the adjacent depth-target object slot and two depth descriptor words. A fast
+headless run through frame 780 matched 6,481 colour-target and 3,555
+depth-target updates, with zero errors across 83,573 bindings. The colour
+descriptor arm first demonstrated its mismatch answer live: comparing the
+pre-call object word failed because the retained body conditionally normalizes
+four formats. The corrected arm compares the post-call normalized object word
+with the separate device descriptor shadow.
 
 The bound-index arm is validated against both outcomes. Focused controls alter
 the DMA address, element width, and evidence presence and are rejected. A live
@@ -44,7 +47,7 @@ among 24,233 draws and 80,023 bindings.
 
 ## Known failure modes
 
-Vertex-stream descriptors are setter outputs, not always verbatim input object
+Colour-target descriptors are setter outputs, not always verbatim input object
 fields. Capture the normalized post-call word; using `object+0x1C` before the
 call produces false mismatches for four device-mode-dependent formats.
 
