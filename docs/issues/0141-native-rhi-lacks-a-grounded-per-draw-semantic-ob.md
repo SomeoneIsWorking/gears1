@@ -77,10 +77,24 @@ matches the actual setter contract. A fast headless run through frame 780
 matched 3,924 index-buffer and 6,481 vertex-stream updates, with zero missing or
 mismatched observations across 79,955 total bindings.
 
+The bound index-buffer object is no longer opaque. Selective body inspection
+identified common flags at `+0x00`, the GPU address at `+0x18`, and allocation
+size at `+0x1C`; a live debugger sample demonstrated both 16-bit/endian-1 and
+32-bit/endian-2 objects with plausible in-range allocations. The focused
+`rhi_index_buffer.*` title adapter canonicalizes the address, decodes width and
+endian mode, and refuses an out-of-allocation draw slice. The shared semantic
+draw carries the complete allocation and consumed slice. Its comparer decodes
+the retained body's DMA base, 16-bit-unit length, initiator width, and endian
+mode independently. A subsequent headless run through frame 780 matched all
+3,717 bound-index draws and 3,926 index-buffer bindings, with zero missing or
+mismatched observations across 24,233 draws and 80,023 bindings. Focused
+controls reject altered DMA addresses, widths, sizes, view fields, and missing
+DMA evidence.
+
 ## Next falsifier
 
-Exercise the bound-vertex draw path dynamically and recover complete buffer
-view data, then add resource creation/lifetime, resolve, and retirement events and
+Exercise the bound-vertex draw path dynamically and recover complete vertex
+buffer view data, then add resource creation/lifetime, resolve, and retirement events and
 compare the complete ordered stream with the PM4-derived `FrameDrawInputs` and
 output. Keep the recompiled compatibility bodies available and super-called
 until a deliberately wrong semantic control is rejected and a same-run

@@ -600,6 +600,12 @@ target_include_directories(test_rhi_semantic_stream PRIVATE ../runtime)
 target_link_libraries(test_rhi_semantic_stream PRIVATE lucent::lucent)
 add_test(NAME rhi_semantic_stream COMMAND test_rhi_semantic_stream)
 
+add_executable(test_rhi_index_buffer
+    test_rhi_index_buffer.cpp
+    ../runtime/titles/gears1/rhi_index_buffer.cpp)
+target_include_directories(test_rhi_index_buffer PRIVATE ../runtime)
+add_test(NAME rhi_index_buffer COMMAND test_rhi_index_buffer)
+
 add_executable(test_gpu_swap_packet
     test_gpu_swap_packet.cpp
     ../runtime/gpu_swap_packet.cpp

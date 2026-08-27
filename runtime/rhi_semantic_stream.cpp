@@ -53,6 +53,20 @@ RhiSemanticReportTotals g_reportTotals;
            kind == RhiSemanticDrawKind::TransientVerticesAndIndices;
 }
 
+[[nodiscard]] bool SameBufferRange(const RhiSemanticBufferRange &left,
+                                   const RhiSemanticBufferRange &right)
+{
+    return left.guestAddress == right.guestAddress && left.sizeBytes == right.sizeBytes;
+}
+
+[[nodiscard]] bool SameBufferView(const RhiSemanticBufferView &left,
+                                  const RhiSemanticBufferView &right)
+{
+    return SameBufferRange(left.allocation, right.allocation) &&
+           left.elementStrideBytes == right.elementStrideBytes &&
+           left.endianSwap == right.endianSwap;
+}
+
 [[nodiscard]] const char *DrawKindName(RhiSemanticDrawKind kind)
 {
     switch (kind)
@@ -122,6 +136,19 @@ RhiDrawEvidenceResult CompareRhiDrawPacket(const RhiSemanticDraw &draw,
             return RhiDrawEvidenceResult::Mismatch;
         }
     }
+    if (draw.kind == RhiSemanticDrawKind::BoundIndices)
+    {
+        if (!draw.indexBufferViewPresent)
+            return RhiDrawEvidenceResult::Mismatch;
+        if (!packet.indexDataPresent)
+            return RhiDrawEvidenceResult::Missing;
+        if (!SameBufferRange(packet.indexData, draw.indexData) ||
+            packet.indexStrideBytes != draw.indexBuffer.elementStrideBytes ||
+            packet.indexEndianSwap != draw.indexBuffer.endianSwap)
+        {
+            return RhiDrawEvidenceResult::Mismatch;
+        }
+    }
     return RhiDrawEvidenceResult::Match;
 }
 
@@ -132,15 +159,20 @@ RhiBindingEvidenceResult CompareRhiBindingState(const RhiSemanticBinding &bindin
         return RhiBindingEvidenceResult::Missing;
     if (state.observedObject != binding.object)
         return RhiBindingEvidenceResult::Mismatch;
-    if (binding.descriptorDwords == 0)
-        return RhiBindingEvidenceResult::Match;
-    if (state.descriptorDwords != binding.descriptorDwords)
-        return RhiBindingEvidenceResult::Mismatch;
-    for (std::uint32_t index = 0; index < binding.descriptorDwords; ++index)
+    if (binding.descriptorDwords != 0)
     {
-        if (state.descriptor[index] != binding.descriptor[index])
+        if (state.descriptorDwords != binding.descriptorDwords)
             return RhiBindingEvidenceResult::Mismatch;
+        for (std::uint32_t index = 0; index < binding.descriptorDwords; ++index)
+        {
+            if (state.descriptor[index] != binding.descriptor[index])
+                return RhiBindingEvidenceResult::Mismatch;
+        }
     }
+    if (binding.bufferViewPresent != state.bufferViewPresent)
+        return RhiBindingEvidenceResult::Mismatch;
+    if (binding.bufferViewPresent && !SameBufferView(binding.bufferView, state.bufferView))
+        return RhiBindingEvidenceResult::Mismatch;
     return RhiBindingEvidenceResult::Match;
 }
 
@@ -336,7 +368,8 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
                     " expected prim {:#x} count {}, observed present={} opcode={:#x}"
                     " prim={:#x} source={} count={}; expected vertex={:#x}+{}"
                     " index={:#x}+{}, observed resources present={} vertex={:#x}+{}"
-                    " index={:#x}+{}",
+                    " index={:#x}+{}; bound index view present={} base={:#x}+{} stride={}"
+                    " endian={}, observed DMA present={} index={:#x}+{} stride={} endian={}",
                     event.sequence, DrawKindName(observed->draw.kind), observed->draw.primitiveType,
                     observed->draw.elementCount, observed->packet.present, observed->packet.opcode,
                     observed->packet.primitiveType, observed->packet.sourceSelect,
@@ -344,7 +377,14 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
                     observed->draw.vertexData.sizeBytes, observed->draw.indexData.guestAddress,
                     observed->draw.indexData.sizeBytes, observed->packet.transientDataPresent,
                     observed->packet.vertexData.guestAddress, observed->packet.vertexData.sizeBytes,
-                    observed->packet.indexData.guestAddress, observed->packet.indexData.sizeBytes);
+                    observed->packet.indexData.guestAddress, observed->packet.indexData.sizeBytes,
+                    observed->draw.indexBufferViewPresent,
+                    observed->draw.indexBuffer.allocation.guestAddress,
+                    observed->draw.indexBuffer.allocation.sizeBytes,
+                    observed->draw.indexBuffer.elementStrideBytes,
+                    observed->draw.indexBuffer.endianSwap, observed->packet.indexDataPresent,
+                    observed->packet.indexData.guestAddress, observed->packet.indexData.sizeBytes,
+                    observed->packet.indexStrideBytes, observed->packet.indexEndianSwap);
             }
             continue;
         }
@@ -353,15 +393,26 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
         {
             if (observed->evidence != RhiBindingEvidenceResult::Match)
             {
-                lucent::error("rhi",
-                              "semantic binding {} ({} slot {}) did not match guest device state:"
-                              " expected object {:#x} descriptor {}:{:#x}, observed present={}"
-                              " object={:#x} descriptor {}:{:#x}",
-                              event.sequence, BindingKindName(observed->binding.kind),
-                              observed->binding.slot, observed->binding.object,
-                              observed->binding.descriptorDwords, observed->binding.descriptor[0],
-                              observed->state.present, observed->state.observedObject,
-                              observed->state.descriptorDwords, observed->state.descriptor[0]);
+                lucent::error(
+                    "rhi",
+                    "semantic binding {} ({} slot {}) did not match guest device state:"
+                    " expected object {:#x} descriptor {}:{:#x}, observed present={}"
+                    " object={:#x} descriptor {}:{:#x}; expected buffer view={}"
+                    " {:#x}+{} stride={} endian={}, observed buffer view={}"
+                    " {:#x}+{} stride={} endian={}",
+                    event.sequence, BindingKindName(observed->binding.kind), observed->binding.slot,
+                    observed->binding.object, observed->binding.descriptorDwords,
+                    observed->binding.descriptor[0], observed->state.present,
+                    observed->state.observedObject, observed->state.descriptorDwords,
+                    observed->state.descriptor[0], observed->binding.bufferViewPresent,
+                    observed->binding.bufferView.allocation.guestAddress,
+                    observed->binding.bufferView.allocation.sizeBytes,
+                    observed->binding.bufferView.elementStrideBytes,
+                    observed->binding.bufferView.endianSwap, observed->state.bufferViewPresent,
+                    observed->state.bufferView.allocation.guestAddress,
+                    observed->state.bufferView.allocation.sizeBytes,
+                    observed->state.bufferView.elementStrideBytes,
+                    observed->state.bufferView.endianSwap);
             }
             continue;
         }

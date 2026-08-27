@@ -34,8 +34,20 @@ failed because the retained body conditionally normalizes four formats. The
 corrected arm compares the post-call normalized object word with the separate
 device descriptor shadow.
 
+The bound-index arm is validated against both outcomes. Focused controls alter
+the DMA address, element width, and evidence presence and are rejected. A live
+headless run through frame 780 matched 3,717 bound-index draws against the
+packet's independently decoded address, byte length, 16/32-bit width, and
+endian mode. It also matched 3,926 index-buffer bindings, including the full
+object-derived allocation view, with zero missing or mismatched observations
+among 24,233 draws and 80,023 bindings.
+
 ## Known failure modes
 
 Vertex-stream descriptors are setter outputs, not always verbatim input object
 fields. Capture the normalized post-call word; using `object+0x1C` before the
 call produces false mismatches for four device-mode-dependent formats.
+
+The DMA size field counts 16-bit units for both index widths. Treating it as a
+dword count doubles every 16-bit consumed range and cannot match the semantic
+slice.
