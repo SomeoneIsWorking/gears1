@@ -595,10 +595,17 @@ add_test(NAME frame_contract COMMAND test_frame_contract)
 
 add_executable(test_rhi_semantic_stream
     test_rhi_semantic_stream.cpp
+    ../runtime/rhi_semantic_state.cpp
     ../runtime/rhi_semantic_stream.cpp)
 target_include_directories(test_rhi_semantic_stream PRIVATE ../runtime)
 target_link_libraries(test_rhi_semantic_stream PRIVATE lucent::lucent)
 add_test(NAME rhi_semantic_stream COMMAND test_rhi_semantic_stream)
+
+add_executable(test_rhi_semantic_state
+    test_rhi_semantic_state.cpp
+    ../runtime/rhi_semantic_state.cpp)
+target_include_directories(test_rhi_semantic_state PRIVATE ../runtime)
+add_test(NAME rhi_semantic_state COMMAND test_rhi_semantic_state)
 
 add_executable(test_rhi_index_buffer
     test_rhi_index_buffer.cpp
@@ -615,6 +622,7 @@ add_test(NAME rhi_vertex_buffer COMMAND test_rhi_vertex_buffer)
 add_executable(test_gpu_swap_packet
     test_gpu_swap_packet.cpp
     ../runtime/gpu_swap_packet.cpp
+    ../runtime/rhi_semantic_state.cpp
     ../runtime/rhi_semantic_stream.cpp)
 target_include_directories(test_gpu_swap_packet PRIVATE ../runtime)
 target_link_libraries(test_gpu_swap_packet PRIVATE lucent::lucent)

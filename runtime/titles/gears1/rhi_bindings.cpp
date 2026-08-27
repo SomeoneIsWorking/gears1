@@ -6,9 +6,13 @@
 #include "rhi_vertex_buffer.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace
 {
+
+[[nodiscard]] std::vector<gears::RhiSemanticVertexStream>
+CaptureBoundVertexStreams(std::uint32_t device);
 
 [[nodiscard]] std::uint32_t ReadGuestBe32(std::uint32_t address)
 {
@@ -96,6 +100,12 @@ namespace
                 };
             }
         }
+        if (kind == gears::RhiSemanticDrawKind::BoundVertices ||
+            kind == gears::RhiSemanticDrawKind::BoundIndices)
+        {
+            evidence.vertexStreamsPresent = device != 0;
+            evidence.vertexStreams = CaptureBoundVertexStreams(device);
+        }
         return evidence;
     }
     return {};
@@ -153,11 +163,10 @@ namespace
 [[nodiscard]] gears::RhiBindingStateEvidence CaptureVertexStreamBinding(std::uint32_t device,
                                                                         std::uint32_t slot)
 {
-    constexpr std::uint32_t kMaximumVertexStream = 17;
     constexpr std::uint32_t kVertexStreamObjectTableOffset = 0x2F9C;
     constexpr std::uint32_t kVertexFetchDescriptorOffset = 0x6F8;
     constexpr std::uint32_t kVertexStreamStrideOffset = 0x2FE0;
-    if (device == 0 || slot > kMaximumVertexStream)
+    if (device == 0 || slot >= gears::gears1::kVertexStreamSlotCount)
         return {};
 
     gears::RhiBindingStateEvidence state{
@@ -175,6 +184,19 @@ namespace
             ReadGuestU8(device + kVertexStreamStrideOffset + slot));
     }
     return state;
+}
+
+std::vector<gears::RhiSemanticVertexStream> CaptureBoundVertexStreams(std::uint32_t device)
+{
+    std::vector<gears::RhiSemanticVertexStream> streams;
+    for (std::uint32_t slot = 0; slot < gears::gears1::kVertexStreamSlotCount; ++slot)
+    {
+        const gears::RhiBindingStateEvidence state = CaptureVertexStreamBinding(device, slot);
+        if (state.observedObject == 0 || !state.bufferViewPresent)
+            continue;
+        streams.push_back({.slot = slot, .object = state.observedObject, .view = state.bufferView});
+    }
+    return streams;
 }
 
 [[nodiscard]] gears::RhiBindingStateEvidence CaptureColorRenderTargetBinding(std::uint32_t device,

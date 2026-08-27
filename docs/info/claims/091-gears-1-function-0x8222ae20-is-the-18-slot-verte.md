@@ -1,10 +1,11 @@
 ---
 id: C091
 kind: claim
-status: holds
+status: falsified
 created: 2026-08-28
 tags: native-rhi,vertex-buffer,gears1
 depends: runtime/titles/gears1/rhi_bindings.cpp#sub_8222AE20, runtime/titles/gears1/rhi_vertex_buffer.cpp#DecodeVertexBufferView, runtime/rhi_semantic_stream.cpp#CompareRhiBindingState
+falsified_on: 2026-08-28
 ---
 
 ## Claim
@@ -18,3 +19,9 @@ The retained body consumes r3..r8 as device, slot, buffer, offset, stride, and d
 ## What would falsify it
 
 Falsified if retained-body or caller evidence no longer has this argument/state contract, a bound draw consumes a different stream table, or the independent device-shadow comparator reports a mismatch.
+
+## FALSIFIED 2026-08-28
+
+The retained reset loop calls 0x8222AE20 for slots 0 through 15 and exits at 16. Decoding an eighteenth slot overlaps the stride-byte table at device+0x2FE0 and produced phantom 0x09000000/0x0A000000 objects in the live bound-draw comparator.
+
+> Anything that cited this claim as proof must be re-checked. Grep the repo for it.

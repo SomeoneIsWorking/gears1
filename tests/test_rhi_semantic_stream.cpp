@@ -10,6 +10,7 @@ int main()
 {
     using gears::CompareRhiBindingState;
     using gears::CompareRhiDrawPacket;
+    using gears::CompareRhiDrawVertexState;
     using gears::RhiBindingEvidenceResult;
     using gears::RhiBindingStateEvidence;
     using gears::RhiDrawEvidenceResult;
@@ -33,6 +34,7 @@ int main()
         .primitiveType = 4,
         .sourceSelect = 2,
         .elementCount = 300,
+        .vertexStreamsPresent = true,
     };
     assert(CompareRhiDrawPacket(autoIndexed, matchingAuto) == RhiDrawEvidenceResult::Match);
 
@@ -67,6 +69,7 @@ int main()
         .indexDataPresent = true,
         .indexStrideBytes = 2,
         .indexEndianSwap = 1,
+        .vertexStreamsPresent = true,
     };
     assert(CompareRhiDrawPacket(indexed, matchingIndexed) == RhiDrawEvidenceResult::Match);
     altered = matchingIndexed;
@@ -182,6 +185,23 @@ int main()
     assert(CompareRhiBindingState(vertexStreamBinding, alteredVertexStream) ==
            RhiBindingEvidenceResult::Mismatch);
 
+    const gears::RhiSemanticDrawState boundDrawState{
+        .draw = indexed,
+        .vertexStreams = {{.slot = 3,
+                           .object = vertexStreamBinding.object,
+                           .view = vertexStreamBinding.bufferView}},
+    };
+    RhiDrawPacketEvidence matchingVertexState = matchingIndexed;
+    matchingVertexState.vertexStreams = boundDrawState.vertexStreams;
+    assert(CompareRhiDrawVertexState(boundDrawState, matchingVertexState) ==
+           RhiDrawEvidenceResult::Match);
+    matchingVertexState.vertexStreams[0].view.elementStrideBytes = 16;
+    assert(CompareRhiDrawVertexState(boundDrawState, matchingVertexState) ==
+           RhiDrawEvidenceResult::Mismatch);
+    matchingVertexState.vertexStreamsPresent = false;
+    assert(CompareRhiDrawVertexState(boundDrawState, matchingVertexState) ==
+           RhiDrawEvidenceResult::Missing);
+
     const RhiSemanticBinding depthTargetBinding{
         .kind = RhiSemanticBindingKind::DepthStencilTarget,
         .object = 0x40104800,
@@ -274,9 +294,10 @@ int main()
     assert(std::holds_alternative<gears::RhiObservedBinding>(frame.events[1].payload));
     assert(std::holds_alternative<gears::RhiObservedDraw>(frame.events[2].payload));
     assert(std::holds_alternative<gears::RhiObservedPresent>(frame.events[3].payload));
-    assert(std::get<gears::RhiObservedDraw>(frame.events[0].payload).draw.elementCount == 300);
+    assert(std::get<gears::RhiObservedDraw>(frame.events[0].payload).state.draw.elementCount ==
+           300);
     assert(std::get<gears::RhiObservedBinding>(frame.events[1].payload).binding.slot == 3);
-    assert(std::get<gears::RhiObservedDraw>(frame.events[2].payload).draw.elementCount == 42);
+    assert(std::get<gears::RhiObservedDraw>(frame.events[2].payload).state.draw.elementCount == 42);
     assert(std::get<gears::RhiObservedPresent>(frame.events[3].payload).present.frontBuffer ==
            0xA0311000);
     assert(frame.matched == 1);
