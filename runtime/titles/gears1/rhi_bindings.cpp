@@ -144,21 +144,37 @@ namespace
     return state;
 }
 
-[[nodiscard]] gears::RhiBindingStateEvidence CaptureVertexStreamBinding(std::uint32_t device,
-                                                                        std::uint32_t slot)
+[[nodiscard]] gears::RhiBindingStateEvidence CaptureColorRenderTargetBinding(std::uint32_t device,
+                                                                             std::uint32_t slot)
 {
-    constexpr std::uint32_t kVertexStreamObjectTableOffset = 0x2F88;
-    constexpr std::uint32_t kVertexStreamDescriptorOffset = 0x2804;
+    constexpr std::uint32_t kRenderTargetObjectTableOffset = 0x2F88;
+    constexpr std::uint32_t kRenderTargetDescriptorOffset = 0x2804;
     if (device == 0)
         return {};
     const std::uint32_t descriptorIndex = slot == 0 ? 0 : slot + 1;
     return {
         .present = true,
         .observedObject =
-            ReadGuestBe32(device + kVertexStreamObjectTableOffset + slot * sizeof(std::uint32_t)),
-        .descriptor = {ReadGuestBe32(device + kVertexStreamDescriptorOffset +
+            ReadGuestBe32(device + kRenderTargetObjectTableOffset + slot * sizeof(std::uint32_t)),
+        .descriptor = {ReadGuestBe32(device + kRenderTargetDescriptorOffset +
                                      descriptorIndex * sizeof(std::uint32_t))},
         .descriptorDwords = 1,
+    };
+}
+
+[[nodiscard]] gears::RhiBindingStateEvidence CaptureDepthStencilTargetBinding(std::uint32_t device)
+{
+    constexpr std::uint32_t kDepthStencilObjectOffset = 0x2F98;
+    constexpr std::uint32_t kDepthDescriptorWord0Offset = 0x2808;
+    constexpr std::uint32_t kDepthDescriptorWord1Offset = 0x28C0;
+    if (device == 0)
+        return {};
+    return {
+        .present = true,
+        .observedObject = ReadGuestBe32(device + kDepthStencilObjectOffset),
+        .descriptor = {ReadGuestBe32(device + kDepthDescriptorWord0Offset),
+                       ReadGuestBe32(device + kDepthDescriptorWord1Offset)},
+        .descriptorDwords = 2,
     };
 }
 
@@ -221,18 +237,43 @@ PPC_FUNC(sub_8222B068)
     const std::uint32_t device = ctx.r3.u32;
     const std::uint32_t slot = ctx.r4.u32;
     gears::RhiSemanticBinding binding{
-        .kind = gears::RhiSemanticBindingKind::VertexStream,
+        .kind = gears::RhiSemanticBindingKind::ColorRenderTarget,
         .slot = slot,
         .object = ctx.r5.u32,
     };
     __imp__sub_8222B068(ctx, base);
     if (binding.object != 0)
     {
-        constexpr std::uint32_t kVertexBufferFetchWordOffset = 0x1C;
-        binding.descriptor = {ReadGuestBe32(binding.object + kVertexBufferFetchWordOffset)};
+        constexpr std::uint32_t kColorDescriptorWordOffset = 0x1C;
+        binding.descriptor = {ReadGuestBe32(binding.object + kColorDescriptorWordOffset)};
         binding.descriptorDwords = 1;
     }
-    gears::ObserveRhiSemanticBinding(binding, CaptureVertexStreamBinding(device, slot));
+    gears::ObserveRhiSemanticBinding(binding, CaptureColorRenderTargetBinding(device, slot));
+}
+
+extern "C" PPC_FUNC(__imp__sub_8222B398);
+PPC_FUNC(sub_8222B398)
+{
+    if (!gears::RhiSemanticObservationEnabled())
+    {
+        __imp__sub_8222B398(ctx, base);
+        return;
+    }
+    const std::uint32_t device = ctx.r3.u32;
+    gears::RhiSemanticBinding binding{
+        .kind = gears::RhiSemanticBindingKind::DepthStencilTarget,
+        .object = ctx.r4.u32,
+    };
+    __imp__sub_8222B398(ctx, base);
+    if (binding.object != 0)
+    {
+        constexpr std::uint32_t kDepthDescriptorWord0Offset = 0x1C;
+        constexpr std::uint32_t kDepthDescriptorWord1Offset = 0x20;
+        binding.descriptor = {ReadGuestBe32(binding.object + kDepthDescriptorWord0Offset),
+                              ReadGuestBe32(binding.object + kDepthDescriptorWord1Offset)};
+        binding.descriptorDwords = 2;
+    }
+    gears::ObserveRhiSemanticBinding(binding, CaptureDepthStencilTargetBinding(device));
 }
 
 extern "C" PPC_FUNC(__imp__sub_8222CFF8);

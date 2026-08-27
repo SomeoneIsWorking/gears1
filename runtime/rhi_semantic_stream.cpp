@@ -32,7 +32,7 @@ struct RhiSemanticReportTotals
     std::uint64_t bindingsMatched = 0;
     std::uint64_t bindingsMissing = 0;
     std::uint64_t bindingsMismatched = 0;
-    std::array<std::uint64_t, 5> bindingKinds{};
+    std::array<std::uint64_t, 6> bindingKinds{};
     std::uint64_t presents = 0;
     std::uint64_t presentsMatched = 0;
     std::uint64_t presentsMissing = 0;
@@ -95,8 +95,10 @@ RhiSemanticReportTotals g_reportTotals;
         return "vertex-shader";
     case RhiSemanticBindingKind::IndexBuffer:
         return "index-buffer";
-    case RhiSemanticBindingKind::VertexStream:
-        return "vertex-stream";
+    case RhiSemanticBindingKind::ColorRenderTarget:
+        return "color-render-target";
+    case RhiSemanticBindingKind::DepthStencilTarget:
+        return "depth-stencil-target";
     }
     return "unknown";
 }

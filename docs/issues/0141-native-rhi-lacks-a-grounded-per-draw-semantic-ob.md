@@ -65,17 +65,19 @@ and 102,353 transient-indexed allocation pairs, with zero missing observations
 or mismatches. Focused negative controls reject missing resource evidence,
 wrong addresses, and wrong sizes.
 
-The retained bodies also grounded `0x8222AFD8` as the index-buffer binder and
-`0x8222B068` as the vertex-stream binder. Both are now ordered binding events.
-Index-buffer objects are checked against device `+0x2F84`; vertex-stream
-objects are checked against the table at `+0x2F88`, and their normalized fetch
-words against the descriptor shadow beginning at `+0x2804`. The first live
-attempt falsified the assumption that `object+0x1C` was copied verbatim: the
-body conditionally rewrites four formats according to device mode. Capturing
-the body result after the call and comparing it with the independent shadow
-matches the actual setter contract. A fast headless run through frame 780
-matched 3,924 index-buffer and 6,481 vertex-stream updates, with zero missing or
-mismatched observations across 79,955 total bindings.
+The retained bodies grounded `0x8222AFD8` as the index-buffer binder. The
+initial identification of `0x8222B068` as a vertex-stream binder was wrong and
+is now removed: its retained body writes one of four colour-target object slots
+at device `+0x2F88` and an interleaved descriptor beginning at `+0x2804`.
+`0x8222B398` writes the adjacent depth-target object slot at `+0x2F98` and its
+two descriptor words. A live slot-zero object carried EDRAM base `0x2d0`, which
+independently confirms render-target ownership. The first live colour arm also
+falsified the assumption that `object+0x1C` was copied verbatim: the body
+conditionally rewrites four formats according to device mode. Capturing the
+body result after the call and comparing it with the independent shadow matches
+the actual setter contract. A fast headless run through frame 780 matched 3,924
+index-buffer, 6,481 colour-target, and 3,555 depth-target updates, with zero
+missing or mismatched observations across 83,573 total bindings.
 
 The bound index-buffer object is no longer opaque. Selective body inspection
 identified common flags at `+0x00`, the GPU address at `+0x18`, and allocation
@@ -93,8 +95,9 @@ DMA evidence.
 
 ## Next falsifier
 
-Exercise the bound-vertex draw path dynamically and recover complete vertex
-buffer view data, then add resource creation/lifetime, resolve, and retirement events and
+Locate and ground the actual vertex-stream setter, exercise the bound-vertex
+draw path dynamically, and recover complete vertex-buffer view data. Then add
+resource creation/lifetime, resolve, and retirement events and
 compare the complete ordered stream with the PM4-derived `FrameDrawInputs` and
 output. Keep the recompiled compatibility bodies available and super-called
 until a deliberately wrong semantic control is rejected and a same-run
