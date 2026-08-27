@@ -160,13 +160,25 @@ diagnostic-only because the warm same-run timing gate measured it slower than
 the retained implementation (1273 vs 1232 ns median over 176/176 calls), and
 the title calls these setters only about twice per frame.
 
+The logical resolve owner at `0x82235528` is now part of the same stream. Its
+title adapter decodes the selected colour/depth source, destination texture
+descriptor, source rectangle, destination point, physical address, pitch, and
+remaining height before the call. The wrapper then super-calls the retained
+body and examines only its newly emitted command span. The comparison requires
+the independently observed source and destination shadows plus a
+three-element, auto-index rectangle-list copy. The first live arm rejected
+expanded destination formats because the shared byte-size table omitted
+formats 27/28/29; adding their 2/4/8-byte sizes fixed the root cause. A headless
+run through frame 540 matched 540/540 logical resolves with no missing packets
+or mismatches. Focused controls reject a packet outside the owned command span.
+
 The semantic count is intentionally lower than the renderer's PM4 draw count:
 the compatibility command processor replays predicated packets per Xenos EDRAM
 tile, while the title issues each logical draw once. Treating tile replay as
 additional RHI calls was the rate-comparison error that obscured these entry
-points. This is observation evidence only; resource creation/lifetime, complete
-buffer view data, resolves, and retirement still need semantic parity before
-any bypass.
+points. This is observation evidence only; resource creation/lifetime and
+retirement, complete renderer-input comparison, and pixel parity still need to
+agree before any bypass.
 
 `VdSwap` now appends the terminal semantic present to that same frame stream
 after encoding the compatibility transport's private swap packet. The extracted
@@ -174,7 +186,7 @@ after encoding the compatibility transport's private swap packet. The extracted
 frame identity, front-buffer address, and six-word fetch description. A headless
 run through frame 240 matched 240/240 presents alongside every observed draw and
 binding, with no missing or mismatched packet. This grounds presentation input;
-it does not yet replace the guest resolve or compatibility command stream.
+it does not yet replace the compatibility command stream.
 
 ## 2. Entry points of one presented frame
 

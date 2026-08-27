@@ -12,6 +12,7 @@ from pathlib import Path
 FORMATTED = [
     "runtime/generated_title_profile.cpp",
     "runtime/generated_title_profile.h",
+    "runtime/guest_address.h",
     "runtime/guest_filesystem.cpp",
     "runtime/guest_filesystem.h",
     "runtime/guest_dirty_pages.cpp",
@@ -20,6 +21,7 @@ FORMATTED = [
     "runtime/guest_texture_hash.h",
     "runtime/guest_write_watch.cpp",
     "runtime/guest_write_watch.h",
+    "runtime/guest_memory.h",
     "runtime/main.cpp",
     "runtime/debug_http.cpp",
     "runtime/debug_http.h",
@@ -30,6 +32,7 @@ FORMATTED = [
     "runtime/frame_queue.h",
     "runtime/gpu_device_features.h",
     "runtime/gpu_draw.cpp",
+    "runtime/gpu_draw_formats.cpp",
     "runtime/gpu_draw_ab.cpp",
     "runtime/gpu_draw_ab.h",
     "runtime/gpu_draw.h",
@@ -110,6 +113,7 @@ FORMATTED = [
     "runtime/rhi_semantic_state.h",
     "runtime/rhi_semantic_stream.cpp",
     "runtime/rhi_semantic_stream.h",
+    "runtime/rhi_packet_evidence.h",
     "runtime/scanout_gamma.cpp",
     "runtime/scanout_gamma.h",
     "runtime/title_executable.cpp",
@@ -122,6 +126,9 @@ FORMATTED = [
     "runtime/titles/gears1/rhi_bindings.cpp",
     "runtime/titles/gears1/rhi_index_buffer.cpp",
     "runtime/titles/gears1/rhi_index_buffer.h",
+    "runtime/titles/gears1/rhi_resolve.cpp",
+    "runtime/titles/gears1/rhi_resolve.h",
+    "runtime/titles/gears1/rhi_resolve_binding.cpp",
     "runtime/titles/gears1/rhi_target_descriptor_watch.cpp",
     "runtime/titles/gears1/rhi_target_descriptor_watch.h",
     "runtime/titles/gears1/rhi_vertex_buffer.cpp",
@@ -154,6 +161,7 @@ FORMATTED = [
     "tests/test_remote_input.cpp",
     "tests/test_rhi_index_buffer.cpp",
     "tests/test_rhi_semantic_state.cpp",
+    "tests/test_rhi_resolve.cpp",
     "tests/test_rhi_vertex_buffer.cpp",
     "tests/test_rhi_semantic_stream.cpp",
     "tests/test_render_retirement.cpp",
@@ -179,6 +187,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/frame_contract.cpp",
     "runtime/frame_queue.cpp",
     "runtime/gpu_draw.cpp",
+    "runtime/gpu_draw_formats.cpp",
     "runtime/gpu_draw_ab.cpp",
     "runtime/gpu_draw_api.cpp",
     "runtime/gpu_draw_arena.cpp",
@@ -222,6 +231,8 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/title_profile.cpp",
     "runtime/titles/gears1/rhi_bindings.cpp",
     "runtime/titles/gears1/rhi_index_buffer.cpp",
+    "runtime/titles/gears1/rhi_resolve.cpp",
+    "runtime/titles/gears1/rhi_resolve_binding.cpp",
     "runtime/titles/gears1/rhi_target_descriptor_watch.cpp",
     "runtime/titles/gears1/rhi_vertex_buffer.cpp",
     "runtime/titles/gears1/shader_setter_override.cpp",
@@ -249,6 +260,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_remote_input.cpp",
     "tests/test_rhi_index_buffer.cpp",
     "tests/test_rhi_semantic_state.cpp",
+    "tests/test_rhi_resolve.cpp",
     "tests/test_rhi_vertex_buffer.cpp",
     "tests/test_rhi_semantic_stream.cpp",
     "tests/test_render_retirement.cpp",
@@ -315,6 +327,10 @@ def selftest():
     else:
         raise AssertionError("missing tools must be refused")
     assert "runtime/gpu_draw_reinterpret.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_draw_formats.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/rhi_resolve.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/rhi_resolve_binding.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_rhi_resolve.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_targets.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_api.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_arena.cpp" in TIDY_TRANSLATION_UNITS

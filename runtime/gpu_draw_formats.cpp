@@ -16,16 +16,23 @@ VkPrimitiveTopology TopologyOf(uint32_t primType)
 {
     switch (primType)
     {
-    case 1: return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-    case 2: return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-    case 3: return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
-    case 4: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    case 5: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
-    case 6: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    case 1:
+        return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
+    case 2:
+        return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
+    case 3:
+        return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
+    case 4:
+        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    case 5:
+        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+    case 6:
+        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     // A rectangle list has no Vulkan topology of its own: its three vertices go
     // in as a triangle list and the geometry shader emits the two-triangle strip
     // (see getRectGeomShader). Anything else unhandled also falls here.
-    default: return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    default:
+        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     }
 }
 
@@ -33,22 +40,38 @@ VkBlendFactor BlendFactorOf(uint32_t f)
 {
     switch (f)
     {
-    case 0: return VK_BLEND_FACTOR_ZERO;
-    case 1: return VK_BLEND_FACTOR_ONE;
-    case 4: return VK_BLEND_FACTOR_SRC_COLOR;
-    case 5: return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
-    case 6: return VK_BLEND_FACTOR_SRC_ALPHA;
-    case 7: return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
-    case 8: return VK_BLEND_FACTOR_DST_COLOR;
-    case 9: return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
-    case 10: return VK_BLEND_FACTOR_DST_ALPHA;
-    case 11: return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
-    case 12: return VK_BLEND_FACTOR_CONSTANT_COLOR;
-    case 13: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
-    case 14: return VK_BLEND_FACTOR_CONSTANT_ALPHA;
-    case 15: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
-    case 16: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
-    default: return VK_BLEND_FACTOR_ONE;
+    case 0:
+        return VK_BLEND_FACTOR_ZERO;
+    case 1:
+        return VK_BLEND_FACTOR_ONE;
+    case 4:
+        return VK_BLEND_FACTOR_SRC_COLOR;
+    case 5:
+        return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+    case 6:
+        return VK_BLEND_FACTOR_SRC_ALPHA;
+    case 7:
+        return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    case 8:
+        return VK_BLEND_FACTOR_DST_COLOR;
+    case 9:
+        return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+    case 10:
+        return VK_BLEND_FACTOR_DST_ALPHA;
+    case 11:
+        return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+    case 12:
+        return VK_BLEND_FACTOR_CONSTANT_COLOR;
+    case 13:
+        return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
+    case 14:
+        return VK_BLEND_FACTOR_CONSTANT_ALPHA;
+    case 15:
+        return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+    case 16:
+        return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+    default:
+        return VK_BLEND_FACTOR_ONE;
     }
 }
 
@@ -56,12 +79,18 @@ VkBlendOp BlendOpOf(uint32_t op)
 {
     switch (op)
     {
-    case 0: return VK_BLEND_OP_ADD;
-    case 1: return VK_BLEND_OP_SUBTRACT;
-    case 2: return VK_BLEND_OP_MIN;
-    case 3: return VK_BLEND_OP_MAX;
-    case 4: return VK_BLEND_OP_REVERSE_SUBTRACT;
-    default: return VK_BLEND_OP_ADD;
+    case 0:
+        return VK_BLEND_OP_ADD;
+    case 1:
+        return VK_BLEND_OP_SUBTRACT;
+    case 2:
+        return VK_BLEND_OP_MIN;
+    case 3:
+        return VK_BLEND_OP_MAX;
+    case 4:
+        return VK_BLEND_OP_REVERSE_SUBTRACT;
+    default:
+        return VK_BLEND_OP_ADD;
     }
 }
 
@@ -69,14 +98,22 @@ VkCompareOp CompareOpOf(uint32_t f)
 {
     switch (f & 7)
     {
-    case 0: return VK_COMPARE_OP_NEVER;
-    case 1: return VK_COMPARE_OP_LESS;
-    case 2: return VK_COMPARE_OP_EQUAL;
-    case 3: return VK_COMPARE_OP_LESS_OR_EQUAL;
-    case 4: return VK_COMPARE_OP_GREATER;
-    case 5: return VK_COMPARE_OP_NOT_EQUAL;
-    case 6: return VK_COMPARE_OP_GREATER_OR_EQUAL;
-    default: return VK_COMPARE_OP_ALWAYS;
+    case 0:
+        return VK_COMPARE_OP_NEVER;
+    case 1:
+        return VK_COMPARE_OP_LESS;
+    case 2:
+        return VK_COMPARE_OP_EQUAL;
+    case 3:
+        return VK_COMPARE_OP_LESS_OR_EQUAL;
+    case 4:
+        return VK_COMPARE_OP_GREATER;
+    case 5:
+        return VK_COMPARE_OP_NOT_EQUAL;
+    case 6:
+        return VK_COMPARE_OP_GREATER_OR_EQUAL;
+    default:
+        return VK_COMPARE_OP_ALWAYS;
     }
 }
 
@@ -109,8 +146,8 @@ VkFormat HostColorFormat(uint32_t colorFormat)
 {
     switch (colorFormat)
     {
-    case 0:  // k_8_8_8_8
-    case 1:  // k_8_8_8_8_GAMMA -- gamma is applied on the way out, not stored
+    case 0: // k_8_8_8_8
+    case 1: // k_8_8_8_8_GAMMA -- gamma is applied on the way out, not stored
         return VK_FORMAT_R8G8B8A8_UNORM;
     case 2:  // k_2_10_10_10
     case 10: // k_2_10_10_10_AS_10_10_10_10
@@ -118,13 +155,13 @@ VkFormat HostColorFormat(uint32_t colorFormat)
     case 3:  // k_2_10_10_10_FLOAT (7e3, [0,32) RGB + unorm alpha)
     case 12: // k_2_10_10_10_FLOAT_AS_16_16_16_16
         return VK_FORMAT_R16G16B16A16_SFLOAT;
-    case 4:  // k_16_16 (fixed point -32..32)
+    case 4: // k_16_16 (fixed point -32..32)
         return VK_FORMAT_R16G16_SNORM;
-    case 5:  // k_16_16_16_16 (fixed point -32..32)
+    case 5: // k_16_16_16_16 (fixed point -32..32)
         return VK_FORMAT_R16G16B16A16_SNORM;
-    case 6:  // k_16_16_FLOAT
+    case 6: // k_16_16_FLOAT
         return VK_FORMAT_R16G16_SFLOAT;
-    case 7:  // k_16_16_16_16_FLOAT
+    case 7: // k_16_16_16_16_FLOAT
         return VK_FORMAT_R16G16B16A16_SFLOAT;
     case 14: // k_32_FLOAT
         return VK_FORMAT_R32_SFLOAT;
@@ -145,29 +182,45 @@ uint32_t StorageColorFormat(uint32_t colorFormat)
 {
     switch (colorFormat)
     {
-    case 10: return 2;  // k_2_10_10_10_AS_10_10_10_10   -> k_2_10_10_10
-    case 12: return 3;  // k_2_10_10_10_FLOAT_AS_16_16_16_16 -> k_2_10_10_10_FLOAT
-    default: return colorFormat;
+    case 10:
+        return 2; // k_2_10_10_10_AS_10_10_10_10   -> k_2_10_10_10
+    case 12:
+        return 3; // k_2_10_10_10_FLOAT_AS_16_16_16_16 -> k_2_10_10_10_FLOAT
+    default:
+        return colorFormat;
     }
 }
 
-const char* ColorFormatName(uint32_t f)
+const char *ColorFormatName(uint32_t f)
 {
     switch (f)
     {
-    case 0: return "k_8_8_8_8";
-    case 1: return "k_8_8_8_8_GAMMA";
-    case 2: return "k_2_10_10_10";
-    case 3: return "k_2_10_10_10_FLOAT";
-    case 4: return "k_16_16";
-    case 5: return "k_16_16_16_16";
-    case 6: return "k_16_16_FLOAT";
-    case 7: return "k_16_16_16_16_FLOAT";
-    case 10: return "k_2_10_10_10_AS_10_10_10_10";
-    case 12: return "k_2_10_10_10_FLOAT_AS_16_16_16_16";
-    case 14: return "k_32_FLOAT";
-    case 15: return "k_32_32_FLOAT";
-    default: return "?";
+    case 0:
+        return "k_8_8_8_8";
+    case 1:
+        return "k_8_8_8_8_GAMMA";
+    case 2:
+        return "k_2_10_10_10";
+    case 3:
+        return "k_2_10_10_10_FLOAT";
+    case 4:
+        return "k_16_16";
+    case 5:
+        return "k_16_16_16_16";
+    case 6:
+        return "k_16_16_FLOAT";
+    case 7:
+        return "k_16_16_16_16_FLOAT";
+    case 10:
+        return "k_2_10_10_10_AS_10_10_10_10";
+    case 12:
+        return "k_2_10_10_10_FLOAT_AS_16_16_16_16";
+    case 14:
+        return "k_32_FLOAT";
+    case 15:
+        return "k_32_32_FLOAT";
+    default:
+        return "?";
     }
 }
 
@@ -180,16 +233,44 @@ uint32_t ColorFormatBytesPerPixel(uint32_t colorFormat)
 {
     switch (colorFormat)
     {
-    case 2: case 8: case 9:                       return 1; // k_8, k_8_A, k_8_B
-    case 3: case 4: case 5: case 10: case 15:
-    case 24: case 30:                             return 2; // 16-bit
-    case 6: case 7: case 14: case 16: case 17:
-    case 22: case 23: // k_24_8, k_24_8_FLOAT -- a DEPTH resolve destination
-    case 25: case 31: case 36:                    return 4; // 32-bit
-    case 26: case 32: case 37: case 50: case 54:
-    case 55: case 56:                             return 8; // 64-bit
-    case 38:                                      return 16;
-    default:                                      return 0;
+    case 2:
+    case 8:
+    case 9:
+        return 1; // k_8, k_8_A, k_8_B
+    case 3:
+    case 4:
+    case 5:
+    case 10:
+    case 15:
+    case 24:
+    case 27:
+    case 30:
+        return 2; // 16-bit
+    case 6:
+    case 7:
+    case 14:
+    case 16:
+    case 17:
+    case 22:
+    case 23: // k_24_8, k_24_8_FLOAT -- a DEPTH resolve destination
+    case 25:
+    case 28:
+    case 31:
+    case 36:
+        return 4; // 32-bit
+    case 26:
+    case 29:
+    case 32:
+    case 37:
+    case 50:
+    case 54:
+    case 55:
+    case 56:
+        return 8; // 64-bit
+    case 38:
+        return 16;
+    default:
+        return 0;
     }
 }
 
@@ -200,14 +281,22 @@ VkStencilOp StencilOpOf(uint32_t op)
 {
     switch (op & 7)
     {
-    case 0:  return VK_STENCIL_OP_KEEP;
-    case 1:  return VK_STENCIL_OP_ZERO;
-    case 2:  return VK_STENCIL_OP_REPLACE;
-    case 3:  return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
-    case 4:  return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
-    case 5:  return VK_STENCIL_OP_INVERT;
-    case 6:  return VK_STENCIL_OP_INCREMENT_AND_WRAP;
-    default: return VK_STENCIL_OP_DECREMENT_AND_WRAP;
+    case 0:
+        return VK_STENCIL_OP_KEEP;
+    case 1:
+        return VK_STENCIL_OP_ZERO;
+    case 2:
+        return VK_STENCIL_OP_REPLACE;
+    case 3:
+        return VK_STENCIL_OP_INCREMENT_AND_CLAMP;
+    case 4:
+        return VK_STENCIL_OP_DECREMENT_AND_CLAMP;
+    case 5:
+        return VK_STENCIL_OP_INVERT;
+    case 6:
+        return VK_STENCIL_OP_INCREMENT_AND_WRAP;
+    default:
+        return VK_STENCIL_OP_DECREMENT_AND_WRAP;
     }
 }
 
@@ -242,7 +331,7 @@ int32_t FloatToFixed16p8(float f)
 // colour format the Xenos can render (a k_8_8_8_8 value lands in [0,1] exactly,
 // a 7e3 HDR value up to 32 and a k_16_16 fixed-point value up to 32 are all far
 // inside float16's range).
-VkFormat HostFormatFor(const std::set<uint32_t>& formats, bool& mixedOut)
+VkFormat HostFormatFor(const std::set<uint32_t> &formats, bool &mixedOut)
 {
     mixedOut = false;
     if (formats.empty())
@@ -273,28 +362,41 @@ bool BlendIsIdentity(uint32_t blend0)
     return cSrc == 1 && cDst == 0 && cOp == 0 && aSrc == 1 && aDst == 0 && aOp == 0;
 }
 
-const char* PrimName(uint32_t primType)
+const char *PrimName(uint32_t primType)
 {
     switch (primType)
     {
-    case 1: return "point_list";
-    case 2: return "line_list";
-    case 3: return "line_strip";
-    case 4: return "triangle_list";
-    case 5: return "triangle_fan";
-    case 6: return "triangle_strip";
-    case 7: return "triangle_w_wflags";
-    case 8: return "rectangle_list";
-    case 12: return "line_loop";
-    case 13: return "quad_list";
-    case 14: return "quad_strip";
-    case 15: return "polygon";
-    default: return "other";
+    case 1:
+        return "point_list";
+    case 2:
+        return "line_list";
+    case 3:
+        return "line_strip";
+    case 4:
+        return "triangle_list";
+    case 5:
+        return "triangle_fan";
+    case 6:
+        return "triangle_strip";
+    case 7:
+        return "triangle_w_wflags";
+    case 8:
+        return "rectangle_list";
+    case 12:
+        return "line_loop";
+    case 13:
+        return "quad_list";
+    case 14:
+        return "quad_strip";
+    case 15:
+        return "polygon";
+    default:
+        return "other";
     }
 }
 
-ResolveSampling DeriveResolveSampling(uint32_t rbSurfaceInfo,
-                                      uint32_t copySampleSelect, bool isDepth)
+ResolveSampling DeriveResolveSampling(uint32_t rbSurfaceInfo, uint32_t copySampleSelect,
+                                      bool isDepth)
 {
     const uint32_t msaa = (rbSurfaceInfo >> 16) & 3;
     ResolveSampling out;
@@ -304,28 +406,35 @@ ResolveSampling DeriveResolveSampling(uint32_t rbSurfaceInfo,
     // Xenia's SanitizeCopySampleSelect (draw_util.cc), which exists because the
     // register can name samples the surface does not have and averages the
     // hardware does not do.
-    uint32_t sel = copySampleSelect;   // 0..3 = k0..k3, 4 = k01, 5 = k23, 6 = k0123
+    uint32_t sel = copySampleSelect; // 0..3 = k0..k3, 4 = k01, 5 = k23, 6 = k0123
     if (msaa >= 2 /*k4X*/)
     {
-        if (sel > 6) sel = 6;
+        if (sel > 6)
+            sel = 6;
         if (isDepth)
         {
             // Depth cannot be averaged: an averaged selector collapses to the
             // first sample of its pair.
-            if (sel == 4 || sel == 6) sel = 0;
-            else if (sel == 5) sel = 2;
+            if (sel == 4 || sel == 6)
+                sel = 0;
+            else if (sel == 5)
+                sel = 2;
         }
     }
     else if (msaa >= 1 /*k2X*/)
     {
-        if (sel == 2) sel = 0;
-        else if (sel == 3) sel = 1;
-        else if (sel > 4) sel = 4;
-        if (isDepth && sel == 4) sel = 0;
+        if (sel == 2)
+            sel = 0;
+        else if (sel == 3)
+            sel = 1;
+        else if (sel > 4)
+            sel = 4;
+        if (isDepth && sel == 4)
+            sel = 0;
     }
     else
     {
-        sel = 0;   // 1X has one sample, whatever the register says
+        sel = 0; // 1X has one sample, whatever the register says
     }
 
     // XeResolveFirstSampleIndex (resolve.xesli): a pair starts at its lower
@@ -336,13 +445,23 @@ ResolveSampling DeriveResolveSampling(uint32_t rbSurfaceInfo,
 
     // The span averaged: a pair differs in Y only (0/1 and 2/3 are vertical
     // neighbours under the mapping above), all four differ in both.
-    if (sel == 4 /*k01*/ || sel == 5 /*k23*/) { out.spanX = 0; out.spanY = 1; }
-    else if (sel == 6 /*k0123*/)              { out.spanX = 1; out.spanY = 1; }
+    if (sel == 4 /*k01*/ || sel == 5 /*k23*/)
+    {
+        out.spanX = 0;
+        out.spanY = 1;
+    }
+    else if (sel == 6 /*k0123*/)
+    {
+        out.spanX = 1;
+        out.spanY = 1;
+    }
 
     // A span cannot reach outside the pixel: a 1X or 2X source has no second
     // sample in X, so an all-four selector on it averages what it has.
-    if (out.scaleX == 1) out.spanX = 0;
-    if (out.scaleY == 1) out.spanY = 0;
+    if (out.scaleX == 1)
+        out.spanX = 0;
+    if (out.scaleY == 1)
+        out.spanY = 0;
     return out;
 }
 

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "guest_address.h"
 #include "ppc_config.h"
 #include "ppc_context.h"
 
@@ -14,11 +15,11 @@ namespace gears
 // that PPC_LOOKUP_FUNC indexes lives inside it, immediately after the image.
 class GuestMemory
 {
-public:
+  public:
     bool Reserve();
     void Release();
 
-    uint8_t* Base() const { return base_; }
+    uint8_t *Base() const { return base_; }
 
     // The extent of the mapping, needed by the fault reporter to tell a guest
     // address apart from a host pointer at the moment of a crash.
@@ -41,7 +42,7 @@ public:
     bool MapPhysicalAliases();
 
     // Whether a HOST pointer lies inside this reservation.
-    bool Contains(const void* host) const;
+    bool Contains(const void *host) const;
 
     // The offsets from Base() at which the same physical bytes appear. A
     // write through any one of them lands in all of them, so an observer that
@@ -51,23 +52,22 @@ public:
     uint64_t AliasOffset(size_t i) const;
     // Mask extracting the physical offset from a guest address: guest code
     // converts between windows by clearing the top three bits.
-    static constexpr uint32_t kAliasMask = 0x1FFFFFFF;
+    static constexpr uint32_t kAliasMask = kGuestPhysicalAddressMask;
 
-    template<typename T>
-    T* Translate(uint32_t address) const
+    template <typename T> T *Translate(uint32_t address) const
     {
-        return reinterpret_cast<T*>(base_ + address);
+        return reinterpret_cast<T *>(base_ + address);
     }
 
-private:
-    uint8_t* base_{};
+  private:
+    uint8_t *base_{};
     size_t reservedSize_{};
     int physicalFd_{-1};
 };
 
 // Populates the function table PPC_LOOKUP_FUNC reads, from PPCFuncMappings.
 // Returns the number of entries installed.
-size_t InstallFunctionTable(GuestMemory& memory);
+size_t InstallFunctionTable(GuestMemory &memory);
 
 // Read-only walk of the GPU command stream, reporting packets that mention
 // `watchAddress`. Executes nothing; see pm4_trace.cpp.
@@ -76,7 +76,7 @@ void TraceCommandStream(uint32_t ringBase, uint32_t ringWords, uint32_t watchAdd
 // The process-wide guest memory. There is exactly one guest address space, and
 // guest threads created later need to reach it without threading a reference
 // through every kernel import.
-GuestMemory& Memory();
-void SetMemory(GuestMemory& memory);
+GuestMemory &Memory();
+void SetMemory(GuestMemory &memory);
 
 } // namespace gears

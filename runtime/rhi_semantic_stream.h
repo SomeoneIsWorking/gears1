@@ -155,6 +155,38 @@ enum class RhiPresentEvidenceResult : std::uint8_t
     Mismatch,
 };
 
+struct RhiSemanticResolve
+{
+    bool sourceDepthStencil = false;
+    std::uint32_t sourceSlot = 0;
+    std::uint32_t sourceObject = 0;
+    std::uint32_t destinationObject = 0;
+    std::uint32_t destinationAddress = 0;
+    std::uint32_t destinationPitch = 0;
+    std::uint32_t destinationHeight = 0;
+    std::uint32_t destinationFormat = 0;
+};
+
+struct RhiResolvePacketEvidence
+{
+    bool present = false;
+    std::uint32_t observedSourceObject = 0;
+    std::uint32_t destinationAddress = 0;
+    std::uint32_t destinationPitch = 0;
+    std::uint32_t destinationHeight = 0;
+    std::uint32_t drawOpcode = 0;
+    std::uint32_t primitiveType = 0;
+    std::uint32_t sourceSelect = 0;
+    std::uint32_t elementCount = 0;
+};
+
+enum class RhiResolveEvidenceResult : std::uint8_t
+{
+    Match,
+    Missing,
+    Mismatch,
+};
+
 struct RhiObservedDraw
 {
     RhiSemanticDrawState state;
@@ -176,8 +208,15 @@ struct RhiObservedPresent
     RhiPresentEvidenceResult evidence = RhiPresentEvidenceResult::Missing;
 };
 
+struct RhiObservedResolve
+{
+    RhiSemanticResolve resolve;
+    RhiResolvePacketEvidence packet;
+    RhiResolveEvidenceResult evidence = RhiResolveEvidenceResult::Missing;
+};
+
 using RhiSemanticEventPayload =
-    std::variant<RhiObservedDraw, RhiObservedBinding, RhiObservedPresent>;
+    std::variant<RhiObservedDraw, RhiObservedBinding, RhiObservedResolve, RhiObservedPresent>;
 
 struct RhiSemanticEvent
 {
@@ -191,6 +230,7 @@ struct RhiSemanticFrame
     std::vector<RhiSemanticEvent> events;
     std::uint64_t draws = 0;
     std::uint64_t bindings = 0;
+    std::uint64_t resolves = 0;
     std::uint64_t presents = 0;
     std::uint64_t matched = 0;
     std::uint64_t missing = 0;
@@ -198,6 +238,9 @@ struct RhiSemanticFrame
     std::uint64_t bindingsMatched = 0;
     std::uint64_t bindingsMissing = 0;
     std::uint64_t bindingsMismatched = 0;
+    std::uint64_t resolvesMatched = 0;
+    std::uint64_t resolvesMissing = 0;
+    std::uint64_t resolvesMismatched = 0;
     std::uint64_t presentsMatched = 0;
     std::uint64_t presentsMissing = 0;
     std::uint64_t presentsMismatched = 0;
@@ -215,11 +258,15 @@ CompareRhiDrawRenderTargetState(const RhiSemanticDrawState &state,
                                                               const RhiBindingStateEvidence &state);
 [[nodiscard]] RhiPresentEvidenceResult
 CompareRhiPresentPacket(const RhiSemanticPresent &present, const RhiPresentPacketEvidence &packet);
+[[nodiscard]] RhiResolveEvidenceResult
+CompareRhiResolvePacket(const RhiSemanticResolve &resolve, const RhiResolvePacketEvidence &packet);
 void ObserveRhiSemanticDraw(const RhiSemanticDraw &draw, const RhiDrawPacketEvidence &packet);
 void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
                                const RhiBindingStateEvidence &state);
 void ObserveRhiSemanticPresent(const RhiSemanticPresent &present,
                                const RhiPresentPacketEvidence &packet);
+void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,
+                               const RhiResolvePacketEvidence &packet);
 [[nodiscard]] RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence);
 void ReportRhiSemanticFrame(std::uint64_t frameSequence);
 

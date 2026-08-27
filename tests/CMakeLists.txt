@@ -619,6 +619,14 @@ add_executable(test_rhi_vertex_buffer
 target_include_directories(test_rhi_vertex_buffer PRIVATE ../runtime)
 add_test(NAME rhi_vertex_buffer COMMAND test_rhi_vertex_buffer)
 
+add_executable(test_rhi_resolve
+    test_rhi_resolve.cpp
+    ../runtime/gpu_draw_formats.cpp
+    ../runtime/titles/gears1/rhi_resolve.cpp)
+target_include_directories(test_rhi_resolve PRIVATE ../runtime)
+target_link_libraries(test_rhi_resolve PRIVATE lucent::lucent)
+add_test(NAME rhi_resolve COMMAND test_rhi_resolve)
+
 add_executable(test_gpu_swap_packet
     test_gpu_swap_packet.cpp
     ../runtime/gpu_swap_packet.cpp
