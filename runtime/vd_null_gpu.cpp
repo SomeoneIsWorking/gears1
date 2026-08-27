@@ -31,6 +31,7 @@
 #include "gpu_present.h"
 #include "gpu_packet_memory.h"
 #include "gpu_register_watch.h"
+#include "gpu_swap_packet.h"
 #include "input.h"
 #include "debug_http.h"
 #include "graphics_probe.h"
@@ -231,16 +232,6 @@ constexpr uint32_t kRegDcLutaControl = 0x1930;
 // into the register file on hardware. Mirroring it makes prim_type / index_size
 // live for the system-constants derivation instead of reading stale-zero.
 constexpr uint32_t kRegDrawInitiator = 0x21FC;
-
-// The runtime's own swap packet. D3D reserves 64 dwords in the command buffer
-// and passes their address to VdSwap; the KERNEL is what fills them with the
-// swap commands (leaving them unwritten desyncs any parser: the stale bytes
-// there are not packets, and the frame's fences behind them are skipped --
-// measured as the transient scene-phase "GPU is hung" episodes). The encoding
-// of the fill is private between the kernel and its GPU, so this pair uses an
-// opcode Xenos does not define and sizes it to the reservation.
-constexpr uint32_t kOpRuntimeSwap = 0x7F;
-constexpr uint32_t kSwapReservationDwords = 64;
 
 // Sequencer instruction-memory loads: this is where a shader actually becomes
 // the bound shader, at the hardware level. IM_LOAD points at microcode in
@@ -625,7 +616,7 @@ std::string OpcodeName(uint32_t op)
         return "SET_BIN_SELECT_LO";
     case 0x63:
         return "SET_BIN_SELECT_HI";
-    case kOpRuntimeSwap:
+    case gears::kGpuRuntimeSwapOpcode:
         return "SWAP";
     default:
         return std::format("op{:#x}", op);
@@ -2256,7 +2247,7 @@ struct CommandProcessor
                 gears::DeferGpuRetirementWrite(data[1], data[2], sourceBase, sourceIndex);
             break;
 
-        case kOpRuntimeSwap:
+        case gears::kGpuRuntimeSwapOpcode:
             // Frame boundary written by VdSwap. data[0] is the front buffer
             // address, data[1] a sequence number stamped at VdSwap time. The
             // sequence exists because the packet lives in guest command-buffer
@@ -3200,7 +3191,6 @@ void __imp__VdSwap(PPCContext &__restrict ctx, uint8_t *)
     }
     gears::HleDumpCensus("swap");
     gears::HleWorkerCensus();
-    gears::ReportRhiSemanticFrame(frame);
     // Drawing is progress even when the guest is making no kernel calls, so the
     // stall detector does not report a busy renderer as a dead guest.
     gears::NoteGuestProgress("draw");
@@ -3222,29 +3212,34 @@ void __imp__VdSwap(PPCContext &__restrict ctx, uint8_t *)
     }
 
     const uint32_t block = ctx.r3.u32;
+    gears::RhiSemanticPresent semanticPresent{
+        .frameSequence = frame,
+        .frontBuffer = ctx.r8.u32 != 0 ? ReadGuest32(ctx.r8.u32) : 0,
+    };
+    for (std::size_t index = 0; index < semanticPresent.fetchDescriptor.size(); ++index)
+    {
+        semanticPresent.fetchDescriptor[index] =
+            ctx.r4.u32 != 0 ? ReadGuest32(ctx.r4.u32 + static_cast<uint32_t>(index) * 4) : 0;
+    }
+
+    gears::RhiPresentPacketEvidence presentEvidence;
     if (block != 0)
     {
-        const uint32_t frontBuffer = ctx.r8.u32 != 0 ? ReadGuest32(ctx.r8.u32) : 0;
-
-        StoreGuest32(block,
-                     (3u << 30) | ((kSwapReservationDwords - 2) << 16) | (kOpRuntimeSwap << 8));
-        StoreGuest32(block + 4, frontBuffer);
-        StoreGuest32(block + 8, uint32_t(frame)); // sequence, see kOpRuntimeSwap
-        // r4 is the front buffer's Direct3D 9 texture header fetch constant, six
-        // dwords. The real kernel posts them to the sequencer as a TYPE0 write to
-        // SHADER_CONSTANT_FETCH_00 immediately before the swap, because the
-        // hardware takes the front buffer's format, size and tiling from fetch
-        // slot 0 rather than from the address. Carrying them in the swap packet
-        // keeps that statement of the guest's alongside the address it belongs
-        // to, and behind the same stale-sequence filter.
-        for (uint32_t i = 0; i < 6; i++)
-            StoreGuest32(block + 12 + i * 4, ctx.r4.u32 != 0 ? ReadGuest32(ctx.r4.u32 + i * 4) : 0);
-        for (uint32_t i = 9; i < kSwapReservationDwords; i++)
-            StoreGuest32(block + i * 4, 0);
+        const gears::GpuSwapPacket packet = gears::EncodeGpuSwapPacket(semanticPresent);
+        for (std::size_t index = 0; index < packet.size(); ++index)
+            StoreGuest32(block + static_cast<uint32_t>(index) * 4, packet[index]);
 
         lucent::debug("gpu", "VdSwap: swap packet at {:#x}, front buffer {:#x}", block,
-                      frontBuffer);
+                      semanticPresent.frontBuffer);
+
+        gears::GpuSwapPacket observedPacket;
+        for (std::size_t index = 0; index < observedPacket.size(); ++index)
+            observedPacket[index] = ReadGuest32(block + static_cast<uint32_t>(index) * 4);
+        presentEvidence = gears::DecodeGpuSwapPacket(observedPacket);
     }
+
+    gears::ObserveRhiSemanticPresent(semanticPresent, presentEvidence);
+    gears::ReportRhiSemanticFrame(frame);
 
     ctx.r3.u64 = 0;
 }

@@ -119,6 +119,14 @@ additional RHI calls was the rate-comparison error that obscured these entry
 points. This is observation evidence only; state, resources, resolves,
 presentation, and retirement still need semantic parity before any bypass.
 
+`VdSwap` now appends the terminal semantic present to that same frame stream
+after encoding the compatibility transport's private swap packet. The extracted
+`runtime/gpu_swap_packet.*` owner round-trips and validates the 64-dword framing,
+frame identity, front-buffer address, and six-word fetch description. A headless
+run through frame 240 matched 240/240 presents alongside every observed draw and
+binding, with no missing or mismatched packet. This grounds presentation input;
+it does not yet replace the guest resolve or compatibility command stream.
+
 ## 2. Entry points of one presented frame
 
 Measured with gdb ignore-count breakpoints over ~30 s of the movie phase

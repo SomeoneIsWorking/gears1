@@ -92,6 +92,8 @@ FORMATTED = [
     "runtime/gpu_scanout_gamma.h",
     "runtime/gpu_shared_device.cpp",
     "runtime/gpu_shared_device.h",
+    "runtime/gpu_swap_packet.cpp",
+    "runtime/gpu_swap_packet.h",
     "runtime/gpu_renderer_lifetime.cpp",
     "runtime/graphics_probe.cpp",
     "runtime/graphics_probe.h",
@@ -136,6 +138,7 @@ FORMATTED = [
     "tests/test_shader_setter_state.cpp",
     "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_gpu_surface_target_lookup.cpp",
+    "tests/test_gpu_swap_packet.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_rhi_semantic_stream.cpp",
     "tests/test_render_retirement.cpp",
@@ -191,6 +194,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/gpu_scanout.cpp",
     "runtime/gpu_scanout_gamma.cpp",
     "runtime/gpu_shared_device.cpp",
+    "runtime/gpu_swap_packet.cpp",
     "runtime/gpu_renderer_lifetime.cpp",
     "runtime/input.cpp",
     "runtime/native_pass.cpp",
@@ -220,6 +224,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_shader_setter_state.cpp",
     "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_gpu_surface_target_lookup.cpp",
+    "tests/test_gpu_swap_packet.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_rhi_semantic_stream.cpp",
     "tests/test_render_retirement.cpp",
@@ -238,6 +243,7 @@ VD_TIDY_RANGES = [
     [1005, 1053],
     [1339, 1339],
     [2621, 2696],
+    [3165, 3245],
 ]
 
 
@@ -292,9 +298,11 @@ def selftest():
     assert "runtime/gpu_frame_slots.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_present_source.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_shared_device.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_swap_packet.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_draw_sample_layout.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_draw_untile.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_surface_format_capacity.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_gpu_swap_packet.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_frame_probe_capture.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/frame_queue.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_frame_queue.cpp" in TIDY_TRANSLATION_UNITS
