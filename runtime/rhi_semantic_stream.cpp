@@ -47,6 +47,12 @@ RhiSemanticReportTotals g_reportTotals;
            kind == RhiSemanticDrawKind::BoundIndices;
 }
 
+[[nodiscard]] bool ExpectsTransientData(RhiSemanticDrawKind kind)
+{
+    return kind == RhiSemanticDrawKind::TransientVertices ||
+           kind == RhiSemanticDrawKind::TransientVerticesAndIndices;
+}
+
 [[nodiscard]] const char *DrawKindName(RhiSemanticDrawKind kind)
 {
     switch (kind)
@@ -99,6 +105,18 @@ RhiDrawEvidenceResult CompareRhiDrawPacket(const RhiSemanticDraw &draw,
         packet.sourceSelect != expectedSource || packet.elementCount != draw.elementCount)
     {
         return RhiDrawEvidenceResult::Mismatch;
+    }
+    if (ExpectsTransientData(draw.kind))
+    {
+        if (!packet.transientDataPresent)
+            return RhiDrawEvidenceResult::Missing;
+        if (packet.vertexData.guestAddress != draw.vertexData.guestAddress ||
+            packet.vertexData.sizeBytes != draw.vertexData.sizeBytes ||
+            packet.indexData.guestAddress != draw.indexData.guestAddress ||
+            packet.indexData.sizeBytes != draw.indexData.sizeBytes)
+        {
+            return RhiDrawEvidenceResult::Mismatch;
+        }
     }
     return RhiDrawEvidenceResult::Match;
 }
@@ -299,15 +317,21 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
         {
             if (observed->evidence != RhiDrawEvidenceResult::Match)
             {
-                lucent::error("rhi",
-                              "semantic draw {} ({}) did not match its guest PM4 emission:"
-                              " expected prim {:#x} count {}, observed present={} opcode={:#x}"
-                              " prim={:#x} source={} count={}",
-                              event.sequence, DrawKindName(observed->draw.kind),
-                              observed->draw.primitiveType, observed->draw.elementCount,
-                              observed->packet.present, observed->packet.opcode,
-                              observed->packet.primitiveType, observed->packet.sourceSelect,
-                              observed->packet.elementCount);
+                lucent::error(
+                    "rhi",
+                    "semantic draw {} ({}) did not match its guest PM4 emission:"
+                    " expected prim {:#x} count {}, observed present={} opcode={:#x}"
+                    " prim={:#x} source={} count={}; expected vertex={:#x}+{}"
+                    " index={:#x}+{}, observed resources present={} vertex={:#x}+{}"
+                    " index={:#x}+{}",
+                    event.sequence, DrawKindName(observed->draw.kind), observed->draw.primitiveType,
+                    observed->draw.elementCount, observed->packet.present, observed->packet.opcode,
+                    observed->packet.primitiveType, observed->packet.sourceSelect,
+                    observed->packet.elementCount, observed->draw.vertexData.guestAddress,
+                    observed->draw.vertexData.sizeBytes, observed->draw.indexData.guestAddress,
+                    observed->draw.indexData.sizeBytes, observed->packet.transientDataPresent,
+                    observed->packet.vertexData.guestAddress, observed->packet.vertexData.sizeBytes,
+                    observed->packet.indexData.guestAddress, observed->packet.indexData.sizeBytes);
             }
             continue;
         }

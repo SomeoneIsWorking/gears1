@@ -1,4 +1,5 @@
 #include "guest_memory.h"
+#include "guest_stack_argument.h"
 #include "import_stub.h"
 #include "rhi_semantic_stream.h"
 
@@ -12,7 +13,14 @@ namespace
     return __builtin_bswap32(*gears::Memory().Translate<std::uint32_t>(address));
 }
 
-[[nodiscard]] gears::RhiDrawPacketEvidence CaptureLastDrawPacket(std::uint32_t device, bool staged)
+[[nodiscard]] bool HasTransientData(gears::RhiSemanticDrawKind kind)
+{
+    return kind == gears::RhiSemanticDrawKind::TransientVertices ||
+           kind == gears::RhiSemanticDrawKind::TransientVerticesAndIndices;
+}
+
+[[nodiscard]] gears::RhiDrawPacketEvidence CaptureLastDrawPacket(std::uint32_t device, bool staged,
+                                                                 gears::RhiSemanticDrawKind kind)
 {
     constexpr std::uint32_t kCommandWritePointerOffset = 0x28;
     constexpr std::uint32_t kStagedCommandEndOffset = 0x3314;
@@ -37,11 +45,33 @@ namespace
         if (payloadDwords <= initiatorIndex || headerAddress + payloadDwords * 4 > end)
             continue;
         const std::uint32_t initiator = ReadGuestBe32(headerAddress + (initiatorIndex + 1) * 4);
-        return {.present = true,
-                .opcode = opcode,
-                .primitiveType = initiator & 0x3F,
-                .sourceSelect = (initiator >> 6) & 0x3,
-                .elementCount = initiator >> 16};
+        gears::RhiDrawPacketEvidence evidence{
+            .present = true,
+            .opcode = opcode,
+            .primitiveType = initiator & 0x3F,
+            .sourceSelect = (initiator >> 6) & 0x3,
+            .elementCount = initiator >> 16,
+        };
+        if (HasTransientData(kind))
+        {
+            constexpr std::uint32_t kVertexAddressOffset = 13080;
+            constexpr std::uint32_t kIndexAddressOffset = 13084;
+            constexpr std::uint32_t kVertexDwordCountOffset = 13088;
+            constexpr std::uint32_t kIndexDwordCountOffset = 13092;
+            evidence.transientDataPresent = true;
+            evidence.vertexData = {
+                .guestAddress = ReadGuestBe32(device + kVertexAddressOffset),
+                .sizeBytes = ReadGuestBe32(device + kVertexDwordCountOffset) * 4,
+            };
+            if (kind == gears::RhiSemanticDrawKind::TransientVerticesAndIndices)
+            {
+                evidence.indexData = {
+                    .guestAddress = ReadGuestBe32(device + kIndexAddressOffset),
+                    .sizeBytes = ReadGuestBe32(device + kIndexDwordCountOffset) * 4,
+                };
+            }
+        }
+        return evidence;
     }
     return {};
 }
@@ -70,7 +100,7 @@ namespace
 
 void ObserveAfterSuper(const gears::RhiSemanticDraw &draw, std::uint32_t device, bool staged)
 {
-    gears::ObserveRhiSemanticDraw(draw, CaptureLastDrawPacket(device, staged));
+    gears::ObserveRhiSemanticDraw(draw, CaptureLastDrawPacket(device, staged, draw.kind));
 }
 
 } // namespace
@@ -102,7 +132,7 @@ PPC_FUNC(sub_8222CFF8)
         __imp__sub_8222CFF8(ctx, base);
         return;
     }
-    const gears::RhiSemanticDraw draw{
+    gears::RhiSemanticDraw draw{
         .kind = gears::RhiSemanticDrawKind::TransientVertices,
         .primitiveType = ctx.r4.u32,
         .elementCount = ctx.r5.u32,
@@ -110,6 +140,10 @@ PPC_FUNC(sub_8222CFF8)
     };
     const std::uint32_t device = ctx.r3.u32;
     __imp__sub_8222CFF8(ctx, base);
+    draw.vertexData = {
+        .guestAddress = ctx.r3.u32,
+        .sizeBytes = (draw.elementCount * draw.vertexStrideBytes) & ~std::uint32_t{3},
+    };
     ObserveAfterSuper(draw, device, true);
 }
 
@@ -121,7 +155,7 @@ PPC_FUNC(sub_8222D4F8)
         __imp__sub_8222D4F8(ctx, base);
         return;
     }
-    const gears::RhiSemanticDraw draw{
+    gears::RhiSemanticDraw draw{
         .kind = gears::RhiSemanticDrawKind::TransientVerticesAndIndices,
         .primitiveType = ctx.r4.u32,
         .elementCount = ctx.r7.u32,
@@ -130,7 +164,23 @@ PPC_FUNC(sub_8222D4F8)
         .indexFormatFlags = ctx.r8.u32,
     };
     const std::uint32_t device = ctx.r3.u32;
+    const std::uint32_t vertexCount = ctx.r6.u32;
+    const std::uint32_t indexDataOutput = ctx.r10.u32;
+    const std::uint32_t vertexDataOutput = gears::GuestStackArgument32(base, ctx.r1.u32, 8);
     __imp__sub_8222D4F8(ctx, base);
+    if (ctx.r3.u32 == 0)
+    {
+        draw.vertexData = {
+            .guestAddress = ReadGuestBe32(vertexDataOutput),
+            .sizeBytes = (vertexCount * draw.vertexStrideBytes) & ~std::uint32_t{3},
+        };
+        const std::uint32_t indexDwords =
+            (draw.indexFormatFlags & 4) != 0 ? draw.elementCount : (draw.elementCount + 1) / 2;
+        draw.indexData = {
+            .guestAddress = ReadGuestBe32(indexDataOutput),
+            .sizeBytes = indexDwords * 4,
+        };
+    }
     ObserveAfterSuper(draw, device, true);
 }
 

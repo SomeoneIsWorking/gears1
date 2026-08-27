@@ -60,6 +60,36 @@ int main()
     altered.sourceSelect = 2;
     assert(CompareRhiDrawPacket(indexed, altered) == RhiDrawEvidenceResult::Mismatch);
 
+    const RhiSemanticDraw transient{
+        .kind = RhiSemanticDrawKind::TransientVerticesAndIndices,
+        .primitiveType = 4,
+        .elementCount = 6,
+        .vertexStrideBytes = 32,
+        .indexFormatFlags = 0,
+        .vertexData = {.guestAddress = 0x1000, .sizeBytes = 128},
+        .indexData = {.guestAddress = 0x1080, .sizeBytes = 12},
+    };
+    const RhiDrawPacketEvidence matchingTransient{
+        .present = true,
+        .opcode = 0x22,
+        .primitiveType = 4,
+        .sourceSelect = 0,
+        .elementCount = 6,
+        .transientDataPresent = true,
+        .vertexData = {.guestAddress = 0x1000, .sizeBytes = 128},
+        .indexData = {.guestAddress = 0x1080, .sizeBytes = 12},
+    };
+    assert(CompareRhiDrawPacket(transient, matchingTransient) == RhiDrawEvidenceResult::Match);
+    RhiDrawPacketEvidence alteredTransient = matchingTransient;
+    alteredTransient.vertexData.sizeBytes -= 4;
+    assert(CompareRhiDrawPacket(transient, alteredTransient) == RhiDrawEvidenceResult::Mismatch);
+    alteredTransient = matchingTransient;
+    alteredTransient.indexData.guestAddress += 4;
+    assert(CompareRhiDrawPacket(transient, alteredTransient) == RhiDrawEvidenceResult::Mismatch);
+    alteredTransient = matchingTransient;
+    alteredTransient.transientDataPresent = false;
+    assert(CompareRhiDrawPacket(transient, alteredTransient) == RhiDrawEvidenceResult::Missing);
+
     const RhiSemanticBinding textureBinding{
         .kind = RhiSemanticBindingKind::Texture,
         .slot = 3,

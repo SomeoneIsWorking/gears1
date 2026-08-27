@@ -16,6 +16,12 @@ enum class RhiSemanticDrawKind : std::uint8_t
     BoundIndices,
 };
 
+struct RhiSemanticBufferRange
+{
+    std::uint32_t guestAddress = 0;
+    std::uint32_t sizeBytes = 0;
+};
+
 struct RhiSemanticDraw
 {
     RhiSemanticDrawKind kind = RhiSemanticDrawKind::BoundVertices;
@@ -25,6 +31,8 @@ struct RhiSemanticDraw
     std::uint32_t startIndex = 0;
     std::uint32_t vertexStrideBytes = 0;
     std::uint32_t indexFormatFlags = 0;
+    RhiSemanticBufferRange vertexData;
+    RhiSemanticBufferRange indexData;
 };
 
 struct RhiDrawPacketEvidence
@@ -34,6 +42,9 @@ struct RhiDrawPacketEvidence
     std::uint32_t primitiveType = 0;
     std::uint32_t sourceSelect = 0;
     std::uint32_t elementCount = 0;
+    bool transientDataPresent = false;
+    RhiSemanticBufferRange vertexData;
+    RhiSemanticBufferRange indexData;
 };
 
 enum class RhiDrawEvidenceResult : std::uint8_t

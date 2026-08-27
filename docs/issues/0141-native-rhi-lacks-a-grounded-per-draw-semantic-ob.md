@@ -52,11 +52,25 @@ SetTexture census, and false `sub_82544148` draw probe were removed after their
 findings were recorded. Remaining D3D submission/queue collection is explicitly
 default-off, so ordinary runs no longer pay its atomics and table scans.
 
+Selective inspection of the locally generated bodies recovered the transient
+allocation ABI without committing generated code. The shared draw contract now
+carries title-neutral guest-address/byte-range pairs. The Gears 1 adapter reads
+the single-vertex mapping from the return register and the indexed mapping from
+r10's output plus the PowerPC ABI's ninth stack argument; the existing
+`guest_stack_argument` owner supplies that ABI rule. Expected byte counts come
+from the public call arguments and are checked independently against the four
+post-call device fields written by the retained bodies. A headless menu walk
+through frame 1980 matched all 153,214 draws, including 28,550 transient-vertex
+and 102,353 transient-indexed allocation pairs, with zero missing observations
+or mismatches. Focused negative controls reject missing resource evidence,
+wrong addresses, and wrong sizes.
+
 ## Next falsifier
 
-Exercise the bound-vertex path dynamically, then mirror the complete ordered
-state/resource/draw/resolve/retirement stream and compare it with the PM4-derived
-`FrameDrawInputs` and output. Keep the recompiled compatibility bodies available
-and super-called until a deliberately wrong semantic control is rejected and a
-same-run complete-stream and pixel-parity gate agrees. Per-draw packet agreement
-alone does not authorize a native bypass.
+Exercise the bound-vertex path dynamically and recover the bound stream/index
+resource state, then add resource lifetime, resolve, and retirement events and
+compare the complete ordered stream with the PM4-derived `FrameDrawInputs` and
+output. Keep the recompiled compatibility bodies available and super-called
+until a deliberately wrong semantic control is rejected and a same-run
+complete-stream and pixel-parity gate agrees. Transient buffer agreement alone
+does not authorize a native bypass.
