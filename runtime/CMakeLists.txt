@@ -272,6 +272,7 @@ add_library(gears_draw STATIC
     frame_content.cpp
     frame_contract.cpp
     gpu_device_features.cpp
+    gpu_draw_ab.cpp
     gpu_draw.cpp
     gpu_draw_api.cpp
     gpu_draw_arena.cpp

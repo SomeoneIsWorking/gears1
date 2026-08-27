@@ -10,7 +10,6 @@
 // explicitly allows -- the pixel shader samples a render target that does not
 // exist yet.
 #include "gpu_draw.h"
-#include "frame_ab.h"
 #include "frame_artifact_policy.h"
 #include "frame_probe_capture.h"
 #include "gpu_device_features.h"
@@ -44,6 +43,7 @@
 #include <vulkan/vulkan.h>
 
 #include "gpu_draw_xlate.h"
+#include "gpu_draw_ab.h"
 #include "gpu_draw_depth_bias.h"
 #include "gpu_draw_formats.h"
 #include "gpu_draw_pixels.h"
@@ -411,32 +411,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     // gameplay frame and the only one still unexplained inside itself.
     double msModify = 0, msShaderLookup = 0;
 
-    // GEARS_DRAW_AB_CENSUS=1 puts the per-draw viewport census back on alternate
-    // frames, so the arm with it and the arm without it are compared inside ONE
-    // run. Separate runs cannot answer this: three of them at an identical 743
-    // draws a frame gave 39.4, 47.2 and 42.7 ms draw loops, and the two slower
-    // ones were the runs with the census already removed. See runtime/frame_ab.h.
-    static AbTest ab(lucent::config::flag("DRAW_AB_CENSUS"));
-    ab.BeginFrame();
-    // GEARS_DRAW_AB_UNTILE=1 does the same for the EDRAM-tiling collapse: the
-    // arm with tiling collapsed and the arm without it alternate frame by frame
-    // inside one run. The collapse removes a QUARTER of a gameplay frame's draws,
-    // and the honest thing to say about a saving that large is still a measured
-    // number rather than two replay timings -- one of which came out slower.
-    static AbTest abUntile(lucent::config::flag("DRAW_AB_UNTILE"));
-    abUntile.BeginFrame();
-    // And for the soft-dirty texture-staleness skips (catalog #137): the
-    // baseline arm re-hashes every cached texture, the experimental arm skips
-    // the ones whose guest pages the kernel reports unwritten.
-    static AbTest abTexDirty(lucent::config::flag("DRAW_AB_TEXDIRTY"));
-    abTexDirty.BeginFrame();
-    {
-        const int armed = int(ab.Enabled()) + int(abUntile.Enabled()) + int(abTexDirty.Enabled());
-        if (armed > 1)
-            lucent::error("draw", "more than one GEARS_DRAW_AB_* timing knob is on."
-                                  " They alternate independently and all record the same frame"
-                                  " cost, so no result would mean anything. Enable ONE");
-    }
+    static DrawTimingAb timingAb;
+    timingAb.BeginFrame();
     // ON BY DEFAULT. A renderer that is native does not emulate the console's
     // EDRAM tiling, and this one no longer does: GEARS_DRAW_TILED=1 puts the
     // faithful per-tile replay back for an A/B or a bisect.
@@ -451,7 +427,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     // an optimisation: the renderer now does the host thing by default and the
     // console thing on request.
     const bool untileThisFrame =
-        abUntile.Enabled() ? abUntile.Arm() : !lucent::config::flag("DRAW_TILED");
+        timingAb.UntileEnabled() ? timingAb.UntileArm() : !lucent::config::flag("DRAW_TILED");
     double msSsboUpload = 0;
     auto accumulate = [](double &into, Clock::time_point from)
     { into += std::chrono::duration<double, std::milli>(Clock::now() - from).count(); };
@@ -660,7 +636,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     // refusal is reported rather than silently replaced by a stub.
     draw::TextureUploader TX(*this, P, in);
     // The texture owner resolves the default/control/A-B policy (catalog #137).
-    TX.BeginStalenessFrame(options.trackTextureDirtyPages, abTexDirty.Enabled(), abTexDirty.Arm());
+    TX.BeginStalenessFrame(options.trackTextureDirtyPages, timingAb.TextureDirtyEnabled(),
+                           timingAb.TextureDirtyArm());
     std::vector<VkBuffer> &stagingBufs = TX.stagingBufs;
     std::vector<VkDeviceMemory> &stagingMems = TX.stagingMems;
 
@@ -692,6 +669,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     // The cache's extents are the SAMPLE grid: its images are EDRAM, and
     // EDRAM is samples. Off the model SW,SH are W,H.
     draw::RenderTargetCache RT(*this, P, in, P.width, P.height, depthFormat);
+    RT.reuseFrameSurfaceTargets = timingAb.TargetLookupEnabled()
+                                      ? timingAb.TargetLookupArm()
+                                      : !lucent::config::flag("DRAW_NO_TARGET_LOOKUP_CACHE");
     RT.BuildResolvePipeline();
     // GEARS_DRAW_REINTERP=1: convert a surface's contents when the frame
     // re-declares its EDRAM base under a different colour format. Off by
@@ -768,7 +748,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     // What the frame CONTAINED -- the per-surface, per-mode, reach, viewport and
     // skip tallies -- is in gpu_draw_census.{h,cpp}, with the report lines that
     // consume it.
-    draw::FrameCensus CN(in.report || ab.Arm());
+    draw::FrameCensus CN(in.report || timingAb.CollectCensus());
     // Every resolve of the frame, decoded per the Xenia contract: which colour
     // surface it reads (RB_COPY_CONTROL.copy_src_select indexes RB_COLOR_INFO
     // 0x2001/0x2003/0x2004/0x2005; >= 4 means depth) and where it writes
@@ -1455,7 +1435,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
             // byte-for-byte what they were and only the silent frames get
             // cheaper. Still measured, because a diagnostic whose cost is
             // assumed is how this one survived.
-            if (in.report || ab.Arm())
+            if (in.report || timingAb.CollectCensus())
             {
                 ScopedMs censusTime(msCensus);
                 ++CN.viewportCensus[std::format("{},{} {}x{} scissor {},{} {}x{}", gv.x, gv.y, gv.w,
@@ -2855,8 +2835,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     static const std::string &streamPath = lucent::config::text("DRAW_STREAM");
     const bool deferred = completion && completionPending && !needHostPixels && surfDumps.empty() &&
                           resolveDumps.empty() && !PB.RequiresGpuCompletion() && !DS.Enabled() &&
-                          streamPath.empty() && !wantRawStream && !ab.Enabled() &&
-                          !abUntile.Enabled() && !abTexDirty.Enabled();
+                          streamPath.empty() && !wantRawStream && !timingAb.AnyEnabled();
     if (deferred)
     {
         GpuFrameSlots::Completion cleanup = MakeFrameCleanup(
@@ -3717,70 +3696,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     frameCost.flush(lucent::Level::Info, "draw");
     drawLoopCost.flush(lucent::Level::Info, "draw");
 
-    // The draw loop rather than the whole frame, and not on report frames: their
-    // readback and PPM cost would land on whichever arm they happened to use.
-    //
-    // AND NOT THE WARM-UP EITHER, which frame_ab.h says are "simply not recorded"
-    // -- but that is the CALLER's job and this call site was not doing it. The
-    // first render of a scene pays for every shader translation and every
-    // pipeline in it, hundreds of milliseconds that appear in no later frame, and
-    // including them inflates the arms' variance enough to bury a real effect:
-    // an 81-frame replay reported the collapsed arm 15 ms faster and NOT RESOLVED
-    // against a 30 ms noise floor. Skipping a fixed count cannot bias the result
-    // because the arms keep alternating through it, so each loses the same number.
-    static uint64_t renderedFrames = 0;
-    ++renderedFrames;
-    constexpr uint64_t kAbWarmupFrames = 12;
-    const bool recordable =
-        FrameMayRecordMeasurement(in.report, in.probe) && renderedFrames > kAbWarmupFrames;
-    if (abUntile.Enabled() && recordable)
-        abUntile.RecordFrame(msDrawLoop);
-    if (ab.Enabled() && recordable)
-        ab.RecordFrame(msDrawLoop);
-    if (abTexDirty.Enabled() && recordable)
-        abTexDirty.RecordFrame(msDrawLoop);
-    // One reporter for whichever A/B is running. Both arms are summarised the
-    // same way, including the case it must not get wrong: a difference smaller
-    // than the run's own resolution is noise and is printed as such.
-    auto summarise = [&](AbTest &t, const char *what)
-    {
-        if (!t.Enabled() || !in.report)
-            return;
-        AbSummary sm;
-        if (!t.Summarise(sm))
-        {
-            lucent::info("draw",
-                         "A/B ({}): nothing recorded yet -- every frame so"
-                         " far was a report frame, which is excluded",
-                         what);
-            return;
-        }
-        if (sm.resolved)
-        {
-            lucent::info("draw",
-                         "A/B ({}): the experimental arm is {:+.2f} ms"
-                         " ({:.2f} vs {:.2f} ms over {} and {} frames), and that is"
-                         " larger than the {:.2f} ms this run can resolve",
-                         what, sm.differenceMs, sm.armMs, sm.baselineMs, sm.armFrames,
-                         sm.baselineFrames, sm.noiseMs);
-        }
-        else
-        {
-            // THE NEGATIVE, WITH ITS DENOMINATOR. "No difference" from a run that
-            // could not have seen one is not a measurement, so the resolution is
-            // printed next to the difference every time.
-            lucent::info("draw",
-                         "A/B ({}): NOT RESOLVED. The arms differ by"
-                         " {:+.2f} ms ({:.2f} vs {:.2f} over {} and {} frames) but this run"
-                         " can only resolve {:.2f} ms, so that number is noise -- do not"
-                         " read it as a small effect in either direction",
-                         what, sm.differenceMs, sm.armMs, sm.baselineMs, sm.armFrames,
-                         sm.baselineFrames, sm.noiseMs);
-        }
-    };
-    summarise(ab, "per-draw viewport census");
-    summarise(abUntile, "EDRAM tiling collapsed");
-    summarise(abTexDirty, "texture staleness page-skips");
+    timingAb.CompleteFrame(msDrawLoop, in.report, in.probe);
     PB.Report(prepared);
 
     // --- teardown --------------------------------------------------------

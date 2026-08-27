@@ -14,6 +14,8 @@
 // to serve is a resolve that did not happen, and one that is not reported looks
 // exactly like one that was not asked for.
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <set>
@@ -28,6 +30,27 @@
 
 namespace gears::draw
 {
+
+class FrameSurfaceTargetLookup
+{
+  public:
+    [[nodiscard]] SurfaceTarget *Find(uint32_t base, bool nativeMultisample) const
+    {
+        if (base >= kBaseCount)
+            return nullptr;
+        return entries_[base + (nativeMultisample ? kBaseCount : 0)];
+    }
+
+    void Remember(uint32_t base, bool nativeMultisample, SurfaceTarget *target)
+    {
+        if (base < kBaseCount)
+            entries_[base + (nativeMultisample ? kBaseCount : 0)] = target;
+    }
+
+  private:
+    static constexpr std::size_t kBaseCount = 0x1000;
+    std::array<SurfaceTarget *, kBaseCount * 2> entries_{};
+};
 
 // One authority for a surface target's Vulkan lifetime. Cache promotion and
 // whole-renderer teardown both use it, so adding another owned image cannot
@@ -49,6 +72,14 @@ struct RenderTargetCache
     const VkFormat depthFormat;
 
     std::map<uint32_t, std::set<uint32_t>> formatsPerBase;
+
+    // PlanResolves fills formatsPerBase completely before the first draw is
+    // prepared. Therefore the target capacity decision for one (base, sample
+    // model) is invariant for the rest of this frame. Repeating it per draw
+    // copied sets and re-read configuration thousands of times. The A/B control
+    // disables this lookup while retaining the old decision path.
+    bool reuseFrameSurfaceTargets = true;
+    FrameSurfaceTargetLookup frameSurfaceTargets;
 
     std::vector<VkDescriptorSet> resolveSets;
     uint32_t resolveSetsUsed = 0;

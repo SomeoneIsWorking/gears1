@@ -611,6 +611,11 @@ target_include_directories(test_gpu_draw_census PRIVATE ../runtime)
 target_link_libraries(test_gpu_draw_census PRIVATE lucent::lucent)
 add_test(NAME gpu_draw_census COMMAND test_gpu_draw_census)
 
+add_executable(test_gpu_surface_target_lookup test_gpu_surface_target_lookup.cpp)
+target_include_directories(test_gpu_surface_target_lookup PRIVATE ../runtime)
+target_link_libraries(test_gpu_surface_target_lookup PRIVATE lucent::lucent)
+add_test(NAME gpu_surface_target_lookup COMMAND test_gpu_surface_target_lookup)
+
 # The fragment-output clamp. A fixed-point render target clamps a shader's colour
 # output to [0,1] before blending and a floating-point one does not -- and this
 # renderer gives a reinterpreted surface ONE float host image, so every draw into
