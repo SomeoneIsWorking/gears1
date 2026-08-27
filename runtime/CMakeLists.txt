@@ -224,6 +224,7 @@ add_executable(gears1
     gpu_instance.cpp
     gpu_device_features.cpp
     gpu_packet_memory.cpp
+    gpu_swap_packet.cpp
     render_thread.cpp
     native_pass.cpp
     guest_indirect_call.cpp

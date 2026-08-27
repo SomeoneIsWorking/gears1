@@ -600,6 +600,14 @@ target_include_directories(test_rhi_semantic_stream PRIVATE ../runtime)
 target_link_libraries(test_rhi_semantic_stream PRIVATE lucent::lucent)
 add_test(NAME rhi_semantic_stream COMMAND test_rhi_semantic_stream)
 
+add_executable(test_gpu_swap_packet
+    test_gpu_swap_packet.cpp
+    ../runtime/gpu_swap_packet.cpp
+    ../runtime/rhi_semantic_stream.cpp)
+target_include_directories(test_gpu_swap_packet PRIVATE ../runtime)
+target_link_libraries(test_gpu_swap_packet PRIVATE lucent::lucent)
+add_test(NAME gpu_swap_packet COMMAND test_gpu_swap_packet)
+
 add_executable(test_shader_setter_state test_shader_setter_state.cpp)
 target_include_directories(test_shader_setter_state PRIVATE ../runtime)
 add_test(NAME shader_setter_state COMMAND test_shader_setter_state)

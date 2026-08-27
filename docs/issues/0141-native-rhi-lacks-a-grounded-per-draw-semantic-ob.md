@@ -42,7 +42,12 @@ cross-kind order needed by a native consumer is preserved directly. Focused
 controls prove both the binding mismatch answer and interleaved draw/binding/draw
 ordering. A post-refactor headless run through frame 60 matched 58/58 draw
 packets and 490/490 binding updates with zero missing observations or mismatches.
-The historical shader argument scanner,
+`VdSwap` now appends a terminal present event to the same frame stream. The
+extracted title-neutral `gpu_swap_packet.*` owner encodes and decodes the
+compatibility transport, while the present comparer verifies its framing, frame
+identity, front buffer, and six-word fetch description. A headless run through
+frame 240 matched 240/240 present packets alongside 236/236 draws and 1,914/1,914
+bindings, with no missing or mismatched observation. The historical shader argument scanner,
 SetTexture census, and false `sub_82544148` draw probe were removed after their
 findings were recorded. Remaining D3D submission/queue collection is explicitly
 default-off, so ordinary runs no longer pay its atomics and table scans.
@@ -50,7 +55,7 @@ default-off, so ordinary runs no longer pay its atomics and table scans.
 ## Next falsifier
 
 Exercise the bound-vertex path dynamically, then mirror the complete ordered
-state/resource/draw/resolve/present stream and compare it with the PM4-derived
+state/resource/draw/resolve/retirement stream and compare it with the PM4-derived
 `FrameDrawInputs` and output. Keep the recompiled compatibility bodies available
 and super-called until a deliberately wrong semantic control is rejected and a
 same-run complete-stream and pixel-parity gate agrees. Per-draw packet agreement
