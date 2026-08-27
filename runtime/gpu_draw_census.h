@@ -26,6 +26,8 @@ namespace gears::draw
 
 struct FrameCensus
 {
+    explicit FrameCensus(bool collect = true) : collect_(collect) {}
+
     uint32_t issued = 0, skipped = 0;
 
     // Per-EDRAM-surface. A draw's RB_COLOR_INFO (0x2001) names the EDRAM tile
@@ -38,7 +40,9 @@ struct FrameCensus
     // are different questions, and only the second explains an empty surface.
     struct SurfaceStat
     {
-        uint32_t draws = 0; uint32_t format = 0; uint32_t mode = 0;
+        uint32_t draws = 0;
+        uint32_t format = 0;
+        uint32_t mode = 0;
         uint32_t colorDepth = 0, depthOnly = 0, otherMode = 0;
     };
     std::map<uint32_t, SurfaceStat> surfaces; // RB_COLOR_INFO color_base -> stat
@@ -67,7 +71,7 @@ struct FrameCensus
     // partial answer -- which is why it is reported next to them.
     uint32_t drawsClassifyFailed = 0;
 
-    std::set<uint32_t> depthBases;   // distinct RB_DEPTH_INFO.depth_base
+    std::set<uint32_t> depthBases; // distinct RB_DEPTH_INFO.depth_base
     std::map<std::pair<uint32_t, uint32_t>, uint64_t> surfaceDepthPairs;
     uint32_t issuedResolves = 0, skippedResolves = 0;
 
@@ -75,7 +79,13 @@ struct FrameCensus
     // the two apart -- every skipped draw is a draw missing from the picture,
     // and one that is not attributed is one nobody can look for.
     std::map<uint64_t, uint64_t> skipReasons;
-    void Skip(uint64_t reason) { ++skipped; ++skipReasons[reason]; }
+    void Skip(uint64_t reason)
+    {
+        if (!collect_)
+            return;
+        ++skipped;
+        ++skipReasons[reason];
+    }
 
     // Geometry reach: how many draws fetch vertices from outside the SSBO
     // mirror. Such a fetch reads zero, so every primitive collapses -- and the
@@ -98,6 +108,9 @@ struct FrameCensus
     void ReportReach(uint64_t mirrorBytes) const;
     void ReportViewports() const;
     void ReportSkips(size_t drawCount) const;
+
+  private:
+    bool collect_ = true;
 };
 
 } // namespace gears::draw

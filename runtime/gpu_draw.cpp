@@ -768,7 +768,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     // What the frame CONTAINED -- the per-surface, per-mode, reach, viewport and
     // skip tallies -- is in gpu_draw_census.{h,cpp}, with the report lines that
     // consume it.
-    draw::FrameCensus CN;
+    draw::FrameCensus CN(in.report || ab.Arm());
     // Every resolve of the frame, decoded per the Xenia contract: which colour
     // surface it reads (RB_COPY_CONTROL.copy_src_select indexes RB_COLOR_INFO
     // 0x2001/0x2003/0x2004/0x2005; >= 4 means depth) and where it writes
