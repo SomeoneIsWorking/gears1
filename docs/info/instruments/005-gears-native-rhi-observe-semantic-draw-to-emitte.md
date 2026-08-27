@@ -45,6 +45,13 @@ endian mode. It also matched 3,926 index-buffer bindings, including the full
 object-derived allocation view, with zero missing or mismatched observations
 among 24,233 draws and 80,023 bindings.
 
+The actual vertex-stream binder is `0x8222AE20`. Its retained body and callers
+independently establish 18 slots carrying an object, offset-adjusted fetch
+address, remaining byte range, and dword-encoded stride. Focused controls reject
+an altered stride and invalid source ranges. A live headless run through frame
+780 matched all 2,463 vertex-stream updates with zero missing or mismatched
+observations among 86,002 total bindings.
+
 ## Known failure modes
 
 Colour-target descriptors are setter outputs, not always verbatim input object

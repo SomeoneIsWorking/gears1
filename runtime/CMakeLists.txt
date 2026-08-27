@@ -207,6 +207,7 @@ add_executable(gears1
     rhi_semantic_stream.cpp
     titles/gears1/rhi_bindings.cpp
     titles/gears1/rhi_index_buffer.cpp
+    titles/gears1/rhi_vertex_buffer.cpp
     titles/gears1/shader_setter_override.cpp
     guest_write_watch.cpp
     gpu_register_watch.cpp

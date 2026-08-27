@@ -93,11 +93,21 @@ mismatched observations across 24,233 draws and 80,023 bindings. Focused
 controls reject altered DMA addresses, widths, sizes, view fields, and missing
 DMA evidence.
 
+The actual vertex-stream binder is `0x8222AE20`. Its callers provide device,
+slot, buffer object, byte offset, byte stride, and a dirty bit; the retained
+body writes one of 18 object slots plus an offset-adjusted address, remaining
+byte range, and quarter-stride shadow. The focused `rhi_vertex_buffer.*` title
+adapter validates ranges and derives the expected view independently from the
+call, while the binding observer decodes the post-call device state. A headless
+run through frame 780 matched all 2,463 vertex-stream updates with zero missing
+or mismatched observations across 86,002 bindings. Focused controls reject an
+altered stride and out-of-range offsets.
+
 ## Next falsifier
 
-Locate and ground the actual vertex-stream setter, exercise the bound-vertex
-draw path dynamically, and recover complete vertex-buffer view data. Then add
-resource creation/lifetime, resolve, and retirement events and
+Exercise the bound-vertex draw path dynamically and connect each draw to the
+complete ordered vertex-buffer views it consumes. Then add resource
+creation/lifetime, resolve, and retirement events and
 compare the complete ordered stream with the PM4-derived `FrameDrawInputs` and
 output. Keep the recompiled compatibility bodies available and super-called
 until a deliberately wrong semantic control is rejected and a same-run

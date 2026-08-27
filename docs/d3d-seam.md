@@ -115,6 +115,15 @@ field: four formats are conditionally normalized using device mode. A fast
 headless run through frame 780 matched 3,924 index-buffer, 6,481 colour-target,
 and 3,555 depth-target updates with zero missing observations or mismatches.
 
+The actual vertex-stream binder is `0x8222AE20`, not either target binder. Its
+callers pass `(device, slot, buffer, byte offset, byte stride, dirty bit)` and
+its retained body owns 18 object slots at `+0x2F9C`, reverse-ordered two-word
+fetch descriptors ending at `+0x6F8`, and quarter-stride bytes at `+0x2FE0`.
+`rhi_vertex_buffer.*` independently derives the offset-adjusted GPU address,
+remaining byte range, and stride from the call and compares them with those
+post-call shadows. A headless run through frame 780 matched all 2,463 updates
+with zero errors across 86,002 total bindings.
+
 With `GEARS_NATIVE_RHI_OBSERVE=1`, a headless menu walk through frame 1980
 compared 153,214 semantic calls with the packets and transient-buffer state the
 original bodies emitted: 153,214 matches, zero missing observations, and zero
