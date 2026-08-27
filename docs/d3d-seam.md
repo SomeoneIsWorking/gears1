@@ -94,13 +94,22 @@ points:
 It preserves and calls every owned `__imp__sub_*` body, then publishes typed
 operations to the title-neutral `runtime/rhi_semantic_stream.*` observation seam.
 Draws and bindings share one event vector, so a future native consumer receives
-their exact interleaving without merging independent queues. With
-`GEARS_NATIVE_RHI_OBSERVE=1`, a headless menu walk through frame 1712 compared
-90,854 semantic calls with the packets the original bodies emitted: 90,854
-matches, zero missing packets, and zero mismatches. The mix was 17,864
-transient-vertex, 60,465 transient-vertex-and-index, and 12,525 bound-index
-calls. The bound-vertex entry is statically grounded but was not exercised by
-that walk.
+their exact interleaving without merging independent queues. The two transient
+entry points also publish their mapped guest buffer ranges. `0x8222CFF8`
+returns the vertex address and records its dword count at device offsets
+`+0x3318/+0x3320`; `0x8222D4F8` returns the index address through r10's output,
+the vertex address through its ninth stack argument, and records both ranges at
+`+0x3318..+0x3324`. The adapter derives byte counts from the title-facing
+arguments, while the comparator independently reads those recorded ranges from
+post-call device state.
+
+With `GEARS_NATIVE_RHI_OBSERVE=1`, a headless menu walk through frame 1980
+compared 153,214 semantic calls with the packets and transient-buffer state the
+original bodies emitted: 153,214 matches, zero missing observations, and zero
+mismatches. The mix was 28,550 transient-vertex, 102,353
+transient-vertex-and-index, and 22,311 bound-index calls. The bound-vertex entry
+is statically grounded but was not exercised by that walk. Focused controls
+reject absent transient state, a wrong mapped address, and a wrong byte range.
 
 `runtime/titles/gears1/shader_setter_state.h` and
 `shader_setter_override.cpp` own the two shader setters. Their native arm
@@ -116,8 +125,8 @@ The semantic count is intentionally lower than the renderer's PM4 draw count:
 the compatibility command processor replays predicated packets per Xenos EDRAM
 tile, while the title issues each logical draw once. Treating tile replay as
 additional RHI calls was the rate-comparison error that obscured these entry
-points. This is observation evidence only; state, resources, resolves,
-presentation, and retirement still need semantic parity before any bypass.
+points. This is observation evidence only; bound resource state, resource
+lifetime, resolves, and retirement still need semantic parity before any bypass.
 
 `VdSwap` now appends the terminal semantic present to that same frame stream
 after encoding the compatibility transport's private swap packet. The extracted
