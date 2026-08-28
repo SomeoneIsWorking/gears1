@@ -3,6 +3,8 @@
 #include <lucent/config.h>
 #include <lucent/log.h>
 
+#include "native_scene_composite_spv.h"
+
 namespace gears::native
 {
 
@@ -19,10 +21,10 @@ const std::vector<Pass> &RosterStorage()
              "movie YUV composite",
              "observed pass identity; clean implementation not yet provided",
              {}},
-        Pass{0x501ac5d8692bf7b6ull,
-             "full-screen scene composite",
-             "observed pass identity; clean implementation not yet provided",
-             {}},
+        Pass{0x501ac5d8692bf7b6ull, "full-screen scene composite",
+             "observed full-screen contract; post-swizzle signs are read from"
+             " the translated system-constant field and view routing is host-owned",
+             NativeSceneCompositeSpirv()},
         Pass{0x9610bf8038af9aafull,
              "post-process blend",
              "observed pass identity; clean implementation not yet provided",

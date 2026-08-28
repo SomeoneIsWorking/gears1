@@ -31,6 +31,13 @@ target_include_directories(test_rhi_resource_reference PRIVATE
     ../runtime/titles/gears1)
 add_test(NAME rhi_resource_reference COMMAND test_rhi_resource_reference)
 
+add_executable(test_native_pass
+    test_native_pass.cpp
+    ../runtime/native_pass.cpp)
+target_include_directories(test_native_pass PRIVATE ../runtime)
+target_link_libraries(test_native_pass PRIVATE lucent::lucent)
+add_test(NAME native_pass COMMAND test_native_pass)
+
 add_executable(test_gpu_ticket_wait
     test_gpu_ticket_wait.cpp
     ../runtime/gpu_ticket_wait.cpp)

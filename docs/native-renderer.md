@@ -40,17 +40,33 @@ produce the requested native engine.
 ## Native-pass seam
 
 `runtime/native_pass.*` retains a compatibility seam for substituting an
-independently authored host module for an observed pass. At the clean tracked
-tip, the roster has declarations only: it contains no distributable implemented
-module, and enabling `GEARS_NATIVE_PASSES=1` changes no rendering behavior.
+independently authored host module for an observed pass. The clean tracked
+roster now contains one implementation for the full-screen scene composite;
+enabling `GEARS_NATIVE_PASSES=1` substitutes it only for its observed pixel
+shader hash. The compatibility arm remains the default and remains available
+for the required same-input comparison.
 
-An independently authored full-screen scene-composite candidate was exercised
-against `scratch/frames/title600.gfr` and rejected. Its raw unsigned/signed
-control was within 0.2621 channel units mean absolute error, but the first
-guest-texture `kGamma` path diverged by 14.0665 under a forced `0x3f` sign word.
-The candidate and its generated SPIR-V were removed; issue #155 records the
-remaining sampled-view/sign contract investigation. No native-pass speed
-measurement is valid until that parity gate passes with signs enabled.
+The implementation is independently authored in
+`runtime/shaders/native_scene_composite.frag` and its generated SPIR-V header.
+The previous candidate's root cause was identified before restoration: it used
+the translated `texture_swizzles` word as both channel routing and texture-sign
+mode. The corrected module reads the fetch-zero sign byte from the separate
+`texture_swizzled_signs` field; fetch routing remains owned by the host image
+view, so the native shader does not apply `texture_swizzles` a second time. The
+PWL gamma arithmetic was also corrected to add, rather than rescale, the
+truncated correction term. A fresh signs-enabled same-input replay now matches
+the compatibility arm to 0.0000 mean channel error, with no channel farther
+than 4/255. The deliberately wrong-sign control diverged by 5.2155 mean
+channel units and 66/255 worst difference, so issue #155 is resolved for this
+pass and capture. This pass is parity-proven for the captured content, but it
+does not establish the complete native renderer or its 5 ms budget.
+
+A four-repeat warm replay measured 7.268 ms GPU on the compatibility arm and
+7.287 ms with this native pass enabled. This is not a speedup: the seam still
+translates every guest shader before substituting the native module, so it
+cannot remove the compatibility shader/compiler cost. The next performance
+boundary is a native contract that supplies the required layout and state
+metadata without invoking translation, followed by the complete RHI bypass.
 
 The six former title-derived shader substitutions are not shipping GearsUE3
 implementations and are not evidence that a native renderer exists. Their
