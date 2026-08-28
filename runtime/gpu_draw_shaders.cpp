@@ -27,16 +27,56 @@ bool ShaderCache::GetShader(bool isVertex, const uint8_t *uc, size_t sz, uint64_
                             ShaderXlate *&outX, VkShaderModule &outM)
 {
     diagnosticOverride.Observe(isVertex, hash, modification);
+    const gears::native::Pass *nat = isVertex ? nullptr : gears::native::Find(hash);
+    const std::vector<uint32_t> *overrideCode =
+        diagnosticOverride.CodeFor(isVertex, hash, modification);
+    // Keep the inspection controls explicit: normal native execution supplies
+    // the host interface directly, while a requested dump or A/B inspection
+    // retains the translated metadata and module construction.
+    static const std::string spvDir{lucent::config::text("DRAW_SPV_DUMP")};
+    static const bool keepTranslated = lucent::config::flag("NATIVE_PASSES_KEEP_TRANSLATED");
+    const bool nativeFastPath =
+        nat != nullptr && overrideCode == nullptr && spvDir.empty() && !keepTranslated;
+    if (nat != nullptr)
+    {
+        if (!nat->shaderInterface.ok)
+        {
+            lucent::error("native", "pass \"{}\" has no complete shader interface", nat->name);
+            return false;
+        }
+        const uint32_t actualInterpolatorMask = ShaderInterpolatorMask(false, modification);
+        if (nat->shaderInterface.requiredInterpolatorMask != 0 &&
+            nat->shaderInterface.requiredInterpolatorMask != actualInterpolatorMask)
+        {
+            lucent::error("native",
+                          "pass \"{}\" refuses pixel shader {:#018x}: interpolator mask"
+                          " {:#x} does not match required {:#x}",
+                          nat->name, hash, actualInterpolatorMask,
+                          nat->shaderInterface.requiredInterpolatorMask);
+            return false;
+        }
+    }
     const Key key{hash, modification, clampOutput ? (clampMode == ClampMode::kRgba ? 1 : 2) : 0};
     auto xit = xlate.find(key);
     if (xit == xlate.end())
     {
         ShaderXlate x;
-        const auto t0 = Clock::now();
-        const bool translated = TranslateShader(isVertex, uc, sz, hash, modification, x);
-        msTranslate += std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
-        if (!translated)
-            return false;
+        if (nativeFastPath)
+        {
+            static_cast<ShaderInterface &>(x) = nat->shaderInterface;
+            lucent::info("native",
+                         "pass \"{}\" supplied its host interface without Xenos"
+                         " translation for pixel shader {:#018x}",
+                         nat->name, hash);
+        }
+        else
+        {
+            const auto t0 = Clock::now();
+            const bool translated = TranslateShader(isVertex, uc, sz, hash, modification, x);
+            msTranslate += std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+            if (!translated)
+                return false;
+        }
         xit = xlate.emplace(key, std::move(x)).first;
         // GEARS_DRAW_SPV_DUMP=<dir>: the TRANSLATED module, as the runtime
         // actually built it for THIS draw's modification key.
@@ -53,47 +93,35 @@ bool ShaderCache::GetShader(bool isVertex, const uint8_t *uc, size_t sz, uint64_
         // Always the TRANSLATED module, never the native substitute: the
         // reference is the thing being matched, and dumping our own output
         // instead would let a native pass "verify" against itself.
+        if (!spvDir.empty() && !xit->second.spirv.empty())
         {
-            // BY VALUE, not by reference. lucent::config::text returns a
-            // reference into its own cache, and that cache can be dropped --
-            // the interleaved comparer drops it deliberately between arms to
-            // make a knob re-read. A `static const std::string&` then dangles
-            // and the next draw crashes inside std::filesystem::path.
-            static const std::string spvDir{lucent::config::text("DRAW_SPV_DUMP")};
-            if (!spvDir.empty())
+            std::error_code ec;
+            std::filesystem::create_directories(spvDir, ec);
+            char name[128];
+            std::snprintf(name, sizeof name, "%s_%016llx_mod%016llx.spv", isVertex ? "vs" : "ps",
+                          static_cast<unsigned long long>(hash),
+                          static_cast<unsigned long long>(modification));
+            const std::filesystem::path out = std::filesystem::path(spvDir) / name;
+            std::ofstream f(out, std::ios::binary);
+            if (f)
             {
-                std::error_code ec;
-                std::filesystem::create_directories(spvDir, ec);
-                char name[128];
-                std::snprintf(name, sizeof name, "%s_%016llx_mod%016llx.spv",
-                              isVertex ? "vs" : "ps", static_cast<unsigned long long>(hash),
-                              static_cast<unsigned long long>(modification));
-                const std::filesystem::path out = std::filesystem::path(spvDir) / name;
-                std::ofstream f(out, std::ios::binary);
-                if (f)
-                {
-                    f.write(reinterpret_cast<const char *>(xit->second.spirv.data()),
-                            std::streamsize(xit->second.spirv.size()));
-                    lucent::debug("draw", "translated module -> {} ({} bytes)", out.string(),
-                                  xit->second.spirv.size());
-                }
-                else
-                {
-                    // A dump that silently writes nothing is worse than none:
-                    // the next reader concludes the shader was never bound.
-                    lucent::error("draw", "GEARS_DRAW_SPV_DUMP: cannot write {}", out.string());
-                }
+                f.write(reinterpret_cast<const char *>(xit->second.spirv.data()),
+                        std::streamsize(xit->second.spirv.size()));
+                lucent::debug("draw", "translated module -> {} ({} bytes)", out.string(),
+                              xit->second.spirv.size());
+            }
+            else
+            {
+                // A dump that silently writes nothing is worse than none: the
+                // next reader concludes the shader was never bound.
+                lucent::error("draw", "GEARS_DRAW_SPV_DUMP: cannot write {}", out.string());
             }
         }
-        // A NATIVE PASS STANDS IN HERE, and only here: the translation still
-        // ran, so its binding layout, constant map and texture list are what
-        // the rest of the frame uses -- the native module implements the same
-        // interface with our own arithmetic. Substituting at the module keeps
-        // every other property of the draw the guest's.
-        const gears::native::Pass *nat = isVertex ? nullptr : gears::native::Find(hash);
+        // A NATIVE PASS STANDS IN HERE, and only here. The normal native arm
+        // supplied the host interface above without translation; the retained
+        // arm remains available when native passes are disabled or when the
+        // explicit translation-inspection control is enabled.
         VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        const std::vector<uint32_t> *overrideCode =
-            diagnosticOverride.CodeFor(isVertex, hash, modification);
         if (overrideCode != nullptr)
         {
             mi.codeSize = overrideCode->size() * sizeof(uint32_t);

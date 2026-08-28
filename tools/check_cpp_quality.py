@@ -56,6 +56,7 @@ FORMATTED = [
     "runtime/gpu_draw_resolve_decode.cpp",
     "runtime/gpu_draw_resolve_decode.h",
     "runtime/gpu_draw_sample_layout.h",
+    "runtime/gpu_draw_shader_interface.cpp",
     "runtime/gpu_draw_shaders.cpp",
     "runtime/gpu_draw_targets.cpp",
     "runtime/gpu_draw_targets.h",
@@ -223,6 +224,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/gpu_draw_reinterpret.cpp",
     "runtime/gpu_draw_resolve.cpp",
     "runtime/gpu_draw_resolve_decode.cpp",
+    "runtime/gpu_draw_shader_interface.cpp",
     "runtime/gpu_draw_shaders.cpp",
     "runtime/gpu_draw_targets.cpp",
     "runtime/gpu_draw_textures.cpp",
@@ -379,6 +381,7 @@ def selftest():
     assert "tests/test_rhi_resolve.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_targets.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_api.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_draw_shader_interface.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_arena.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_frame_cleanup.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_frame_slots.cpp" in TIDY_TRANSLATION_UNITS
