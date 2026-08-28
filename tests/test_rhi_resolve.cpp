@@ -87,5 +87,15 @@ int main()
         gears::FindLastRhiDrawPacket(kCommandEnd, kHeaderAddress, 8, readWord);
     assert(!outsideSpan.present);
 
+    constexpr std::uint32_t kNewBufferHeader = 0x2010;
+    constexpr std::uint32_t kNewBufferEnd = kNewBufferHeader + 2 * sizeof(std::uint32_t);
+    words[kNewBufferHeader] = 0xC0012200;
+    words[kNewBufferHeader + sizeof(std::uint32_t)] = 0;
+    words[kNewBufferEnd] = 0x00030088;
+    const gears::RhiBasicDrawPacketEvidence afterBufferTransition =
+        gears::FindLastRhiDrawPacketAcrossCommandBuffers(0x3010, kNewBufferEnd, 8, readWord);
+    assert(afterBufferTransition.present);
+    assert(afterBufferTransition.headerAddress == kNewBufferHeader);
+
     return 0;
 }

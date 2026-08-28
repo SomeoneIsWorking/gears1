@@ -211,7 +211,12 @@ three-element, auto-index rectangle-list copy. The first live arm rejected
 expanded destination formats because the shared byte-size table omitted
 formats 27/28/29; adding their 2/4/8-byte sizes fixed the root cause. A headless
 run through frame 540 matched 540/540 logical resolves with no missing packets
-or mismatches. Focused controls reject a packet outside the owned command span.
+or mismatches. The retained command writer can replace the buffer behind its
+write pointer during a call; the observer now detects the resulting lower
+post-call pointer and performs a second bounded tail search in the new buffer.
+A longer Clang headless walk through frame 2280 crossed the previously failing
+region with no resolve refusal. Focused controls reject a packet outside the
+owned command span and cover the allocation-transition search.
 
 The semantic count is intentionally lower than the renderer's PM4 draw count:
 the compatibility command processor replays predicated packets per Xenos EDRAM
