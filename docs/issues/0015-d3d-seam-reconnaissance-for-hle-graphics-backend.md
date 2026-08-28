@@ -3,7 +3,7 @@ id: 15
 title: D3D seam reconnaissance for HLE graphics backend
 status: open
 created: 2026-07-22
-updated: 2026-08-27
+updated: 2026-08-28
 ---
 
 ## Root cause
@@ -25,7 +25,7 @@ DYNAMIC FRAME PROFILE (gdb ignore-count breakpoints, ~30s of movie phase, normal
 
 SHADERS: container magic 0x102A1100 (BE); two built-ins embedded in the image at 0x82039878/0x82039A40 (totalSize 0x10C, carries D3D9 SM3 token 0xFFFF0300 as metadata); validation at create in the 0x82227600 region; UE3-side loaders referencing the magic at 0x82617464/0x8261D58C/0x826223E0/0x82694CD0/0x8274679C. The executable payload is XENOS MICROCODE -- shader translation (ucode -> host) is the unavoidable hard core.
 
-RESOURCES: guest objects carry PRECOMPUTED hardware descriptors (texture objects hold the 6-dword fetch constant; the PM4 stream carries TYPE0 writes to 0x4800+, ALU constants to 0x4000+, and RB/PA EDRAM setup in the 0x2xxx register series -- all observed live). HLE must either hook creation APIs (entry points NOT yet identified; candidates 0x82227120/0x82227000 from UE3 texture code 0x8264Dxxx) or parse fetch constants at bind time.
+RESOURCES: guest objects carry PRECOMPUTED hardware descriptors (texture objects hold the 6-dword fetch constant; the PM4 stream carries TYPE0 writes to 0x4800+, ALU constants to 0x4000+, and RB/PA EDRAM setup in the 0x2xxx register series -- all observed live). HLE must either hook creation APIs (entry points NOT yet identified) or parse fetch constants at bind time. Static inspection falsified the former candidates `0x82227120`/`0x82227000` from UE3 texture code `0x8264Dxxx`: they index existing object arrays and return/update state, not construct resources.
 
 SIZE ASSESSMENT (blunt): first movie frame = hook layer + resource map + hand-written host equivalents of the two built-in shaders = small weeks. General scene rendering = full ucode translator + EDRAM/resolve model + remaining API surface = largest remaining subsystem, comparable to everything done so far combined. The existing LLE command processor stays as the transition scaffold; its packet knowledge maps directly onto the HLE state model.
 

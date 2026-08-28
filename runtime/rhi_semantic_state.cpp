@@ -5,45 +5,94 @@ namespace gears
 
 void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding)
 {
+    ApplyBinding(binding, {});
+}
+
+void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding,
+                                           const RhiBindingStateEvidence &state)
+{
+    RhiSemanticBinding effective = binding;
+    if (state.present)
+    {
+        effective.object = state.observedObject;
+        effective.descriptor = state.descriptor;
+        effective.descriptorDwords = state.descriptorDwords;
+        effective.bufferViewPresent = state.bufferViewPresent;
+        effective.bufferView = state.bufferView;
+    }
+
     if (binding.kind == RhiSemanticBindingKind::ColorRenderTarget)
     {
-        if (binding.object == 0)
-        {
-            colorTargets_.erase(binding.slot);
-            return;
-        }
-        colorTargets_[binding.slot] = {
-            .slot = binding.slot,
-            .object = binding.object,
-        };
+        if (effective.object == 0)
+            colorTargets_.erase(effective.slot);
+        else
+            colorTargets_[effective.slot] = {
+                .slot = effective.slot,
+                .object = effective.object,
+                .descriptor = effective.descriptor,
+                .descriptorDwords = effective.descriptorDwords,
+            };
         return;
     }
     if (binding.kind == RhiSemanticBindingKind::DepthStencilTarget)
     {
-        if (binding.object == 0)
-        {
+        if (effective.object == 0)
             depthStencilTarget_.reset();
-            return;
-        }
-        depthStencilTarget_ = {
-            .depthStencil = true,
-            .slot = binding.slot,
-            .object = binding.object,
-        };
-        return;
-    }
-    if (binding.kind != RhiSemanticBindingKind::VertexStream)
-        return;
-    if (binding.object == 0 || !binding.bufferViewPresent)
-    {
-        vertexStreams_.erase(binding.slot);
+        else
+            depthStencilTarget_ = {
+                .depthStencil = true,
+                .slot = effective.slot,
+                .object = effective.object,
+                .descriptor = effective.descriptor,
+                .descriptorDwords = effective.descriptorDwords,
+            };
         return;
     }
 
-    vertexStreams_[binding.slot] = {
-        .slot = binding.slot,
-        .object = binding.object,
-        .view = binding.bufferView,
+    if (effective.kind == RhiSemanticBindingKind::Texture)
+    {
+        if (effective.object == 0)
+            textures_.erase(effective.slot);
+        else
+            textures_[effective.slot] = effective;
+        return;
+    }
+    if (effective.kind == RhiSemanticBindingKind::PixelShader)
+    {
+        if (effective.object == 0)
+            pixelShader_.reset();
+        else
+            pixelShader_ = effective;
+        return;
+    }
+    if (effective.kind == RhiSemanticBindingKind::VertexShader)
+    {
+        if (effective.object == 0)
+            vertexShader_.reset();
+        else
+            vertexShader_ = effective;
+        return;
+    }
+    if (effective.kind == RhiSemanticBindingKind::IndexBuffer)
+    {
+        if (effective.object == 0 || !effective.bufferViewPresent)
+            indexBuffer_.reset();
+        else
+            indexBuffer_ = effective;
+        return;
+    }
+    if (effective.kind != RhiSemanticBindingKind::VertexStream)
+        return;
+    if (effective.object == 0 || !effective.bufferViewPresent)
+    {
+        vertexStreams_.erase(effective.slot);
+        return;
+    }
+
+    vertexStreams_[effective.slot] = {
+        .slot = effective.slot,
+        .object = effective.object,
+        .view = effective.bufferView,
     };
 }
 
@@ -76,12 +125,25 @@ RhiSemanticDrawState RhiSemanticStateTracker::SnapshotDraw(const RhiSemanticDraw
     }
     if (depthStencilTarget_.has_value())
         state.renderTargets.push_back(*depthStencilTarget_);
+    state.textures.reserve(textures_.size());
+    for (const auto &[slot, texture] : textures_)
+    {
+        (void)slot;
+        state.textures.push_back(texture);
+    }
+    state.pixelShader = pixelShader_;
+    state.vertexShader = vertexShader_;
+    state.indexBuffer = indexBuffer_;
     return state;
 }
 
 void RhiSemanticStateTracker::Reset()
 {
     vertexStreams_.clear();
+    textures_.clear();
+    pixelShader_.reset();
+    vertexShader_.reset();
+    indexBuffer_.reset();
     colorTargets_.clear();
     depthStencilTarget_.reset();
 }
