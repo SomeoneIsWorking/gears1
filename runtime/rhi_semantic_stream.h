@@ -244,6 +244,18 @@ struct RhiSemanticResolve
     std::uint32_t destinationPitch = 0;
     std::uint32_t destinationHeight = 0;
     std::uint32_t destinationFormat = 0;
+
+    // Preserve the complete title-neutral call payload alongside the fields
+    // decoded for the retained-packet comparer. A native resolve consumer
+    // needs the requested rectangle, destination point, storage descriptor,
+    // and byte width; dropping these at the title adapter would force it to
+    // rediscover guest layout from PM4 state. operationFlags remains raw until
+    // each bit has an independently grounded native meaning.
+    std::uint32_t operationFlags = 0;
+    std::array<std::int32_t, 4> sourceRectangle{};
+    std::array<std::int32_t, 2> destinationPoint{};
+    std::array<std::uint32_t, 6> destinationDescriptor{};
+    std::uint32_t bytesPerBlock = 0;
 };
 
 struct RhiResolvePacketEvidence
