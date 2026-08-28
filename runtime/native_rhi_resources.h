@@ -12,6 +12,7 @@ namespace gears::native_rhi
 enum class ResourceRegistryStatus : std::uint8_t
 {
     Accepted,
+    AdoptionEvidenceMissing,
     ConstructionEvidenceMissing,
     InvalidObject,
     InvalidReferenceCount,
@@ -20,6 +21,7 @@ enum class ResourceRegistryStatus : std::uint8_t
     ResourceTypeMismatch,
     BackingObjectMismatch,
     ReferenceCountMismatch,
+    IdentityMismatch,
     ReferenceBoundary,
 };
 
@@ -46,11 +48,13 @@ struct ResourceRecord
     std::uint32_t allocationFlags = 0;
     std::uint32_t referenceCount = 0;
     std::array<std::uint32_t, 5> objectWords{};
+    bool constructionObserved = false;
 };
 
 class ResourceRegistry
 {
   public:
+    [[nodiscard]] ResourceRegistryResult AdoptExisting(const RhiResourceIdentityEvidence &identity);
     [[nodiscard]] ResourceRegistryResult Construct(const ResourceConstructionCommand &command);
     [[nodiscard]] ResourceRegistryResult ApplyLifetime(const ResourceLifetimeCommand &command);
 

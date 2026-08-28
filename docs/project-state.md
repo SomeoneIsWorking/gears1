@@ -43,8 +43,10 @@ The observed Gears 1 boundary includes ordered texture/shader/buffer/target bind
 bound draws with resource views, device vertex/target state, logical resolves, presents, resource
 reference transitions, resource-wrapper construction contracts, and the 16-slot vertex-stream reset.
 `native_rhi_resources.*` now provides a title-neutral guest-object registry for those construction
-and non-boundary lifetime commands. Claims C096 and C097 record the native reference and reset-owner
-evidence.
+and non-boundary lifetime commands. Binding state and lifetime commands now carry an explicit
+title-adapter-decoded object identity so a future host backend can adopt resources that predate the
+observed frame; this is not API allocation. Claims C096 and C097 record the native reference and
+reset-owner evidence.
 
 Gap: The construction contracts at `0x8222EA18` and `0x8222EB78` are statically grounded but had
 zero calls in the current headless walk through frame 1440; release-to-zero destruction is also not
@@ -77,8 +79,10 @@ The PM4-independent plan now also has an explicit `native_rhi_backend.*` executi
 validates command ordering before dispatch, routes each semantic command to a supplied host backend,
 and requires cancellation after a partial refusal. `native_rhi_resources.*` supplies that backend's
 title-neutral resource identity and non-boundary lifetime bookkeeping, refusing unknown objects and
-retained destructor boundaries. The focused tests prove those transaction and registry rules; they do
-not provide a backend or alter the shipping renderer.
+retained destructor boundaries. It now accepts explicitly supplied identity evidence for resources
+whose constructors were not observed, while rejecting inconsistent metadata and zero-reference
+adoption. The focused tests prove those transaction and registry rules; they do not provide a backend
+or alter the shipping renderer.
 
 The native-pass seam now contains an independently authored scene-composite
 module whose descriptor contract validates as Vulkan 1.1 SPIR-V. Its first

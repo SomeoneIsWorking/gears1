@@ -5,7 +5,7 @@ status: open
 symptom: the audio pump stops advancing and presentation plateaus while the process stays alive; other runs pass the same point
 tags: hang,nondeterministic,guest,audio,blocker
 created: 2026-07-28
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 ## Current status
@@ -39,6 +39,16 @@ the corrected harness. Preserve the first failing object-lifetime report and the
 per-subsystem progress counters from that run. Do not infer a ring race merely
 from the existence of two producers; an observed overlap or corrupted commit is
 required.
+
+### Note (2026-08-29)
+
+A 180-second headless semantic-observer run reached frame 2760 with accepted
+PM4-independent plans, then aborted on the already-known deliberate pure-virtual
+fault. The call chain was `sub_82444EF0 <- sub_82445028 <- sub_8243ADA0 <-
+sub_827A9470`, with the indirect target reported as `0x421ace00`. This is a
+render-command object/vtable failure after sustained progress, not evidence that
+the native RHI identity observer or plan builder caused the abort. It remains
+separate from the no-stall result and needs its own object-lifetime evidence.
 
 ### Note (2026-08-28)
 Fixed the distinct-thread detector's reporting state: it retained only the immediately previous identity, so ordinary alternation emitted an error on every producer entry and generated multi-megabyte logs. It now remembers the set of observed OS thread IDs and reports each newly discovered identity once. This does not change the established zero-overlap conclusion.

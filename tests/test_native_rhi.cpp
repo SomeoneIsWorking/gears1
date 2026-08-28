@@ -30,6 +30,14 @@ gears::RhiSemanticFrame CompleteFrame()
     };
     const gears::RhiObservedBinding observedBinding{
         .binding = binding,
+        .state = {.present = true,
+                  .observedObject = 0x2000,
+                  .identity = {.present = true,
+                               .object = 0x2000,
+                               .rawFlags = 4,
+                               .resourceType = 4,
+                               .backingObject = 0x2100,
+                               .referenceCount = 1}},
         .evidence = gears::RhiBindingEvidenceResult::Match,
     };
     const gears::RhiSemanticResourceLifetime lifetime{
@@ -152,6 +160,10 @@ int main()
                .state.draw.elementCount == 3);
     assert(std::holds_alternative<gears::native_rhi::PresentCommand>(
         accepted.frame.commands.back().payload));
+    assert(std::get<gears::native_rhi::BindingCommand>(accepted.frame.commands[1].payload)
+               .identity.object == 0x2000);
+    assert(std::get<gears::native_rhi::ResourceLifetimeCommand>(accepted.frame.commands[2].payload)
+               .identity.referenceCount == 0);
 
     gears::RhiSemanticFrame missingEvidence = CompleteFrame();
     std::get<gears::RhiObservedDraw>(missingEvidence.events[0].payload).evidence =
@@ -197,12 +209,60 @@ int main()
                      .objectWords = {4, 1, 0xFFFFFFFF, 0x5000, 64}}};
     const gears::native_rhi::ResourceRegistryResult constructed =
         resources.Construct(resourceConstruction);
+    (void)constructed;
     assert(constructed.status == gears::native_rhi::ResourceRegistryStatus::Accepted);
     assert(constructed.referenceCount == 1);
     assert(resources.size() == 1);
     assert(resources.Find(0x4000)->backingObject == 0x5000);
+    assert(resources.Find(0x4000)->constructionObserved);
     assert(resources.Construct(resourceConstruction).status ==
            gears::native_rhi::ResourceRegistryStatus::DuplicateObject);
+
+    const gears::RhiResourceIdentityEvidence existingIdentity{
+        .present = true,
+        .object = 0x4100,
+        .rawFlags = 6,
+        .resourceType = 6,
+        .backingObject = 0x5100,
+        .referenceCount = 2,
+    };
+    assert(resources.AdoptExisting(existingIdentity).status ==
+           gears::native_rhi::ResourceRegistryStatus::Accepted);
+    assert(!resources.Find(0x4100)->constructionObserved);
+    assert(resources.AdoptExisting(existingIdentity).status ==
+           gears::native_rhi::ResourceRegistryStatus::Accepted);
+    auto conflictingIdentity = existingIdentity;
+    conflictingIdentity.backingObject = 0x6100;
+    assert(resources.AdoptExisting(conflictingIdentity).status ==
+           gears::native_rhi::ResourceRegistryStatus::IdentityMismatch);
+    auto missingIdentity = existingIdentity;
+    missingIdentity.present = false;
+    assert(resources.AdoptExisting(missingIdentity).status ==
+           gears::native_rhi::ResourceRegistryStatus::AdoptionEvidenceMissing);
+
+    gears::native_rhi::ResourceLifetimeCommand adoptedLifetime{
+        .lifetime = {.operation = gears::RhiResourceLifetimeOperation::Release,
+                     .object = existingIdentity.object,
+                     .rawFlags = existingIdentity.rawFlags,
+                     .resourceType = existingIdentity.resourceType,
+                     .backingObject = existingIdentity.backingObject,
+                     .previousReferenceCount = existingIdentity.referenceCount},
+        .identity = existingIdentity,
+    };
+    assert(resources.ApplyLifetime(adoptedLifetime).referenceCount == 1);
+    auto inconsistentLifetimeIdentity = adoptedLifetime;
+    inconsistentLifetimeIdentity.identity.rawFlags = 7;
+    assert(resources.ApplyLifetime(inconsistentLifetimeIdentity).status ==
+           gears::native_rhi::ResourceRegistryStatus::IdentityMismatch);
+    auto boundaryLifetime = adoptedLifetime;
+    boundaryLifetime.lifetime.operation = gears::RhiResourceLifetimeOperation::AddReference;
+    boundaryLifetime.lifetime.object = 0x4200;
+    boundaryLifetime.lifetime.previousReferenceCount = 0;
+    boundaryLifetime.identity.object = 0x4200;
+    boundaryLifetime.identity.referenceCount = 0;
+    assert(resources.ApplyLifetime(boundaryLifetime).status ==
+           gears::native_rhi::ResourceRegistryStatus::ReferenceBoundary);
+    assert(resources.Find(0x4200) == nullptr);
 
     gears::native_rhi::ResourceLifetimeCommand resourceLifetime{
         .lifetime = {.operation = gears::RhiResourceLifetimeOperation::AddReference,
@@ -240,6 +300,7 @@ int main()
     RecordingBackend backend;
     const gears::native_rhi::ExecutionResult executed =
         gears::native_rhi::ExecuteFrame(accepted.frame, backend);
+    (void)executed;
     assert(executed.status == gears::native_rhi::ExecutionStatus::Accepted);
     assert((backend.calls == std::vector<std::string_view>{"begin", "draw", "binding", "lifetime",
                                                            "construction", "reset", "resolve",
@@ -249,6 +310,7 @@ int main()
     refusingBackend.commandResult = false;
     const gears::native_rhi::ExecutionResult refused =
         gears::native_rhi::ExecuteFrame(accepted.frame, refusingBackend);
+    (void)refused;
     assert(refused.status == gears::native_rhi::ExecutionStatus::BackendRefused);
     assert(refused.commandIndex == 0);
     assert((refusingBackend.calls == std::vector<std::string_view>{"begin", "draw", "cancel"}));
@@ -257,6 +319,7 @@ int main()
     gears::native_rhi::Frame incomplete;
     const gears::native_rhi::ExecutionResult incompleteResult =
         gears::native_rhi::ExecuteFrame(incomplete, incompleteBackend);
+    (void)incompleteResult;
     assert(incompleteResult.status == gears::native_rhi::ExecutionStatus::IncompleteFrame);
     assert(incompleteBackend.calls.empty());
 
@@ -265,6 +328,7 @@ int main()
     RecordingBackend malformedBackend;
     const gears::native_rhi::ExecutionResult malformedResult =
         gears::native_rhi::ExecuteFrame(malformed, malformedBackend);
+    (void)malformedResult;
     assert(malformedResult.status == gears::native_rhi::ExecutionStatus::SequenceNotIncreasing);
     assert(malformedBackend.calls.empty());
 }
