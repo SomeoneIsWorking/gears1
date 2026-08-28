@@ -614,6 +614,12 @@ add_executable(test_frame_contract
 target_include_directories(test_frame_contract PRIVATE ../runtime)
 add_test(NAME frame_contract COMMAND test_frame_contract)
 
+add_executable(test_frame_production_timing
+    test_frame_production_timing.cpp
+    ../runtime/frame_production_timing.cpp)
+target_include_directories(test_frame_production_timing PRIVATE ../runtime)
+add_test(NAME frame_production_timing COMMAND test_frame_production_timing)
+
 add_executable(test_rhi_semantic_stream
     test_rhi_semantic_stream.cpp
     ../runtime/rhi_semantic_state.cpp

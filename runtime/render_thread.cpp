@@ -4,6 +4,7 @@
 #include "gpu_draw.h"
 #include "gpu_frame_timing.h"
 #include "graphics_probe_render.h"
+#include "frame_production_timing.h"
 
 #include <algorithm>
 #include <atomic>
@@ -22,6 +23,7 @@
 #include <unistd.h>
 
 #include <lucent/log.h>
+#include <lucent/config.h>
 
 #include "render_retirement.h"
 
@@ -173,6 +175,10 @@ bool SubmitFrameForRender(FrameDrawInputs &&in)
         lucent::error("draw", "render queue rejected monotonic frame {} after acceptance", frameId);
         std::terminate();
     }
+    static const bool traceEnabled = lucent::config::flag("FRAME_PRODUCTION_TRACE");
+    if (traceEnabled)
+        (void)GlobalFrameProductionTiming().Observe(FrameProductionStage::RenderSubmission,
+                                                    FrameProductionTiming::Clock::now());
     return true;
 }
 

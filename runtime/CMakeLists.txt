@@ -208,6 +208,7 @@ add_executable(gears1
     rhi_semantic_stream.cpp
     rhi_resource_reference.cpp
     gpu_ticket_wait.cpp
+    frame_production_timing.cpp
     titles/gears1/color_write_gamma_override.cpp
     titles/gears1/rhi_bindings.cpp
     titles/gears1/rhi_device_state_reset_binding.cpp
@@ -217,6 +218,7 @@ add_executable(gears1
     titles/gears1/rhi_resource_lifetime_binding.cpp
     titles/gears1/gpu_ticket_wait_binding.cpp
     titles/gears1/gpu_ticket_wait_state.cpp
+    titles/gears1/frame_production_timing_binding.cpp
     titles/gears1/rhi_target_descriptor_watch.cpp
     titles/gears1/rhi_vertex_buffer.cpp
     titles/gears1/rhi_vertex_stream_watch.cpp

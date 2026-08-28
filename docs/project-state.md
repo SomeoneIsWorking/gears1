@@ -18,7 +18,9 @@ done/partial/missing inventory.
 ## Current focus
 
 S004 is the current focus: move measured, parity-checked RHI operations from retained bodies to
-native owners while keeping runtime retained/A/B controls.
+native owners while keeping runtime retained/A/B controls. The new title-boundary timing probe
+rules out the startup Bink wait as the general gameplay 30 Hz limiter; a steady gameplay trace is
+still missing.
 
 ## Capability details
 
@@ -81,7 +83,7 @@ The conformance reporter exists, but no title has passed its complete report.
 
 Missing capability: There is no complete native renderer path to measure against the 5 ms / 200 fps
 goal. Current compatibility frames are useful migration evidence, not proof of the native target;
-the separate title-side approximately 30 Hz producer limit also remains unidentified.
+the separate title-side approximately 30 Hz gameplay producer limit also remains unidentified.
 
 ### S008 — Clean image-only provisioning
 
