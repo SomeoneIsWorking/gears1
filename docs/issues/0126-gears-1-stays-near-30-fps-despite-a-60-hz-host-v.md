@@ -13,6 +13,24 @@ updated: 2026-08-22
 
 ## What was tried / dead ends
 
+### Title-boundary timing trace (2026-08-28)
+
+`GEARS_FRAME_PRODUCTION_TRACE=1` now counts the exact Gears 1 boundaries while
+retaining and super-calling the generated bodies: `0x8221B378` (timing tick),
+`0x8221B670` (Bink/render producer dispatch), `0x824A5170` (producer present
+wrapper), and the host render handoff; the existing `VdSwap` rate log is the
+cross-check. A 12-second headless boot trace
+measured the timing tick at roughly 4.7–5.5 million calls/s, producer dispatch
+at 70–113/s, and producer-present calls equal to `VdSwap` at 22–29/s. The
+remaining dispatches took the `0x82AE8C30` blocked path.
+
+This does not identify the gameplay limiter: issue #0013 already identifies
+`0x82AE8C30` as the Bink wait and `0x8221B670` as the Bink pump, so these counts
+describe the startup movie path. The probe rules out treating that movie wait
+as the title's general 30 Hz simulation cap. The next measurement must reach a
+gameplay-state producer after the Bink path; no timing or present override is
+justified by this trace.
+
 
 ## Resolution
 

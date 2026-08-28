@@ -23,6 +23,7 @@ the same commit that removes it.
 | Knob | Meaning |
 |---|---|
 | `-DGEARS_PPC_OPT=-O0` | Optimisation level for the 49k translated guest functions (CMake cache, default `-O2`). `-O0` builds in about the same time and makes the title's own code ~2.5x slower; it exists for bisecting a miscompile, not for speed |
+| `GEARS_FRAME_PRODUCTION_TRACE=1` | Diagnostic control: retain and super-call the Gears 1 timing/producer boundaries and report scheduler, producer, exact present-call, and host render-handoff rates once per second. The existing `VdSwap` log is the present cross-check. The current trace covers the startup Bink path; it is not a 60 Hz enhancement |
 
 ## Selecting what runs
 
