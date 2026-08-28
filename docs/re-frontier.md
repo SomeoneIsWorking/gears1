@@ -220,6 +220,14 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap:
 - notes: Fixed in runtime/guest_stack_argument.{h,cpp} plus the corrected parameter mapping in xam_user.cpp, tests first. FOUR wrong theories were recorded against this step before the answer and are listed in catalog #45 so they are not re-derived: a game/render thread race, GPU pipeline latency, the holder being freed, and safe-by-allocator-timing. Also cleared as suspects: the gamertag-derived save filename (the read and write share the path builder, so save:\\Pla was always self-consistent) and the default_checkpoint.sav literal (a fallback not meant to be reached). #44 is NOT downstream of this -- the ring two-producer warnings still occur 421 times in the fixed run -- so it stands as its own bug.
 
+### audio-mix-native — Native Gears 1 audio mix kernel
+- status: re-verified
+- deps: audio-driver
+- evidence: The retained 0x825F2D40 body was statically grounded as a 16-iteration SIMD mixer. The native title adapter matched 256 same-call audits byte-for-byte, including the output buffer and retained stack-store ordering, then a current headless profile removed __imp__sub_825F2D40 from the sampled CPU-hotspot list; the same SP_Prison_P run reached 29.6-29.8 rendered frames/s after warm-up.
+- where: runtime/titles/gears1/audio_mix.{h,cpp}; runtime/titles/gears1/audio_mix_override.cpp
+- gap: This is a Gears 1 exact-revision operation and is opt-in; no other title/revision binding or shared audio-engine contract is established. The native renderer and separate title-side frame-production limit remain.
+- notes: The retained body remains callable through RECOMP_AUDIO_MIX=1 and GEARS_AUDIO_MIX_AB=1. Audit with NATIVE_AUDIO_MIX_AUDIT=1 before relying on a new revision binding.
+
 ## compare
 
 
@@ -342,7 +350,7 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - notes: Logical title draw calls are not one-to-one with compatibility-renderer draw executions because predicated Xenos packets replay per EDRAM tile. Exact guest addresses and device offsets remain in the Gears 1 adapter; the semantic stream is title-neutral.
 
 ### gpu-ticket-wait-native — Block the grounded retirement wait on host publication
-- status: partial
+- status: re-partial
 - deps: native-rhi-observation, gpu-retirement
 - evidence: Static inspection of the retained Gears 1 helper grounds the operation-kind-3 state, owning-thread exemption, progress address, modular five-second deadline, and deadline-refresh condition. The shared packet-memory owner publishes a generation notification after the authoritative `EVENT_WRITE_SHD` store. The title adapter keeps the generated helper callable and uses a notified native wait by default, with retained and alternating controls. Focused tests cover deadline arithmetic, normalized address aliases, notification wakeup, and exact state decoding. Current-build headless controls reduced process user CPU from 53.44 s retained to 32.36 s native in 35 s runs while both remained near 30 produced frames/s.
 - where: runtime/gpu_ticket_wait.*; runtime/gpu_packet_memory.cpp; runtime/titles/gears1/gpu_ticket_wait_*; tests/test_gpu_ticket_wait*.cpp; docs/issues/0152-retained-gpu-ticket-wait-burns-one-third-of-samp.md
