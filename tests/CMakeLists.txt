@@ -582,6 +582,14 @@ if(Vulkan_FOUND)
     target_include_directories(test_swapchain_format PRIVATE ../runtime ${Vulkan_INCLUDE_DIRS})
     add_test(NAME swapchain_format COMMAND test_swapchain_format)
 
+    add_executable(test_native_rhi_vulkan_resolve
+        test_native_rhi_vulkan_resolve.cpp
+        ../runtime/native_rhi_vulkan_resolve.cpp)
+    target_include_directories(test_native_rhi_vulkan_resolve PRIVATE ../runtime
+                               ${Vulkan_INCLUDE_DIRS})
+    target_link_libraries(test_native_rhi_vulkan_resolve PRIVATE Vulkan::Vulkan)
+    add_test(NAME native_rhi_vulkan_resolve COMMAND test_native_rhi_vulkan_resolve)
+
 endif()
 
 # The audio pump's pacing policy. What a pump does with slots it MISSED decides
