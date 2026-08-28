@@ -31,12 +31,17 @@ engine subsystems progressively own the shipping execution path.
 - Generated recomp output is never edited, and every native replacement has a runtime original/native
   seam with an explicit super-call until its parity gate authorizes native execution.
 - Shared engine code contains no Gears 1 guest addresses, hashes, or revision policy.
+- The shipping native engine must not emulate a console GPU: no GameCube GPU emulation and no
+  Xbox 360/Xenos/PM4 GPU emulation may be part of its final rendering path. Console GPU behavior
+  may remain in the retained compatibility oracle used for migration and conformance only.
 
 ### Non-goals
 
 - A Gears 1-only source port.
 - Treating the PM4/Xenos compatibility renderer or the recompiled title executable as the final
   engine architecture.
+- Making console-GPU emulation a required product dependency, default renderer, or performance
+  fallback for the native engine.
 - Reimplementing unrelated general-purpose Unreal Engine editor or content-authoring tools.
 
 ## G002 — Preserve exact behavior while migrating ownership natively

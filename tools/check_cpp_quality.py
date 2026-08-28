@@ -28,6 +28,7 @@ FORMATTED = [
     "runtime/frame_probe_capture.h",
     "runtime/frame_contract.cpp",
     "runtime/frame_contract.h",
+    "runtime/frame_production_timing.h",
     "runtime/frame_queue.cpp",
     "runtime/frame_queue.h",
     "runtime/gpu_device_features.h",
@@ -123,6 +124,7 @@ FORMATTED = [
     "runtime/native_rhi.cpp",
     "runtime/native_rhi.h",
     "runtime/native_rhi_present.cpp",
+    "runtime/frame_production_timing.cpp",
     "runtime/rhi_resource_reference.cpp",
     "runtime/rhi_resource_reference.h",
     "runtime/rhi_packet_evidence.h",
@@ -154,6 +156,7 @@ FORMATTED = [
     "runtime/titles/gears1/gpu_ticket_wait_state.cpp",
     "runtime/titles/gears1/gpu_ticket_wait_state.h",
     "runtime/titles/gears1/shader_setter_override.cpp",
+    "runtime/titles/gears1/frame_production_timing_binding.cpp",
     "runtime/titles/gears1/shader_setter_state.h",
     "runtime/vd_null_gpu.cpp",
     "runtime/swapchain_format.h",
@@ -196,6 +199,7 @@ FORMATTED = [
     "tests/test_generated_title_profile.cpp",
     "tests/test_title_executable.cpp",
     "tests/test_title_profile.cpp",
+    "tests/test_frame_production_timing.cpp",
 ]
 
 TIDY_TRANSLATION_UNITS = [
@@ -256,6 +260,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/native_rhi_backend.cpp",
     "runtime/native_rhi_resources.cpp",
     "runtime/native_rhi_present.cpp",
+    "runtime/frame_production_timing.cpp",
     "tests/test_native_rhi.cpp",
     "runtime/rhi_resource_reference.cpp",
     "runtime/scanout_gamma.cpp",
@@ -274,6 +279,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/titles/gears1/gpu_ticket_wait_binding.cpp",
     "runtime/titles/gears1/gpu_ticket_wait_state.cpp",
     "runtime/titles/gears1/shader_setter_override.cpp",
+    "runtime/titles/gears1/frame_production_timing_binding.cpp",
     "tests/test_depth_alias_shader_format.cpp",
     "tests/test_color_write_gamma_state.cpp",
     "tests/test_frame_probe_capture.cpp",
@@ -312,7 +318,12 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_generated_title_profile.cpp",
     "tests/test_title_executable.cpp",
     "tests/test_title_profile.cpp",
+    "tests/test_frame_production_timing.cpp",
 ]
+
+FORMAT_RANGES = {
+    "runtime/guest_probes.cpp": [[1245, 1249]],
+}
 
 VD_TIDY_RANGES = [
     [445, 456],
@@ -369,6 +380,12 @@ def selftest():
         raise AssertionError("missing tools must be refused")
     assert "runtime/gpu_draw_reinterpret.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_formats.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/frame_production_timing.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/frame_production_timing.cpp" in FORMATTED
+    assert "runtime/frame_production_timing.h" in FORMATTED
+    assert "runtime/titles/gears1/frame_production_timing_binding.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_frame_production_timing.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/guest_probes.cpp" in FORMAT_RANGES
     assert "runtime/titles/gears1/rhi_resolve.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resolve_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resource_construction_binding.cpp" in TIDY_TRANSLATION_UNITS
@@ -441,6 +458,9 @@ def main(argv):
         return 1
 
     run([clang_format, "--dry-run", "--Werror", *FORMATTED], root)
+    for source, ranges in FORMAT_RANGES.items():
+        for first, last in ranges:
+            run([clang_format, "--dry-run", "--Werror", f"--lines={first}:{last}", source], root)
 
     resource_dir = subprocess.run(
         [clang_cxx, "-print-resource-dir"], check=True, text=True,

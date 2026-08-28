@@ -19,8 +19,9 @@ done/partial/missing inventory.
 
 S004 is the current focus: move measured, parity-checked RHI operations from retained bodies to
 native owners while keeping runtime retained/A/B controls. The new title-boundary timing probe
-rules out the startup Bink wait as the general gameplay 30 Hz limiter; a steady gameplay trace is
-still missing.
+rules out the startup Bink wait as the general gameplay 30 Hz limiter. Its post-Bink extension
+shows ring reservations continuing after the traced producer stops while semantic presents remain
+near 30 Hz; the steady gameplay producer or wait that limits those presents is still unidentified.
 
 ## Capability details
 

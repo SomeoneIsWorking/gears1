@@ -1,19 +1,10 @@
 #include "frame_production_timing.h"
 #include "import_stub.h"
 
-#include <lucent/config.h>
-#include <lucent/log.h>
-
 namespace
 {
 
 thread_local bool t_insideProducer = false;
-
-[[nodiscard]] bool FrameProductionTraceEnabled()
-{
-    static const bool enabled = lucent::config::flag("FRAME_PRODUCTION_TRACE");
-    return enabled;
-}
 
 void ReportSchedulerTick()
 {
@@ -22,13 +13,7 @@ void ReportSchedulerTick()
     if (!report.has_value())
         return;
 
-    lucent::info("timing",
-                 "Gears 1 frame chain: scheduler {:.1f}/s ({}), producer {:.1f}/s ({}),"
-                 " producer-present {} calls, blocked {} calls, render handoff {:.1f}/s ({}),"
-                 " over {:.2f}s",
-                 report->schedulerHz, report->schedulerTicks, report->producerHz,
-                 report->producerDispatches, report->producerPresents, report->producerBlocks,
-                 report->submissionHz, report->renderSubmissions, report->elapsedSeconds);
+    gears::ReportFrameProductionTiming(*report);
 }
 
 void ObserveProducerDispatch()
@@ -54,7 +39,7 @@ void ObserveProducerBlocked()
 extern "C" PPC_FUNC(__imp__sub_8221B378);
 PPC_FUNC(sub_8221B378)
 {
-    if (FrameProductionTraceEnabled())
+    if (gears::FrameProductionTraceEnabled())
         ReportSchedulerTick();
     __imp__sub_8221B378(ctx, base);
 }
@@ -62,7 +47,7 @@ PPC_FUNC(sub_8221B378)
 extern "C" PPC_FUNC(__imp__sub_8221B670);
 PPC_FUNC(sub_8221B670)
 {
-    if (FrameProductionTraceEnabled())
+    if (gears::FrameProductionTraceEnabled())
         ObserveProducerDispatch();
     const bool wasInsideProducer = t_insideProducer;
     t_insideProducer = true;
@@ -73,7 +58,7 @@ PPC_FUNC(sub_8221B670)
 extern "C" PPC_FUNC(__imp__sub_824A5170);
 PPC_FUNC(sub_824A5170)
 {
-    if (FrameProductionTraceEnabled())
+    if (gears::FrameProductionTraceEnabled())
         ObserveProducerPresent();
     __imp__sub_824A5170(ctx, base);
 }
@@ -81,7 +66,7 @@ PPC_FUNC(sub_824A5170)
 extern "C" PPC_FUNC(__imp__sub_82AE8C30);
 PPC_FUNC(sub_82AE8C30)
 {
-    const bool observe = FrameProductionTraceEnabled() && t_insideProducer;
+    const bool observe = gears::FrameProductionTraceEnabled() && t_insideProducer;
     __imp__sub_82AE8C30(ctx, base);
     if (observe && ctx.r3.u32 != 0)
         ObserveProducerBlocked();

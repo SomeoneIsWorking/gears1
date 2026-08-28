@@ -38,6 +38,8 @@ void TestReportsAllStages()
     assert(report->producerPresents == 201);
     assert(report->producerBlocks == 201);
     assert(report->renderSubmissions == 201);
+    assert(report->renderRingReservations == 0);
+    assert(report->presentBoundaries == 0);
     AssertNear(report->elapsedSeconds, 2.0);
     AssertNear(report->schedulerHz, 100.0);
     AssertNear(report->producerHz, 100.0);
@@ -58,10 +60,31 @@ void TestOnlySchedulerTicksTriggerReports()
     assert(report->producerDispatches == 1);
 }
 
+void TestPostSchedulerReportsUsePresentBoundaryProgress()
+{
+    Timing timing;
+    const Timing::TimePoint start{};
+    for (int tick = 0; tick < 60; ++tick)
+        timing.Observe(gears::FrameProductionStage::SchedulerTick, start + tick * 10ms);
+
+    for (int swap = 0; swap < 60; ++swap)
+    {
+        timing.Observe(gears::FrameProductionStage::RenderRingReservation,
+                       start + 1s + swap * 10ms);
+        timing.Observe(gears::FrameProductionStage::PresentBoundary, start + 1s + swap * 10ms);
+    }
+
+    const auto report = timing.ReportIfDue(start + 2s);
+    assert(report.has_value());
+    assert(report->renderRingReservations == 60);
+    assert(report->presentBoundaries == 60);
+}
+
 } // namespace
 
 int main()
 {
     TestReportsAllStages();
     TestOnlySchedulerTicksTriggerReports();
+    TestPostSchedulerReportsUsePresentBoundaryProgress();
 }
