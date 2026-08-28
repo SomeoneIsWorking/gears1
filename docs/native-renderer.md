@@ -140,4 +140,7 @@ compatibility renderer with a no-op. The focused native-RHI test exercises the
 ordered dispatch, incomplete-frame refusal, command refusal cancellation, and
 sequence rejection. A real backend still needs a title-neutral host resource
 resolver and same-input state/pixel parity before it may be connected or used
-for performance measurements.
+for performance measurements. `runtime/native_rhi_resources.*` now supplies
+the title-neutral guest-object identity and non-boundary lifetime part of that
+resolver, with strict unknown-object and destructor-boundary refusal. API-
+specific allocation and pipeline/material resolution remain unimplemented.
