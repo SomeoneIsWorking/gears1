@@ -5,7 +5,7 @@ status: investigating
 symptom: Per-draw semantics are now observed and packet-checked, but complete state, resource, resolve, presentation, and retirement semantics are not yet mirrored, so native execution cannot safely bypass PM4
 tags: performance,native-rhi,d3d,re,draw,seam
 created: 2026-08-27
-updated: 2026-08-28
+updated: 2026-08-29
 ---
 
 ## Root cause
@@ -209,3 +209,16 @@ lossy handoff before a native resolve backend is designed; it does not interpret
 the raw flags or authorize backend execution. The packet comparer still proves
 only the independently decoded address, pitch, height, and rectangle-list
 submission.
+
+The first longer live walk then exposed a false negative in this observer: the
+retained body can cross its device command-buffer limit at `+0x30` and replace
+the write-pointer buffer at `+0x28` during one resolve. At the failing event the
+pointer moved from `0xa030eddc` to `0xa0017b28`; the old linear scanner treated
+that valid allocation transition as an empty span. The bounded
+`FindLastRhiDrawPacketAcrossCommandBuffers` path now retries the new buffer's
+bounded tail only when the post-call pointer is lower, while preserving the
+normal span and the existing packet-field checks. Focused regression coverage
+exercises both paths. A Clang headless walk through frame 2280 then accepted
+the previously failing resolve region with no semantic resolve refusal. This
+repairs observation completeness; it does not provide a host backend or permit
+the native frontend bypass.

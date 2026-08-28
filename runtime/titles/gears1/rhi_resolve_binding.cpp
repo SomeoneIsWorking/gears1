@@ -107,8 +107,8 @@ PPC_FUNC(sub_82235528)
 
     const std::uint32_t commandEnd =
         device != 0 ? memory.Read32(device + kCommandWritePointerOffset) : 0;
-    const gears::RhiBasicDrawPacketEvidence draw = gears::FindLastRhiDrawPacket(
-        commandEnd, commandBefore, kMaximumResolvePacketSearchDwords,
+    const gears::RhiBasicDrawPacketEvidence draw = gears::FindLastRhiDrawPacketAcrossCommandBuffers(
+        commandBefore, commandEnd, kMaximumResolvePacketSearchDwords,
         [&memory](std::uint32_t address) { return memory.Read32(address); });
     const std::uint32_t pitchHeight =
         device != 0 ? memory.Read32(device + kCopyDestinationPitchHeightShadowOffset) : 0;

@@ -62,4 +62,22 @@ FindLastRhiDrawPacket(std::uint32_t commandEnd, std::uint32_t lowerAddressExclus
     return {};
 }
 
+// The Gears RHI write pointer can move to a newly allocated command buffer
+// while a retained operation is emitting packets. A lower post-call pointer
+// therefore does not describe an address range that crosses the old buffer's
+// end. Keep the normal bounded span first; only after the title-observed
+// ordering proves a buffer transition do we search the new buffer's bounded
+// tail from its address-space floor.
+template <typename ReadWord>
+[[nodiscard]] RhiBasicDrawPacketEvidence
+FindLastRhiDrawPacketAcrossCommandBuffers(std::uint32_t commandBefore, std::uint32_t commandEnd,
+                                          std::uint32_t maximumSearchDwords, ReadWord &&readWord)
+{
+    const RhiBasicDrawPacketEvidence draw =
+        FindLastRhiDrawPacket(commandEnd, commandBefore, maximumSearchDwords, readWord);
+    if (draw.present || commandEnd >= commandBefore)
+        return draw;
+    return FindLastRhiDrawPacket(commandEnd, 0, maximumSearchDwords, readWord);
+}
+
 } // namespace gears

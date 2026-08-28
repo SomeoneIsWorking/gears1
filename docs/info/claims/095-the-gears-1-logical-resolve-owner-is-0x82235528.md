@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-28
 tags: native-rhi,resolve,gears1
 depends: runtime/titles/gears1/rhi_resolve.cpp#DecodeResolveCall, runtime/titles/gears1/rhi_resolve_binding.cpp#sub_82235528, runtime/rhi_semantic_stream.cpp#CompareRhiResolvePacket
+reconfirmed: 2026-08-29
+verified_at: 2026-08-29 01:03:02
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ Selective retained-body inspection plus focused decoder/packet controls and a he
 ## What would falsify it
 
 A supported exact Gears 1 revision routes a logical resolve through another owner, or an observed call disagrees with the decoded source/destination or emitted rectangle packet.
+
+## Re-confirmed 2026-08-29
+
+Focused decoder/packet controls plus Clang headless GEARS_NATIVE_RHI_OBSERVE and GEARS_NATIVE_RHI_PLAN walks through frame 2280: logical resolves continued through the previously failing lower command-buffer pointer transition with no missing or mismatched resolve evidence.

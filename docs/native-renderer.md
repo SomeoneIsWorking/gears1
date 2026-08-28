@@ -135,10 +135,13 @@ construction events, stream resets, resolves, and presentation. It is enabled
 only with `GEARS_NATIVE_RHI_PLAN=1`, runs alongside the retained compatibility
 renderer, and refuses incomplete evidence, non-monotonic ordering, or a missing
 terminal present. A headless Gears 1 menu walk reached frame 1440 with every
-reported frame accepted; later frames in a longer walk were refused when the
-existing resolve observer reported missing or mismatched retained packet
-evidence. This proves the seam can receive early complete ordered semantic
-frames and correctly stop on a known parity gap, not that native rendering is
+reported frame accepted; later frames in a longer walk were previously refused
+when the existing resolve observer treated a retained command-buffer allocation
+transition as missing packet evidence. The observer now preserves its bounded
+normal search and retries the new allocation's bounded tail only when the
+title's before/after pointers move backward; a Clang headless walk accepted
+through frame 2280 with no resolve refusal. This proves the seam can receive a
+larger complete ordered semantic stream, not that native rendering is
 executing.
 
 The plan deliberately has no PM4 packets, Xenos registers, EDRAM state, or
