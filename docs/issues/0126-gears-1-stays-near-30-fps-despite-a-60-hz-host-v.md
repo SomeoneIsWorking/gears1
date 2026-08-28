@@ -5,7 +5,7 @@ status: investigating
 symptom: headless guest presents at 29.7-29.9 fps and must reach verified 60 fps without speeding the guest clock
 tags: performance,timing,60fps,present,vblank
 created: 2026-08-22
-updated: 2026-08-22
+updated: 2026-08-29
 ---
 
 ## Root cause
@@ -30,6 +30,26 @@ describe the startup movie path. The probe rules out treating that movie wait
 as the title's general 30 Hz simulation cap. The next measurement must reach a
 gameplay-state producer after the Bink path; no timing or present override is
 justified by this trace.
+
+### Post-Bink ring and VdSwap trace (2026-08-29)
+
+The trace was extended to the render-ring reservation entry and the semantic
+present boundary (which is emitted once per `VdSwap`), then
+run headlessly for 45 seconds with host rendering bypassed
+(`GEARS_DRAW_FRAME_AT=99999999`, `GEARS_DRAW_FRAME_COUNT=0`). At approximately
+frame 571, the startup producer counters stopped at 993 dispatches and 429
+blocked calls, while the ring recorded 7,971 reservations and `VdSwap` recorded
+571 calls at 29.9/s. By approximately frame 1,142, the producer counters were
+still unchanged, ring reservations had reached 81,643, and `VdSwap` remained
+29.9/s. Render handoff stayed at zero as requested by the no-render control.
+
+This proves the earlier trace stopped at an instrumentation boundary: ring
+activity continues after the Bink producer boundary, but it does not identify
+which gameplay producer or wait limits `VdSwap`. It is not a timing fix, and
+the no-render control still parses guest PM4 and accumulates draw commands, so
+it cannot establish native-engine cadence. The next instrument must classify
+the post-Bink ring producer/consumer interval or the guest wait that precedes
+it; a 60 Hz override remains unjustified.
 
 
 ## Resolution

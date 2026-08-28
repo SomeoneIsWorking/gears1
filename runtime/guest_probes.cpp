@@ -36,6 +36,7 @@
 #include <lucent/log.h>
 
 #include "guest_backtrace.h"
+#include "frame_production_timing.h"
 #include "guest_thread.h"
 #include "guest_memory.h"
 
@@ -595,8 +596,6 @@ uint64_t RingProducerEntries();
 uint64_t RingProducerOverlaps();
 } // namespace gears
 
-
-
 // to catch happened on every run. THE SIZE IS r5.
 PPC_FUNC(sub_822151F8)
 {
@@ -742,7 +741,6 @@ PPC_FUNC(sub_8221CBA8)
     // unnecessary. Bounded, because a producer that reserves and never commits
     // would otherwise hang the process -- and if that bound is ever hit, it is
     // reported rather than silently ignored.
-    if (ctx.r4.u32 == kRenderRing)
     {
         const uint32_t writingFlag = kRenderRing + 16;
         constexpr int kMaxSpins = 20000;
@@ -774,7 +772,6 @@ PPC_FUNC(sub_8221CBA8)
                 " producer's commit (engagement {})", spins,
                 engagements.fetch_add(1) + 1);
     }
-
     NoteRingThread("the render-ring allocator", g_producerThreadIds,
         g_firstProducerThreadName, g_producerThreads);
     gears::CountRingProducerEntry();
@@ -1237,7 +1234,6 @@ PPC_FUNC(sub_824453A0)
     __imp__sub_824453A0(ctx, base);
 }
 
-
 namespace
 {
 std::atomic<uint64_t> g_ringProducerEntries{0};
@@ -1246,7 +1242,11 @@ std::atomic<uint64_t> g_ringProducerOverlaps{0};
 
 namespace gears
 {
-void CountRingProducerEntry() { g_ringProducerEntries.fetch_add(1); }
+void CountRingProducerEntry()
+{
+    g_ringProducerEntries.fetch_add(1);
+    ObserveFrameProductionRingReservation();
+}
 void CountRingProducerOverlap() { g_ringProducerOverlaps.fetch_add(1); }
 uint64_t RingProducerEntries() { return g_ringProducerEntries.load(); }
 uint64_t RingProducerOverlaps() { return g_ringProducerOverlaps.load(); }

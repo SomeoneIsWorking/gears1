@@ -635,6 +635,7 @@ add_executable(test_frame_production_timing
     test_frame_production_timing.cpp
     ../runtime/frame_production_timing.cpp)
 target_include_directories(test_frame_production_timing PRIVATE ../runtime)
+target_link_libraries(test_frame_production_timing PRIVATE lucent::lucent)
 add_test(NAME frame_production_timing COMMAND test_frame_production_timing)
 
 add_executable(test_rhi_semantic_stream
