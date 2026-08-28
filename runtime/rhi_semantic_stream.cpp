@@ -166,7 +166,8 @@ RenderTargetOrEmpty(const std::vector<RhiSemanticRenderTarget> &targets, std::si
 
 bool RhiSemanticObservationEnabled()
 {
-    static const bool enabled = lucent::config::flag("NATIVE_RHI_OBSERVE");
+    static const bool enabled =
+        lucent::config::flag("NATIVE_RHI_OBSERVE") || lucent::config::flag("NATIVE_RHI_PLAN");
     return enabled;
 }
 
@@ -565,10 +566,10 @@ RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
     return frame;
 }
 
-void ReportRhiSemanticFrame(std::uint64_t frameSequence)
+RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence)
 {
     if (!RhiSemanticObservationEnabled())
-        return;
+        return {.frameSequence = frameSequence};
 
     const RhiSemanticFrame frame = SealRhiSemanticFrame(frameSequence);
     for (const RhiSemanticEvent &event : frame.events)
@@ -863,6 +864,8 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
             event.sequence, observed.present.frameSequence, observed.present.frontBuffer,
             observed.packet.present, observed.packet.frameSequence, observed.packet.frontBuffer);
     }
+
+    return frame;
 }
 
 } // namespace gears

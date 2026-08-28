@@ -94,6 +94,10 @@ subsystems rather than copying platform-specific implementations.
 - `runtime/gpu_present.cpp` orchestrates presentation. Swapchain-dependent
   staging resources belong in focused owners such as `gpu_present_stage.cpp`,
   not in the presenter orchestration file.
+- `runtime/native_rhi.*` owns the title-neutral, PM4-independent semantic frame
+  plan boundary. It must not absorb Vulkan execution, Xenos translation, or
+  title-address bindings; host resource/pipeline execution belongs in a later
+  focused native backend behind the retained compatibility arm.
 
 Pure state transitions belong behind production interfaces with focused tests.
 Run `tools/check_source_structure.py`, its self-test, and the CTest suite before

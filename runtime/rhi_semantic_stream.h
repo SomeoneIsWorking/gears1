@@ -385,6 +385,6 @@ void ObserveRhiSemanticVertexStreamReset(const RhiSemanticVertexStreamReset &res
 void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,
                                const RhiResolvePacketEvidence &packet);
 [[nodiscard]] RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence);
-void ReportRhiSemanticFrame(std::uint64_t frameSequence);
+[[nodiscard]] RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence);
 
 } // namespace gears
