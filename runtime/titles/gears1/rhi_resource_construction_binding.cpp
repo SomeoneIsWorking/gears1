@@ -33,6 +33,9 @@ void ObserveResourceConstruction(PPCContext &ctx, std::uint8_t *base,
     {
         const GuestStateMemory memory(base);
         evidence.present = true;
+        evidence.objectFlags = memory.Read32(evidence.object + 0);
+        evidence.initialReferenceCount = memory.Read32(evidence.object + 4);
+        evidence.backingObject = memory.Read32(evidence.object + 24);
         evidence.objectWords = {
             memory.Read32(evidence.object + 0),  memory.Read32(evidence.object + 4),
             memory.Read32(evidence.object + 20), memory.Read32(evidence.object + 24),

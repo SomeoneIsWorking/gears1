@@ -184,6 +184,14 @@ Static inspection also falsified the old resource-creation candidates
 or update existing object state, rather than construct resources. Creation
 entry points remain unidentified.
 
+The next host-side prerequisite is now explicit in `runtime/native_rhi_resources.*`: a
+title-neutral registry records construction identity and reference state, accepts only matching
+non-boundary transitions, and refuses unknown objects, duplicate construction, mismatched metadata,
+and release-to-zero destructor boundaries. The Gears 1 adapter decodes object flags, initial
+reference count, and backing identity from the returned wrapper while retaining the raw five-word
+audit. This is unit-tested resource bookkeeping, not live construction coverage or API allocation;
+the zero-construction result in the frame-1440 walk remains unresolved.
+
 ## Next falsifier
 
 Exercise the separate bound-vertex entry dynamically if the title reaches it.

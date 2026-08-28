@@ -206,6 +206,12 @@ struct RhiResourceConstructionEvidence
 {
     bool present = false;
     std::uint32_t object = 0;
+    // These fields are decoded by the title adapter from the returned object.
+    // The object words remain available for byte-level evidence, but native
+    // owners must not infer a title's layout from that audit array.
+    std::uint32_t objectFlags = 0;
+    std::uint32_t initialReferenceCount = 0;
+    std::uint32_t backingObject = 0;
     std::array<std::uint32_t, 5> objectWords{};
 };
 

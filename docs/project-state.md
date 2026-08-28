@@ -42,11 +42,14 @@ See `docs/re-frontier.md` (`frame-delivery-contract`) and issues #139 and #140.
 The observed Gears 1 boundary includes ordered texture/shader/buffer/target bindings, transient and
 bound draws with resource views, device vertex/target state, logical resolves, presents, resource
 reference transitions, resource-wrapper construction contracts, and the 16-slot vertex-stream reset.
-Claims C096 and C097 record the native reference and reset-owner evidence.
+`native_rhi_resources.*` now provides a title-neutral guest-object registry for those construction
+and non-boundary lifetime commands. Claims C096 and C097 record the native reference and reset-owner
+evidence.
 
 Gap: The construction contracts at `0x8222EA18` and `0x8222EB78` are statically grounded but had
 zero calls in the current headless walk through frame 1440; release-to-zero destruction is also not
-covered live. The separate bound-vertex draw entry lacks dynamic coverage, and the complete stream
+covered live. The registry is unit-tested but has no live construction input and does not allocate
+API resources. The separate bound-vertex draw entry lacks dynamic coverage, and the complete stream
 is not yet compared with renderer inputs and pixels. The new `native_rhi.*` plan boundary accepts the
 complete ordered semantic stream on the same live path, but remains capture-only. See issues #141,
 #148, #149, and #150.
@@ -70,15 +73,17 @@ default because their timing gates showed no win.
 
 The PM4-independent plan now also has an explicit `native_rhi_backend.*` execution contract. It
 validates command ordering before dispatch, routes each semantic command to a supplied host backend,
-and requires cancellation after a partial refusal. The focused test proves those transaction rules;
-it does not provide a backend or alter the shipping renderer.
+and requires cancellation after a partial refusal. `native_rhi_resources.*` supplies that backend's
+title-neutral resource identity and non-boundary lifetime bookkeeping, refusing unknown objects and
+retained destructor boundaries. The focused tests prove those transaction and registry rules; they do
+not provide a backend or alter the shipping renderer.
 
 Gap: Only the non-retiring reference-count fast path, the Gears 1 operation-kind-3 wait, and the
 explicitly enabled Gears 1 audio mix are authorized. Zero-to-one backing ownership, one-to-zero
 destruction, resource construction, draw submission, and renderer bypass remain on the retained
 path. `native_rhi.*` now builds a PM4-independent ordered frame plan when explicitly enabled, and
-`native_rhi_backend.*` defines its explicit host execution transaction, but no concrete backend is
-installed and compatibility rendering remains authoritative. A candidate native scene
+`native_rhi_backend.*` plus `native_rhi_resources.*` define the host execution and resource-identity
+contracts, but no concrete backend is installed and compatibility rendering remains authoritative. A candidate native scene
 composite was rejected because its texture `kGamma` path failed same-input parity; the native-pass
 roster is declarations-only again. The title still produces only about 30 frames/s, and the
 complete native frontend has not been built. See issues #141, #149, #152, #153, #154, and #155.

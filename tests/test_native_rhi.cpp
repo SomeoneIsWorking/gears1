@@ -1,5 +1,6 @@
 #include "native_rhi.h"
 #include "native_rhi_backend.h"
+#include "native_rhi_resources.h"
 
 #include <cassert>
 #include <cstdint>
@@ -181,6 +182,60 @@ int main()
            gears::native_rhi::BuildStatus::ConstructionEvidenceMissing);
     assert(std::string_view(gears::native_rhi::BuildStatusText(
                gears::native_rhi::BuildStatus::Accepted)) == "accepted");
+
+    gears::native_rhi::ResourceRegistry resources;
+    gears::native_rhi::ResourceConstructionCommand resourceConstruction{
+        .construction = {.kind = gears::RhiSemanticResourceConstructionKind::OwnedBacking,
+                         .requestedBytes = 64,
+                         .resourceFlags = 0x100,
+                         .allocationFlags = 0x200},
+        .retained = {.present = true,
+                     .object = 0x4000,
+                     .objectFlags = 4,
+                     .initialReferenceCount = 1,
+                     .backingObject = 0x5000,
+                     .objectWords = {4, 1, 0xFFFFFFFF, 0x5000, 64}}};
+    const gears::native_rhi::ResourceRegistryResult constructed =
+        resources.Construct(resourceConstruction);
+    assert(constructed.status == gears::native_rhi::ResourceRegistryStatus::Accepted);
+    assert(constructed.referenceCount == 1);
+    assert(resources.size() == 1);
+    assert(resources.Find(0x4000)->backingObject == 0x5000);
+    assert(resources.Construct(resourceConstruction).status ==
+           gears::native_rhi::ResourceRegistryStatus::DuplicateObject);
+
+    gears::native_rhi::ResourceLifetimeCommand resourceLifetime{
+        .lifetime = {.operation = gears::RhiResourceLifetimeOperation::AddReference,
+                     .object = 0x4000,
+                     .resourceType = 4,
+                     .backingObject = 0x5000,
+                     .previousReferenceCount = 1}};
+    assert(resources.ApplyLifetime(resourceLifetime).referenceCount == 2);
+    resourceLifetime.lifetime.operation = gears::RhiResourceLifetimeOperation::Release;
+    resourceLifetime.lifetime.previousReferenceCount = 2;
+    assert(resources.ApplyLifetime(resourceLifetime).referenceCount == 1);
+    resourceLifetime.lifetime.previousReferenceCount = 1;
+    assert(resources.ApplyLifetime(resourceLifetime).status ==
+           gears::native_rhi::ResourceRegistryStatus::ReferenceBoundary);
+
+    resourceLifetime.lifetime.previousReferenceCount = 2;
+    assert(resources.ApplyLifetime(resourceLifetime).status ==
+           gears::native_rhi::ResourceRegistryStatus::ReferenceCountMismatch);
+    resourceLifetime.lifetime.previousReferenceCount = 1;
+    resourceLifetime.lifetime.resourceType = 5;
+    assert(resources.ApplyLifetime(resourceLifetime).status ==
+           gears::native_rhi::ResourceRegistryStatus::ResourceTypeMismatch);
+    resourceLifetime.lifetime.resourceType = 4;
+    resourceLifetime.lifetime.backingObject = 0x6000;
+    assert(resources.ApplyLifetime(resourceLifetime).status ==
+           gears::native_rhi::ResourceRegistryStatus::BackingObjectMismatch);
+    resourceLifetime.lifetime.backingObject = 0x5000;
+    resourceLifetime.lifetime.object = 0x7000;
+    assert(resources.ApplyLifetime(resourceLifetime).status ==
+           gears::native_rhi::ResourceRegistryStatus::UnknownObject);
+    assert(std::string_view(gears::native_rhi::ResourceRegistryStatusText(
+               gears::native_rhi::ResourceRegistryStatus::ReferenceBoundary)) ==
+           "reference boundary requires retained destructor semantics");
 
     RecordingBackend backend;
     const gears::native_rhi::ExecutionResult executed =

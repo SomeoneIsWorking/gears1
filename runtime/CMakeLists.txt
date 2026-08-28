@@ -209,6 +209,7 @@ add_executable(gears1
     rhi_resource_reference.cpp
     native_rhi.cpp
     native_rhi_backend.cpp
+    native_rhi_resources.cpp
     native_rhi_present.cpp
     gpu_ticket_wait.cpp
     frame_production_timing.cpp

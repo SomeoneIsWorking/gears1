@@ -94,6 +94,9 @@ subsystems rather than copying platform-specific implementations.
 - `runtime/gpu_present.cpp` orchestrates presentation. Swapchain-dependent
   staging resources belong in focused owners such as `gpu_present_stage.cpp`,
   not in the presenter orchestration file.
+- `runtime/native_rhi_resources.*` owns title-neutral guest-object resource
+  identity and non-boundary lifetime bookkeeping for a future native backend;
+  API-specific allocation and retirement remain in that backend.
 - `runtime/native_rhi.*` owns the title-neutral, PM4-independent semantic frame
   plan boundary. It must not absorb Vulkan execution, Xenos translation, or
   title-address bindings; host resource/pipeline execution belongs in a later
