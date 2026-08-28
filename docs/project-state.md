@@ -72,9 +72,10 @@ Gap: Only the non-retiring reference-count fast path, the Gears 1 operation-kind
 explicitly enabled Gears 1 audio mix are authorized. Zero-to-one backing ownership, one-to-zero
 destruction, resource construction, draw submission, and renderer bypass remain on the retained
 path. `native_rhi.*` now builds a PM4-independent ordered frame plan when explicitly enabled, but
-does not execute a host backend or remove compatibility rendering. The title still produces only
-about 30 frames/s, and the complete native frontend has not been built. See issues #141, #149, #152,
-#153, and #154.
+does not execute a host backend or remove compatibility rendering. A candidate native scene
+composite was rejected because its texture `kGamma` path failed same-input parity; the native-pass
+roster is declarations-only again. The title still produces only about 30 frames/s, and the
+complete native frontend has not been built. See issues #141, #149, #152, #153, #154, and #155.
 
 ### S005 — Complete native RHI frontend
 

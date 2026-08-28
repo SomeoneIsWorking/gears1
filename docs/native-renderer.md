@@ -44,6 +44,14 @@ independently authored host module for an observed pass. At the clean tracked
 tip, the roster has declarations only: it contains no distributable implemented
 module, and enabling `GEARS_NATIVE_PASSES=1` changes no rendering behavior.
 
+An independently authored full-screen scene-composite candidate was exercised
+against `scratch/frames/title600.gfr` and rejected. Its raw unsigned/signed
+control was within 0.2621 channel units mean absolute error, but the first
+guest-texture `kGamma` path diverged by 14.0665 under a forced `0x3f` sign word.
+The candidate and its generated SPIR-V were removed; issue #155 records the
+remaining sampled-view/sign contract investigation. No native-pass speed
+measurement is valid until that parity gate passes with signs enabled.
+
 The six former title-derived shader substitutions are not shipping GearsUE3
 implementations and are not evidence that a native renderer exists. Their
 historical comparisons may explain past investigation, but no decoded shader
