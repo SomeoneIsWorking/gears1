@@ -107,16 +107,20 @@ explicitly enabled Gears 1 audio mix, and the one direct native scene-composite 
 authorized. Zero-to-one backing ownership, one-to-zero destruction, resource construction, the
 remaining draw submissions, and renderer bypass remain on the retained path. `native_rhi.*` now
 builds a PM4-independent ordered frame plan when explicitly enabled, and `native_rhi_backend.*`
-plus `native_rhi_resources.*` define the host execution and resource-identity contracts, but no
-concrete backend is installed and compatibility rendering remains authoritative. The native-pass
-roster remains experimental. The title still produces only about 30 frames/s, and the complete
-native frontend has not been built. See issues #141, #149, #152, #153, #154, #155, and #157.
+plus `native_rhi_resources.*` define the host execution and resource-identity contracts. The
+isolated `native_rhi_vulkan_resolve.*` slice now records a real host-owned Vulkan colour copy and
+passes a headless pixel test with an unsupported-flags negative control, but it is not connected
+to the live plan because native source-image production and parity are missing. Compatibility
+rendering remains authoritative. The native-pass roster remains experimental. The title still
+produces only about 30 frames/s, and the complete native frontend has not been built. See issues
+#141, #149, #152, #153, #154, #155, and #157.
 
 ### S005 — Complete native RHI frontend
 
 Missing capability: No complete native frontend currently consumes the semantic stream, bypasses
-title PM4 generation, and passes same-binary state plus pixel parity. The compatibility renderer is
-still the shipping rendering authority.
+title PM4 generation, and passes same-binary state plus pixel parity. A focused host-owned Vulkan
+colour-copy operation exists, but it has no native producer or live resource/lifetime owner to feed
+it. The compatibility renderer is still the shipping rendering authority.
 
 ### S006 — Multi-title compatibility
 

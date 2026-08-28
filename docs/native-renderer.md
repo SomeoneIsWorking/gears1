@@ -161,6 +161,20 @@ addition to the packet-checked address/pitch/height fields. The raw flags are
 deliberately not interpreted until their native meaning is independently
 grounded.
 
+The first host execution slice now lives in `runtime/native_rhi_vulkan_resolve.*`.
+It records a real Vulkan `vkCmdCopyImage` between two backend-owned,
+single-sample colour images, with explicit layout transitions and
+bounds/format validation. It accepts only the grounded one-to-one copy class;
+depth/stencil, multisample, unsupported flags, format conversion, swizzle, and
+scaling refuse rather than being approximated. The headless
+`test_native_rhi_vulkan_resolve` creates both images itself, verifies copied
+pixels, and exercises an unsupported-flags negative control. This is a
+host-operation proof, not live frontend execution: the production plan still
+has no resource allocator or native draw producer, and the compatibility
+renderer still supplies the only live source images. It must not be connected
+to the live stream until those images are produced natively and same-binary
+state/pixel parity is measured.
+
 ## Native backend execution contract
 
 `runtime/native_rhi_backend.*` now owns the narrow execution boundary after plan

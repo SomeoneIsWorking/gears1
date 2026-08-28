@@ -233,3 +233,12 @@ identity and apply a non-boundary lifetime transition, but it still refuses
 missing or conflicting identity evidence and does not allocate an API resource.
 This closes the pre-existing-identity contract gap without claiming live
 constructor coverage or native rendering.
+
+The first isolated host operation is now grounded in
+`runtime/native_rhi_vulkan_resolve.*`. It records a real `vkCmdCopyImage`
+between backend-owned single-sample colour images, transitions their layouts,
+and refuses unsupported operation flags, depth/stencil sources, multisample
+images, mismatched formats, and out-of-bounds rectangles. Its headless Vulkan
+test verified copied pixels and the unsupported-flags negative control. This
+does not resolve the issue: the live plan still has no native resource
+allocator, source-image producer, or same-binary state/pixel parity gate.
