@@ -89,6 +89,8 @@ FORMATTED = [
     "runtime/gpu_renderer_capacity.cpp",
     "runtime/gpu_packet_memory.cpp",
     "runtime/gpu_packet_memory.h",
+    "runtime/gpu_ticket_wait.cpp",
+    "runtime/gpu_ticket_wait.h",
     "runtime/gpu_scanout.cpp",
     "runtime/gpu_scanout.h",
     "runtime/gpu_scanout_gamma.cpp",
@@ -139,6 +141,9 @@ FORMATTED = [
     "runtime/titles/gears1/rhi_vertex_buffer.h",
     "runtime/titles/gears1/rhi_vertex_stream_watch.cpp",
     "runtime/titles/gears1/rhi_vertex_stream_watch.h",
+    "runtime/titles/gears1/gpu_ticket_wait_binding.cpp",
+    "runtime/titles/gears1/gpu_ticket_wait_state.cpp",
+    "runtime/titles/gears1/gpu_ticket_wait_state.h",
     "runtime/titles/gears1/shader_setter_override.cpp",
     "runtime/titles/gears1/shader_setter_state.h",
     "runtime/vd_null_gpu.cpp",
@@ -164,6 +169,8 @@ FORMATTED = [
     "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_gpu_surface_target_lookup.cpp",
     "tests/test_gpu_swap_packet.cpp",
+    "tests/test_gpu_ticket_wait.cpp",
+    "tests/test_gpu_ticket_wait_state.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_rhi_index_buffer.cpp",
     "tests/test_rhi_resource_reference.cpp",
@@ -223,6 +230,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/gpu_retirement.cpp",
     "runtime/gpu_renderer_capacity.cpp",
     "runtime/gpu_packet_memory.cpp",
+    "runtime/gpu_ticket_wait.cpp",
     "runtime/gpu_scanout.cpp",
     "runtime/gpu_scanout_gamma.cpp",
     "runtime/gpu_shared_device.cpp",
@@ -246,6 +254,8 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/titles/gears1/rhi_target_descriptor_watch.cpp",
     "runtime/titles/gears1/rhi_vertex_buffer.cpp",
     "runtime/titles/gears1/rhi_vertex_stream_watch.cpp",
+    "runtime/titles/gears1/gpu_ticket_wait_binding.cpp",
+    "runtime/titles/gears1/gpu_ticket_wait_state.cpp",
     "runtime/titles/gears1/shader_setter_override.cpp",
     "tests/test_depth_alias_shader_format.cpp",
     "tests/test_color_write_gamma_state.cpp",
@@ -269,6 +279,8 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_gpu_surface_format_capacity.cpp",
     "tests/test_gpu_surface_target_lookup.cpp",
     "tests/test_gpu_swap_packet.cpp",
+    "tests/test_gpu_ticket_wait.cpp",
+    "tests/test_gpu_ticket_wait_state.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_rhi_index_buffer.cpp",
     "tests/test_rhi_semantic_state.cpp",
@@ -365,6 +377,11 @@ def selftest():
     assert "runtime/frame_queue.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_frame_queue.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_packet_memory.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_ticket_wait.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/gpu_ticket_wait_binding.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/gpu_ticket_wait_state.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_gpu_ticket_wait.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_gpu_ticket_wait_state.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_queue_access.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_renderer_capacity.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_queue_access.cpp" in TIDY_TRANSLATION_UNITS

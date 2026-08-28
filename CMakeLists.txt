@@ -12,11 +12,9 @@ find_program(GEARS_UV_EXECUTABLE NAMES uv REQUIRED)
 set(GEARS_UV_RUN
     "${GEARS_UV_EXECUTABLE}" run --locked --project "${CMAKE_SOURCE_DIR}")
 
-if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-    message(FATAL_ERROR
-        "XenonRecomp's output relies on Clang-specific intrinsics and function "
-        "aliasing. Configure with -DCMAKE_CXX_COMPILER=clang++.")
-endif()
+# The project accepts the compiler supported by the host and its dependencies.
+# Maintainer verification selects Clang explicitly, but that policy must not
+# turn into a project-local compiler ban for users.
 
 # Where XenonRecomp wrote the translated game code. Gitignored: it is derived
 # from the user's own copy of the game and never enters the repository.

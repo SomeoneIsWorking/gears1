@@ -5,6 +5,7 @@
 #include <lucent/log.h>
 
 #include "guest_memory.h"
+#include "gpu_ticket_wait.h"
 #include "render_thread.h"
 
 namespace gears
@@ -48,6 +49,7 @@ void StoreGpuPacketWord(uint32_t addressWord, uint32_t value)
         lucent::warn("gpu", "unhandled endian mode {} storing to {:#x}", endian, address);
         StoreGuest32(address, value);
     }
+    NotifyGpuPacketMemoryChanged(address);
 }
 
 void DeferGpuRetirementWrite(uint32_t addressWord, uint32_t value, uint32_t packetBase,

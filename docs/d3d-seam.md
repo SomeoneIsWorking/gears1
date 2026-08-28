@@ -43,6 +43,17 @@ The 360's D3D is statically linked into the title. The surface is:
 | 0x8223B7D0 / 0x8223B5E0 | D3D worker thread and its CPU command-list interpreter |
 | 0x825B48B8 | render-command executor with the 16-case jump table at 0x825B48F8 |
 
+The operation-kind-3 adaptive waiter now has a runtime native seam in
+`runtime/titles/gears1/gpu_ticket_wait_binding.cpp`. It observes the guest's
+progress address before reading the ticket and blocks on a shared, address-keyed
+notification. `StoreGpuPacketWord` publishes that notification only after the
+authoritative `EVENT_WRITE_SHD` store, so a producer update between the guest
+read and the host wait cannot be lost. The retained helper remains the
+super-call and still owns progress accounting, the owning-thread exemption,
+five-second hang escalation, and the return value. `GEARS_RECOMP_GPU_TICKET_WAIT`
+and `GEARS_GPU_TICKET_WAIT_AB` provide explicit retained and same-process
+alternating controls.
+
 ## 1b. Functions read at the seam (contracts recovered from the recompiled body)
 
 ### 0x82220858 — SetTexture(device r3, slot r4, texture r5, dirtyBit r6) **V**
