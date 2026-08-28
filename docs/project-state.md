@@ -68,11 +68,17 @@ the warm gameplay render rate rose from roughly 15-16 to 24-30 frames/s on the m
 Existing shader and color-write setters remain executable native experiments but retained by
 default because their timing gates showed no win.
 
+The PM4-independent plan now also has an explicit `native_rhi_backend.*` execution contract. It
+validates command ordering before dispatch, routes each semantic command to a supplied host backend,
+and requires cancellation after a partial refusal. The focused test proves those transaction rules;
+it does not provide a backend or alter the shipping renderer.
+
 Gap: Only the non-retiring reference-count fast path, the Gears 1 operation-kind-3 wait, and the
 explicitly enabled Gears 1 audio mix are authorized. Zero-to-one backing ownership, one-to-zero
 destruction, resource construction, draw submission, and renderer bypass remain on the retained
-path. `native_rhi.*` now builds a PM4-independent ordered frame plan when explicitly enabled, but
-does not execute a host backend or remove compatibility rendering. A candidate native scene
+path. `native_rhi.*` now builds a PM4-independent ordered frame plan when explicitly enabled, and
+`native_rhi_backend.*` defines its explicit host execution transaction, but no concrete backend is
+installed and compatibility rendering remains authoritative. A candidate native scene
 composite was rejected because its texture `kGamma` path failed same-input parity; the native-pass
 roster is declarations-only again. The title still produces only about 30 frames/s, and the
 complete native frontend has not been built. See issues #141, #149, #152, #153, #154, and #155.
