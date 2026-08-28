@@ -317,6 +317,16 @@ add_test(NAME source_structure
 add_test(NAME source_structure_selftest
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py" --selftest)
+
+# Keep the project-local registry entry point executable from a build
+# directory. It delegates to the canonical shared/re-harness implementation,
+# so a missing wrapper or an accidental cwd dependency cannot recur silently.
+add_test(NAME project_info_entrypoint
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/info.py"
+            brief native engine performance)
+set_tests_properties(project_info_entrypoint PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_BINARY_DIR}")
+
 add_test(NAME re_frontier_selftest
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/re_frontier.py" selftest)
