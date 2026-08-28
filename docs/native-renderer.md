@@ -147,7 +147,12 @@ guest PM4 path remains authoritative. The next bounded candidate is the logical
 resolve at `0x82235528`, but its existing host helpers still consume
 compatibility `SurfaceTarget`/`ResolveTarget` objects. It therefore requires a
 native resource/resolve contract, same-binary A/B output checks, PM4 absence
-checks, and negative controls before it can become an execution arm.
+checks, and negative controls before it can become an execution arm. The
+semantic resolve now preserves the title call's raw flags, source rectangle,
+destination point, six-word destination descriptor, and bytes-per-block in
+addition to the packet-checked address/pitch/height fields. The raw flags are
+deliberately not interpreted until their native meaning is independently
+grounded.
 
 ## Native backend execution contract
 

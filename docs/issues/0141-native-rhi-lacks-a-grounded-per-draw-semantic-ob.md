@@ -201,3 +201,11 @@ output. Keep the recompiled compatibility bodies available and super-called
 until a deliberately wrong semantic control is rejected and a same-run
 complete-stream and pixel-parity gate agrees. Transient and bound-buffer
 agreement alone does not authorize a native bypass.
+
+The semantic resolve contract now retains the complete title-call payload that
+is available at the grounded boundary: raw operation flags, source rectangle,
+destination point, destination descriptor, and bytes per block. This removes a
+lossy handoff before a native resolve backend is designed; it does not interpret
+the raw flags or authorize backend execution. The packet comparer still proves
+only the independently decoded address, pitch, height, and rectangle-list
+submission.

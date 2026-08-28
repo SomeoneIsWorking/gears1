@@ -44,6 +44,11 @@ int main()
     assert(resolve.destinationPitch == 1280);
     assert(resolve.destinationHeight == 208);
     assert(resolve.destinationFormat == 23);
+    assert(resolve.operationFlags == call.flags);
+    assert(resolve.sourceRectangle == call.sourceRectangle);
+    assert(resolve.destinationPoint == call.destinationPoint);
+    assert(resolve.destinationDescriptor == call.destinationDescriptor);
+    assert(resolve.bytesPerBlock == call.bytesPerBlock);
 
     call.flags = 4;
     const gears::RhiSemanticResolve depth = gears::gears1::DecodeResolveCall(call);

@@ -17,6 +17,11 @@ RhiSemanticResolve DecodeResolveCall(const ResolveCallState &call)
         .sourceObject = call.sourceObject,
         .destinationObject = call.destinationObject,
         .destinationFormat = call.destinationDescriptor[1] & 0x3F,
+        .operationFlags = call.flags,
+        .sourceRectangle = call.sourceRectangle,
+        .destinationPoint = call.destinationPoint,
+        .destinationDescriptor = call.destinationDescriptor,
+        .bytesPerBlock = call.bytesPerBlock,
     };
     if (sourceSelection > 4 || call.destinationObject == 0 || call.bytesPerBlock == 0)
         return resolve;
