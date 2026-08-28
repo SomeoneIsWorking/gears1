@@ -188,6 +188,27 @@ enum class RhiResourceLifetimeEvidenceResult : std::uint8_t
     Mismatch,
 };
 
+enum class RhiSemanticResourceConstructionKind : std::uint8_t
+{
+    OwnedBacking,
+    WrappedBacking,
+};
+
+struct RhiSemanticResourceConstruction
+{
+    RhiSemanticResourceConstructionKind kind = RhiSemanticResourceConstructionKind::OwnedBacking;
+    std::uint32_t requestedBytes = 0;
+    std::uint32_t resourceFlags = 0;
+    std::uint32_t allocationFlags = 0;
+};
+
+struct RhiResourceConstructionEvidence
+{
+    bool present = false;
+    std::uint32_t object = 0;
+    std::array<std::uint32_t, 5> objectWords{};
+};
+
 struct RhiSemanticVertexStreamReset
 {
     std::uint32_t firstSlot = 0;
@@ -274,6 +295,12 @@ struct RhiObservedResourceLifetime
     RhiResourceLifetimeEvidenceResult evidence = RhiResourceLifetimeEvidenceResult::Missing;
 };
 
+struct RhiObservedResourceConstruction
+{
+    RhiSemanticResourceConstruction construction;
+    RhiResourceConstructionEvidence retained;
+};
+
 struct RhiObservedVertexStreamReset
 {
     RhiSemanticVertexStreamReset reset;
@@ -283,7 +310,8 @@ struct RhiObservedVertexStreamReset
 
 using RhiSemanticEventPayload =
     std::variant<RhiObservedDraw, RhiObservedBinding, RhiObservedResourceLifetime,
-                 RhiObservedVertexStreamReset, RhiObservedResolve, RhiObservedPresent>;
+                 RhiObservedResourceConstruction, RhiObservedVertexStreamReset, RhiObservedResolve,
+                 RhiObservedPresent>;
 
 struct RhiSemanticEvent
 {
@@ -299,6 +327,7 @@ struct RhiSemanticFrame
     std::uint64_t bindings = 0;
     std::uint64_t resourceLifetimeCalls = 0;
     std::uint64_t resourceRetirements = 0;
+    std::uint64_t resourceConstructions = 0;
     std::uint64_t resolves = 0;
     std::uint64_t presents = 0;
     std::uint64_t matched = 0;
@@ -349,6 +378,8 @@ void ObserveRhiSemanticPresent(const RhiSemanticPresent &present,
                                const RhiPresentPacketEvidence &packet);
 void ObserveRhiSemanticResourceLifetime(const RhiSemanticResourceLifetime &lifetime,
                                         const RhiResourceLifetimeEvidence &retained);
+void ObserveRhiSemanticResourceConstruction(const RhiSemanticResourceConstruction &construction,
+                                            const RhiResourceConstructionEvidence &retained);
 void ObserveRhiSemanticVertexStreamReset(const RhiSemanticVertexStreamReset &reset,
                                          const RhiVertexStreamResetEvidence &state);
 void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,

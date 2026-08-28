@@ -134,6 +134,7 @@ FORMATTED = [
     "runtime/titles/gears1/rhi_resolve.cpp",
     "runtime/titles/gears1/rhi_resolve.h",
     "runtime/titles/gears1/rhi_resolve_binding.cpp",
+    "runtime/titles/gears1/rhi_resource_construction_binding.cpp",
     "runtime/titles/gears1/rhi_resource_lifetime_binding.cpp",
     "runtime/titles/gears1/rhi_target_descriptor_watch.cpp",
     "runtime/titles/gears1/rhi_target_descriptor_watch.h",
@@ -250,6 +251,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/titles/gears1/rhi_index_buffer.cpp",
     "runtime/titles/gears1/rhi_resolve.cpp",
     "runtime/titles/gears1/rhi_resolve_binding.cpp",
+    "runtime/titles/gears1/rhi_resource_construction_binding.cpp",
     "runtime/titles/gears1/rhi_resource_lifetime_binding.cpp",
     "runtime/titles/gears1/rhi_target_descriptor_watch.cpp",
     "runtime/titles/gears1/rhi_vertex_buffer.cpp",
@@ -354,6 +356,7 @@ def selftest():
     assert "runtime/gpu_draw_formats.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resolve.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resolve_binding.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/rhi_resource_construction_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/rhi_resource_reference.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_device_state_reset_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resource_lifetime_binding.cpp" in TIDY_TRANSLATION_UNITS

@@ -41,12 +41,13 @@ See `docs/re-frontier.md` (`frame-delivery-contract`) and issues #139 and #140.
 
 The observed Gears 1 boundary includes ordered texture/shader/buffer/target bindings, transient and
 bound draws with resource views, device vertex/target state, logical resolves, presents, resource
-reference transitions, and the 16-slot vertex-stream reset.
+reference transitions, resource-wrapper construction contracts, and the 16-slot vertex-stream reset.
 Claims C096 and C097 record the native reference and reset-owner evidence.
 
-Gap: Resource creation and release-to-zero destruction are not yet covered live, the separate
-bound-vertex draw entry lacks dynamic coverage, and the complete stream is not yet compared with
-renderer inputs and pixels. See issues #141, #148, #149, and #150.
+Gap: The construction contracts at `0x8222EA18` and `0x8222EB78` are statically grounded but had
+zero calls in the current headless walk through frame 1440; release-to-zero destruction is also not
+covered live. The separate bound-vertex draw entry lacks dynamic coverage, and the complete stream
+is not yet compared with renderer inputs and pixels. See issues #141, #148, #149, and #150.
 
 ### S004 — Native RHI execution
 

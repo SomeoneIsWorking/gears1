@@ -215,6 +215,7 @@ add_executable(gears1
     titles/gears1/rhi_index_buffer.cpp
     titles/gears1/rhi_resolve.cpp
     titles/gears1/rhi_resolve_binding.cpp
+    titles/gears1/rhi_resource_construction_binding.cpp
     titles/gears1/rhi_resource_lifetime_binding.cpp
     titles/gears1/gpu_ticket_wait_binding.cpp
     titles/gears1/gpu_ticket_wait_state.cpp
