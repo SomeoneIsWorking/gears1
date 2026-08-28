@@ -59,13 +59,17 @@ uses a notified packet-memory wait by default, while retaining the generated hel
 hang, exemption, and A/B semantics; focused tests cover deadline arithmetic, address aliasing, and
 state decoding. A headless current-build control reduced sampled process user CPU from 53.44 s on
 the retained arm to 32.36 s on the native arm during 35 s runs while both stayed near 30 produced
-frames/s. Existing shader and color-write setters remain executable native experiments but retained
-by default because their timing gates showed no win.
+frames/s. The Gears 1 audio mix kernel is now an opt-in native SIMD operation with a retained-body
+super-call and 256 same-call audits; a current profile removed its former 18.59% CPU hotspot and
+the warm gameplay render rate rose from roughly 15-16 to 24-30 frames/s on the measured path.
+Existing shader and color-write setters remain executable native experiments but retained by
+default because their timing gates showed no win.
 
-Gap: Only the non-retiring reference-count fast path and the Gears 1 operation-kind-3 wait are
-authorized. Zero-to-one backing ownership, one-to-zero destruction, resource construction, draw
-submission, and renderer bypass remain on the retained path. The title still produces only about
-30 frames/s, and the complete native frontend has not been built. See issues #141, #149, and #152.
+Gap: Only the non-retiring reference-count fast path, the Gears 1 operation-kind-3 wait, and the
+explicitly enabled Gears 1 audio mix are authorized. Zero-to-one backing ownership, one-to-zero
+destruction, resource construction, draw submission, and renderer bypass remain on the retained
+path. The title still produces only about 30 frames/s, and the complete native frontend has not
+been built. See issues #141, #149, #152, and #153.
 
 ### S005 — Complete native RHI frontend
 

@@ -219,6 +219,8 @@ add_executable(gears1
     titles/gears1/gpu_ticket_wait_binding.cpp
     titles/gears1/gpu_ticket_wait_state.cpp
     titles/gears1/frame_production_timing_binding.cpp
+    titles/gears1/audio_mix.cpp
+    titles/gears1/audio_mix_override.cpp
     titles/gears1/rhi_target_descriptor_watch.cpp
     titles/gears1/rhi_vertex_buffer.cpp
     titles/gears1/rhi_vertex_stream_watch.cpp
