@@ -242,10 +242,12 @@ std::vector<gears::RhiSemanticVertexStream> CaptureBoundVertexStreams(std::uint3
 MakeObservedRenderTarget(bool depthStencil, std::uint32_t slot,
                          const gears::RhiBindingStateEvidence &state)
 {
-    return {
+    return gears::RhiSemanticRenderTarget{
         .depthStencil = depthStencil,
         .slot = slot,
         .object = state.observedObject,
+        .descriptor = state.descriptor,
+        .descriptorDwords = state.descriptorDwords,
     };
 }
 

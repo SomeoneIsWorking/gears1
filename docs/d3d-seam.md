@@ -405,8 +405,10 @@ title that got further would bind more.
   HLE this means either (a) hook creation APIs too and keep a guest→host
   resource map, or (b) parse fetch constants at bind time (Xenia's LLE
   approach). (a) is the HLE-consistent choice but creation entry points are
-  not yet identified (candidates 0x82227120/0x82227000 called from UE3
-  texture code at 0x8264Dxxx — unverified, **?**).
+  not yet identified. The former candidates `0x82227120` and `0x82227000`,
+  called from UE3 texture code at `0x8264Dxxx`, were inspected and are
+  indexed existing-object accessors: they compute an object-array entry and
+  return or update its state, not construct a resource (**?**).
 
 ## 5. Honest size assessment
 

@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <variant>
 #include <vector>
 
@@ -40,11 +41,14 @@ struct RhiSemanticVertexStream
 
 struct RhiSemanticRenderTarget
 {
-    // Binding identity only. Target descriptors can be mutated after binding by
-    // separate render-state setters and must enter draw state through that owner.
+    // The object identity and descriptor words observed in the device shadow.
+    // Descriptors can be mutated after binding by separate render-state setters;
+    // the title adapter supplies the post-call state when it is available.
     bool depthStencil = false;
     std::uint32_t slot = 0;
     std::uint32_t object = 0;
+    std::array<std::uint32_t, 6> descriptor{};
+    std::uint32_t descriptorDwords = 0;
 };
 
 struct RhiSemanticDraw
@@ -60,13 +64,6 @@ struct RhiSemanticDraw
     RhiSemanticBufferRange indexData;
     bool indexBufferViewPresent = false;
     RhiSemanticBufferView indexBuffer;
-};
-
-struct RhiSemanticDrawState
-{
-    RhiSemanticDraw draw;
-    std::vector<RhiSemanticVertexStream> vertexStreams;
-    std::vector<RhiSemanticRenderTarget> renderTargets;
 };
 
 struct RhiDrawPacketEvidence
@@ -132,6 +129,17 @@ enum class RhiBindingEvidenceResult : std::uint8_t
     Match,
     Missing,
     Mismatch,
+};
+
+struct RhiSemanticDrawState
+{
+    RhiSemanticDraw draw;
+    std::vector<RhiSemanticVertexStream> vertexStreams;
+    std::vector<RhiSemanticRenderTarget> renderTargets;
+    std::vector<RhiSemanticBinding> textures;
+    std::optional<RhiSemanticBinding> pixelShader;
+    std::optional<RhiSemanticBinding> vertexShader;
+    std::optional<RhiSemanticBinding> indexBuffer;
 };
 
 struct RhiSemanticPresent

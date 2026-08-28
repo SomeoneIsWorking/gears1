@@ -168,6 +168,22 @@ corrected transition run stayed free of RHI semantic errors beyond the old
 first mismatch point, where the stale model had produced 154,333 draw
 mismatches.
 
+## Bound-state model progress
+
+The native state tracker now retains every observed binding class needed by a
+frontend snapshot: ordered texture slots, pixel and vertex shaders, index
+buffer views, vertex streams, colour/depth targets, and target descriptors.
+`ObserveRhiSemanticBinding` applies the post-call device-shadow evidence when it
+exists, so a native consumer does not accidentally use a request-time
+descriptor after the retained body normalizes it. Focused tests cover
+post-call descriptor adoption and all four unbind paths. This is state-model
+progress only; it does not enable a renderer bypass.
+
+Static inspection also falsified the old resource-creation candidates
+`0x82227000` and `0x82227120`: they index an existing object array and return
+or update existing object state, rather than construct resources. Creation
+entry points remain unidentified.
+
 ## Next falsifier
 
 Exercise the separate bound-vertex entry dynamically if the title reaches it.

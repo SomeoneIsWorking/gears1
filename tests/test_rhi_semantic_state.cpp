@@ -22,17 +22,50 @@ int main()
         .descriptor = {0x2D0, 0x20},
         .descriptorDwords = 2,
     });
+    tracker.ApplyBinding(
+        {
+            .kind = gears::RhiSemanticBindingKind::ColorRenderTarget,
+            .slot = 2,
+            .object = 0x40103000,
+            .descriptor = {0x97813},
+            .descriptorDwords = 1,
+        },
+        {
+            .present = true,
+            .observedObject = 0x40103000,
+            .descriptor = {0xabcde},
+            .descriptorDwords = 1,
+        });
+    tracker.ApplyBinding(
+        {
+            .kind = gears::RhiSemanticBindingKind::Texture,
+            .slot = 3,
+            .object = 0x40103000,
+        },
+        {
+            .present = true,
+            .observedObject = 0x40103000,
+            .descriptor = {1, 2, 3, 4, 5, 6},
+            .descriptorDwords = 6,
+        });
     tracker.ApplyBinding({
-        .kind = gears::RhiSemanticBindingKind::ColorRenderTarget,
-        .slot = 2,
-        .object = 0x40103000,
-        .descriptor = {0x97813},
-        .descriptorDwords = 1,
+        .kind = gears::RhiSemanticBindingKind::PixelShader,
+        .object = 0x40106000,
     });
     tracker.ApplyBinding({
-        .kind = gears::RhiSemanticBindingKind::Texture,
-        .slot = 3,
-        .object = 0x40103000,
+        .kind = gears::RhiSemanticBindingKind::VertexShader,
+        .object = 0x40107000,
+    });
+    tracker.ApplyBinding({
+        .kind = gears::RhiSemanticBindingKind::IndexBuffer,
+        .object = 0x40108000,
+        .bufferViewPresent = true,
+        .bufferView =
+            {
+                .allocation = {.guestAddress = 0x00108000, .sizeBytes = 0x2000},
+                .elementStrideBytes = 2,
+                .endianSwap = 1,
+            },
     });
     tracker.ApplyBinding({
         .kind = gears::RhiSemanticBindingKind::VertexStream,
@@ -66,6 +99,18 @@ int main()
     assert(state.renderTargets[0].object == 0x40103000);
     assert(state.renderTargets[1].depthStencil);
     assert(state.renderTargets[1].object == 0x40104000);
+    assert(state.renderTargets[0].descriptorDwords == 1);
+    assert(state.renderTargets[0].descriptor[0] == 0xabcde);
+    assert(state.textures.size() == 1);
+    assert(state.textures[0].slot == 3);
+    assert(state.textures[0].descriptorDwords == 6);
+    assert(state.textures[0].descriptor[5] == 6);
+    assert(state.pixelShader.has_value());
+    assert(state.pixelShader->object == 0x40106000);
+    assert(state.vertexShader.has_value());
+    assert(state.vertexShader->object == 0x40107000);
+    assert(state.indexBuffer.has_value());
+    assert(state.indexBuffer->bufferView.elementStrideBytes == 2);
 
     tracker.ApplyBinding({
         .kind = gears::RhiSemanticBindingKind::VertexStream,
@@ -96,6 +141,19 @@ int main()
     });
     state = tracker.SnapshotDraw(draw);
     assert(state.renderTargets.empty());
+
+    tracker.ApplyBinding({
+        .kind = gears::RhiSemanticBindingKind::Texture,
+        .slot = 3,
+    });
+    tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::PixelShader});
+    tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::VertexShader});
+    tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::IndexBuffer});
+    state = tracker.SnapshotDraw(draw);
+    assert(state.textures.empty());
+    assert(!state.pixelShader.has_value());
+    assert(!state.vertexShader.has_value());
+    assert(!state.indexBuffer.has_value());
 
     tracker.Reset();
     assert(tracker.SnapshotDraw(draw).vertexStreams.empty());

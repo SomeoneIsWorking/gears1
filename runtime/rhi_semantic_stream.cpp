@@ -367,7 +367,7 @@ void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
          .payload = RhiObservedBinding{.binding = binding,
                                        .state = state,
                                        .evidence = CompareRhiBindingState(binding, state)}});
-    g_stream.semanticState.ApplyBinding(binding);
+    g_stream.semanticState.ApplyBinding(binding, state);
 }
 
 void ObserveRhiSemanticPresent(const RhiSemanticPresent &present,

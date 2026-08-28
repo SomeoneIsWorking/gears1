@@ -28,6 +28,15 @@ primary performance plan. The cost includes guest rendering work, packet
 emission, command parsing, register-state reconstruction, translation, and host
 submission.
 
+The hottest guest-side symbols in the steady gameplay profile are not native
+rendering passes: `sub_8279B8C0` and `sub_8279DA90` expand and validate
+XGraphics/Xenos shader IR, while the other sampled symbols are CPU data/setup
+routines without PM4, draw, resolve, present, Vulkan, or RHI operations. The
+native speed fix is therefore to stop invoking the compatibility shader/compiler
+work in the native steady-state path, with native shader/material handling and
+caching grounded separately; optimizing those compatibility helpers would not
+produce the requested native engine.
+
 ## Native-pass seam
 
 `runtime/native_pass.*` retains a compatibility seam for substituting an
