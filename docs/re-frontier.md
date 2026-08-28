@@ -341,6 +341,14 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap: The separate bound-vertex draw entry is statically grounded but lacks live coverage. Resource creation and live release-to-zero destructor effects, full-stream comparison with renderer inputs, and pixel parity do not yet exist, so no complete frontend bypass is authorized.
 - notes: Logical title draw calls are not one-to-one with compatibility-renderer draw executions because predicated Xenos packets replay per EDRAM tile. Exact guest addresses and device offsets remain in the Gears 1 adapter; the semantic stream is title-neutral.
 
+### gpu-ticket-wait-native — Block the grounded retirement wait on host publication
+- status: partial
+- deps: native-rhi-observation, gpu-retirement
+- evidence: Static inspection of the retained Gears 1 helper grounds the operation-kind-3 state, owning-thread exemption, progress address, modular five-second deadline, and deadline-refresh condition. The shared packet-memory owner publishes a generation notification after the authoritative `EVENT_WRITE_SHD` store. The title adapter keeps the generated helper callable and uses a notified native wait by default, with retained and alternating controls. Focused tests cover deadline arithmetic, normalized address aliases, notification wakeup, and exact state decoding. Current-build headless controls reduced process user CPU from 53.44 s retained to 32.36 s native in 35 s runs while both remained near 30 produced frames/s.
+- where: runtime/gpu_ticket_wait.*; runtime/gpu_packet_memory.cpp; runtime/titles/gears1/gpu_ticket_wait_*; tests/test_gpu_ticket_wait*.cpp; docs/issues/0152-retained-gpu-ticket-wait-burns-one-third-of-samp.md
+- gap: This removes one measured retained polling cost but does not identify the separate title-side approximately 30 Hz producer limit or provide the complete native RHI frontend. A current-commit symbol-level profile and same-binary semantic/pixel parity gate remain required before treating the path as fully conformance-proven.
+- notes: The native seam waits only for the address that can publish the ticket, then invokes the retained helper for progress accounting, hang escalation, and return semantics. Other adaptive-wait operation kinds remain retained.
+
 ### native-rhi-bypass — Bypass guest D3D/PM4 work only after faithful parity
 - status: todo
 - deps: native-rhi-observation

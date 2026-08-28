@@ -91,8 +91,7 @@ fi
 if [ "$build" -eq 1 ]; then
     if [ ! -f "$build_dir/build.ninja" ] && [ ! -f "$build_dir/Makefile" ]; then
         echo "run.sh: configuring $build_dir" >&2
-        cmake -S . -B "$build_dir" -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-              -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang >&2
+        cmake -S . -B "$build_dir" -G Ninja -DCMAKE_BUILD_TYPE=Debug >&2
     fi
     cmake --build "$build_dir" --target gears1 >&2
 fi

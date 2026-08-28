@@ -31,6 +31,19 @@ target_include_directories(test_rhi_resource_reference PRIVATE
     ../runtime/titles/gears1)
 add_test(NAME rhi_resource_reference COMMAND test_rhi_resource_reference)
 
+add_executable(test_gpu_ticket_wait
+    test_gpu_ticket_wait.cpp
+    ../runtime/gpu_ticket_wait.cpp)
+target_include_directories(test_gpu_ticket_wait PRIVATE ../runtime)
+add_test(NAME gpu_ticket_wait COMMAND test_gpu_ticket_wait)
+
+add_executable(test_gpu_ticket_wait_state
+    test_gpu_ticket_wait_state.cpp
+    ../runtime/titles/gears1/gpu_ticket_wait_state.cpp)
+target_include_directories(test_gpu_ticket_wait_state PRIVATE
+    ../runtime/titles/gears1)
+add_test(NAME gpu_ticket_wait_state COMMAND test_gpu_ticket_wait_state)
+
 # Replays a dumped XMA context (GEARS_XMA_DUMP's .ctx + .packets pair) through
 # the REAL context protocol -- xma_context.cpp, the same code the runtime
 # runs -- acting as the title: kick, drain the output ring, advance the read

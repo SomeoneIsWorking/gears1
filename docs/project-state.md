@@ -52,12 +52,18 @@ The shared big-endian atomic resource-reference owner now executes all observed 
 AddRef/Release transitions natively by default. The exact Gears 1 adapter retains runtime recomp and
 alternating A/B controls. Focused concurrent tests exercise the shipping atomic implementation; a
 live 12,000-call A/B run matched every retained arithmetic observation and measured about 51 ns
-native versus 72 ns retained mean cost (C096). Existing shader and color-write setters remain executable
-native experiments but retained by default because their timing gates showed no win.
+native versus 72 ns retained mean cost (C096). The exact Gears 1 operation-kind-3 GPU ticket wait now
+uses a notified packet-memory wait by default, while retaining the generated helper for progress,
+hang, exemption, and A/B semantics; focused tests cover deadline arithmetic, address aliasing, and
+state decoding. A headless current-build control reduced sampled process user CPU from 53.44 s on
+the retained arm to 32.36 s on the native arm during 35 s runs while both stayed near 30 produced
+frames/s. Existing shader and color-write setters remain executable native experiments but retained
+by default because their timing gates showed no win.
 
-Gap: Only the non-retiring reference-count fast path is authorized. Zero-to-one backing ownership,
-one-to-zero destruction, resource construction, draw submission, and renderer bypass remain on the
-retained path. See issues #141 and #149.
+Gap: Only the non-retiring reference-count fast path and the Gears 1 operation-kind-3 wait are
+authorized. Zero-to-one backing ownership, one-to-zero destruction, resource construction, draw
+submission, and renderer bypass remain on the retained path. The title still produces only about
+30 frames/s, and the complete native frontend has not been built. See issues #141, #149, and #152.
 
 ### S005 — Complete native RHI frontend
 
