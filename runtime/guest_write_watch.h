@@ -11,6 +11,7 @@ enum class GuestWriteWatchOwner : uint8_t
     kQueue,
     kDrawPacket,
     kRhiTargetDescriptor,
+    kRhiVertexStreamReset,
 };
 
 struct GuestWriteWatchStats

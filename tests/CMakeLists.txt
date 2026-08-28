@@ -23,6 +23,14 @@ target_include_directories(test_runtime_logic PRIVATE
 target_link_libraries(test_runtime_logic PRIVATE lucent::lucent)
 add_test(NAME runtime_logic COMMAND test_runtime_logic)
 
+add_executable(test_rhi_resource_reference
+    test_rhi_resource_reference.cpp
+    ../runtime/rhi_resource_reference.cpp)
+target_include_directories(test_rhi_resource_reference PRIVATE
+    ../runtime
+    ../runtime/titles/gears1)
+add_test(NAME rhi_resource_reference COMMAND test_rhi_resource_reference)
+
 # Replays a dumped XMA context (GEARS_XMA_DUMP's .ctx + .packets pair) through
 # the REAL context protocol -- xma_context.cpp, the same code the runtime
 # runs -- acting as the title: kick, drain the output ring, advance the read

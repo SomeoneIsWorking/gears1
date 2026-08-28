@@ -13,6 +13,7 @@ class RhiSemanticStateTracker
 {
   public:
     void ApplyBinding(const RhiSemanticBinding &binding);
+    void ApplyVertexStreamReset(const RhiSemanticVertexStreamReset &reset);
     [[nodiscard]] RhiSemanticDrawState SnapshotDraw(const RhiSemanticDraw &draw) const;
     void Reset();
 

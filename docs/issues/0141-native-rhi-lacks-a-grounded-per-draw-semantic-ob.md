@@ -150,10 +150,28 @@ and 29 were absent from `ColorFormatBytesPerPixel`. After adding their 2/4/8-byt
 sizes, a headless run through frame 540 matched 540/540 resolves with zero
 missing or mismatched observations alongside every draw, binding, and present.
 
+Resource reference operations are now part of the same ordered stream. The
+retained `0x8222E868` AddRef and `0x8222E8E0` Release bodies grounded the object
+flags, backing-resource link, big-endian atomic reference count, and the two
+ownership boundaries. A shared native CAS owner executes non-boundary
+transitions by default while the exact adapter keeps retained and alternating
+A/B controls. A 12,000-call live A/B run matched every result and measured
+roughly 51 ns native versus 72 ns retained mean execution; the longer
+default-native run through frame 2940 matched 103,187 resource transitions with
+no missing or mismatched result.
+
+The gameplay-transition failure also exposed a missing state owner rather than
+a draw defect. A binder-paused write watch attributed the direct stream-table
+clear to `0x82487510`; its Gears 1 wrapper now emits one independently checked
+16-slot reset event and the shared tracker applies the range clear. The
+corrected transition run stayed free of RHI semantic errors beyond the old
+first mismatch point, where the stale model had produced 154,333 draw
+mismatches.
+
 ## Next falsifier
 
 Exercise the separate bound-vertex entry dynamically if the title reaches it.
-Then add resource creation/lifetime and retirement events and
+Then add resource creation and live release-to-zero retirement effects and
 compare the complete ordered stream with the PM4-derived `FrameDrawInputs` and
 output. Keep the recompiled compatibility bodies available and super-called
 until a deliberately wrong semantic control is rejected and a same-run

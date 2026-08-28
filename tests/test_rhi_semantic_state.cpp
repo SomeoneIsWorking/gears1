@@ -76,6 +76,18 @@ int main()
     assert(state.vertexStreams[0].slot == 1);
 
     tracker.ApplyBinding({
+        .kind = gears::RhiSemanticBindingKind::VertexStream,
+        .slot = 4,
+        .object = 0x40105000,
+        .bufferViewPresent = true,
+        .bufferView = {.allocation = {.guestAddress = 0x00105000, .sizeBytes = 0x800}},
+    });
+    tracker.ApplyVertexStreamReset({.firstSlot = 0, .slotCount = 4});
+    state = tracker.SnapshotDraw(draw);
+    assert(state.vertexStreams.size() == 1);
+    assert(state.vertexStreams[0].slot == 4);
+
+    tracker.ApplyBinding({
         .kind = gears::RhiSemanticBindingKind::ColorRenderTarget,
         .slot = 2,
     });

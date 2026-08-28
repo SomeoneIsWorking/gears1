@@ -6,6 +6,7 @@
 #include "rhi_semantic_stream.h"
 #include "rhi_target_descriptor_watch.h"
 #include "rhi_vertex_buffer.h"
+#include "rhi_vertex_stream_watch.h"
 
 #include <cstdint>
 #include <vector>
@@ -168,7 +169,6 @@ CaptureBoundRenderTargets(std::uint32_t device);
 [[nodiscard]] gears::RhiBindingStateEvidence CaptureVertexStreamBinding(std::uint32_t device,
                                                                         std::uint32_t slot)
 {
-    constexpr std::uint32_t kVertexStreamObjectTableOffset = 0x2F9C;
     constexpr std::uint32_t kVertexFetchDescriptorOffset = 0x6F8;
     constexpr std::uint32_t kVertexStreamStrideOffset = 0x2FE0;
     if (device == 0 || slot >= gears::gears1::kVertexStreamSlotCount)
@@ -176,8 +176,8 @@ CaptureBoundRenderTargets(std::uint32_t device);
 
     gears::RhiBindingStateEvidence state{
         .present = true,
-        .observedObject =
-            ReadGuestBe32(device + kVertexStreamObjectTableOffset + slot * sizeof(std::uint32_t)),
+        .observedObject = ReadGuestBe32(device + gears::gears1::kVertexStreamObjectTableOffset +
+                                        slot * sizeof(std::uint32_t)),
     };
     if (state.observedObject != 0)
     {
@@ -269,6 +269,7 @@ void ObserveAfterSuper(const gears::RhiSemanticDraw &draw, std::uint32_t device,
 {
     gears::ObserveRhiSemanticDraw(draw, CaptureLastDrawPacket(device, staged, draw.kind));
     gears::gears1::ReportRhiTargetDescriptorWriteWatch();
+    gears::gears1::ReportRhiVertexStreamResetWriteWatch();
 }
 
 } // namespace
@@ -320,8 +321,10 @@ PPC_FUNC(sub_8222AE20)
             binding.bufferView = *view;
         }
     }
+    gears::gears1::PauseRhiVertexStreamResetWriteWatch(slot);
     __imp__sub_8222AE20(ctx, base);
     gears::ObserveRhiSemanticBinding(binding, CaptureVertexStreamBinding(device, slot));
+    gears::gears1::MaybeArmRhiVertexStreamResetWriteWatch(device, slot);
 }
 
 extern "C" PPC_FUNC(__imp__sub_8222AFD8);

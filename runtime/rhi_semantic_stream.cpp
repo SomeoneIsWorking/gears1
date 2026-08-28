@@ -40,6 +40,18 @@ struct RhiSemanticReportTotals
     std::uint64_t bindingsMissing = 0;
     std::uint64_t bindingsMismatched = 0;
     std::array<std::uint64_t, 7> bindingKinds{};
+    std::uint64_t resourceLifetimeCalls = 0;
+    std::uint64_t resourceLifetimeMatched = 0;
+    std::uint64_t resourceLifetimeMissing = 0;
+    std::uint64_t resourceLifetimeMismatched = 0;
+    std::uint64_t resourceRetirements = 0;
+    std::uint64_t resourceAddReferences = 0;
+    std::uint64_t resourceReleases = 0;
+    std::array<std::uint64_t, 16> resourceTypes{};
+    std::uint64_t vertexStreamResets = 0;
+    std::uint64_t vertexStreamResetsMatched = 0;
+    std::uint64_t vertexStreamResetsMissing = 0;
+    std::uint64_t vertexStreamResetsMismatched = 0;
     std::uint64_t resolves = 0;
     std::uint64_t resolvesMatched = 0;
     std::uint64_t resolvesMissing = 0;
@@ -271,6 +283,36 @@ RhiPresentEvidenceResult CompareRhiPresentPacket(const RhiSemanticPresent &prese
     return RhiPresentEvidenceResult::Match;
 }
 
+RhiResourceLifetimeEvidenceResult
+CompareRhiResourceLifetime(const RhiSemanticResourceLifetime &lifetime,
+                           const RhiResourceLifetimeEvidence &retained)
+{
+    if (!retained.present)
+        return RhiResourceLifetimeEvidenceResult::Missing;
+    const std::uint32_t expectedReferenceCount =
+        lifetime.operation == RhiResourceLifetimeOperation::AddReference
+            ? lifetime.previousReferenceCount + 1
+            : lifetime.previousReferenceCount - 1;
+    return retained.returnedReferenceCount == expectedReferenceCount
+               ? RhiResourceLifetimeEvidenceResult::Match
+               : RhiResourceLifetimeEvidenceResult::Mismatch;
+}
+
+RhiVertexStreamResetEvidenceResult
+CompareRhiVertexStreamReset(const RhiSemanticVertexStreamReset &reset,
+                            const RhiVertexStreamResetEvidence &state)
+{
+    if (!state.present)
+        return RhiVertexStreamResetEvidenceResult::Missing;
+    const std::uint64_t end = std::uint64_t{reset.firstSlot} + reset.slotCount;
+    for (const RhiSemanticVertexStream &stream : state.activeStreams)
+    {
+        if (stream.slot >= reset.firstSlot && std::uint64_t{stream.slot} < end)
+            return RhiVertexStreamResetEvidenceResult::Mismatch;
+    }
+    return RhiVertexStreamResetEvidenceResult::Match;
+}
+
 RhiResolveEvidenceResult CompareRhiResolvePacket(const RhiSemanticResolve &resolve,
                                                  const RhiResolvePacketEvidence &packet)
 {
@@ -342,6 +384,36 @@ void ObserveRhiSemanticPresent(const RhiSemanticPresent &present,
                                        .evidence = CompareRhiPresentPacket(present, packet)}});
 }
 
+void ObserveRhiSemanticResourceLifetime(const RhiSemanticResourceLifetime &lifetime,
+                                        const RhiResourceLifetimeEvidence &retained)
+{
+    if (!RhiSemanticObservationEnabled())
+        return;
+
+    std::lock_guard guard(g_stream.mutex);
+    g_stream.pendingEvents.push_back(
+        {.sequence = g_stream.nextSequence++,
+         .payload = RhiObservedResourceLifetime{
+             .lifetime = lifetime,
+             .retained = retained,
+             .evidence = CompareRhiResourceLifetime(lifetime, retained)}});
+}
+
+void ObserveRhiSemanticVertexStreamReset(const RhiSemanticVertexStreamReset &reset,
+                                         const RhiVertexStreamResetEvidence &state)
+{
+    if (!RhiSemanticObservationEnabled())
+        return;
+
+    std::lock_guard guard(g_stream.mutex);
+    g_stream.pendingEvents.push_back({.sequence = g_stream.nextSequence++,
+                                      .payload = RhiObservedVertexStreamReset{
+                                          .reset = reset,
+                                          .state = state,
+                                          .evidence = CompareRhiVertexStreamReset(reset, state)}});
+    g_stream.semanticState.ApplyVertexStreamReset(reset);
+}
+
 void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,
                                const RhiResolvePacketEvidence &packet)
 {
@@ -396,6 +468,45 @@ RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
                 break;
             case RhiBindingEvidenceResult::Mismatch:
                 ++frame.bindingsMismatched;
+                break;
+            }
+            continue;
+        }
+        if (const auto *observed = std::get_if<RhiObservedResourceLifetime>(&event.payload))
+        {
+            ++frame.resourceLifetimeCalls;
+            if (observed->lifetime.operation == RhiResourceLifetimeOperation::Release &&
+                observed->retained.present && observed->retained.returnedReferenceCount == 0)
+            {
+                ++frame.resourceRetirements;
+            }
+            switch (observed->evidence)
+            {
+            case RhiResourceLifetimeEvidenceResult::Match:
+                ++frame.resourceLifetimeMatched;
+                break;
+            case RhiResourceLifetimeEvidenceResult::Missing:
+                ++frame.resourceLifetimeMissing;
+                break;
+            case RhiResourceLifetimeEvidenceResult::Mismatch:
+                ++frame.resourceLifetimeMismatched;
+                break;
+            }
+            continue;
+        }
+        if (const auto *observed = std::get_if<RhiObservedVertexStreamReset>(&event.payload))
+        {
+            ++frame.vertexStreamResets;
+            switch (observed->evidence)
+            {
+            case RhiVertexStreamResetEvidenceResult::Match:
+                ++frame.vertexStreamResetsMatched;
+                break;
+            case RhiVertexStreamResetEvidenceResult::Missing:
+                ++frame.vertexStreamResetsMissing;
+                break;
+            case RhiVertexStreamResetEvidenceResult::Mismatch:
+                ++frame.vertexStreamResetsMismatched;
                 break;
             }
             continue;
@@ -465,6 +576,15 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
             ++g_reportTotals.bindingKinds[static_cast<std::size_t>(observed->binding.kind)];
             continue;
         }
+        if (const auto *observed = std::get_if<RhiObservedResourceLifetime>(&event.payload))
+        {
+            if (observed->lifetime.operation == RhiResourceLifetimeOperation::AddReference)
+                ++g_reportTotals.resourceAddReferences;
+            else
+                ++g_reportTotals.resourceReleases;
+            ++g_reportTotals.resourceTypes[observed->lifetime.resourceType & 0xF];
+            continue;
+        }
     }
     g_reportTotals.draws += frame.draws;
     g_reportTotals.matched += frame.matched;
@@ -474,6 +594,15 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
     g_reportTotals.bindingsMatched += frame.bindingsMatched;
     g_reportTotals.bindingsMissing += frame.bindingsMissing;
     g_reportTotals.bindingsMismatched += frame.bindingsMismatched;
+    g_reportTotals.resourceLifetimeCalls += frame.resourceLifetimeCalls;
+    g_reportTotals.resourceLifetimeMatched += frame.resourceLifetimeMatched;
+    g_reportTotals.resourceLifetimeMissing += frame.resourceLifetimeMissing;
+    g_reportTotals.resourceLifetimeMismatched += frame.resourceLifetimeMismatched;
+    g_reportTotals.resourceRetirements += frame.resourceRetirements;
+    g_reportTotals.vertexStreamResets += frame.vertexStreamResets;
+    g_reportTotals.vertexStreamResetsMatched += frame.vertexStreamResetsMatched;
+    g_reportTotals.vertexStreamResetsMissing += frame.vertexStreamResetsMissing;
+    g_reportTotals.vertexStreamResetsMismatched += frame.vertexStreamResetsMismatched;
     g_reportTotals.resolves += frame.resolves;
     g_reportTotals.resolvesMatched += frame.resolvesMatched;
     g_reportTotals.resolvesMissing += frame.resolvesMissing;
@@ -485,19 +614,31 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
 
     if (frame.frameSequence == 1 || frame.frameSequence % 60 == 0 || frame.missing != 0 ||
         frame.mismatched != 0 || frame.bindingsMissing != 0 || frame.bindingsMismatched != 0 ||
+        frame.resourceLifetimeMissing != 0 || frame.resourceLifetimeMismatched != 0 ||
+        frame.vertexStreamResetsMissing != 0 || frame.vertexStreamResetsMismatched != 0 ||
         frame.resolvesMissing != 0 || frame.resolvesMismatched != 0 || frame.presentsMissing != 0 ||
         frame.presentsMismatched != 0)
     {
         lucent::Line line;
         line.add("native RHI semantic through frame {}: {} draw call(s), {} packet match(es),"
                  " {} missing packet(s), {} mismatch(es); {} binding call(s), {} state"
-                 " match(es), {} missing state observation(s), {} mismatch(es); {} resolve call(s),"
-                 " {} packet match(es), {} missing packet(s), {} mismatch(es); {} present call(s),"
+                 " match(es), {} missing state observation(s), {} mismatch(es); {} resource"
+                 " lifetime call(s), {} match(es), {} missing result(s), {} mismatch(es), {}"
+                 " retirement(s) ({} add-reference, {} release); {} vertex-stream reset(s),"
+                 " {} match(es), {} missing state observation(s), {} mismatch(es); {} resolve"
+                 " call(s), {} packet match(es), {} missing packet(s), {} mismatch(es);"
+                 " {} present call(s),"
                  " {} packet match(es), {} missing packet(s), {} mismatch(es)",
                  frame.frameSequence, g_reportTotals.draws, g_reportTotals.matched,
                  g_reportTotals.missing, g_reportTotals.mismatched, g_reportTotals.bindings,
                  g_reportTotals.bindingsMatched, g_reportTotals.bindingsMissing,
-                 g_reportTotals.bindingsMismatched, g_reportTotals.resolves,
+                 g_reportTotals.bindingsMismatched, g_reportTotals.resourceLifetimeCalls,
+                 g_reportTotals.resourceLifetimeMatched, g_reportTotals.resourceLifetimeMissing,
+                 g_reportTotals.resourceLifetimeMismatched, g_reportTotals.resourceRetirements,
+                 g_reportTotals.resourceAddReferences, g_reportTotals.resourceReleases,
+                 g_reportTotals.vertexStreamResets, g_reportTotals.vertexStreamResetsMatched,
+                 g_reportTotals.vertexStreamResetsMissing,
+                 g_reportTotals.vertexStreamResetsMismatched, g_reportTotals.resolves,
                  g_reportTotals.resolvesMatched, g_reportTotals.resolvesMissing,
                  g_reportTotals.resolvesMismatched, g_reportTotals.presents,
                  g_reportTotals.presentsMatched, g_reportTotals.presentsMissing,
@@ -513,6 +654,11 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
             if (g_reportTotals.bindingKinds[index] != 0)
                 line.add("  {} x{}", BindingKindName(static_cast<RhiSemanticBindingKind>(index)),
                          g_reportTotals.bindingKinds[index]);
+        }
+        for (std::size_t index = 0; index < g_reportTotals.resourceTypes.size(); ++index)
+        {
+            if (g_reportTotals.resourceTypes[index] != 0)
+                line.add("  resource-type-{} x{}", index, g_reportTotals.resourceTypes[index]);
         }
         line.add("  bound-draw-state with-streams={} without-streams={}",
                  g_reportTotals.boundDrawsWithVertexStreams,
@@ -604,6 +750,42 @@ void ReportRhiSemanticFrame(std::uint64_t frameSequence)
                     observed->state.bufferView.allocation.sizeBytes,
                     observed->state.bufferView.elementStrideBytes,
                     observed->state.bufferView.endianSwap);
+            }
+            continue;
+        }
+
+        if (const auto *observed = std::get_if<RhiObservedResourceLifetime>(&event.payload))
+        {
+            if (observed->evidence != RhiResourceLifetimeEvidenceResult::Match)
+            {
+                lucent::error(
+                    "rhi",
+                    "semantic resource lifetime {} ({} object {:#x}, type {}, flags {:#x},"
+                    " backing {:#x}) did not match retained refcount arithmetic: previous={}"
+                    " observed present={} returned={}",
+                    event.sequence,
+                    observed->lifetime.operation == RhiResourceLifetimeOperation::AddReference
+                        ? "add-reference"
+                        : "release",
+                    observed->lifetime.object, observed->lifetime.resourceType,
+                    observed->lifetime.rawFlags, observed->lifetime.backingObject,
+                    observed->lifetime.previousReferenceCount, observed->retained.present,
+                    observed->retained.returnedReferenceCount);
+            }
+            continue;
+        }
+
+        if (const auto *observed = std::get_if<RhiObservedVertexStreamReset>(&event.payload))
+        {
+            if (observed->evidence != RhiVertexStreamResetEvidenceResult::Match)
+            {
+                lucent::error(
+                    "rhi",
+                    "semantic vertex-stream reset {} (slots {}..{}) did not match guest device"
+                    " state: observed present={} active streams={}",
+                    event.sequence, observed->reset.firstSlot,
+                    observed->reset.firstSlot + observed->reset.slotCount, observed->state.present,
+                    observed->state.activeStreams.size());
             }
             continue;
         }

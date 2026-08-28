@@ -132,6 +132,14 @@ all 24,239 draw packets, 86,061 bindings, and 780 presents with no missing or
 mismatched observation. Its first run rejected a false 18-slot snapshot,
 exposing the slot-17/stride-table overlap before the adapter was corrected.
 
+The normal binder is not the only owner of that table. A binder-paused page
+watch attributed the gameplay transition's direct slot-1 clear to retained
+function `0x82487510`. That function resets all 16 object slots at `+0x2F9C`
+and their stride bytes at `+0x2FE0` as one device-state operation. The exact
+adapter now publishes one checked 16-slot reset event after super-calling the
+body, and the title-neutral state tracker clears that owned range. This removed
+the former post-transition stale slot without reconciling state at draw time.
+
 The same state owner now snapshots ordered active color/depth target object
 identities at every draw. A headless run through frame 600 matched all 3,786
 draw snapshots, including 482 bound-index draws, against a fresh read of the
@@ -207,7 +215,7 @@ so this set IS the "first presented frame" target. **V**
 | 0x82222350 | 0.38 | state setter (unidentified) |
 | 0x822193D8 / 0x822193B0 | 0.28 / — | free / alloc utility pair (575/420 static callers) (medium) |
 | 0x8222ABF8 / 0x8222AB30 | 0.15 | paired begin/end-shaped calls (per movie frame) (low) |
-| 0x8222E8E0 | 0.12 | setter with 99 static callers incl. thunk arrays (unidentified) |
+| 0x8222E868 / 0x8222E8E0 | workload-dependent | D3D resource AddRef / Release; native big-endian atomic fast path for non-boundary transitions, retained body for zero-to-one / one-to-zero ownership (high) |
 | 0x8222B068 / 0x8222B398 | 0.08 | colour-render-target / depth-stencil-target binders (high) |
 | 0x8221D9B8 | 0.07 | async/block-wait helper (appears in movie + resource paths) (low) |
 | 0x82544148 | **exactly 1 per frame, measured in both menus and gameplay** | State flush, NOT the draw emitter. It was labelled "THE draw flush (state → TYPE0 packets + draw)" from a static read; wrapping it and counting against the renderer's own per-frame draw count gives one call per frame against 744 draws (`catalog.py show 58`). The movie path draws via 0x8221D3A8 |

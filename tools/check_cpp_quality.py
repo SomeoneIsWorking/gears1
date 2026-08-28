@@ -113,6 +113,8 @@ FORMATTED = [
     "runtime/rhi_semantic_state.h",
     "runtime/rhi_semantic_stream.cpp",
     "runtime/rhi_semantic_stream.h",
+    "runtime/rhi_resource_reference.cpp",
+    "runtime/rhi_resource_reference.h",
     "runtime/rhi_packet_evidence.h",
     "runtime/scanout_gamma.cpp",
     "runtime/scanout_gamma.h",
@@ -124,15 +126,19 @@ FORMATTED = [
     "runtime/titles/gears1/color_write_gamma_state.h",
     "runtime/titles/gears1/guest_state_memory.h",
     "runtime/titles/gears1/rhi_bindings.cpp",
+    "runtime/titles/gears1/rhi_device_state_reset_binding.cpp",
     "runtime/titles/gears1/rhi_index_buffer.cpp",
     "runtime/titles/gears1/rhi_index_buffer.h",
     "runtime/titles/gears1/rhi_resolve.cpp",
     "runtime/titles/gears1/rhi_resolve.h",
     "runtime/titles/gears1/rhi_resolve_binding.cpp",
+    "runtime/titles/gears1/rhi_resource_lifetime_binding.cpp",
     "runtime/titles/gears1/rhi_target_descriptor_watch.cpp",
     "runtime/titles/gears1/rhi_target_descriptor_watch.h",
     "runtime/titles/gears1/rhi_vertex_buffer.cpp",
     "runtime/titles/gears1/rhi_vertex_buffer.h",
+    "runtime/titles/gears1/rhi_vertex_stream_watch.cpp",
+    "runtime/titles/gears1/rhi_vertex_stream_watch.h",
     "runtime/titles/gears1/shader_setter_override.cpp",
     "runtime/titles/gears1/shader_setter_state.h",
     "runtime/vd_null_gpu.cpp",
@@ -160,6 +166,7 @@ FORMATTED = [
     "tests/test_gpu_swap_packet.cpp",
     "tests/test_remote_input.cpp",
     "tests/test_rhi_index_buffer.cpp",
+    "tests/test_rhi_resource_reference.cpp",
     "tests/test_rhi_semantic_state.cpp",
     "tests/test_rhi_resolve.cpp",
     "tests/test_rhi_vertex_buffer.cpp",
@@ -226,21 +233,26 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/render_thread.cpp",
     "runtime/rhi_semantic_state.cpp",
     "runtime/rhi_semantic_stream.cpp",
+    "runtime/rhi_resource_reference.cpp",
     "runtime/scanout_gamma.cpp",
     "runtime/title_executable.cpp",
     "runtime/title_profile.cpp",
     "runtime/titles/gears1/rhi_bindings.cpp",
+    "runtime/titles/gears1/rhi_device_state_reset_binding.cpp",
     "runtime/titles/gears1/rhi_index_buffer.cpp",
     "runtime/titles/gears1/rhi_resolve.cpp",
     "runtime/titles/gears1/rhi_resolve_binding.cpp",
+    "runtime/titles/gears1/rhi_resource_lifetime_binding.cpp",
     "runtime/titles/gears1/rhi_target_descriptor_watch.cpp",
     "runtime/titles/gears1/rhi_vertex_buffer.cpp",
+    "runtime/titles/gears1/rhi_vertex_stream_watch.cpp",
     "runtime/titles/gears1/shader_setter_override.cpp",
     "tests/test_depth_alias_shader_format.cpp",
     "tests/test_color_write_gamma_state.cpp",
     "tests/test_frame_probe_capture.cpp",
     "tests/test_frame_contract.cpp",
     "tests/test_frame_queue.cpp",
+    "tests/test_rhi_resource_reference.cpp",
     "tests/test_graphics_probe.cpp",
     "tests/test_guest_dirty_pages.cpp",
     "tests/test_guest_texture_hash.cpp",
@@ -330,6 +342,12 @@ def selftest():
     assert "runtime/gpu_draw_formats.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resolve.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resolve_binding.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/rhi_resource_reference.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/rhi_device_state_reset_binding.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/rhi_resource_lifetime_binding.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/rhi_vertex_stream_watch.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_rhi_resource_reference.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_rhi_resource_reference.cpp" in FORMATTED
     assert "tests/test_rhi_resolve.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_targets.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_api.cpp" in TIDY_TRANSLATION_UNITS
