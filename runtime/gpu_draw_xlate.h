@@ -35,7 +35,7 @@ struct ShaderTextureBinding
 struct ShaderSamplerBinding
 {
     uint32_t fetchConstant = 0;
-    uint32_t magFilter = 3, minFilter = 3, mipFilter = 3, anisoFilter = 0;
+    uint32_t magFilter = 3, minFilter = 3, mipFilter = 3, anisoFilter = 7;
 };
 
 // One vertex buffer the translated vertex shader fetches from, as the shader
@@ -69,10 +69,13 @@ struct VertexShaderShape
 
 VertexShaderShape AnalyzeVertexShaderShape(const uint8_t *ucode, size_t size, uint64_t hash);
 
-struct ShaderXlate
+// The host interface consumed by descriptor, uniform and vertex-fetch setup.
+// A native pass supplies this contract directly; a translated shader fills it
+// while producing its SPIR-V. Keeping one type for both arms prevents the
+// native path from growing a second, drifting description of the draw ABI.
+struct ShaderInterface
 {
     bool ok = false;
-    std::vector<uint8_t> spirv;             // translated SPIR-V module
     uint64_t floatBitmap[4] = {0, 0, 0, 0}; // ConstantRegisterMap::float_bitmap
     uint32_t floatCount = 0;                // number of float4 constants the UBO holds
     // Whether the stage reads its float constants through the address register
@@ -87,8 +90,20 @@ struct ShaderXlate
     std::vector<ShaderTextureBinding> textures;      // binding index == vector index
     std::vector<ShaderSamplerBinding> samplers;      // binding textures.size() + index
     std::vector<ShaderVertexBinding> vertexBindings; // vertex stage only
-    uint32_t samplerCount = 0; // == samplers.size(); bindings [textures.size(), +samplerCount)
+    // Pixel interpolator locations consumed by a native module. Zero means
+    // that the pass has no fixed interpolator requirement.
+    uint32_t requiredInterpolatorMask = 0;
 };
+
+struct ShaderXlate : ShaderInterface
+{
+    std::vector<uint8_t> spirv; // translated SPIR-V module
+};
+
+// Returns the interpolators encoded by a stage's draw-specific modification.
+// The implementation lives behind the plain header because the caller must
+// not include Xenia's Vulkan headers.
+uint32_t ShaderInterpolatorMask(bool isVertex, uint64_t modification);
 
 // A shader's translation is NOT a function of its microcode alone. Xenia's
 // SpirvShaderTranslator::Modification selects, among other things, WHICH

@@ -82,22 +82,28 @@ The native-pass seam now contains an independently authored scene-composite
 module whose descriptor contract validates as Vulkan 1.1 SPIR-V. Its first
 candidate was rejected for conflating texture-sign and host-swizzle fields;
 the corrected source separates those fields and its PWL gamma correction now
-matches the translated arithmetic. A fresh signs-enabled frame replay matched
-the compatibility arm at 0.0000 mean channel error (worst channel difference
-4/255); this is pass-local parity evidence, not a complete native frontend.
-A four-repeat warm capture measured 7.268 ms GPU retained versus 7.287 ms with
-the native pass, so this post-translation seam has no measured speed benefit.
-See issue #155.
+matches the translated arithmetic. The native arm now supplies the shared
+`ShaderInterface` directly, skipping Xenos-to-SPIR-V translation for this
+implemented pass; `GEARS_NATIVE_PASSES_KEEP_TRANSLATED=1` retains the
+translation arm for inspection. A fresh signs-enabled frame replay matched
+the compatibility arm within 0.001 mean channel difference (worst channel
+difference 4/255), and the validation run reported no image-interface
+diagnostics. Three sequential four-repeat runs of `title600.gfr` measured
+5.574/7.305/7.411 ms GPU retained versus 5.276/5.709/7.157 ms with the native
+pass. The native values are directionally lower on average but the spread is
+too noisy for a stable speedup claim. This is pass-local setup evidence, not a
+complete native frontend or proof of the 5 ms target. See issues #155 and
+#157.
 
-Gap: Only the non-retiring reference-count fast path, the Gears 1 operation-kind-3 wait, and the
-explicitly enabled Gears 1 audio mix are authorized. Zero-to-one backing ownership, one-to-zero
-destruction, resource construction, draw submission, and renderer bypass remain on the retained
-path. `native_rhi.*` now builds a PM4-independent ordered frame plan when explicitly enabled, and
-`native_rhi_backend.*` plus `native_rhi_resources.*` define the host execution and resource-identity
-contracts, but no concrete backend is installed and compatibility rendering remains authoritative. A
-native scene composite now passes a fresh signs-enabled captured-frame parity gate, but the
-native-pass roster remains experimental. The title still produces only about 30 frames/s, and the
-complete native frontend has not been built. See issues #141, #149, #152, #153, #154, and #155.
+Gap: Only the non-retiring reference-count fast path, the Gears 1 operation-kind-3 wait, the
+explicitly enabled Gears 1 audio mix, and the one direct native scene-composite shader arm are
+authorized. Zero-to-one backing ownership, one-to-zero destruction, resource construction, the
+remaining draw submissions, and renderer bypass remain on the retained path. `native_rhi.*` now
+builds a PM4-independent ordered frame plan when explicitly enabled, and `native_rhi_backend.*`
+plus `native_rhi_resources.*` define the host execution and resource-identity contracts, but no
+concrete backend is installed and compatibility rendering remains authoritative. The native-pass
+roster remains experimental. The title still produces only about 30 frames/s, and the complete
+native frontend has not been built. See issues #141, #149, #152, #153, #154, #155, and #157.
 
 ### S005 — Complete native RHI frontend
 

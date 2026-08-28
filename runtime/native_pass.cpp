@@ -11,6 +11,19 @@ namespace gears::native
 namespace
 {
 
+gears::draw::ShaderInterface SceneCompositeInterface()
+{
+    gears::draw::ShaderInterface interface;
+    interface.ok = true;
+    interface.floatBitmap[0] = 0x3;
+    interface.floatBitmap[3] = 1ull << 63;
+    interface.floatCount = 3;
+    interface.textures = {{0, 1}, {0, 1}};
+    interface.samplers = {{0, 3, 3, 3, 7}};
+    interface.requiredInterpolatorMask = 0x3;
+    return interface;
+}
+
 // Hashes are factual interoperability metadata observed from a user-provided
 // image. No title-derived shader implementation is distributed. An empty module
 // is a declaration only, and Find() refuses it.
@@ -24,7 +37,7 @@ const std::vector<Pass> &RosterStorage()
         Pass{0x501ac5d8692bf7b6ull, "full-screen scene composite",
              "observed full-screen contract; post-swizzle signs are read from"
              " the translated system-constant field and view routing is host-owned",
-             NativeSceneCompositeSpirv()},
+             NativeSceneCompositeSpirv(), SceneCompositeInterface()},
         Pass{0x9610bf8038af9aafull,
              "post-process blend",
              "observed pass identity; clean implementation not yet provided",

@@ -363,7 +363,7 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - evidence:
 - where: runtime; tests; tools/frame_replay
 - gap: No runtime original/native toggle or state/pixel parity gate exists for a complete RHI frontend.
-- notes: Preserve the PM4/recomp arm in the same binary. Performance is measured only after the faithful arm passes, with a deliberately wrong control that the comparer rejects. The approximately 5 ms/200 fps renderer target belongs here: native execution must remove Xenos PM4 parsing, EDRAM reconstruction, and redundant pass reconstruction rather than require the compatibility oracle to carry that architecture at native-PC cost.
+- notes: Preserve the PM4/recomp arm in the same binary. One independently authored scene-composite shader now has a direct host-interface bypass with a same-input pixel/interface gate, but that is a pass-local setup seam, not this complete frontend. Performance is measured only after the faithful arm passes, with a deliberately wrong control that the comparer rejects. The approximately 5 ms/200 fps renderer target belongs here: native execution must remove Xenos PM4 parsing, EDRAM reconstruction, and redundant pass reconstruction rather than require the compatibility oracle to carry that architecture at native-PC cost.
 
 ### renderer-60hz-budget — Render steady gameplay below 16.67 ms per produced frame
 - status: todo

@@ -130,7 +130,6 @@ bool TranslateOne(SpirvShaderTranslator &translator, xenos::ShaderType type, con
         s.anisoFilter = uint32_t(sb.aniso_filter);
         out.samplers.push_back(s);
     }
-    out.samplerCount = uint32_t(out.samplers.size());
     // Which vertex fetch constants this stage's geometry comes from. The shader
     // decides these, exactly as it decides its texture bindings.
     out.vertexBindings.clear();
@@ -146,7 +145,7 @@ bool TranslateOne(SpirvShaderTranslator &translator, xenos::ShaderType type, con
                  "translated {} {:#018x}: {} bytes SPIR-V, {} float constants,"
                  " {} textures, {} samplers",
                  type == xenos::ShaderType::kVertex ? "VS" : "PS", hash, spirv.size(),
-                 out.floatCount, out.textures.size(), out.samplerCount);
+                 out.floatCount, out.textures.size(), out.samplers.size());
     return true;
 }
 

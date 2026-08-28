@@ -50,7 +50,7 @@ std::string PipelineCache::TexSignature(const ShaderXlate &x, VkShaderStageFlags
     for (const auto &t : x.textures)
         s.push_back(char('0' + (t.dimension & 3)));
     s.push_back('|');
-    s += std::to_string(x.samplerCount);
+    s += std::to_string(x.samplers.size());
     s.push_back('|');
     s += std::to_string(stage);
     return s;
@@ -67,10 +67,10 @@ bool PipelineCache::GetTexLayout(const ShaderXlate &x, VkShaderStageFlags stage,
         return true;
     }
     std::vector<VkDescriptorSetLayoutBinding> b;
-    b.reserve(x.textures.size() + x.samplerCount);
+    b.reserve(x.textures.size() + x.samplers.size());
     for (uint32_t i = 0; i < uint32_t(x.textures.size()); ++i)
         b.push_back({i, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 1, stage, nullptr});
-    for (uint32_t j = 0; j < x.samplerCount; ++j)
+    for (uint32_t j = 0; j < x.samplers.size(); ++j)
         b.push_back(
             {uint32_t(x.textures.size()) + j, VK_DESCRIPTOR_TYPE_SAMPLER, 1, stage, nullptr});
     VkDescriptorSetLayout l = VK_NULL_HANDLE;

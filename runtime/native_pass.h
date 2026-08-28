@@ -17,9 +17,10 @@
 //
 // THE RECOMP BODY STAYS ALIVE, which is the rule this project already follows for
 // native overrides of guest code (see the recomp-overrides methodology): the
-// translated shader is still built, so a native pass can be A/B'd against it in
-// the same run, on the same captured frame, pixel for pixel. A native pass that
-// cannot be compared is a native pass nobody can trust.
+// The translated shader remains available through the compatibility arm and
+// the explicit inspection control, so a native pass can be A/B'd against it
+// on the same captured frame, pixel for pixel. A native pass that cannot be
+// compared is a native pass nobody can trust.
 //
 // GEARS_NATIVE_PASSES=1 enables substitution; without it every draw uses the
 // translated shader exactly as before, which is why landing this changes nothing
@@ -29,6 +30,8 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+
+#include "gpu_draw_xlate.h"
 
 namespace gears::native
 {
@@ -48,6 +51,9 @@ struct Pass
     // The module. Empty means "declared but not implemented yet" -- registering a
     // pass with no module is how the roster stays honest about what exists.
     std::vector<uint32_t> spirv;
+    // Metadata consumed by host draw setup. Native passes supply it directly,
+    // without invoking Xenos shader translation.
+    gears::draw::ShaderInterface shaderInterface;
 };
 
 // The passes this build knows how to render itself. Empty entries are declarations,

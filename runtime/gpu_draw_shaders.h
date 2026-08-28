@@ -10,9 +10,9 @@
 // modules across a frame, and collapsing the key would silently hand a draw
 // the wrong one.
 //
-// This is also where a NATIVE PASS is substituted, and the only place: the
-// translation still runs, so the rest of the frame keeps using the guest
-// shader's binding layout, constant map and texture list.
+// This is also where a NATIVE PASS is selected. Its independently authored
+// module supplies the same host interface directly; the translated arm remains
+// available when native substitution is disabled or explicitly inspected.
 
 #include <cstdint>
 #include <map>
@@ -31,17 +31,18 @@ namespace gears::draw
 
 struct ShaderCache
 {
-    ShaderCache(Renderer& r, RendererPersistent& p)
-        : R(r), P(p), xlate(p.xlate), modules(p.modules) {}
+    ShaderCache(Renderer &r, RendererPersistent &p) : R(r), P(p), xlate(p.xlate), modules(p.modules)
+    {
+    }
 
     // (microcode hash, modification, clamp). Clamp is 0 for none, 1 for RGBA,
     // 2 otherwise -- see GetShader for why it belongs in the key.
     using Key = std::tuple<uint64_t, uint64_t, int>;
 
-    Renderer& R;
-    RendererPersistent& P;
-    std::map<Key, ShaderXlate>& xlate;
-    std::map<Key, VkShaderModule>& modules;
+    Renderer &R;
+    RendererPersistent &P;
+    std::map<Key, ShaderXlate> &xlate;
+    std::map<Key, VkShaderModule> &modules;
     ShaderOverride diagnosticOverride;
 
     // What TRANSLATION cost this run, accumulated inside GetShader so the
@@ -54,9 +55,9 @@ struct ShaderCache
     // False means the microcode could not be translated or the module could
     // not be created -- the caller must skip the draw rather than bind
     // whatever was there before.
-    bool GetShader(bool isVertex, const uint8_t* uc, size_t sz, uint64_t hash,
-                   uint64_t modification, bool clampOutput, ClampMode clampMode,
-                   ShaderXlate*& outX, VkShaderModule& outM);
+    bool GetShader(bool isVertex, const uint8_t *uc, size_t sz, uint64_t hash,
+                   uint64_t modification, bool clampOutput, ClampMode clampMode, ShaderXlate *&outX,
+                   VkShaderModule &outM);
 };
 
 } // namespace gears::draw

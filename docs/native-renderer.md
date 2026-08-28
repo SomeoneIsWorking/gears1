@@ -43,8 +43,11 @@ produce the requested native engine.
 independently authored host module for an observed pass. The clean tracked
 roster now contains one implementation for the full-screen scene composite;
 enabling `GEARS_NATIVE_PASSES=1` substitutes it only for its observed pixel
-shader hash. The compatibility arm remains the default and remains available
-for the required same-input comparison.
+shader hash. That pass now supplies its descriptor, constant, sampler, and
+interpolator contract directly, so its normal native arm does not invoke the
+Xenos-to-SPIR-V translator. `GEARS_NATIVE_PASSES_KEEP_TRANSLATED=1` explicitly
+retains translation for interface inspection and A/B debugging. The
+compatibility arm remains available for the required same-input comparison.
 
 The implementation is independently authored in
 `runtime/shaders/native_scene_composite.frag` and its generated SPIR-V header.
@@ -61,12 +64,17 @@ channel units and 66/255 worst difference, so issue #155 is resolved for this
 pass and capture. This pass is parity-proven for the captured content, but it
 does not establish the complete native renderer or its 5 ms budget.
 
-A four-repeat warm replay measured 7.268 ms GPU on the compatibility arm and
-7.287 ms with this native pass enabled. This is not a speedup: the seam still
-translates every guest shader before substituting the native module, so it
-cannot remove the compatibility shader/compiler cost. The next performance
-boundary is a native contract that supplies the required layout and state
-metadata without invoking translation, followed by the complete RHI bypass.
+A three-run sequential sweep of `title600.gfr` measured 5.574/7.305/7.411 ms
+GPU on the compatibility arm and 5.276/5.709/7.157 ms with the native pass
+enabled. The native log records the direct-interface path and no translation for
+the implemented scene-composite pixel shader. The screenshots matched within
+0.001 mean channel difference, with a 4/255 worst channel difference, and the
+validation run exited cleanly without image-interface diagnostics. The retained
+inspection control translated the same pixel shader and still matched within the
+same tolerance. The sweep is directionally lower on average but too noisy to
+claim a stable speedup, and neither arm establishes the native renderer's 5 ms
+budget: all other draws still use the compatibility renderer, and the complete
+PM4/RHI frontend bypass remains outstanding.
 
 The six former title-derived shader substitutions are not shipping GearsUE3
 implementations and are not evidence that a native renderer exists. Their
