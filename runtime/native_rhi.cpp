@@ -11,6 +11,17 @@ namespace gears::native_rhi
 namespace
 {
 
+[[nodiscard]] RhiResourceIdentityEvidence
+IdentityFromLifetime(const RhiSemanticResourceLifetime &lifetime)
+{
+    return {.present = lifetime.object != 0,
+            .object = lifetime.object,
+            .rawFlags = lifetime.rawFlags,
+            .resourceType = lifetime.resourceType,
+            .backingObject = lifetime.backingObject,
+            .referenceCount = lifetime.previousReferenceCount};
+}
+
 [[nodiscard]] bool IsEvidenceMissing(RhiDrawEvidenceResult evidence)
 {
     return evidence == RhiDrawEvidenceResult::Missing;
@@ -132,7 +143,8 @@ BuildResult BuildFrame(const RhiSemanticFrame &observed)
             }
             result.frame.commands.push_back(
                 {.sequence = event.sequence,
-                 .payload = BindingCommand{.binding = binding->binding}});
+                 .payload = BindingCommand{.binding = binding->binding,
+                                           .identity = binding->state.identity}});
             ++result.frame.bindings;
             continue;
         }
@@ -146,7 +158,9 @@ BuildResult BuildFrame(const RhiSemanticFrame &observed)
             }
             result.frame.commands.push_back(
                 {.sequence = event.sequence,
-                 .payload = ResourceLifetimeCommand{.lifetime = lifetime->lifetime}});
+                 .payload = ResourceLifetimeCommand{.lifetime = lifetime->lifetime,
+                                                    .identity =
+                                                        IdentityFromLifetime(lifetime->lifetime)}});
             ++result.frame.resourceLifetimeCalls;
             continue;
         }

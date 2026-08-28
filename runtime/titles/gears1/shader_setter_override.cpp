@@ -1,6 +1,7 @@
 #include "guest_memory.h"
 #include "guest_state_memory.h"
 #include "import_stub.h"
+#include "rhi_resource_identity.h"
 #include "rhi_semantic_stream.h"
 #include "shader_setter_state.h"
 
@@ -91,10 +92,12 @@ std::atomic<std::uint64_t> g_reportOrdinal{0};
 {
     if (device == 0)
         return {};
-    return {
+    gears::RhiBindingStateEvidence state{
         .present = true,
         .observedObject = ReadGuestBe32(device + fieldOffset),
     };
+    state.identity = gears::titles::gears1::CaptureRhiResourceIdentity(state.observedObject);
+    return state;
 }
 
 using RecompiledSetter = void (*)(PPCContext &, std::uint8_t *);

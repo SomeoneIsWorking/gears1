@@ -3,6 +3,7 @@
 #include "import_stub.h"
 #include "rhi_index_buffer.h"
 #include "rhi_packet_evidence.h"
+#include "rhi_resource_identity.h"
 #include "rhi_semantic_stream.h"
 #include "rhi_target_descriptor_watch.h"
 #include "rhi_vertex_buffer.h"
@@ -136,6 +137,7 @@ CaptureBoundRenderTargets(std::uint32_t device);
         device + slot * kTextureFetchDwords * 4 + kTextureFetchShadowOffset;
     for (std::uint32_t index = 0; index < kTextureFetchDwords; ++index)
         state.descriptor[index] = ReadGuestBe32(shadow + index * 4);
+    state.identity = gears::titles::gears1::CaptureRhiResourceIdentity(state.observedObject);
     return state;
 }
 
@@ -163,6 +165,7 @@ CaptureBoundRenderTargets(std::uint32_t device);
         state.bufferViewPresent = true;
         state.bufferView = CaptureIndexBufferView(state.observedObject);
     }
+    state.identity = gears::titles::gears1::CaptureRhiResourceIdentity(state.observedObject);
     return state;
 }
 
@@ -188,6 +191,7 @@ CaptureBoundRenderTargets(std::uint32_t device);
             ReadGuestBe32(descriptor), ReadGuestBe32(descriptor + sizeof(std::uint32_t)),
             ReadGuestU8(device + kVertexStreamStrideOffset + slot));
     }
+    state.identity = gears::titles::gears1::CaptureRhiResourceIdentity(state.observedObject);
     return state;
 }
 
@@ -212,7 +216,7 @@ std::vector<gears::RhiSemanticVertexStream> CaptureBoundVertexStreams(std::uint3
     if (device == 0)
         return {};
     const std::uint32_t descriptorIndex = slot == 0 ? 0 : slot + 1;
-    return {
+    gears::RhiBindingStateEvidence state{
         .present = true,
         .observedObject =
             ReadGuestBe32(device + kRenderTargetObjectTableOffset + slot * sizeof(std::uint32_t)),
@@ -220,6 +224,8 @@ std::vector<gears::RhiSemanticVertexStream> CaptureBoundVertexStreams(std::uint3
                                      descriptorIndex * sizeof(std::uint32_t))},
         .descriptorDwords = 1,
     };
+    state.identity = gears::titles::gears1::CaptureRhiResourceIdentity(state.observedObject);
+    return state;
 }
 
 [[nodiscard]] gears::RhiBindingStateEvidence CaptureDepthStencilTargetBinding(std::uint32_t device)
@@ -229,13 +235,15 @@ std::vector<gears::RhiSemanticVertexStream> CaptureBoundVertexStreams(std::uint3
     constexpr std::uint32_t kDepthDescriptorWord1Offset = 0x28C0;
     if (device == 0)
         return {};
-    return {
+    gears::RhiBindingStateEvidence state{
         .present = true,
         .observedObject = ReadGuestBe32(device + kDepthStencilObjectOffset),
         .descriptor = {ReadGuestBe32(device + kDepthDescriptorWord0Offset),
                        ReadGuestBe32(device + kDepthDescriptorWord1Offset)},
         .descriptorDwords = 2,
     };
+    state.identity = gears::titles::gears1::CaptureRhiResourceIdentity(state.observedObject);
+    return state;
 }
 
 [[nodiscard]] gears::RhiSemanticRenderTarget

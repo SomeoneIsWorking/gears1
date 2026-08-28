@@ -222,3 +222,14 @@ exercises both paths. A Clang headless walk through frame 2280 then accepted
 the previously failing resolve region with no semantic resolve refusal. This
 repairs observation completeness; it does not provide a host backend or permit
 the native frontend bypass.
+
+The next 30-second identity-enabled Clang headless walk reached frame 703 and
+matched 10,610/10,610 draw packets, 39,168/39,168 binding states,
+5,103/5,103 resource references, 1,550/1,550 resolves, and 660/660 presents;
+resource construction remained at zero. The title adapter now decodes the
+already-grounded wrapper flags, type, backing object, and reference count once
+for every binding state. `native_rhi_resources.*` can explicitly adopt that
+identity and apply a non-boundary lifetime transition, but it still refuses
+missing or conflicting identity evidence and does not allocate an API resource.
+This closes the pre-existing-identity contract gap without claiming live
+constructor coverage or native rendering.

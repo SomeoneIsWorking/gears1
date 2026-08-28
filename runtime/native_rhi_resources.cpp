@@ -12,7 +12,45 @@ ResourceRegistryResult Result(ResourceRegistryStatus status, std::uint32_t refer
     return {.status = status, .referenceCount = referenceCount};
 }
 
+bool SameIdentity(const ResourceRecord &record, const RhiResourceIdentityEvidence &identity)
+{
+    return record.object == identity.object && record.objectFlags == identity.rawFlags &&
+           record.resourceType == identity.resourceType &&
+           record.backingObject == identity.backingObject;
+}
+
 } // namespace
+
+ResourceRegistryResult ResourceRegistry::AdoptExisting(const RhiResourceIdentityEvidence &identity)
+{
+    if (!identity.present)
+        return Result(ResourceRegistryStatus::AdoptionEvidenceMissing);
+    if (identity.object == 0)
+        return Result(ResourceRegistryStatus::InvalidObject);
+    if (identity.referenceCount == 0)
+        return Result(ResourceRegistryStatus::InvalidReferenceCount);
+    if (identity.resourceType != (identity.rawFlags & kResourceTypeMask))
+        return Result(ResourceRegistryStatus::ResourceTypeMismatch);
+
+    const auto existing = resources_.find(identity.object);
+    if (existing != resources_.end())
+    {
+        if (!SameIdentity(existing->second, identity))
+            return Result(ResourceRegistryStatus::IdentityMismatch,
+                          existing->second.referenceCount);
+        if (existing->second.referenceCount != identity.referenceCount)
+            return Result(ResourceRegistryStatus::ReferenceCountMismatch,
+                          existing->second.referenceCount);
+        return Result(ResourceRegistryStatus::Accepted, existing->second.referenceCount);
+    }
+
+    resources_.emplace(identity.object, ResourceRecord{.object = identity.object,
+                                                       .objectFlags = identity.rawFlags,
+                                                       .resourceType = identity.resourceType,
+                                                       .backingObject = identity.backingObject,
+                                                       .referenceCount = identity.referenceCount});
+    return Result(ResourceRegistryStatus::Accepted, identity.referenceCount);
+}
 
 ResourceRegistryResult ResourceRegistry::Construct(const ResourceConstructionCommand &command)
 {
@@ -36,14 +74,35 @@ ResourceRegistryResult ResourceRegistry::Construct(const ResourceConstructionCom
                                       .resourceFlags = command.construction.resourceFlags,
                                       .allocationFlags = command.construction.allocationFlags,
                                       .referenceCount = evidence.initialReferenceCount,
-                                      .objectWords = evidence.objectWords});
+                                      .objectWords = evidence.objectWords,
+                                      .constructionObserved = true});
     return Result(ResourceRegistryStatus::Accepted, evidence.initialReferenceCount);
 }
 
 ResourceRegistryResult ResourceRegistry::ApplyLifetime(const ResourceLifetimeCommand &command)
 {
     const RhiSemanticResourceLifetime &lifetime = command.lifetime;
-    const auto resource = resources_.find(lifetime.object);
+    if (command.identity.present &&
+        (command.identity.object != lifetime.object ||
+         command.identity.rawFlags != lifetime.rawFlags ||
+         command.identity.resourceType != lifetime.resourceType ||
+         command.identity.backingObject != lifetime.backingObject ||
+         command.identity.referenceCount != lifetime.previousReferenceCount))
+        return Result(ResourceRegistryStatus::IdentityMismatch);
+
+    auto resource = resources_.find(lifetime.object);
+    if (resource == resources_.end() && command.identity.present)
+    {
+        if ((lifetime.operation == RhiResourceLifetimeOperation::AddReference &&
+             lifetime.previousReferenceCount == 0) ||
+            (lifetime.operation == RhiResourceLifetimeOperation::Release &&
+             lifetime.previousReferenceCount <= 1))
+            return Result(ResourceRegistryStatus::ReferenceBoundary);
+        const ResourceRegistryResult adopted = AdoptExisting(command.identity);
+        if (adopted.status != ResourceRegistryStatus::Accepted)
+            return adopted;
+        resource = resources_.find(lifetime.object);
+    }
     if (resource == resources_.end())
         return Result(ResourceRegistryStatus::UnknownObject);
 
@@ -83,6 +142,8 @@ const char *ResourceRegistryStatusText(ResourceRegistryStatus status) noexcept
     {
     case ResourceRegistryStatus::Accepted:
         return "accepted";
+    case ResourceRegistryStatus::AdoptionEvidenceMissing:
+        return "pre-existing resource identity evidence is missing";
     case ResourceRegistryStatus::ConstructionEvidenceMissing:
         return "construction evidence is missing";
     case ResourceRegistryStatus::InvalidObject:
@@ -99,6 +160,8 @@ const char *ResourceRegistryStatusText(ResourceRegistryStatus status) noexcept
         return "backing object does not match construction";
     case ResourceRegistryStatus::ReferenceCountMismatch:
         return "reference count does not match registry state";
+    case ResourceRegistryStatus::IdentityMismatch:
+        return "pre-existing resource identity does not match registry state";
     case ResourceRegistryStatus::ReferenceBoundary:
         return "reference boundary requires retained destructor semantics";
     }

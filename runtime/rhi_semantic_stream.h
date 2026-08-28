@@ -114,6 +114,16 @@ struct RhiSemanticBinding
     RhiSemanticBufferView bufferView;
 };
 
+struct RhiResourceIdentityEvidence
+{
+    bool present = false;
+    std::uint32_t object = 0;
+    std::uint32_t rawFlags = 0;
+    std::uint32_t resourceType = 0;
+    std::uint32_t backingObject = 0;
+    std::uint32_t referenceCount = 0;
+};
+
 struct RhiBindingStateEvidence
 {
     bool present = false;
@@ -122,6 +132,7 @@ struct RhiBindingStateEvidence
     std::uint32_t descriptorDwords = 0;
     bool bufferViewPresent = false;
     RhiSemanticBufferView bufferView;
+    RhiResourceIdentityEvidence identity;
 };
 
 enum class RhiBindingEvidenceResult : std::uint8_t

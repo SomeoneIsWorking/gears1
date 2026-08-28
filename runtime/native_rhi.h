@@ -21,11 +21,13 @@ struct DrawCommand
 struct BindingCommand
 {
     RhiSemanticBinding binding;
+    RhiResourceIdentityEvidence identity;
 };
 
 struct ResourceLifetimeCommand
 {
     RhiSemanticResourceLifetime lifetime;
+    RhiResourceIdentityEvidence identity;
 };
 
 struct ResourceConstructionCommand

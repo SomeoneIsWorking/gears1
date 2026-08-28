@@ -145,7 +145,11 @@ larger complete ordered semantic stream, not that native rendering is
 executing.
 
 The plan deliberately has no PM4 packets, Xenos registers, EDRAM state, or
-translated shader microcode. No host backend consumes it yet, and the retained
+translated shader microcode. Binding and lifetime commands carry only exact
+title-adapter-decoded resource identity evidence; this lets a future backend
+adopt resources already alive when observation begins without guessing an API
+allocation or treating a missing constructor as success. No host backend
+consumes it yet, and the retained
 guest PM4 path remains authoritative. The next bounded candidate is the logical
 resolve at `0x82235528`, but its existing host helpers still consume
 compatibility `SurfaceTarget`/`ResolveTarget` objects. It therefore requires a
