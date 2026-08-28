@@ -1,8 +1,10 @@
 #include "native_rhi.h"
+#include "native_rhi_backend.h"
 
 #include <cassert>
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 namespace
 {
@@ -73,6 +75,62 @@ gears::RhiSemanticFrame CompleteFrame()
 
 } // namespace
 
+class RecordingBackend final : public gears::native_rhi::Backend
+{
+  public:
+    bool BeginFrame(std::uint64_t) override
+    {
+        calls.push_back("begin");
+        return beginResult;
+    }
+    bool Bind(const gears::native_rhi::BindingCommand &) override
+    {
+        calls.push_back("binding");
+        return commandResult;
+    }
+    bool ApplyResourceLifetime(const gears::native_rhi::ResourceLifetimeCommand &) override
+    {
+        calls.push_back("lifetime");
+        return commandResult;
+    }
+    bool ConstructResource(const gears::native_rhi::ResourceConstructionCommand &) override
+    {
+        calls.push_back("construction");
+        return commandResult;
+    }
+    bool ResetVertexStreams(const gears::native_rhi::VertexStreamResetCommand &) override
+    {
+        calls.push_back("reset");
+        return commandResult;
+    }
+    bool Draw(const gears::native_rhi::DrawCommand &) override
+    {
+        calls.push_back("draw");
+        return commandResult;
+    }
+    bool Resolve(const gears::native_rhi::ResolveCommand &) override
+    {
+        calls.push_back("resolve");
+        return commandResult;
+    }
+    bool Present(const gears::native_rhi::PresentCommand &) override
+    {
+        calls.push_back("present");
+        return commandResult;
+    }
+    bool FinishFrame() override
+    {
+        calls.push_back("finish");
+        return finishResult;
+    }
+    void CancelFrame() override { calls.push_back("cancel"); }
+
+    bool beginResult = true;
+    bool commandResult = true;
+    bool finishResult = true;
+    std::vector<std::string_view> calls;
+};
+
 int main()
 {
     const gears::native_rhi::BuildResult accepted = gears::native_rhi::BuildFrame(CompleteFrame());
@@ -123,4 +181,35 @@ int main()
            gears::native_rhi::BuildStatus::ConstructionEvidenceMissing);
     assert(std::string_view(gears::native_rhi::BuildStatusText(
                gears::native_rhi::BuildStatus::Accepted)) == "accepted");
+
+    RecordingBackend backend;
+    const gears::native_rhi::ExecutionResult executed =
+        gears::native_rhi::ExecuteFrame(accepted.frame, backend);
+    assert(executed.status == gears::native_rhi::ExecutionStatus::Accepted);
+    assert((backend.calls == std::vector<std::string_view>{"begin", "draw", "binding", "lifetime",
+                                                           "construction", "reset", "resolve",
+                                                           "present", "finish"}));
+
+    RecordingBackend refusingBackend;
+    refusingBackend.commandResult = false;
+    const gears::native_rhi::ExecutionResult refused =
+        gears::native_rhi::ExecuteFrame(accepted.frame, refusingBackend);
+    assert(refused.status == gears::native_rhi::ExecutionStatus::BackendRefused);
+    assert(refused.commandIndex == 0);
+    assert((refusingBackend.calls == std::vector<std::string_view>{"begin", "draw", "cancel"}));
+
+    RecordingBackend incompleteBackend;
+    gears::native_rhi::Frame incomplete;
+    const gears::native_rhi::ExecutionResult incompleteResult =
+        gears::native_rhi::ExecuteFrame(incomplete, incompleteBackend);
+    assert(incompleteResult.status == gears::native_rhi::ExecutionStatus::IncompleteFrame);
+    assert(incompleteBackend.calls.empty());
+
+    gears::native_rhi::Frame malformed = accepted.frame;
+    malformed.commands[1].sequence = malformed.commands[0].sequence;
+    RecordingBackend malformedBackend;
+    const gears::native_rhi::ExecutionResult malformedResult =
+        gears::native_rhi::ExecuteFrame(malformed, malformedBackend);
+    assert(malformedResult.status == gears::native_rhi::ExecutionStatus::SequenceNotIncreasing);
+    assert(malformedBackend.calls.empty());
 }

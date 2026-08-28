@@ -124,3 +124,20 @@ resolve at `0x82235528`, but its existing host helpers still consume
 compatibility `SurfaceTarget`/`ResolveTarget` objects. It therefore requires a
 native resource/resolve contract, same-binary A/B output checks, PM4 absence
 checks, and negative controls before it can become an execution arm.
+
+## Native backend execution contract
+
+`runtime/native_rhi_backend.*` now owns the narrow execution boundary after plan
+construction. `ExecuteFrame` validates command ordering and terminal present
+before calling a supplied backend, dispatches every semantic command in order,
+and requires the backend to finish or cancel the transaction. A backend owns the
+native resource map, pipeline/material selection, queue submission, and
+retirement; the executor owns none of those and does not read PM4 state.
+
+This is an interface milestone, not a renderer implementation. No backend is
+installed in the product, so this change cannot accidentally replace the
+compatibility renderer with a no-op. The focused native-RHI test exercises the
+ordered dispatch, incomplete-frame refusal, command refusal cancellation, and
+sequence rejection. A real backend still needs a title-neutral host resource
+resolver and same-input state/pixel parity before it may be connected or used
+for performance measurements.

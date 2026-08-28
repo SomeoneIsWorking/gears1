@@ -98,6 +98,11 @@ subsystems rather than copying platform-specific implementations.
   plan boundary. It must not absorb Vulkan execution, Xenos translation, or
   title-address bindings; host resource/pipeline execution belongs in a later
   focused native backend behind the retained compatibility arm.
+- `runtime/native_rhi_backend.*` owns only the explicit host-backend execution
+  contract and ordered frame transaction. A backend must provide real native
+  resource/pipeline/submission ownership and may refuse a frame; no no-op
+  backend is installed, and this interface does not authorize bypassing the
+  retained compatibility renderer.
 
 Pure state transitions belong behind production interfaces with focused tests.
 Run `tools/check_source_structure.py`, its self-test, and the CTest suite before

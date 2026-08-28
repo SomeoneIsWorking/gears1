@@ -636,7 +636,8 @@ add_test(NAME rhi_semantic_state COMMAND test_rhi_semantic_state)
 
 add_executable(test_native_rhi
     test_native_rhi.cpp
-    ../runtime/native_rhi.cpp)
+    ../runtime/native_rhi.cpp
+    ../runtime/native_rhi_backend.cpp)
 target_include_directories(test_native_rhi PRIVATE ../runtime)
 target_link_libraries(test_native_rhi PRIVATE lucent::lucent)
 add_test(NAME native_rhi COMMAND test_native_rhi)
