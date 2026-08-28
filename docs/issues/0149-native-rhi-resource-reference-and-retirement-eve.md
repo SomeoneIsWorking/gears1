@@ -36,4 +36,8 @@ A concurrent focused test drives the shipping atomic implementation. A headless 
 observed 12,000 calls with zero semantic errors and no boundary fallback; at that point native mean
 execution was about 51 ns versus 72 ns retained. A longer default-native run through frame 2940
 matched 103,187/103,187 resource calls with zero missing results, mismatches, or retirements.
-Release-to-zero and construction remain explicit gaps in S003/S004 rather than being claimed here.
+Release-to-zero remains an explicit gap in S003/S004 rather than being claimed here. Static
+inspection now grounds the adjacent wrapper constructors `0x8222EA18` (owned backing) and
+`0x8222EB78` (wrapped backing), and the semantic stream records their post-call wrapper words when
+they execute. The current headless menu walk reached frame 1440 with zero construction events, so
+the contracts are not live-covered and no native construction or destruction owner is authorized.

@@ -169,6 +169,28 @@ transient-vertex-and-index, and 22,311 bound-index calls. The bound-vertex entry
 is statically grounded but was not exercised by that walk. Focused controls
 reject absent transient state, a wrong mapped address, and a wrong byte range.
 
+Static inspection also grounds the resource-wrapper construction family. The
+exact-revision adapter observes `0x8222EA18` (requested byte count in `r3`,
+resource flags in `r4`, owned backing) and `0x8222EB78` (requested byte count in
+`r3`, resource flags in `r4`, allocation flags in `r5`, wrapped backing). Both
+allocate a 32-byte wrapper with refcount one, sentinel `0xFFFF0000` at `+20`,
+backing state at `+24`, and size/packing at `+28`; their retained post-call
+words are now carried by the ordered semantic stream. Their known caller is
+`0x827DA348`, which uses `0x8222EB78(12, 0, 1, 0)` and
+`0x8222EA18(120, 0, 0, 0)` during a video/resource setup path. A headless
+`GEARS_NATIVE_RHI_OBSERVE=1` menu walk on the current build reached frame 1440
+with zero construction events, so this is static contract evidence only, not
+live coverage. The native owner must not be enabled until a run exercises the
+constructors and confirms the returned wrapper and backing allocations.
+
+The release boundary is equally explicit: `0x8222E8E0` decrements the
+big-endian count at `object+4`, recursively releases `object+24` only for the
+type-4/`0x40000000` flag combination, and calls `0x8222E2C8` at zero. The
+destructor then dispatches by the low type nibble and frees auxiliary GPU
+ranges before the wrapper. The live semantic stream currently covers the
+non-retiring atomic transitions, but no release-to-zero destruction has been
+observed, so no native destruction bypass is authorized.
+
 `runtime/titles/gears1/shader_setter_state.h` and
 `shader_setter_override.cpp` own the two shader setters. Their native arm
 applies the exact dirty masks, binding fields, patch records, vertex-mode bit,

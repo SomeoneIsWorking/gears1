@@ -20,6 +20,7 @@ int main()
     using gears::RhiPresentPacketEvidence;
     using gears::RhiResolveEvidenceResult;
     using gears::RhiResolvePacketEvidence;
+    using gears::RhiResourceConstructionEvidence;
     using gears::RhiResourceLifetimeEvidence;
     using gears::RhiResourceLifetimeEvidenceResult;
     using gears::RhiResourceLifetimeOperation;
@@ -29,6 +30,8 @@ int main()
     using gears::RhiSemanticDrawKind;
     using gears::RhiSemanticPresent;
     using gears::RhiSemanticResolve;
+    using gears::RhiSemanticResourceConstruction;
+    using gears::RhiSemanticResourceConstructionKind;
     using gears::RhiSemanticResourceLifetime;
     using gears::RhiSemanticVertexStreamReset;
     using gears::RhiVertexStreamResetEvidence;
@@ -370,6 +373,18 @@ int main()
     assert(gears::CompareRhiResourceLifetime(release, matchingRelease) ==
            RhiResourceLifetimeEvidenceResult::Match);
 
+    const RhiSemanticResourceConstruction construction{
+        .kind = RhiSemanticResourceConstructionKind::OwnedBacking,
+        .requestedBytes = 120,
+        .resourceFlags = 0,
+        .allocationFlags = 0,
+    };
+    const RhiResourceConstructionEvidence matchingConstruction{
+        .present = true,
+        .object = 0x4010B000,
+        .objectWords = {0x30100001, 1, 0xFFFF0000, 0x6010B003, 120},
+    };
+
     const RhiSemanticVertexStreamReset vertexStreamReset{.firstSlot = 0, .slotCount = 16};
     const RhiVertexStreamResetEvidence matchingVertexStreamReset{.present = true};
     assert(gears::CompareRhiVertexStreamReset(vertexStreamReset, matchingVertexStreamReset) ==
@@ -388,6 +403,7 @@ int main()
     gears::ObserveRhiSemanticDraw(autoIndexed, matchingAuto);
     gears::ObserveRhiSemanticBinding(textureBinding, matchingBinding);
     gears::ObserveRhiSemanticResourceLifetime(release, matchingRelease);
+    gears::ObserveRhiSemanticResourceConstruction(construction, matchingConstruction);
     gears::ObserveRhiSemanticVertexStreamReset(vertexStreamReset, matchingVertexStreamReset);
     gears::ObserveRhiSemanticResolve(resolve, matchingResolve);
     altered = matchingIndexed;
@@ -396,11 +412,12 @@ int main()
     gears::ObserveRhiSemanticPresent(present, matchingPresent);
     const gears::RhiSemanticFrame frame = gears::SealRhiSemanticFrame(17);
     assert(frame.frameSequence == 17);
-    assert(frame.events.size() == 7);
+    assert(frame.events.size() == 8);
     assert(frame.draws == 2);
     assert(frame.bindings == 1);
     assert(frame.resourceLifetimeCalls == 1);
     assert(frame.resourceRetirements == 1);
+    assert(frame.resourceConstructions == 1);
     assert(frame.vertexStreamResets == 1);
     assert(frame.resolves == 1);
     assert(frame.presents == 1);
@@ -410,23 +427,27 @@ int main()
     assert(frame.events[3].sequence + 1 == frame.events[4].sequence);
     assert(frame.events[4].sequence + 1 == frame.events[5].sequence);
     assert(frame.events[5].sequence + 1 == frame.events[6].sequence);
+    assert(frame.events[6].sequence + 1 == frame.events[7].sequence);
     assert(std::holds_alternative<gears::RhiObservedDraw>(frame.events[0].payload));
     assert(std::holds_alternative<gears::RhiObservedBinding>(frame.events[1].payload));
     assert(std::holds_alternative<gears::RhiObservedResourceLifetime>(frame.events[2].payload));
-    assert(std::holds_alternative<gears::RhiObservedVertexStreamReset>(frame.events[3].payload));
-    assert(std::holds_alternative<gears::RhiObservedResolve>(frame.events[4].payload));
-    assert(std::holds_alternative<gears::RhiObservedDraw>(frame.events[5].payload));
-    assert(std::holds_alternative<gears::RhiObservedPresent>(frame.events[6].payload));
+    assert(std::holds_alternative<gears::RhiObservedResourceConstruction>(frame.events[3].payload));
+    assert(std::holds_alternative<gears::RhiObservedVertexStreamReset>(frame.events[4].payload));
+    assert(std::holds_alternative<gears::RhiObservedResolve>(frame.events[5].payload));
+    assert(std::holds_alternative<gears::RhiObservedDraw>(frame.events[6].payload));
+    assert(std::holds_alternative<gears::RhiObservedPresent>(frame.events[7].payload));
     assert(std::get<gears::RhiObservedDraw>(frame.events[0].payload).state.draw.elementCount ==
            300);
     assert(std::get<gears::RhiObservedBinding>(frame.events[1].payload).binding.slot == 3);
     assert(std::get<gears::RhiObservedResourceLifetime>(frame.events[2].payload)
                .retained.returnedReferenceCount == 0);
+    assert(std::get<gears::RhiObservedResourceConstruction>(frame.events[3].payload)
+               .retained.objectWords[4] == 120);
     assert(
-        std::get<gears::RhiObservedResolve>(frame.events[4].payload).resolve.destinationAddress ==
+        std::get<gears::RhiObservedResolve>(frame.events[5].payload).resolve.destinationAddress ==
         0x0BCC0000);
-    assert(std::get<gears::RhiObservedDraw>(frame.events[5].payload).state.draw.elementCount == 42);
-    assert(std::get<gears::RhiObservedPresent>(frame.events[6].payload).present.frontBuffer ==
+    assert(std::get<gears::RhiObservedDraw>(frame.events[6].payload).state.draw.elementCount == 42);
+    assert(std::get<gears::RhiObservedPresent>(frame.events[7].payload).present.frontBuffer ==
            0xA0311000);
     assert(frame.matched == 1);
     assert(frame.missing == 0);
