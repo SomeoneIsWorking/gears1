@@ -61,6 +61,8 @@ const char *OwnerName(GuestWriteWatchOwner owner)
         return "draw-packet";
     case GuestWriteWatchOwner::kRhiTargetDescriptor:
         return "RHI target-descriptor";
+    case GuestWriteWatchOwner::kRhiVertexStreamReset:
+        return "RHI vertex-stream reset";
     }
     return "unknown";
 }

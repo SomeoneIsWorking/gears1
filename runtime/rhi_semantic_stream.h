@@ -1,5 +1,7 @@
 #pragma once
 
+#include "rhi_resource_reference.h"
+
 #include <array>
 #include <cstdint>
 #include <variant>
@@ -155,6 +157,48 @@ enum class RhiPresentEvidenceResult : std::uint8_t
     Mismatch,
 };
 
+struct RhiSemanticResourceLifetime
+{
+    RhiResourceLifetimeOperation operation = RhiResourceLifetimeOperation::AddReference;
+    std::uint32_t object = 0;
+    std::uint32_t rawFlags = 0;
+    std::uint32_t resourceType = 0;
+    std::uint32_t backingObject = 0;
+    std::uint32_t previousReferenceCount = 0;
+};
+
+struct RhiResourceLifetimeEvidence
+{
+    bool present = false;
+    std::uint32_t returnedReferenceCount = 0;
+};
+
+enum class RhiResourceLifetimeEvidenceResult : std::uint8_t
+{
+    Match,
+    Missing,
+    Mismatch,
+};
+
+struct RhiSemanticVertexStreamReset
+{
+    std::uint32_t firstSlot = 0;
+    std::uint32_t slotCount = 0;
+};
+
+struct RhiVertexStreamResetEvidence
+{
+    bool present = false;
+    std::vector<RhiSemanticVertexStream> activeStreams;
+};
+
+enum class RhiVertexStreamResetEvidenceResult : std::uint8_t
+{
+    Match,
+    Missing,
+    Mismatch,
+};
+
 struct RhiSemanticResolve
 {
     bool sourceDepthStencil = false;
@@ -215,8 +259,23 @@ struct RhiObservedResolve
     RhiResolveEvidenceResult evidence = RhiResolveEvidenceResult::Missing;
 };
 
+struct RhiObservedResourceLifetime
+{
+    RhiSemanticResourceLifetime lifetime;
+    RhiResourceLifetimeEvidence retained;
+    RhiResourceLifetimeEvidenceResult evidence = RhiResourceLifetimeEvidenceResult::Missing;
+};
+
+struct RhiObservedVertexStreamReset
+{
+    RhiSemanticVertexStreamReset reset;
+    RhiVertexStreamResetEvidence state;
+    RhiVertexStreamResetEvidenceResult evidence = RhiVertexStreamResetEvidenceResult::Missing;
+};
+
 using RhiSemanticEventPayload =
-    std::variant<RhiObservedDraw, RhiObservedBinding, RhiObservedResolve, RhiObservedPresent>;
+    std::variant<RhiObservedDraw, RhiObservedBinding, RhiObservedResourceLifetime,
+                 RhiObservedVertexStreamReset, RhiObservedResolve, RhiObservedPresent>;
 
 struct RhiSemanticEvent
 {
@@ -230,6 +289,8 @@ struct RhiSemanticFrame
     std::vector<RhiSemanticEvent> events;
     std::uint64_t draws = 0;
     std::uint64_t bindings = 0;
+    std::uint64_t resourceLifetimeCalls = 0;
+    std::uint64_t resourceRetirements = 0;
     std::uint64_t resolves = 0;
     std::uint64_t presents = 0;
     std::uint64_t matched = 0;
@@ -238,6 +299,13 @@ struct RhiSemanticFrame
     std::uint64_t bindingsMatched = 0;
     std::uint64_t bindingsMissing = 0;
     std::uint64_t bindingsMismatched = 0;
+    std::uint64_t resourceLifetimeMatched = 0;
+    std::uint64_t resourceLifetimeMissing = 0;
+    std::uint64_t resourceLifetimeMismatched = 0;
+    std::uint64_t vertexStreamResets = 0;
+    std::uint64_t vertexStreamResetsMatched = 0;
+    std::uint64_t vertexStreamResetsMissing = 0;
+    std::uint64_t vertexStreamResetsMismatched = 0;
     std::uint64_t resolvesMatched = 0;
     std::uint64_t resolvesMissing = 0;
     std::uint64_t resolvesMismatched = 0;
@@ -258,6 +326,12 @@ CompareRhiDrawRenderTargetState(const RhiSemanticDrawState &state,
                                                               const RhiBindingStateEvidence &state);
 [[nodiscard]] RhiPresentEvidenceResult
 CompareRhiPresentPacket(const RhiSemanticPresent &present, const RhiPresentPacketEvidence &packet);
+[[nodiscard]] RhiResourceLifetimeEvidenceResult
+CompareRhiResourceLifetime(const RhiSemanticResourceLifetime &lifetime,
+                           const RhiResourceLifetimeEvidence &retained);
+[[nodiscard]] RhiVertexStreamResetEvidenceResult
+CompareRhiVertexStreamReset(const RhiSemanticVertexStreamReset &reset,
+                            const RhiVertexStreamResetEvidence &state);
 [[nodiscard]] RhiResolveEvidenceResult
 CompareRhiResolvePacket(const RhiSemanticResolve &resolve, const RhiResolvePacketEvidence &packet);
 void ObserveRhiSemanticDraw(const RhiSemanticDraw &draw, const RhiDrawPacketEvidence &packet);
@@ -265,6 +339,10 @@ void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
                                const RhiBindingStateEvidence &state);
 void ObserveRhiSemanticPresent(const RhiSemanticPresent &present,
                                const RhiPresentPacketEvidence &packet);
+void ObserveRhiSemanticResourceLifetime(const RhiSemanticResourceLifetime &lifetime,
+                                        const RhiResourceLifetimeEvidence &retained);
+void ObserveRhiSemanticVertexStreamReset(const RhiSemanticVertexStreamReset &reset,
+                                         const RhiVertexStreamResetEvidence &state);
 void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,
                                const RhiResolvePacketEvidence &packet);
 [[nodiscard]] RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence);

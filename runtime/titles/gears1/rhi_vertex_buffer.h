@@ -9,6 +9,7 @@ namespace gears::gears1
 {
 
 inline constexpr std::uint32_t kVertexStreamSlotCount = 16;
+inline constexpr std::uint32_t kVertexStreamObjectTableOffset = 0x2F9C;
 
 [[nodiscard]] std::uint32_t EncodeVertexFetchAddress(std::uint32_t guestAddress);
 [[nodiscard]] std::optional<RhiSemanticBufferView>

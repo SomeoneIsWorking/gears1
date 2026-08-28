@@ -653,13 +653,17 @@ constexpr uint32_t kRenderRing = 0x82C0CB24;
 std::atomic<uint32_t> g_drainThreads{0};
 std::atomic<uint32_t> g_producerThreads{0};
 
-// One slot per guest thread name seen in each path. A second distinct name is
-// the whole finding, so it is reported the moment it appears.
+// Track each OS thread identity once. Guest work legitimately alternates
+// between named roles, so repeatedly comparing only with the immediately
+// previous entrant turns ordinary alternation into an unbounded error stream.
 std::mutex g_ringMutex;
-std::string g_drainThreadName;
-std::string g_producerThreadName;
+std::set<long> g_drainThreadIds;
+std::set<long> g_producerThreadIds;
+std::string g_firstDrainThreadName;
+std::string g_firstProducerThreadName;
 
-void NoteRingThread(const char* which, std::string& slot, std::atomic<uint32_t>& count)
+void NoteRingThread(const char* which, std::set<long>& knownThreadIds,
+    std::string& firstThreadName, std::atomic<uint32_t>& count)
 {
     const char* name = gears::GuestThreadName();
     // THE TID IS PART OF THE IDENTITY, not decoration. 'host' is the DEFAULT
@@ -669,37 +673,28 @@ void NoteRingThread(const char* which, std::string& slot, std::atomic<uint32_t>&
     // open question, WHICH host thread is entering the guest's render ring.
     // Appending the tid makes the comparison distinguish them as well as
     // naming them.
+    const long threadId = long(syscall(SYS_gettid));
     const std::string current = std::string(name ? name : "?") + " (tid " +
-        std::to_string(long(syscall(SYS_gettid))) + ")";
+        std::to_string(threadId) + ")";
     std::lock_guard<std::mutex> guard(g_ringMutex);
-    if (slot.empty())
+    if (!knownThreadIds.insert(threadId).second)
+        return;
+    if (knownThreadIds.size() == 1)
     {
-        slot = current;
+        firstThreadName = current;
         lucent::info("ring", "{} entered by guest thread '{}'", which, current);
         return;
     }
-    if (slot != current)
-    {
-        // THE SINGLE-PRODUCER/SINGLE-CONSUMER ASSUMPTION IS BROKEN. FRingBuffer
-        // has no protection against this, and this is exactly the corruption it
-        // produces.
-        // THE OS THREAD ID, because 'host' is not an identity. It is the
-        // DEFAULT name for any thread that never entered guest code
-        // (guest_thread.cpp), so every host thread reports the same string and
-        // catalog #44's own next question -- WHICH host thread enters the
-        // producer, and whether it is a guest callback running on one of ours
-        // -- cannot be answered from the name alone. The tid can be joined
-        // against the thread that created it.
-        lucent::error("ring", "{} entered by a SECOND thread: '{}' after '{}'"
-            " (producer entries so far: {}, overlaps caught by the wait: {})."
-            " FRingBuffer assumes one producer and one consumer. Each name"
-            " carries its tid because 'host' is the DEFAULT for every thread"
-            " that has never run guest code, so two host threads would"
-            " otherwise be indistinguishable", which, current, slot,
-            gears::RingProducerEntries(), gears::RingProducerOverlaps());
-        count.fetch_add(1);
-        slot = current;
-    }
+
+    // A distinct identity is evidence that the path is not permanently owned
+    // by one host thread. It is not by itself evidence of concurrent entry;
+    // RingProducerOverlaps is the instrument that answers that question.
+    lucent::error("ring", "{} entered by another distinct thread: '{}' after"
+        " first entrant '{}' ({} distinct thread(s), producer entries so far:"
+        " {}, overlaps caught by the wait: {})", which, current,
+        firstThreadName, knownThreadIds.size(), gears::RingProducerEntries(),
+        gears::RingProducerOverlaps());
+    count.fetch_add(1);
 }
 } // namespace
 
@@ -737,10 +732,10 @@ PPC_FUNC(sub_8221CBA8)
     // producers essentially never interleaved.
     //
     // Recompiled, that window is tens of host instructions with volatile
-    // accesses, and two producers DO interleave -- measured: the game thread and
-    // the rendering thread both enter here, ~30 alternations per run. The commit
-    // is a non-atomic read-modify-write on WritePointer, so a lost update leaves
-    // it mid-command and the consumer then reads a header that is not one.
+    // accesses. The game thread and rendering thread alternate entries here,
+    // but distinct identities do not establish simultaneous access. The open
+    // question is whether their reserve/commit intervals overlap, which is what
+    // this wait measures.
     //
     // So this waits for the flag the title already maintains. It is not a lock
     // invented here; it completes a protocol the title defines and hardware made
@@ -780,13 +775,14 @@ PPC_FUNC(sub_8221CBA8)
                 engagements.fetch_add(1) + 1);
     }
 
-    NoteRingThread("the render-ring allocator", g_producerThreadName, g_producerThreads);
+    NoteRingThread("the render-ring allocator", g_producerThreadIds,
+        g_firstProducerThreadName, g_producerThreads);
     gears::CountRingProducerEntry();
 
-    // WHICH CALL SITE, per thread. Two producers on a ring with a non-atomic
-    // commit is a lost-update race; whether it is OUR bug depends on whether the
-    // rendering thread is SUPPOSED to enqueue here, and the caller identifies
-    // that. Recorded as a set so a hot path cannot flood the log.
+    // WHICH CALL SITE, per thread. Distinct producer identities are only a
+    // lost-update race if their reserve/commit intervals overlap; whether that
+    // happens is measured above. The caller identifies why each thread enters.
+    // Recorded as a set so a hot path cannot flood the log.
     {
         const char* rawName = gears::GuestThreadName();
         const std::string name = rawName ? rawName : "?";
@@ -829,7 +825,8 @@ PPC_FUNC(sub_8221CBA8)
 
 PPC_FUNC(sub_82444EF0)
 {
-    NoteRingThread("the render-ring drain loop", g_drainThreadName, g_drainThreads);
+    NoteRingThread("the render-ring drain loop", g_drainThreadIds,
+        g_firstDrainThreadName, g_drainThreads);
 
     const uint32_t data = ByteSwap(*gears::Memory().Translate<uint32_t>(kRenderRing + 0));
     const uint32_t dataEnd = ByteSwap(*gears::Memory().Translate<uint32_t>(kRenderRing + 4));

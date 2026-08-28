@@ -47,6 +47,18 @@ void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding)
     };
 }
 
+void RhiSemanticStateTracker::ApplyVertexStreamReset(const RhiSemanticVertexStreamReset &reset)
+{
+    const std::uint64_t end = std::uint64_t{reset.firstSlot} + reset.slotCount;
+    for (auto stream = vertexStreams_.begin(); stream != vertexStreams_.end();)
+    {
+        if (stream->first >= reset.firstSlot && std::uint64_t{stream->first} < end)
+            stream = vertexStreams_.erase(stream);
+        else
+            ++stream;
+    }
+}
+
 RhiSemanticDrawState RhiSemanticStateTracker::SnapshotDraw(const RhiSemanticDraw &draw) const
 {
     RhiSemanticDrawState state{.draw = draw};
