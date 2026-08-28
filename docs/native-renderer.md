@@ -94,3 +94,25 @@ the same captured inputs. A valid gate must:
 
 Until the full native RHI parity gate exists, the PM4 path is the authoritative
 renderer and native-RHI work remains observation-only.
+
+## PM4-independent frame-plan boundary
+
+`runtime/native_rhi.*` now converts an observed, evidence-checked semantic frame
+into an ordered plan containing only draws, bindings, resource lifetime and
+construction events, stream resets, resolves, and presentation. It is enabled
+only with `GEARS_NATIVE_RHI_PLAN=1`, runs alongside the retained compatibility
+renderer, and refuses incomplete evidence, non-monotonic ordering, or a missing
+terminal present. A headless Gears 1 menu walk reached frame 1440 with every
+reported frame accepted; later frames in a longer walk were refused when the
+existing resolve observer reported missing or mismatched retained packet
+evidence. This proves the seam can receive early complete ordered semantic
+frames and correctly stop on a known parity gap, not that native rendering is
+executing.
+
+The plan deliberately has no PM4 packets, Xenos registers, EDRAM state, or
+translated shader microcode. No host backend consumes it yet, and the retained
+guest PM4 path remains authoritative. The next bounded candidate is the logical
+resolve at `0x82235528`, but its existing host helpers still consume
+compatibility `SurfaceTarget`/`ResolveTarget` objects. It therefore requires a
+native resource/resolve contract, same-binary A/B output checks, PM4 absence
+checks, and negative controls before it can become an execution arm.

@@ -41,6 +41,7 @@
 #include "gpu_endian.h"
 #include "render_thread.h"
 #include "rhi_semantic_stream.h"
+#include "native_rhi.h"
 #include "frame_capture.h"
 #include "frame_content.h"
 #include "hle_d3d.h"
@@ -3238,8 +3239,7 @@ void __imp__VdSwap(PPCContext &__restrict ctx, uint8_t *)
         presentEvidence = gears::DecodeGpuSwapPacket(observedPacket);
     }
 
-    gears::ObserveRhiSemanticPresent(semanticPresent, presentEvidence);
-    gears::ReportRhiSemanticFrame(frame);
+    gears::native_rhi::ObserveAndSubmitPresent(semanticPresent, presentEvidence);
 
     ctx.r3.u64 = 0;
 }

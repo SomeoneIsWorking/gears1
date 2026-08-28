@@ -47,7 +47,9 @@ Claims C096 and C097 record the native reference and reset-owner evidence.
 Gap: The construction contracts at `0x8222EA18` and `0x8222EB78` are statically grounded but had
 zero calls in the current headless walk through frame 1440; release-to-zero destruction is also not
 covered live. The separate bound-vertex draw entry lacks dynamic coverage, and the complete stream
-is not yet compared with renderer inputs and pixels. See issues #141, #148, #149, and #150.
+is not yet compared with renderer inputs and pixels. The new `native_rhi.*` plan boundary accepts the
+complete ordered semantic stream on the same live path, but remains capture-only. See issues #141,
+#148, #149, and #150.
 
 ### S004 — Native RHI execution
 
@@ -69,8 +71,10 @@ default because their timing gates showed no win.
 Gap: Only the non-retiring reference-count fast path, the Gears 1 operation-kind-3 wait, and the
 explicitly enabled Gears 1 audio mix are authorized. Zero-to-one backing ownership, one-to-zero
 destruction, resource construction, draw submission, and renderer bypass remain on the retained
-path. The title still produces only about 30 frames/s, and the complete native frontend has not
-been built. See issues #141, #149, #152, and #153.
+path. `native_rhi.*` now builds a PM4-independent ordered frame plan when explicitly enabled, but
+does not execute a host backend or remove compatibility rendering. The title still produces only
+about 30 frames/s, and the complete native frontend has not been built. See issues #141, #149, #152,
+#153, and #154.
 
 ### S005 — Complete native RHI frontend
 

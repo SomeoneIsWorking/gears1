@@ -634,6 +634,13 @@ add_executable(test_rhi_semantic_state
 target_include_directories(test_rhi_semantic_state PRIVATE ../runtime)
 add_test(NAME rhi_semantic_state COMMAND test_rhi_semantic_state)
 
+add_executable(test_native_rhi
+    test_native_rhi.cpp
+    ../runtime/native_rhi.cpp)
+target_include_directories(test_native_rhi PRIVATE ../runtime)
+target_link_libraries(test_native_rhi PRIVATE lucent::lucent)
+add_test(NAME native_rhi COMMAND test_native_rhi)
+
 add_executable(test_rhi_index_buffer
     test_rhi_index_buffer.cpp
     ../runtime/titles/gears1/rhi_index_buffer.cpp)
