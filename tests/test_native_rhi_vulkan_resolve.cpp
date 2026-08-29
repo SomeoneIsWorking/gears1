@@ -1,8 +1,9 @@
-#include "native_rhi_vulkan_resolve.h"
+#include "native_rhi_vulkan_resources.h"
 
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
+#include <utility>
 #include <vector>
 
 namespace
@@ -17,40 +18,11 @@ struct VulkanTestContext
     std::uint32_t queueFamily = 0;
 };
 
-struct Image
-{
-    VkImage image = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-};
-
-struct Buffer
-{
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VkDeviceMemory memory = VK_NULL_HANDLE;
-};
-
 bool Check(VkResult result, const char *operation)
 {
     if (result == VK_SUCCESS)
         return true;
     std::fprintf(stderr, "native Vulkan resolve: %s failed (%d)\n", operation, result);
-    return false;
-}
-
-bool FindMemoryType(VkPhysicalDevice physical, std::uint32_t bits, VkMemoryPropertyFlags properties,
-                    std::uint32_t &index)
-{
-    VkPhysicalDeviceMemoryProperties memoryProperties{};
-    vkGetPhysicalDeviceMemoryProperties(physical, &memoryProperties);
-    for (std::uint32_t candidate = 0; candidate < memoryProperties.memoryTypeCount; ++candidate)
-    {
-        if ((bits & (1u << candidate)) != 0 &&
-            (memoryProperties.memoryTypes[candidate].propertyFlags & properties) == properties)
-        {
-            index = candidate;
-            return true;
-        }
-    }
     return false;
 }
 
@@ -69,77 +41,6 @@ void Transition(VkCommandBuffer commands, VkImage image, VkImageLayout oldLayout
     barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
-}
-
-bool MakeImage(VulkanTestContext &context, VkPhysicalDevice physical, VkExtent2D extent, Image &out)
-{
-    VkImageCreateInfo createInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    createInfo.imageType = VK_IMAGE_TYPE_2D;
-    createInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
-    createInfo.extent = {extent.width, extent.height, 1};
-    createInfo.mipLevels = 1;
-    createInfo.arrayLayers = 1;
-    createInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    createInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    createInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-    if (!Check(vkCreateImage(context.device, &createInfo, nullptr, &out.image), "vkCreateImage"))
-        return false;
-
-    VkMemoryRequirements requirements{};
-    vkGetImageMemoryRequirements(context.device, out.image, &requirements);
-    std::uint32_t memoryType = 0;
-    if (!FindMemoryType(physical, requirements.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
-                        memoryType))
-        return false;
-    VkMemoryAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    allocateInfo.allocationSize = requirements.size;
-    allocateInfo.memoryTypeIndex = memoryType;
-    return Check(vkAllocateMemory(context.device, &allocateInfo, nullptr, &out.memory),
-                 "vkAllocateMemory") &&
-           Check(vkBindImageMemory(context.device, out.image, out.memory, 0), "vkBindImageMemory");
-}
-
-bool MakeBuffer(VulkanTestContext &context, VkPhysicalDevice physical, VkDeviceSize size,
-                Buffer &out)
-{
-    VkBufferCreateInfo createInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    createInfo.size = size;
-    createInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
-    createInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    if (!Check(vkCreateBuffer(context.device, &createInfo, nullptr, &out.buffer), "vkCreateBuffer"))
-        return false;
-    VkMemoryRequirements requirements{};
-    vkGetBufferMemoryRequirements(context.device, out.buffer, &requirements);
-    std::uint32_t memoryType = 0;
-    if (!FindMemoryType(physical, requirements.memoryTypeBits,
-                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                        memoryType))
-        return false;
-    VkMemoryAllocateInfo allocateInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    allocateInfo.allocationSize = requirements.size;
-    allocateInfo.memoryTypeIndex = memoryType;
-    return Check(vkAllocateMemory(context.device, &allocateInfo, nullptr, &out.memory),
-                 "vkAllocateMemory") &&
-           Check(vkBindBufferMemory(context.device, out.buffer, out.memory, 0),
-                 "vkBindBufferMemory");
-}
-
-void Destroy(VulkanTestContext &context, Image &image)
-{
-    if (image.image != VK_NULL_HANDLE)
-        vkDestroyImage(context.device, image.image, nullptr);
-    if (image.memory != VK_NULL_HANDLE)
-        vkFreeMemory(context.device, image.memory, nullptr);
-    image = {};
-}
-
-void Destroy(VulkanTestContext &context, Buffer &buffer)
-{
-    if (buffer.buffer != VK_NULL_HANDLE)
-        vkDestroyBuffer(context.device, buffer.buffer, nullptr);
-    if (buffer.memory != VK_NULL_HANDLE)
-        vkFreeMemory(context.device, buffer.memory, nullptr);
-    buffer = {};
 }
 
 } // namespace
@@ -205,13 +106,33 @@ int main()
         return 1;
 
     constexpr VkExtent2D extent{8, 8};
-    Image source;
-    Image destination;
-    Buffer readback;
-    if (!MakeImage(context, physical, extent, source) ||
-        !MakeImage(context, physical, extent, destination) ||
-        !MakeBuffer(context, physical, extent.width * extent.height * 4, readback))
+    gears::native_rhi::VulkanResourceOwner resources(physical, context.device);
+    const auto invalidBuffer = resources.CreateBuffer({});
+    const auto invalidImage = resources.CreateImage({});
+    assert(invalidBuffer.status == gears::native_rhi::VulkanResourceStatus::InvalidDescriptor);
+    assert(invalidImage.status == gears::native_rhi::VulkanResourceStatus::InvalidDescriptor);
+    assert(resources.RetireBuffer(0) == nullptr);
+    assert(resources.RetireImage(0) == nullptr);
+    const gears::native_rhi::VulkanImageDescriptor imageDescriptor{
+        VK_FORMAT_R8G8B8A8_UNORM,
+        extent,
+        VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        VK_SAMPLE_COUNT_1_BIT,
+        VK_IMAGE_ASPECT_COLOR_BIT,
+        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT};
+    auto sourceResult = resources.CreateImage(imageDescriptor);
+    auto destinationResult = resources.CreateImage(imageDescriptor);
+    const gears::native_rhi::VulkanBufferDescriptor readbackDescriptor{
+        extent.width * extent.height * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, true};
+    auto readbackResult = resources.CreateBuffer(readbackDescriptor);
+    if (sourceResult.status != gears::native_rhi::VulkanResourceStatus::Accepted ||
+        destinationResult.status != gears::native_rhi::VulkanResourceStatus::Accepted ||
+        readbackResult.status != gears::native_rhi::VulkanResourceStatus::Accepted)
         return 1;
+    auto source = std::move(sourceResult.resource);
+    auto destination = std::move(destinationResult.resource);
+    auto readback = std::move(readbackResult.resource);
 
     VkCommandBufferAllocateInfo commandInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
     commandInfo.commandPool = context.commandPool;
@@ -225,13 +146,13 @@ int main()
     if (!Check(vkBeginCommandBuffer(commands, &beginInfo), "vkBeginCommandBuffer"))
         return 1;
 
-    Transition(commands, source.image, VK_IMAGE_LAYOUT_UNDEFINED,
+    Transition(commands, source->resolve.image, VK_IMAGE_LAYOUT_UNDEFINED,
                VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0, VK_ACCESS_TRANSFER_WRITE_BIT);
     VkClearColorValue clear{{0x12 / 255.0f, 0x34 / 255.0f, 0x56 / 255.0f, 0x78 / 255.0f}};
     VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdClearColorImage(commands, source.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1,
-                         &range);
-    Transition(commands, source.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    vkCmdClearColorImage(commands, source->resolve.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         &clear, 1, &range);
+    Transition(commands, source->resolve.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                VK_ACCESS_TRANSFER_READ_BIT);
 
@@ -244,29 +165,24 @@ int main()
     resolve.destinationHeight = extent.height - resolve.destinationPoint[1];
     resolve.destinationFormat = 0;
     resolve.bytesPerBlock = 4;
-    gears::native_rhi::VulkanResolveImage nativeSource{source.image, VK_FORMAT_R8G8B8A8_UNORM,
-                                                       extent, VK_SAMPLE_COUNT_1_BIT,
-                                                       VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL};
-    gears::native_rhi::VulkanResolveImage nativeDestination{
-        destination.image, VK_FORMAT_R8G8B8A8_UNORM, extent, VK_SAMPLE_COUNT_1_BIT,
-        VK_IMAGE_LAYOUT_UNDEFINED};
-    assert(
-        gears::native_rhi::RecordColorResolve(commands, resolve, nativeSource, nativeDestination) ==
-        gears::native_rhi::VulkanResolveStatus::Accepted);
+    assert(gears::native_rhi::RecordColorResolve(commands, resolve, source->resolve,
+                                                 destination->resolve) ==
+           gears::native_rhi::VulkanResolveStatus::Accepted);
     gears::RhiSemanticResolve unsupported = resolve;
     unsupported.operationFlags = 8;
-    assert(gears::native_rhi::RecordColorResolve(commands, unsupported, nativeSource,
-                                                 nativeDestination) ==
+    assert(gears::native_rhi::RecordColorResolve(commands, unsupported, source->resolve,
+                                                 destination->resolve) ==
            gears::native_rhi::VulkanResolveStatus::UnsupportedOperationFlags);
 
-    Transition(commands, destination.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+    Transition(commands, destination->resolve.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT,
                VK_ACCESS_TRANSFER_READ_BIT);
     VkBufferImageCopy readbackRegion{};
     readbackRegion.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     readbackRegion.imageExtent = {extent.width, extent.height, 1};
-    vkCmdCopyImageToBuffer(commands, destination.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                           readback.buffer, 1, &readbackRegion);
+    vkCmdCopyImageToBuffer(commands, destination->resolve.image,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback->buffer, 1,
+                           &readbackRegion);
     if (!Check(vkEndCommandBuffer(commands), "vkEndCommandBuffer"))
         return 1;
     VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -276,11 +192,8 @@ int main()
         !Check(vkQueueWaitIdle(context.queue), "vkQueueWaitIdle"))
         return 1;
 
-    void *mapped = nullptr;
-    if (!Check(vkMapMemory(context.device, readback.memory, 0, VK_WHOLE_SIZE, 0, &mapped),
-               "vkMapMemory"))
-        return 1;
-    const auto *pixels = static_cast<const std::uint8_t *>(mapped);
+    const auto *pixels = static_cast<const std::uint8_t *>(readback->mapped);
+    assert(pixels != nullptr);
     for (std::uint32_t y = 0; y < 3; ++y)
         for (std::uint32_t x = 0; x < 4; ++x)
         {
@@ -290,12 +203,22 @@ int main()
             assert(pixels[offset + 2] == 0x56);
             assert(pixels[offset + 3] == 0x78);
         }
-    vkUnmapMemory(context.device, readback.memory);
-
     vkDeviceWaitIdle(context.device);
-    Destroy(context, readback);
-    Destroy(context, destination);
-    Destroy(context, source);
+    auto retiredSource = resources.RetireImage(source->id);
+    assert(retiredSource != nullptr);
+    assert(resources.AcquireImage(source->id) == nullptr);
+    assert(resources.ActiveImageCount() == 1);
+    assert(resources.ActiveBufferCount() == 1);
+    auto retiredDestination = resources.RetireImage(destination->id);
+    auto retiredReadback = resources.RetireBuffer(readback->id);
+    assert(retiredDestination != nullptr);
+    assert(retiredReadback != nullptr);
+    source.reset();
+    destination.reset();
+    readback.reset();
+    retiredSource.reset();
+    retiredDestination.reset();
+    retiredReadback.reset();
     vkDestroyCommandPool(context.device, context.commandPool, nullptr);
     vkDestroyDevice(context.device, nullptr);
     vkDestroyInstance(context.instance, nullptr);

@@ -584,7 +584,8 @@ if(Vulkan_FOUND)
 
     add_executable(test_native_rhi_vulkan_resolve
         test_native_rhi_vulkan_resolve.cpp
-        ../runtime/native_rhi_vulkan_resolve.cpp)
+        ../runtime/native_rhi_vulkan_resolve.cpp
+        ../runtime/native_rhi_vulkan_resources.cpp)
     target_include_directories(test_native_rhi_vulkan_resolve PRIVATE ../runtime
                                ${Vulkan_INCLUDE_DIRS})
     target_link_libraries(test_native_rhi_vulkan_resolve PRIVATE Vulkan::Vulkan)

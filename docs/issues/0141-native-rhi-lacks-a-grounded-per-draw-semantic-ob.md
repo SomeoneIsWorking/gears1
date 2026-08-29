@@ -242,3 +242,11 @@ images, mismatched formats, and out-of-bounds rectangles. Its headless Vulkan
 test verified copied pixels and the unsupported-flags negative control. This
 does not resolve the issue: the live plan still has no native resource
 allocator, source-image producer, or same-binary state/pixel parity gate.
+
+The host-side prerequisite is now separated into
+`runtime/native_rhi_vulkan_resources.*`. It owns explicit Vulkan buffer and
+colour-image allocations, stable native IDs, image layout state, and
+retainable leases for fence-delayed destruction. The resolve test exercises
+that owner, but no live constructor call has been observed and no native draw
+producer consumes it. Wiring it to the semantic plan now would invent resource
+meaning from absent title evidence, so the issue remains open.

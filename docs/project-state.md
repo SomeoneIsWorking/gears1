@@ -18,7 +18,9 @@ done/partial/missing inventory.
 ## Current focus
 
 S004 is the current focus: move measured, parity-checked RHI operations from retained bodies to
-native owners while keeping runtime retained/A/B controls. The new title-boundary timing probe
+native owners while keeping runtime retained/A/B controls. The Vulkan resource owner now provides
+explicit host buffer/colour-image allocation and fence-retainable leases, but it is not live-wired
+because no constructor producer or native draw producer has been proven. The new title-boundary timing probe
 rules out the startup Bink wait as the general gameplay 30 Hz limiter. Its post-Bink extension
 shows ring reservations continuing after the traced producer stops while semantic presents remain
 near 30 Hz; the steady gameplay producer or wait that limits those presents is still unidentified.
@@ -109,8 +111,10 @@ remaining draw submissions, and renderer bypass remain on the retained path. `na
 builds a PM4-independent ordered frame plan when explicitly enabled, and `native_rhi_backend.*`
 plus `native_rhi_resources.*` define the host execution and resource-identity contracts. The
 isolated `native_rhi_vulkan_resolve.*` slice now records a real host-owned Vulkan colour copy and
-passes a headless pixel test with an unsupported-flags negative control, but it is not connected
-to the live plan because native source-image production and parity are missing. Compatibility
+passes a headless pixel test with an unsupported-flags negative control. The companion
+`native_rhi_vulkan_resources.*` owner now creates host buffers/images and retains them through
+leases, but neither owner is connected to the live plan because native source-image production
+and parity are missing. Compatibility
 rendering remains authoritative. The native-pass roster remains experimental. The title still
 produces only about 30 frames/s, and the complete native frontend has not been built. See issues
 #141, #149, #152, #153, #154, #155, and #157.
