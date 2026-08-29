@@ -169,11 +169,16 @@ depth/stencil, multisample, unsupported flags, format conversion, swizzle, and
 scaling refuse rather than being approximated. The headless
 `test_native_rhi_vulkan_resolve` creates both images itself, verifies copied
 pixels, and exercises an unsupported-flags negative control. This is a
-host-operation proof, not live frontend execution: the production plan still
-has no resource allocator or native draw producer, and the compatibility
-renderer still supplies the only live source images. It must not be connected
-to the live stream until those images are produced natively and same-binary
-state/pixel parity is measured.
+host-operation proof, not live frontend execution. The focused
+`runtime/native_rhi_vulkan_resources.*` owner now creates explicit host buffer
+and colour-image resources with stable native IDs, preserves image layout state,
+and returns retainable leases for fence-delayed destruction. Its descriptors
+never infer Vulkan objects from guest construction words. The production plan
+still has no live resource-construction producer or native draw producer, and
+the compatibility renderer still supplies the only live source images. The
+owner and resolve operation must not be connected to the live stream until
+those images are produced natively and same-binary state/pixel parity is
+measured.
 
 ## Native backend execution contract
 
