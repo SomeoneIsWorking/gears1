@@ -8,6 +8,7 @@ namespace
 {
 
 constexpr std::uint64_t kSceneComposite = 0x501ac5d8692bf7b6ull;
+constexpr std::uint64_t kSceneCompositeVertex = 0x5363d0746b3ef666ull;
 constexpr std::uint32_t kSpirvMagic = 0x07230203u;
 
 void TestSceneCompositeModuleIsImplemented()
@@ -41,6 +42,20 @@ void TestSceneCompositeModuleIsImplemented()
     assert(sampler.mipFilter == 3);
     assert(sampler.anisoFilter == 7);
     assert(scene->shaderInterface.requiredInterpolatorMask == 0x3);
+    assert(scene->vertexShaderHash == kSceneCompositeVertex);
+    assert(scene->vertexSpirv.size() >= 5);
+    assert(scene->vertexSpirv.front() == kSpirvMagic);
+    assert(scene->vertexShaderInterface.ok);
+    assert(scene->vertexShaderInterface.floatBitmap[0] == 0xFull);
+    assert(scene->vertexShaderInterface.floatCount == 4);
+    assert(scene->vertexShaderInterface.vertexBindings.size() == 1);
+    assert(scene->vertexShaderInterface.vertexBindings.front().fetchConstant == 95);
+    assert(scene->vertexShaderInterface.vertexBindings.front().strideWords == 12);
+    assert(scene->vertexShaderInterface.requiredInterpolatorMask == 0x3);
+    if (gears::native::Enabled())
+        assert(gears::native::FindVertex(kSceneCompositeVertex) != nullptr);
+    else
+        assert(gears::native::FindVertex(kSceneCompositeVertex) == nullptr);
 }
 
 void TestUnimplementedDeclarationsRemainRefused()

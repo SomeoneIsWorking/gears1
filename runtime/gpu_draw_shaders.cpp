@@ -27,7 +27,15 @@ bool ShaderCache::GetShader(bool isVertex, const uint8_t *uc, size_t sz, uint64_
                             ShaderXlate *&outX, VkShaderModule &outM)
 {
     diagnosticOverride.Observe(isVertex, hash, modification);
-    const gears::native::Pass *nat = isVertex ? nullptr : gears::native::Find(hash);
+    const gears::native::Pass *nat =
+        isVertex ? gears::native::FindVertex(hash) : gears::native::Find(hash);
+    const ShaderInterface *nativeInterface = nullptr;
+    const std::vector<uint32_t> *nativeCode = nullptr;
+    if (nat != nullptr)
+    {
+        nativeInterface = isVertex ? &nat->vertexShaderInterface : &nat->shaderInterface;
+        nativeCode = isVertex ? &nat->vertexSpirv : &nat->spirv;
+    }
     const std::vector<uint32_t> *overrideCode =
         diagnosticOverride.CodeFor(isVertex, hash, modification);
     // Keep the inspection controls explicit: normal native execution supplies
@@ -39,20 +47,21 @@ bool ShaderCache::GetShader(bool isVertex, const uint8_t *uc, size_t sz, uint64_
         nat != nullptr && overrideCode == nullptr && spvDir.empty() && !keepTranslated;
     if (nat != nullptr)
     {
-        if (!nat->shaderInterface.ok)
+        if (!nativeInterface->ok)
         {
-            lucent::error("native", "pass \"{}\" has no complete shader interface", nat->name);
+            lucent::error("native", "pass \"{}\" has no complete {} shader interface", nat->name,
+                          isVertex ? "vertex" : "pixel");
             return false;
         }
-        const uint32_t actualInterpolatorMask = ShaderInterpolatorMask(false, modification);
-        if (nat->shaderInterface.requiredInterpolatorMask != 0 &&
-            nat->shaderInterface.requiredInterpolatorMask != actualInterpolatorMask)
+        const uint32_t actualInterpolatorMask = ShaderInterpolatorMask(isVertex, modification);
+        if (nativeInterface->requiredInterpolatorMask != 0 &&
+            nativeInterface->requiredInterpolatorMask != actualInterpolatorMask)
         {
             lucent::error("native",
-                          "pass \"{}\" refuses pixel shader {:#018x}: interpolator mask"
+                          "pass \"{}\" refuses {} shader {:#018x}: interpolator mask"
                           " {:#x} does not match required {:#x}",
-                          nat->name, hash, actualInterpolatorMask,
-                          nat->shaderInterface.requiredInterpolatorMask);
+                          nat->name, isVertex ? "vertex" : "pixel", hash, actualInterpolatorMask,
+                          nativeInterface->requiredInterpolatorMask);
             return false;
         }
     }
@@ -63,11 +72,11 @@ bool ShaderCache::GetShader(bool isVertex, const uint8_t *uc, size_t sz, uint64_
         ShaderXlate x;
         if (nativeFastPath)
         {
-            static_cast<ShaderInterface &>(x) = nat->shaderInterface;
+            static_cast<ShaderInterface &>(x) = *nativeInterface;
             lucent::info("native",
                          "pass \"{}\" supplied its host interface without Xenos"
-                         " translation for pixel shader {:#018x}",
-                         nat->name, hash);
+                         " translation for {} shader {:#018x}",
+                         nat->name, isVertex ? "vertex" : "pixel", hash);
         }
         else
         {
@@ -134,12 +143,13 @@ bool ShaderCache::GetShader(bool isVertex, const uint8_t *uc, size_t sz, uint64_
         }
         else if (nat != nullptr)
         {
-            mi.codeSize = nat->spirv.size() * sizeof(uint32_t);
-            mi.pCode = nat->spirv.data();
+            mi.codeSize = nativeCode->size() * sizeof(uint32_t);
+            mi.pCode = nativeCode->data();
             lucent::info("native",
-                         "pass \"{}\" is rendering natively for pixel"
+                         "pass \"{}\" is rendering natively for {}"
                          " shader {:#018x} ({} SPIR-V words, from {})",
-                         nat->name, hash, nat->spirv.size(), nat->evidence);
+                         nat->name, isVertex ? "vertex" : "pixel", hash, nativeCode->size(),
+                         nat->evidence);
         }
         else
         {

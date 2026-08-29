@@ -89,13 +89,15 @@ whose constructors were not observed, while rejecting inconsistent metadata and 
 adoption. The focused tests prove those transaction and registry rules; they do not provide a backend
 or alter the shipping renderer.
 
-The native-pass seam now contains an independently authored scene-composite
-module whose descriptor contract validates as Vulkan 1.1 SPIR-V. Its first
+The native-pass seam now contains independently authored scene-composite
+vertex and pixel modules whose descriptor contracts validate as Vulkan 1.1
+SPIR-V. Its first
 candidate was rejected for conflating texture-sign and host-swizzle fields;
 the corrected source separates those fields and its PWL gamma correction now
 matches the translated arithmetic. The native arm now supplies the shared
 `ShaderInterface` directly, skipping Xenos-to-SPIR-V translation for this
-implemented pass; `GEARS_NATIVE_PASSES_KEEP_TRANSLATED=1` retains the
+implemented pair, including the observed fetch-95 vertex layout;
+`GEARS_NATIVE_PASSES_KEEP_TRANSLATED=1` retains the
 translation arm for inspection. A fresh signs-enabled frame replay matched
 the compatibility arm within 0.001 mean channel difference (worst channel
 difference 4/255), and the validation run reported no image-interface
@@ -107,7 +109,7 @@ complete native frontend or proof of the 5 ms target. See issues #155 and
 #157.
 
 Gap: Only the non-retiring reference-count fast path, the Gears 1 operation-kind-3 wait, the
-explicitly enabled Gears 1 audio mix, and the one direct native scene-composite shader arm are
+explicitly enabled Gears 1 audio mix, and the one direct native scene-composite vertex/pixel arm are
 authorized. Zero-to-one backing ownership, one-to-zero destruction, resource construction, the
 remaining draw submissions, and renderer bypass remain on the retained path. `native_rhi.*` now
 builds a PM4-independent ordered frame plan when explicitly enabled, and `native_rhi_backend.*`

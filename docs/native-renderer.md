@@ -39,18 +39,24 @@ produce the requested native engine.
 
 ## Native-pass seam
 
-`runtime/native_pass.*` retains a compatibility seam for substituting an
-independently authored host module for an observed pass. The clean tracked
+`runtime/native_pass.*` retains a compatibility seam for substituting
+independently authored host modules for an observed pass. The clean tracked
 roster now contains one implementation for the full-screen scene composite;
-enabling `GEARS_NATIVE_PASSES=1` substitutes it only for its observed pixel
-shader hash. That pass now supplies its descriptor, constant, sampler, and
-interpolator contract directly, so its normal native arm does not invoke the
-Xenos-to-SPIR-V translator. `GEARS_NATIVE_PASSES_KEEP_TRANSLATED=1` explicitly
-retains translation for interface inspection and A/B debugging. The
+enabling `GEARS_NATIVE_PASSES=1` substitutes its observed vertex and pixel
+shader hashes. Both stages supply their descriptor, constant, vertex-fetch, and
+interpolator contracts directly, so this native arm does not invoke the
+Xenos-to-SPIR-V translator for the pair. `GEARS_NATIVE_PASSES_KEEP_TRANSLATED=1`
+explicitly retains translation for interface inspection and A/B debugging. The
 compatibility arm remains available for the required same-input comparison.
 
 The implementation is independently authored in
-`runtime/shaders/native_scene_composite.frag` and its generated SPIR-V header.
+`runtime/shaders/native_scene_composite.vert` and
+`runtime/shaders/native_scene_composite.frag`, with generated SPIR-V headers.
+The vertex contract is grounded by the observed fetch-95 layout: a 12-dword
+stride, position at offset 0, UV at offset 4, colour/interpolator data at
+offset 6, and the captured system/float/fetch block bindings. Its module reads
+guest vertex data through the existing host shared-memory descriptor; it does
+not introduce a second guest-memory mirror.
 The previous candidate's root cause was identified before restoration: it used
 the translated `texture_swizzles` word as both channel routing and texture-sign
 mode. The corrected module reads the fetch-zero sign byte from the separate
@@ -61,13 +67,14 @@ truncated correction term. A fresh signs-enabled same-input replay now matches
 the compatibility arm to 0.0000 mean channel error, with no channel farther
 than 4/255. The deliberately wrong-sign control diverged by 5.2155 mean
 channel units and 66/255 worst difference, so issue #155 is resolved for this
-pass and capture. This pass is parity-proven for the captured content, but it
+pass and capture. Both stages are now exercised by the same-input comparison.
+This pass is parity-proven for the captured content, but it
 does not establish the complete native renderer or its 5 ms budget.
 
 A three-run sequential sweep of `title600.gfr` measured 5.574/7.305/7.411 ms
 GPU on the compatibility arm and 5.276/5.709/7.157 ms with the native pass
 enabled. The native log records the direct-interface path and no translation for
-the implemented scene-composite pixel shader. The screenshots matched within
+the implemented scene-composite vertex and pixel shaders. The screenshots matched within
 0.001 mean channel difference, with a 4/255 worst channel difference, and the
 validation run exited cleanly without image-interface diagnostics. The retained
 inspection control translated the same pixel shader and still matched within the
