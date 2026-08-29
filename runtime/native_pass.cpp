@@ -4,6 +4,7 @@
 #include <lucent/log.h>
 
 #include "native_scene_composite_spv.h"
+#include "native_scene_composite_vertex_spv.h"
 
 namespace gears::native
 {
@@ -24,6 +25,17 @@ gears::draw::ShaderInterface SceneCompositeInterface()
     return interface;
 }
 
+gears::draw::ShaderInterface SceneCompositeVertexInterface()
+{
+    gears::draw::ShaderInterface interface;
+    interface.ok = true;
+    interface.floatBitmap[0] = 0xFull;
+    interface.floatCount = 4;
+    interface.vertexBindings = {{95, 12}};
+    interface.requiredInterpolatorMask = 0x3;
+    return interface;
+}
+
 // Hashes are factual interoperability metadata observed from a user-provided
 // image. No title-derived shader implementation is distributed. An empty module
 // is a declaration only, and Find() refuses it.
@@ -37,7 +49,8 @@ const std::vector<Pass> &RosterStorage()
         Pass{0x501ac5d8692bf7b6ull, "full-screen scene composite",
              "observed full-screen contract; post-swizzle signs are read from"
              " the translated system-constant field and view routing is host-owned",
-             NativeSceneCompositeSpirv(), SceneCompositeInterface()},
+             NativeSceneCompositeSpirv(), SceneCompositeInterface(), 0x5363d0746b3ef666ull,
+             NativeSceneCompositeVertexSpirv(), SceneCompositeVertexInterface()},
         Pass{0x9610bf8038af9aafull,
              "post-process blend",
              "observed pass identity; clean implementation not yet provided",
@@ -77,6 +90,16 @@ const Pass *Find(uint64_t pixelShaderHash)
         return nullptr;
     for (const Pass &p : RosterStorage())
         if (p.pixelShaderHash == pixelShaderHash && !p.spirv.empty())
+            return &p;
+    return nullptr;
+}
+
+const Pass *FindVertex(uint64_t vertexShaderHash)
+{
+    if (!Enabled() || vertexShaderHash == 0)
+        return nullptr;
+    for (const Pass &p : RosterStorage())
+        if (p.vertexShaderHash == vertexShaderHash && !p.vertexSpirv.empty())
             return &p;
     return nullptr;
 }

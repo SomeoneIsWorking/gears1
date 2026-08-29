@@ -54,6 +54,12 @@ struct Pass
     // Metadata consumed by host draw setup. Native passes supply it directly,
     // without invoking Xenos shader translation.
     gears::draw::ShaderInterface shaderInterface;
+    // Optional native vertex stage for the same pass. Keeping the pixel and
+    // vertex modules together makes the pair's interpolator contract explicit;
+    // an absent module remains an honest pixel-only substitution.
+    uint64_t vertexShaderHash = 0;
+    std::vector<uint32_t> vertexSpirv;
+    gears::draw::ShaderInterface vertexShaderInterface;
 };
 
 // The passes this build knows how to render itself. Empty entries are declarations,
@@ -67,6 +73,10 @@ bool Enabled();
 // but unimplemented pass, and null when substitution is off -- so a caller can
 // use it unconditionally.
 const Pass *Find(uint64_t pixelShaderHash);
+
+// The native vertex stage for a shader hash, or null when substitution is off
+// or the roster has no implemented vertex module for that hash.
+const Pass *FindVertex(uint64_t vertexShaderHash);
 
 // One line per run naming what is registered, what is implemented and what is
 // merely declared. Without it, "native passes are on" and "native passes are on
