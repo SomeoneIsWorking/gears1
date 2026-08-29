@@ -1,0 +1,20 @@
+---
+id: C101
+kind: claim
+status: holds
+created: 2026-08-30
+tags:
+depends: runtime/gpu_draw_native_input.cpp#BuildNativeDrawInput, runtime/gpu_draw.cpp#Renderer::RenderFrameImpl
+---
+
+## Claim
+
+The compatibility draw loop consumes one extracted title-neutral NativeDrawInput boundary
+
+## Evidence
+
+A Clang-configured build compiled gpu_draw_native_input.cpp; test_gpu_draw_native_input passed refusal and valid 2X fixed-viewport cases; the rerun CTest suite passed all 90 non-cpp_quality tests and the standalone clang-format/clang-tidy gate passed.
+
+## What would falsify it
+
+The focused boundary test fails, RenderFrameImpl rereads the extracted fields, or a same-input compatibility comparison demonstrates changed renderer behavior.

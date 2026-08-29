@@ -63,6 +63,12 @@ crossed the prior refusal region through frame 2280. The new `native_rhi.*` plan
 complete ordered semantic stream on the same live path, but remains capture-only. See issues #141,
 #148, #149, and #150.
 
+The compatibility renderer now consumes a single title-neutral `NativeDrawInput` produced by
+`gpu_draw_native_input.*` instead of decoding the same register fields in its orchestration body.
+`test_gpu_draw_native_input` covers refusal, target identity, 2X sample layout, output-merger state,
+and host viewport/scissor derivation. This is an input handoff for a future native producer, not a
+native execution claim.
+
 ### S004 — Native RHI execution
 
 The shared big-endian atomic resource-reference owner now executes all observed non-boundary
@@ -88,6 +94,10 @@ retained destructor boundaries. It now accepts explicitly supplied identity evid
 whose constructors were not observed, while rejecting inconsistent metadata and zero-reference
 adoption. The focused tests prove those transaction and registry rules; they do not provide a backend
 or alter the shipping renderer.
+
+The draw-input extraction removes a duplicate state-decoding owner and gives future native draw
+execution one bounded input contract. It does not authorize native draw execution or change the
+retained renderer's output.
 
 The native-pass seam now contains independently authored scene-composite
 vertex and pixel modules whose descriptor contracts validate as Vulkan 1.1
