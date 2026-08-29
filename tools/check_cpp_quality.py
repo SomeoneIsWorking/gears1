@@ -42,6 +42,8 @@ FORMATTED = [
     "runtime/gpu_draw_arena.h",
     "runtime/gpu_draw_indices.cpp",
     "runtime/gpu_draw_indices.h",
+    "runtime/gpu_draw_native_input.cpp",
+    "runtime/gpu_draw_native_input.h",
     "runtime/gpu_draw_options.cpp",
     "runtime/gpu_draw_options.h",
     "runtime/gpu_draw_pixels.cpp",
@@ -174,6 +176,7 @@ FORMATTED = [
     "tests/test_guest_texture_hash.cpp",
     "tests/test_guest_write_watch.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
+    "tests/test_gpu_draw_native_input.cpp",
     "tests/test_gpu_draw_untile.cpp",
     "tests/test_gpu_draw_options.cpp",
     "tests/test_gpu_draw_indices.cpp",
@@ -225,6 +228,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/gpu_draw_api.cpp",
     "runtime/gpu_draw_arena.cpp",
     "runtime/gpu_draw_indices.cpp",
+    "runtime/gpu_draw_native_input.cpp",
     "runtime/gpu_draw_options.cpp",
     "runtime/gpu_draw_pixels.cpp",
     "runtime/gpu_draw_pipelines.cpp",
@@ -299,6 +303,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_guest_texture_hash.cpp",
     "tests/test_guest_write_watch.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
+    "tests/test_gpu_draw_native_input.cpp",
     "tests/test_gpu_draw_untile.cpp",
     "tests/test_gpu_draw_options.cpp",
     "tests/test_gpu_draw_indices.cpp",
@@ -408,12 +413,15 @@ def selftest():
     assert "runtime/gpu_draw_api.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_shader_interface.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_draw_arena.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_draw_native_input.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/gpu_draw_native_input.cpp" in FORMATTED
     assert "runtime/gpu_frame_cleanup.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_frame_slots.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_present_source.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_shared_device.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_swap_packet.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_draw_sample_layout.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_gpu_draw_native_input.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_draw_untile.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_surface_format_capacity.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_gpu_swap_packet.cpp" in TIDY_TRANSLATION_UNITS

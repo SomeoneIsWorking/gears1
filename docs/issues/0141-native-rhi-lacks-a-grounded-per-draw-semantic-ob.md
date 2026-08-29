@@ -5,7 +5,7 @@ status: investigating
 symptom: Per-draw semantics are now observed and packet-checked, but complete state, resource, resolve, presentation, and retirement semantics are not yet mirrored, so native execution cannot safely bypass PM4
 tags: performance,native-rhi,d3d,re,draw,seam
 created: 2026-08-27
-updated: 2026-08-29
+updated: 2026-08-30
 ---
 
 ## Root cause
@@ -263,3 +263,13 @@ indexed/auto-index source, index width, and bound-index endian mode. Missing
 renderer input is reported as missing rather than a zero-draw match; duplicate
 publication invalidates the frame. Focused tests cover matching, absent
 renderer input, altered count, and altered ordered input.
+
+The compatibility renderer's per-draw register decoding is now isolated in the
+title-neutral `gpu_draw_native_input.*` boundary. It produces one complete
+`NativeDrawInput` containing draw identity, target identity, sample layout,
+output-merger state, depth bias, diagnostic controls, and host viewport/scissor
+values. The renderer consumes that value instead of rereading those fields in
+its orchestration body. `test_gpu_draw_native_input` covers the refused-input
+path and a valid 2X fixed-viewport decode, including output-merger and target
+fields. This is an input ownership improvement and a native-producer seam; it
+does not claim full resource/shader/constant/texture parity or enable a bypass.

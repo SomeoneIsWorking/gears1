@@ -569,6 +569,11 @@ if(TARGET gears_draw_xlate)
     target_compile_options(test_guest_texture_decode PRIVATE -mavx)
     target_link_libraries(test_guest_texture_decode PRIVATE gears_draw_xlate)
     add_test(NAME guest_texture_decode COMMAND test_guest_texture_decode)
+
+    add_executable(test_gpu_draw_native_input test_gpu_draw_native_input.cpp)
+    target_include_directories(test_gpu_draw_native_input PRIVATE ../runtime)
+    target_link_libraries(test_gpu_draw_native_input PRIVATE gears_draw lucent::lucent)
+    add_test(NAME gpu_draw_native_input COMMAND test_gpu_draw_native_input)
 endif()
 
 # The swapchain format choice. It decides every pixel of the window and NO capture

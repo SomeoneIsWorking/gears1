@@ -62,6 +62,7 @@
 #include "gpu_draw_resolve_plan.h"
 #include "gpu_resolve_extent.h"
 #include "gpu_draw_indices.h"
+#include "gpu_draw_native_input.h"
 #include "gpu_draw_options.h"
 #include "gpu_draw_uniforms.h"
 #include "gpu_draw_vertexfetch.h"
@@ -999,9 +1000,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
         // the low 12 bits in tiles, color_format bits 16..19), and what the
         // draw is for (RB_MODECONTROL.edram_mode). Both are read before any
         // early exit so the census covers every draw, resolves included.
-        const uint32_t surfaceBase = R[0x2001] & 0xFFF;
+        const uint32_t observedSurfaceBase = R[0x2001] & 0xFFF;
         const uint32_t edramMode = R[0x2208] & 0x7;
-        CN.NoteDraw(surfaceBase, (R[0x2001] >> 16) & 0xF, edramMode);
+        CN.NoteDraw(observedSurfaceBase, (R[0x2001] >> 16) & 0xF, edramMode);
         if (edramMode == 6 /*kCopy*/)
         {
             ResolveEvent re;
@@ -1111,13 +1112,34 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
         // established at boot to a mixed HDR container, and the shader's
         // guest-format clamp must be selected against the promoted image.
         static const long onlyBase = lucent::config::number("DRAW_ONLY_BASE", -1);
-        if (onlyBase >= 0 && surfaceBase != uint32_t(onlyBase))
+        if (onlyBase >= 0 && observedSurfaceBase != uint32_t(onlyBase))
         {
             CN.Skip(0);
             continue;
         }
-        const draw::DrawSampleLayout sampleLayout = draw::DeriveDrawSampleLayout(
-            msaaModel ? ((R[0x2000] >> 16) & 3) : 0, P.width, P.height);
+        static const bool fixedVp = lucent::config::flag("DRAW_FIXEDVP");
+        const draw::NativeDrawInputOptions nativeInputOptions{
+            .msaaModel = msaaModel,
+            .hasDepthClamp = hasDepthClamp,
+            .applyDepthBias = options.applyDepthBias,
+            .fixedViewport = fixedVp,
+            .sampleGridWidth = P.width,
+            .sampleGridHeight = P.height,
+            .targetWidth = W,
+            .targetHeight = H,
+            .maxViewportWidth = maxViewportDim[0],
+            .maxViewportHeight = maxViewportDim[1],
+        };
+        draw::NativeDrawInput nativeInput;
+        if (!draw::BuildNativeDrawInput(R, d.primType, d.indexCount, d.indexed, d.indexIs32,
+                                        d.indexEndian, d.indexGuestBase, d.vsHash, d.psHash,
+                                        nativeInputOptions, nativeInput))
+        {
+            CN.Skip(1);
+            continue;
+        }
+        const uint32_t surfaceBase = nativeInput.surfaceBase;
+        const draw::DrawSampleLayout &sampleLayout = nativeInput.sampleLayout;
         if (sampleLayout.IsNativeMultisample() &&
             (!hasStandardSampleLocations || !has2xFramebufferSamples))
         {
@@ -1207,19 +1229,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
                 continue;
             }
         }
-        OutputMergerState om;
-        om.colorMask = R[0x2104];
-        om.blend0 = R[0x2201];
-        om.depthControl = R[0x2200];
-        om.stencilRefMask = R[0x210D];
-        om.stencilRefMaskBf = R[0x210C];
-        om.suScModeCntl = R[0x2205];
-        om.polygonal = draw::IsPrimitivePolygonal(R);
-        // PA_CL_CLIP_CNTL.clip_disable (bit 16): the guest wants no near/far
-        // clipping. Xenia gates the same state on the same device feature, so a
-        // device without depthClamp renders as this one did before -- with the
-        // primitives whose Z is a hair outside [0,1] clipped away.
-        om.depthClamp = hasDepthClamp && ((R[0x2204] >> 16) & 1) != 0;
+        const OutputMergerState &om = nativeInput.outputMerger;
         VkShaderModule gsMod = VK_NULL_HANDLE;
         if (d.primType == 1 /*kPointList*/)
             PC.GetPointGeomShader(vsModification, psModification, gsMod);
@@ -1358,15 +1368,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
         pd.psHash = d.psHash;
         pd.hasFragmentStage = pixelShaderUsed;
         pd.colorMask = om.colorMask;
-        const draw::DepthBias depthBias = draw::DeriveDepthBias(R, om.polygonal);
-        pd.depthBiasConstant = depthBias.constantFactor;
-        pd.depthBiasSlope = depthBias.slopeFactor;
-        // GEARS_DRAW_NODEPTHBIAS=1 is the control arm for the formerly missing
-        // state. It is never a fallback or fix: zeroing guest bias should make
-        // a shadow-map regression reappear if this mechanism matters.
-        if (!options.applyDepthBias)
-            pd.depthBiasConstant = pd.depthBiasSlope = 0.0f;
-        pd.depthBase = R[0x2002] & 0xFFF;
+        pd.depthBiasConstant = nativeInput.depthBias.constantFactor;
+        pd.depthBiasSlope = nativeInput.depthBias.slopeFactor;
+        pd.depthBase = nativeInput.depthBase;
         // WHICH HOST DEPTH IMAGE THIS DRAW RENDERS INTO -- a separate question
         // from which base the guest named, and the two must not be conflated.
         // `depthBase` is also what the EDRAM colour/depth ALIASING pass
@@ -1387,44 +1391,29 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
         // The depth FORMAT at this draw, for the aliasing pass: the same bit
         // the resolve path reads, but a geometry draw needs its own copy --
         // resolveDepthIsFloat24 is only filled for kCopy draws.
-        pd.resolveDepthIsFloat24 = ((R[0x2002] >> 16) & 1) == 1;
+        pd.resolveDepthIsFloat24 = nativeInput.depthIsFloat24;
         pd.depthControl = om.depthControl;
         pd.clipDisable = om.depthClamp;
         pd.stencilRefMask = om.stencilRefMask;
         pd.blend0 = om.blend0;
-        pd.colorFormat = (R[0x2001] >> 16) & 0xF;
-        pd.colorExpBias = int32_t((R[0x2001] >> 20) & 0x3F);
-        if (pd.colorExpBias & 0x20)
-            pd.colorExpBias -= 64;
-        pd.clipCntl = R[0x2204];
-        pd.suScModeCntl = R[0x2205];
-        pd.vteCntl = R[0x2206];
-        pd.windowOffset = R[0x2080];
-        pd.surfaceInfo = R[0x2000];
+        pd.colorFormat = nativeInput.colorFormat;
+        pd.colorExpBias = nativeInput.colorExpBias;
+        pd.clipCntl = nativeInput.clipControl;
+        pd.suScModeCntl = om.suScModeCntl;
+        pd.vteCntl = nativeInput.vteControl;
+        pd.windowOffset = nativeInput.windowOffset;
+        pd.surfaceInfo = nativeInput.surfaceInfo;
         pd.sampleLayout = sampleLayout;
-        std::memcpy(&pd.vportXScale, &R[0x210F], 4);
-        std::memcpy(&pd.vportXOffset, &R[0x2110], 4);
-        std::memcpy(&pd.vportYScale, &R[0x2111], 4);
-        std::memcpy(&pd.vportYOffset, &R[0x2112], 4);
-        std::memcpy(&pd.vportZScale, &R[0x2113], 4);
-        std::memcpy(&pd.vportZOffset, &R[0x2114], 4);
+        pd.vportXScale = nativeInput.viewportXScale;
+        pd.vportXOffset = nativeInput.viewportXOffset;
+        pd.vportYScale = nativeInput.viewportYScale;
+        pd.vportYOffset = nativeInput.viewportYOffset;
+        pd.vportZScale = nativeInput.viewportZScale;
+        pd.vportZOffset = nativeInput.viewportZOffset;
         // Viewport/scissor from this draw's own registers, clamped to the host
         // target. A zero extent is a legitimately empty viewport on Xenos.
         {
-            draw::GuestViewport gv;
-            draw::DeriveViewport(R, gv);
-            // GEARS_DRAW_FIXEDVP=1 restores the old host-fixed full-target
-            // viewport: the control arm for measuring what the guest-derived
-            // viewport/scissor changed.
-            static const bool fixedVp = lucent::config::flag("DRAW_FIXEDVP");
-            if (fixedVp)
-            {
-                gv.x = gv.y = gv.scissorX = gv.scissorY = 0;
-                gv.w = gv.scissorW = W;
-                gv.h = gv.scissorH = H;
-                gv.zMin = 0.0f;
-                gv.zMax = 1.0f;
-            }
+            const draw::GuestViewport &gv = nativeInput.guestViewport;
             // A std::format plus a map insert PER DRAW, feeding a census that is
             // only ever printed under `in.report` -- so on the 59 frames out of
             // 60 that print nothing it was building strings for nobody. Measured
@@ -1464,8 +1453,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
             // large viewport from writing outside the image, which is exactly
             // the division of labour Xenia's viewport code assumes.
             // `R` in this function is the REGISTER FILE; the renderer is this.
-            const uint32_t vpMaxW = maxViewportDim[0], vpMaxH = maxViewportDim[1];
-            if (gv.w > vpMaxW || gv.h > vpMaxH)
+            if (nativeInput.viewportClamped)
             {
                 // A clamp here DOES shrink the draw, for the same reason the
                 // old one did -- so it is said out loud rather than applied
@@ -1476,7 +1464,7 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
                              " viewport (clipping disabled) and this device allows only"
                              " {}x{}. It is clamped, and this draw's geometry WILL be"
                              " smaller than the console's by that ratio",
-                             pd.diagIndex, gv.w, gv.h, vpMaxW, vpMaxH);
+                             pd.diagIndex, gv.w, gv.h, maxViewportDim[0], maxViewportDim[1]);
             }
             // INTO THE SAMPLE GRID. The viewport and scissor the guest
             // programmed are in PIXELS of ITS surface; the target is EDRAM,
@@ -1485,21 +1473,13 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
             // fill and a 1X 1280x720 composite cover the same 1280x720 samples
             // -- the same bytes the console gives them. Both scales are 1 with
             // the model off, so this line is the identity there.
-            const uint32_t sx = msaaModel ? pd.sampleLayout.viewportScaleX : 1u;
-            const uint32_t sy = msaaModel ? pd.sampleLayout.viewportScaleY : 1u;
-            pd.viewport.x = float(gv.x * sx);
-            pd.viewport.y = float(gv.y * sy);
-            pd.viewport.width = float(std::min(gv.w * sx, vpMaxW));
-            pd.viewport.height = float(std::min(gv.h * sy, vpMaxH));
-            pd.viewport.minDepth = gv.zMin;
-            pd.viewport.maxDepth = gv.zMax;
-            const uint32_t scx = gv.scissorX * sx, scy = gv.scissorY * sy;
-
-            const uint32_t targetW = msaaModel ? pd.sampleLayout.imageWidth : SW;
-            const uint32_t targetH = msaaModel ? pd.sampleLayout.imageHeight : SH;
-            pd.scissor.offset = {int32_t(std::min(scx, targetW)), int32_t(std::min(scy, targetH))};
-            pd.scissor.extent = {std::min(gv.scissorW * sx, targetW - std::min(scx, targetW)),
-                                 std::min(gv.scissorH * sy, targetH - std::min(scy, targetH))};
+            pd.viewport = {nativeInput.viewport.x,        nativeInput.viewport.y,
+                           nativeInput.viewport.width,    nativeInput.viewport.height,
+                           nativeInput.viewport.minDepth, nativeInput.viewport.maxDepth};
+            pd.scissor.offset = {int32_t(nativeInput.viewport.scissorX),
+                                 int32_t(nativeInput.viewport.scissorY)};
+            pd.scissor.extent = {nativeInput.viewport.scissorWidth,
+                                 nativeInput.viewport.scissorHeight};
         }
         draw::DumpVertices(R, in, d, *vsX, *psX, issued, pd.diagIndex, pd.vsHash, d.indexCount,
                            &UC.sysc, &UC.fVs);
