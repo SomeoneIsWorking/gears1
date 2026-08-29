@@ -649,6 +649,7 @@ add_test(NAME frame_production_timing COMMAND test_frame_production_timing)
 
 add_executable(test_rhi_semantic_stream
     test_rhi_semantic_stream.cpp
+    ../runtime/rhi_renderer_input.cpp
     ../runtime/rhi_semantic_state.cpp
     ../runtime/rhi_semantic_stream.cpp)
 target_include_directories(test_rhi_semantic_stream PRIVATE ../runtime)

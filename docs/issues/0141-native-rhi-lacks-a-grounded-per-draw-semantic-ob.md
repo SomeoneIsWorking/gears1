@@ -196,11 +196,13 @@ the zero-construction result in the frame-1440 walk remains unresolved.
 
 Exercise the separate bound-vertex entry dynamically if the title reaches it.
 Then add resource creation and live release-to-zero retirement effects and
-compare the complete ordered stream with the PM4-derived `FrameDrawInputs` and
-output. Keep the recompiled compatibility bodies available and super-called
-until a deliberately wrong semantic control is rejected and a same-run
-complete-stream and pixel-parity gate agrees. Transient and bound-buffer
-agreement alone does not authorize a native bypass.
+compare complete resource ranges, shader/constant/texture inputs, output state,
+and pixels with the accepted renderer inputs. The ordered draw-shape comparison
+now exists, but it is not full renderer-input parity. Keep the recompiled
+compatibility bodies available and super-called until a deliberately wrong
+semantic control is rejected and a same-run complete-stream and pixel-parity
+gate agrees. Transient and bound-buffer agreement alone does not authorize a
+native bypass.
 
 The semantic resolve contract now retains the complete title-call payload that
 is available at the grounded boundary: raw operation flags, source rectangle,
@@ -250,3 +252,14 @@ retainable leases for fence-delayed destruction. The resolve test exercises
 that owner, but no live constructor call has been observed and no native draw
 producer consumes it. Wiring it to the semantic plan now would invent resource
 meaning from absent title evidence, so the issue remains open.
+
+## Renderer-input comparison
+
+At the guest-present boundary, `runtime/vd_null_gpu.cpp` publishes the accepted
+compatibility-renderer draw shape keyed by the same guest-present sequence that
+seals the semantic stream. The title-neutral stream compares ordered semantic
+draw events with those renderer inputs for primitive type, element count,
+indexed/auto-index source, index width, and bound-index endian mode. Missing
+renderer input is reported as missing rather than a zero-draw match; duplicate
+publication invalidates the frame. Focused tests cover matching, absent
+renderer input, altered count, and altered ordered input.

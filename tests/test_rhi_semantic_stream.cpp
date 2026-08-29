@@ -1,8 +1,10 @@
 #include "rhi_semantic_stream.h"
+#include "gpu_draw.h"
 
 #include <cassert>
 #include <cstdlib>
 #include <variant>
+#include <vector>
 
 #include <lucent/config.h>
 
@@ -18,6 +20,8 @@ int main()
     using gears::RhiDrawPacketEvidence;
     using gears::RhiPresentEvidenceResult;
     using gears::RhiPresentPacketEvidence;
+    using gears::RhiRendererDrawEvidenceResult;
+    using gears::RhiRendererDrawInput;
     using gears::RhiResolveEvidenceResult;
     using gears::RhiResolvePacketEvidence;
     using gears::RhiResourceConstructionEvidence;
@@ -336,6 +340,16 @@ int main()
     assert(gears::CompareRhiResolvePacket(resolve, alteredResolve) ==
            RhiResolveEvidenceResult::Missing);
 
+    const gears::RhiSemanticDrawState rendererAutoState{.draw = autoIndexed};
+    const RhiRendererDrawInput rendererAuto{
+        .primitiveType = 4, .elementCount = 300, .indexed = false};
+    assert(gears::CompareRhiRendererDrawInput(rendererAutoState, rendererAuto) ==
+           RhiRendererDrawEvidenceResult::Match);
+    RhiRendererDrawInput alteredRenderer = rendererAuto;
+    alteredRenderer.elementCount = 299;
+    assert(gears::CompareRhiRendererDrawInput(rendererAutoState, alteredRenderer) ==
+           RhiRendererDrawEvidenceResult::Mismatch);
+
     const RhiSemanticResourceLifetime addReference{
         .operation = RhiResourceLifetimeOperation::AddReference,
         .object = 0x40108000,
@@ -410,6 +424,9 @@ int main()
     altered.sourceSelect = 2;
     gears::ObserveRhiSemanticDraw(indexed, altered);
     gears::ObserveRhiSemanticPresent(present, matchingPresent);
+    gears::ObserveRhiRendererDraws(
+        17, {{.primitiveType = 4, .elementCount = 300, .indexed = false},
+             {.primitiveType = 3, .elementCount = 42, .indexed = true, .indexEndian = 1}});
     const gears::RhiSemanticFrame frame = gears::SealRhiSemanticFrame(17);
     assert(frame.frameSequence == 17);
     assert(frame.events.size() == 8);
@@ -467,6 +484,29 @@ int main()
     assert(frame.presentsMatched == 1);
     assert(frame.presentsMissing == 0);
     assert(frame.presentsMismatched == 0);
+    assert(frame.rendererInputsPresent);
+    assert(frame.rendererDraws == 2);
+    assert(frame.rendererDrawsMatched == 2);
+    assert(frame.rendererDrawsMissing == 0);
+    assert(frame.rendererDrawsMismatched == 0);
+
+    const gears::RhiRendererFrameComparison missingRenderer =
+        gears::CompareRhiRendererDraws(frame, false, {});
+    assert(missingRenderer.semanticDraws == 2);
+    assert(missingRenderer.missing == 2);
+    const gears::RhiRendererFrameComparison wrongRenderer = gears::CompareRhiRendererDraws(
+        frame, true,
+        {{.primitiveType = 4, .elementCount = 299, .indexed = false},
+         {.primitiveType = 3, .elementCount = 42, .indexed = true, .indexEndian = 1}});
+    assert(wrongRenderer.matched == 1);
+    assert(wrongRenderer.mismatched == 1);
+
+    gears::FrameDrawItem bridgeDraw{.primType = 4, .indexCount = 300, .indexed = false};
+    gears::ObserveRhiRendererFrameInputs(18, std::vector<gears::FrameDrawItem>{bridgeDraw});
+    const gears::RhiSemanticFrame bridgeFrame = gears::SealRhiSemanticFrame(18);
+    assert(bridgeFrame.rendererInputsPresent);
+    assert(bridgeFrame.rendererDraws == 1);
+    assert(bridgeFrame.rendererDrawsMissing == 1);
 
     return 0;
 }

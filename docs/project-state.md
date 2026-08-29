@@ -54,9 +54,11 @@ reset-owner evidence.
 Gap: The construction contracts at `0x8222EA18` and `0x8222EB78` are statically grounded but had
 zero calls in the current headless walk through frame 1440; release-to-zero destruction is also not
 covered live. The registry is unit-tested but has no live construction input and does not allocate
-API resources. The separate bound-vertex draw entry lacks dynamic coverage, and the complete stream
-is not yet compared with renderer inputs and pixels. The resolve observer's false negative on a retained
-command-buffer allocation transition is fixed with a bounded lower-pointer retry, and a headless walk
+API resources. The separate bound-vertex draw entry lacks dynamic coverage. The stream now compares
+ordered semantic draw shape with the accepted compatibility-renderer draw list, including primitive,
+count, indexed mode, index width, and bound-index endian; complete resource ranges, shader/constant/
+texture inputs, output state, and pixels are not yet compared. The resolve observer's false negative on
+a retained command-buffer allocation transition is fixed with a bounded lower-pointer retry, and a headless walk
 crossed the prior refusal region through frame 2280. The new `native_rhi.*` plan boundary accepts the
 complete ordered semantic stream on the same live path, but remains capture-only. See issues #141,
 #148, #149, and #150.

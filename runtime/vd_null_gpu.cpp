@@ -1869,8 +1869,8 @@ struct CommandProcessor
                     (frameCount > 0 ? framesRendered >= frameCount : reportCadenceElapsed);
         if (in.report && frameCount <= 0 && reportEvery > 0)
             reportedAtPresent = guestPresents / uint64_t(reportEvery);
-        // Carry guest-present identity through every frame; scan-out must not mint its own clock.
         in.sequence = long(guestPresents);
+        gears::ObserveRhiRendererFrameInputs(guestPresents, in.draws);
 
         // GEARS_DRAW_FRAME_DUMP=<path>: write this frame's whole draw stream to a
         // file that tools/frame_replay renders offline. Reaching a gameplay frame
