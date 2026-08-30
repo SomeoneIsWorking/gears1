@@ -39,9 +39,11 @@ produce the requested native engine.
 
 ## Native-pass seam
 
-`runtime/native_pass.*` retains a compatibility seam for substituting
-independently authored host modules for an observed pass. The clean tracked
-roster now contains one implementation for the full-screen scene composite;
+`runtime/native_pass.*` retains the title-neutral compatibility seam for
+substituting independently authored host modules for an observed pass. It owns
+enablement, lookup refusal, and reporting but no shader identities. The linked
+Gears 1 adapter at `runtime/titles/gears1/native_pass.cpp` supplies the exact
+roster, which contains one implementation for the full-screen scene composite;
 enabling `GEARS_NATIVE_PASSES=1` substitutes its observed vertex and pixel
 shader hashes. Both stages supply their descriptor, constant, vertex-fetch, and
 interpolator contracts directly, so this native arm does not invoke the

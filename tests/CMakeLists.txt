@@ -31,12 +31,15 @@ target_include_directories(test_rhi_resource_reference PRIVATE
     ../runtime/titles/gears1)
 add_test(NAME rhi_resource_reference COMMAND test_rhi_resource_reference)
 
-add_executable(test_native_pass
-    test_native_pass.cpp
+add_executable(test_gears1_native_pass
+    test_gears1_native_pass.cpp
     ../runtime/native_pass.cpp)
-target_include_directories(test_native_pass PRIVATE ../runtime)
-target_link_libraries(test_native_pass PRIVATE lucent::lucent)
-add_test(NAME native_pass COMMAND test_native_pass)
+target_include_directories(test_gears1_native_pass PRIVATE ../runtime)
+target_link_libraries(test_gears1_native_pass PRIVATE gears1_native_pass lucent::lucent)
+add_test(NAME gears1_native_pass_disabled COMMAND test_gears1_native_pass)
+add_test(NAME gears1_native_pass_enabled COMMAND test_gears1_native_pass)
+set_tests_properties(gears1_native_pass_enabled PROPERTIES
+    ENVIRONMENT "GEARS_NATIVE_PASSES=1")
 
 add_executable(test_gpu_ticket_wait
     test_gpu_ticket_wait.cpp
@@ -245,12 +248,12 @@ add_test(NAME gpu_draw_options COMMAND test_gpu_draw_options)
 
 add_executable(test_gpu_draw_indices test_gpu_draw_indices.cpp)
 target_include_directories(test_gpu_draw_indices PRIVATE ../runtime)
-target_link_libraries(test_gpu_draw_indices PRIVATE gears_draw lucent::lucent)
+target_link_libraries(test_gpu_draw_indices PRIVATE gears1_draw lucent::lucent)
 add_test(NAME gpu_draw_indices COMMAND test_gpu_draw_indices)
 
 add_executable(test_gpu_draw_untile test_gpu_draw_untile.cpp)
 target_include_directories(test_gpu_draw_untile PRIVATE ../runtime)
-target_link_libraries(test_gpu_draw_untile PRIVATE gears_draw lucent::lucent)
+target_link_libraries(test_gpu_draw_untile PRIVATE gears1_draw lucent::lucent)
 add_test(NAME gpu_draw_untile COMMAND test_gpu_draw_untile)
 
 add_executable(test_title_profile test_title_profile.cpp)
@@ -525,7 +528,7 @@ add_test(NAME gpu_extent_capacity COMMAND test_gpu_extent_capacity)
 
 add_executable(test_gpu_surface_format_capacity test_gpu_surface_format_capacity.cpp)
 target_include_directories(test_gpu_surface_format_capacity PRIVATE ../runtime)
-target_link_libraries(test_gpu_surface_format_capacity PRIVATE gears_draw lucent::lucent)
+target_link_libraries(test_gpu_surface_format_capacity PRIVATE gears1_draw lucent::lucent)
 add_test(NAME gpu_surface_format_capacity COMMAND test_gpu_surface_format_capacity)
 
 add_executable(test_gpu_draw_sample_layout test_gpu_draw_sample_layout.cpp)
@@ -554,7 +557,7 @@ target_link_libraries(test_guest_texture_hash PRIVATE gears_guest_texture_hash)
 add_test(NAME guest_texture_hash COMMAND test_guest_texture_hash)
 
 add_executable(test_guest_dirty_pages test_guest_dirty_pages.cpp)
-target_link_libraries(test_guest_dirty_pages PRIVATE gears_draw lucent::lucent)
+target_link_libraries(test_guest_dirty_pages PRIVATE gears1_draw lucent::lucent)
 add_test(NAME guest_dirty_pages COMMAND test_guest_dirty_pages)
 
 add_executable(test_gpu_resolve_extent
@@ -575,7 +578,7 @@ if(TARGET gears_draw_xlate)
 
     add_executable(test_gpu_draw_native_input test_gpu_draw_native_input.cpp)
     target_include_directories(test_gpu_draw_native_input PRIVATE ../runtime)
-    target_link_libraries(test_gpu_draw_native_input PRIVATE gears_draw lucent::lucent)
+    target_link_libraries(test_gpu_draw_native_input PRIVATE gears1_draw lucent::lucent)
     add_test(NAME gpu_draw_native_input COMMAND test_gpu_draw_native_input)
 endif()
 
