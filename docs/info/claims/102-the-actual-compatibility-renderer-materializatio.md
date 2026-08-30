@@ -6,7 +6,7 @@ created: 2026-08-30
 tags: native-rhi
 depends: runtime/rhi_renderer_input.cpp#CompareRhiRendererDraws, runtime/gpu_draw.cpp#Renderer::RenderFrameImpl
 reconfirmed: 2026-08-30
-verified_at: 2026-08-30 03:11:38
+verified_at: 2026-08-30 03:15:07
 ---
 
 ## Claim
@@ -23,4 +23,4 @@ a current exact-revision headless run reports a semantic value mismatch, unkeyed
 
 ## Re-confirmed 2026-08-30
 
-2026-08-30 final Clang headless run after callback ownership and guard extraction reached frame 60 with 58 semantic matches, zero missing, zero value mismatches, zero unkeyed inputs, zero duplicates, and 26 explicitly unmatched renderer packet groups; the earlier current-tree run reached frame 300 with the recorded 293/1/0 result
+Final-tree Clang build, 90-test CTest suite, clang-format/clang-tidy gate, focused renderer-input negative controls, and headless GEARS_NATIVE_RHI_OBSERVE run reached frame 60 with 58 matches, zero missing/value mismatches/unkeyed inputs/duplicates, and 26 explicitly unmatched renderer packet groups; the same committed tree previously reached frame 300 with 293 matches, one explicit dropped-frame missing result, 30 unmatched renderer packet groups, and zero value mismatches.

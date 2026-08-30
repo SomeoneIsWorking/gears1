@@ -5,6 +5,8 @@ status: holds
 created: 2026-08-30
 tags:
 depends: runtime/gpu_draw_native_input.cpp#BuildNativeDrawInput, runtime/gpu_draw.cpp#Renderer::RenderFrameImpl
+reconfirmed: 2026-08-30
+verified_at: 2026-08-30 03:15:07
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ A Clang-configured build compiled gpu_draw_native_input.cpp; test_gpu_draw_nativ
 ## What would falsify it
 
 The focused boundary test fails, RenderFrameImpl rereads the extracted fields, or a same-input compatibility comparison demonstrates changed renderer behavior.
+
+## Re-confirmed 2026-08-30
+
+Final-tree Clang build, test_gpu_draw_native_input one-shot terminal materialization/refusal controls, all 90 non-cpp_quality CTests, standalone clang-format/clang-tidy, and a frame-60 headless run passed after terminal renderer observation was added around the same NativeDrawInput boundary.
