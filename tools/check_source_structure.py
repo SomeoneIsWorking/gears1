@@ -11,7 +11,6 @@ DEFAULT_MAX_LINES = 1000
 LEGACY_LIMITS = {
     "runtime/gpu_draw.cpp": 3708,
     "runtime/vd_null_gpu.cpp": 3349,
-    "runtime/guest_probes.cpp": 2179,
     "runtime/gpu_draw_probe.cpp": 1507,
     "runtime/gpu_draw_xlate.cpp": 1438,
     "runtime/gpu_present.cpp": 1371,

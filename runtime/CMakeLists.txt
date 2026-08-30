@@ -242,7 +242,9 @@ add_executable(gears1
     kernel_dispatcher.cpp
     kernel_spinlock.cpp
     audio_out.cpp
-    guest_probes.cpp
+    titles/gears1/guest_probe_core.cpp
+    titles/gears1/guest_probe_runtime.cpp
+    titles/gears1/guest_probe_loader.cpp
     guest_backtrace.cpp
     fault_report.cpp
     file_disposition.cpp
