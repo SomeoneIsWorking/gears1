@@ -4,9 +4,9 @@ kind: claim
 status: holds
 created: 2026-08-30
 tags: native-rhi
-depends: runtime/rhi_renderer_input.cpp#CompareRhiRendererDraws, runtime/titles/gears1/rhi_bindings.cpp
+depends: runtime/rhi_renderer_input.cpp#CompareRhiRendererDraws, runtime/titles/gears1/rhi_bindings.cpp#sub_8222CFF8, runtime/titles/gears1/rhi_bindings.cpp#sub_8222D4F8, runtime/titles/gears1/rhi_bindings.cpp#sub_8222DA48, runtime/titles/gears1/rhi_bindings.cpp#sub_8222DE50
 reconfirmed: 2026-08-30
-verified_at: 2026-08-30 03:59:06
+verified_at: 2026-08-30 05:10:14
 ---
 
 ## Claim
@@ -24,3 +24,7 @@ any unmatched packet group is attributed outside 0x8222B678 or the 0x8222BC18 cl
 ## Re-confirmed 2026-08-30
 
 Committed tree 1eb0f94 carries the exact-revision writer census result, terminal ring/indirect provenance, ambiguity controls, and issue #141 evidence for the 24 startup plus six internal-clear decomposition.
+
+## Re-confirmed 2026-08-30
+
+Committed c19182d frame-540 cadence report still shows exactly 30 cumulative unmatched groups: six materialized and 24 refused, all indirect, with no mixed outcome or source conflict; the exact writer ownership recorded in issue 141 is unchanged.

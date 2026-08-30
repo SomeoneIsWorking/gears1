@@ -4,7 +4,9 @@ kind: claim
 status: holds
 created: 2026-08-27
 tags: native-rhi,index-buffer
-depends: runtime/titles/gears1/rhi_index_buffer.cpp#DecodeIndexBufferView, runtime/titles/gears1/rhi_bindings.cpp#CaptureIndexBufferView, runtime/titles/gears1/rhi_bindings.cpp#sub_8222DE50, runtime/rhi_semantic_stream.cpp#CompareRhiDrawPacket
+depends: runtime/titles/gears1/rhi_bindings.cpp#CaptureIndexBufferView, runtime/rhi_semantic_stream.cpp#CompareRhiDrawPacket
+reconfirmed: 2026-08-30
+verified_at: 2026-08-30 05:10:12
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ Focused controls reject changed DMA address, size, width, endian mode, view fiel
 ## What would falsify it
 
 Any change to the exact executable identity, index-buffer object decoder, draw-slice calculation, bound-index wrapper, or DRAW_INDX packet decoder; or any real run producing a missing/mismatched bound-index observation.
+
+## Re-confirmed 2026-08-30
+
+Committed c19182d headless frame-660 semantic report matched all 10,945 draw packets, including 1,620 bound-index draws, with zero missing or mismatched packet/view evidence; focused tests still reject altered DMA address, width, and range.

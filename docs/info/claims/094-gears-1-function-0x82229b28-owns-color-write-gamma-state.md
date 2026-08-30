@@ -4,7 +4,9 @@ kind: claim
 status: holds
 created: 2026-08-28
 tags: native-rhi,render-target,gamma,gears1
-depends: runtime/titles/gears1/color_write_gamma_state.h#ApplyNativeColorWriteGammaState, runtime/titles/gears1/color_write_gamma_override.cpp#sub_82229B28, runtime/titles/gears1/rhi_target_descriptor_watch.cpp
+depends: runtime/titles/gears1/color_write_gamma_state.h#ApplyNativeColorWriteGammaState, runtime/titles/gears1/color_write_gamma_override.cpp#sub_82229B28, runtime/titles/gears1/rhi_target_descriptor_watch.cpp#MaybeArmRhiTargetDescriptorWriteWatch
+reconfirmed: 2026-08-30
+verified_at: 2026-08-30 05:10:13
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ The binder-paused guest write watch attributed the previously unexplained `0x302
 ## What would falsify it
 
 Falsified if an audited input produces a different retained write set, if another guest entry mutates the same format nibble outside a target bind, or if a supported format transition does not follow the recovered pair mapping.
+
+## Re-confirmed 2026-08-30
+
+Committed c19182d retains and super-calls 0x82229B28 while observing its post-call slot-zero descriptor state; the frame-660 headless run matched all 15,306 color-write transitions with zero missing active targets or mismatches, and focused transition controls remain green.

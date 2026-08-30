@@ -6,7 +6,7 @@ created: 2026-08-30
 tags:
 depends: runtime/gpu_draw_native_input.cpp#BuildNativeDrawInput, runtime/gpu_draw.cpp#Renderer::RenderFrameImpl
 reconfirmed: 2026-08-30
-verified_at: 2026-08-30 03:59:06
+verified_at: 2026-08-30 05:10:13
 ---
 
 ## Claim
@@ -28,3 +28,7 @@ Final-tree Clang build, test_gpu_draw_native_input one-shot terminal materializa
 ## Re-confirmed 2026-08-30
 
 Committed Clang source tree 1eb0f94 retained the single NativeDrawInput extraction boundary; the full build, 90 non-cpp_quality tests, repository-wide clang-format/clang-tidy gate, and focused terminal-provenance controls passed.
+
+## Re-confirmed 2026-08-30
+
+Committed c19182d keeps BuildNativeDrawInput as the single compatibility decode boundary, now sharing only the title-neutral target decoder; the final gpu_draw_native_input test and frame-660 terminal run passed with 10,945 correlated matches and zero value mismatches.

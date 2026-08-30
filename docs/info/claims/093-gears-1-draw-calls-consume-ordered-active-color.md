@@ -4,7 +4,9 @@ kind: claim
 status: holds
 created: 2026-08-28
 tags: native-rhi,render-target,gears1
-depends: runtime/rhi_semantic_state.cpp#RhiSemanticStateTracker, runtime/titles/gears1/rhi_bindings.cpp#CaptureBoundRenderTargets, runtime/rhi_semantic_stream.cpp#CompareRhiDrawRenderTargetState, runtime/titles/gears1/color_write_gamma_state.h#ApplyNativeColorWriteGammaState
+depends: runtime/rhi_semantic_state.cpp#RhiSemanticStateTracker, runtime/titles/gears1/rhi_bindings.cpp#CaptureBoundRenderTargets, runtime/titles/gears1/color_write_gamma_state.h#ApplyNativeColorWriteGammaState
+reconfirmed: 2026-08-30
+verified_at: 2026-08-30 05:10:13
 ---
 
 ## Claim
@@ -18,3 +20,7 @@ The semantic state tracker applied 0x8222B068 color and 0x8222B398 depth binding
 ## What would falsify it
 
 Falsified if a target object changes at draw time without the corresponding binder event, ordered object snapshots diverge from the device slots, or another writer changes target identity outside the binder.
+
+## Re-confirmed 2026-08-30
+
+Committed c19182d headless frame-660 report matched all 10,945 target-bearing draw snapshots, 2,854 color-target binds, 1,566 depth-target binds, and 15,306 ordered post-bind color-write transitions with zero semantic or terminal value mismatches.
