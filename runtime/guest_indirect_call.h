@@ -2,14 +2,13 @@
 //
 // The recompiler's default is a raw table index with no validation, so a guest
 // address that is not a function entry reads a host function pointer out of
-// whatever lies at that table offset and calls it. The #45 fault is exactly
-// that: SIGSEGV at a host address two gigabytes below the guest mapping, from
-// inside recompiled code, with nothing to say which guest pointer was bad.
+// whatever lies at that table offset and calls it. A guest bad branch then
+// becomes a host-memory jump with nothing to say which guest pointer was bad.
 //
 // The console gave this for free -- a branch to a bad address takes an exception
 // at a known guest address, and the bad address is right there in the report.
 // This restores it, and it is the difference between "the process died in host
-// memory" and "the title called through 0x41dec690, which is not code".
+// memory" and "the title called through a non-code guest address".
 //
 // Two things matter about the shape:
 //
@@ -26,11 +25,11 @@
 
 // Claim the hook BEFORE ppc_context.h is parsed. That header leaves
 // PPC_CALL_INDIRECT_FUNC #ifndef-guarded precisely so a runtime can take it
-// over, and a macro body is not evaluated where it is defined -- so naming
-// gears::CallGuestIndirect here, above its own declaration, is fine and keeps
-// the whole mechanism in one file instead of split between here and CMake.
-#define PPC_CALL_INDIRECT_FUNC(x) \
-    gears::CallGuestIndirect(ctx, base, uint32_t(x))
+// over, and a macro body is not evaluated where it is defined. Exact title
+// wrappers may claim it first and delegate to the shared call below.
+#ifndef PPC_CALL_INDIRECT_FUNC
+#define PPC_CALL_INDIRECT_FUNC(x) gears::CallGuestIndirect(ctx, base, uint32_t(x))
+#endif
 
 #include "ppc_context.h"
 
@@ -48,41 +47,37 @@ inline bool IsValidGuestCallTarget(uint32_t target)
     return (target & 3u) == 0;
 }
 
-// Reports the bad call with its guest address and the guest stack that made it,
-// then stops the process. Out of line and cold: nothing on the fast path.
-[[noreturn]] void ReportBadIndirectCall(uint32_t target, PPCContext& ctx,
-                                        uint8_t* base);
+// Each exact-title adapter provides this final failure entry point. It may add
+// revision-specific context before delegating to the generic reporter below.
+// Out of line and cold: nothing on the fast path.
+[[noreturn]] void ReportBadIndirectCall(uint32_t target, PPCContext &ctx, uint8_t *base);
+
+using GuestIndirectCallContextReporter = void (*)(uint32_t target, PPCContext &ctx, uint8_t *base);
+
+inline void DispatchGuestIndirectCallContext(GuestIndirectCallContextReporter reporter,
+                                             uint32_t target, PPCContext &ctx, uint8_t *base)
+{
+    if (reporter != nullptr)
+        reporter(target, ctx, base);
+}
+
+// Owns the shared invalid-call report and abort contract. The callback is the
+// only title-policy seam and runs after the generic registers/backtrace, before
+// the generic object/vtable dump. It may be null for a title with no extension.
+[[noreturn]] void
+ReportGuestIndirectCallFailure(uint32_t target, PPCContext &ctx, uint8_t *base,
+                               GuestIndirectCallContextReporter reportTitleContext);
 
 // Replaces PPC_CALL_INDIRECT_FUNC. Defined for the recompiled sources through a
 // compile definition and a forced include, so the generated code does not have
 // to be touched -- it is regenerated from the image and any edit to it would be
 // lost.
-// #50's call site. sub_823ED7E0 loads an object from an indexed table and calls
-// slot 51 of its vtable; on roughly one run in ten the value it dereferences is a
-// FLOAT (0.84022, 0.10000066), so the pointer chain is landing in rotation and
-// translation data.
-//
-// This records the object and its first word into the fault-context slot, so the
-// numbers survive BOTH ways the crash lands -- an abort from the check below, where
-// registers are reachable, and a SIGSEGV, where they are not. Two of the three
-// occurrences so far were segfaults, and only the abort was ever readable.
-//
-// It is one compare against a constant on all 29,190 sites, and it is debt: an
-// earlier probe of exactly this shape was removed for that cost. It comes out
-// again once it has answered, and issue #50 records it so it is not forgotten.
-void NoteStreamingObject(PPCContext& ctx, uint8_t* base);
-constexpr uint32_t kStreamingCallReturn = 0x823EDB50;
-
-inline void CallGuestIndirect(PPCContext& ctx, uint8_t* base, uint32_t target)
+inline void CallGuestIndirect(PPCContext &ctx, uint8_t *base, uint32_t target)
 {
-    if (uint32_t(ctx.lr) == kStreamingCallReturn) [[unlikely]]
-        NoteStreamingObject(ctx, base);
-
-
     if (!IsValidGuestCallTarget(target)) [[unlikely]]
         ReportBadIndirectCall(target, ctx, base);
 
-    PPCFunc* const function = PPC_LOOKUP_FUNC(base, target);
+    PPCFunc *const function = PPC_LOOKUP_FUNC(base, target);
 
     // A null entry means the address is in range and four-byte aligned but is
     // not a function the recompiler found -- the middle of a function, or data
