@@ -47,6 +47,12 @@ add_executable(test_hle_d3d
 target_include_directories(test_hle_d3d PRIVATE ../runtime)
 add_test(NAME hle_d3d COMMAND test_hle_d3d)
 
+add_executable(test_gpu_diagnostics_profile
+    test_gpu_diagnostics_profile.cpp
+    ../runtime/titles/gears1/gpu_diagnostics_profile.cpp)
+target_include_directories(test_gpu_diagnostics_profile PRIVATE ../runtime)
+add_test(NAME gpu_diagnostics_profile COMMAND test_gpu_diagnostics_profile)
+
 add_executable(test_gpu_ticket_wait
     test_gpu_ticket_wait.cpp
     ../runtime/gpu_ticket_wait.cpp)

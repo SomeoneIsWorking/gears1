@@ -8,7 +8,7 @@ created: 2026-07-23
 updated: 2026-07-23
 ---
 
-Captured a representative hot-pair (vs_5363d074/ps_501ac5d8) DRAW_INDX on a real headless run (runtime/vd_null_gpu.cpp CaptureHotDraw, GEARS_DRAW_CAPTURE=1; report scratch/draw-params/hot_draw.txt). Packet layout decoded per Xenia pm4_command_processor_implement.h (ExecutePacketType3_DRAW_INDX -> viz token then ExecutePacketType3Draw) + registers.h VGT_DRAW_INITIATOR (prim_type[0:5], source_select[6:7], index_size[11], num_indices[16:31]) + VGT_DMA_SIZE (num_words[0:23], swap_mode[30:31]).
+Captured a representative hot-pair (vs_5363d074/ps_501ac5d8) DRAW_INDX on a real headless run (runtime/vd_null_gpu.cpp CaptureRepresentativeDraw, GEARS_DRAW_CAPTURE=1; report scratch/draw-params/hot_draw.txt). Packet layout decoded per Xenia pm4_command_processor_implement.h (ExecutePacketType3_DRAW_INDX -> viz token then ExecutePacketType3Draw) + registers.h VGT_DRAW_INITIATOR (prim_type[0:5], source_select[6:7], index_size[11], num_indices[16:31]) + VGT_DMA_SIZE (num_words[0:23], swap_mode[30:31]).
 
 CAPTURED: VGT_DRAW_INITIATOR=0x00060804 -> prim_type=triangle_list(0x4), source_select=kDMA/indexed(0), index_size=int32(1), num_indices=6. VGT_DMA_BASE=0x978d0, VGT_DMA_SIZE=0x8000000c (num_words=12, swap_mode=2/k8in32). Index buffer guest_base 0x978d0, 6x int32.
 
