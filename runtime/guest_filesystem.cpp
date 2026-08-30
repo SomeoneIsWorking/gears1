@@ -52,7 +52,7 @@ void FileSystem::SetGameDirectory(const std::filesystem::path &directory)
 bool FileSystem::SetSaveNamespace(std::string_view saveNamespace)
 {
     std::lock_guard<std::mutex> guard(mutex_);
-    if (!saveDirectory_.empty() || saveNamespace.empty())
+    if (!saveDirectory_.empty() || !saveNamespace_.empty() || saveNamespace.empty())
     {
         lucent::error("fs", "cannot activate save namespace '{}'", saveNamespace);
         return false;
@@ -67,6 +67,12 @@ const std::filesystem::path &FileSystem::SaveDirectory() const
     std::lock_guard<std::mutex> guard(mutex_);
     if (!saveDirectory_.empty())
         return saveDirectory_;
+
+    if (saveNamespace_.empty())
+    {
+        lucent::error("fs", "save directory requested before a title namespace was activated");
+        return saveDirectory_;
+    }
 
     if (const std::string &configured = lucent::config::text("SAVE_DIR"); !configured.empty())
     {

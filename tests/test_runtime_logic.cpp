@@ -26,14 +26,14 @@
 // The runtime's guest_memory.cpp references the generated function-mapping
 // table. These tests exercise none of it, so an empty table stands in rather
 // than linking 176 MB of translated game code into a unit test.
-PPCFuncMapping PPCFuncMappings[] = { { 0, nullptr } };
+PPCFuncMapping PPCFuncMappings[] = {{0, nullptr}};
 
 namespace
 {
 
 int g_failures = 0;
 
-void Check(bool ok, const char* what)
+void Check(bool ok, const char *what)
 {
     if (!ok)
     {
@@ -129,10 +129,12 @@ void TestCrossThreadWake()
     KernelObject e(KernelObject::Kind::SynchronizationEvent, false);
     std::atomic<bool> woke{false};
 
-    std::thread waiter([&] {
-        if (e.Wait(-1))
-            woke = true;
-    });
+    std::thread waiter(
+        [&]
+        {
+            if (e.Wait(-1))
+                woke = true;
+        });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     Check(!woke.load(), "cross-thread: waiter must still be blocked before Set");
@@ -154,9 +156,9 @@ void TestTimeoutUnits()
 
     Check(!ok, "timeout: must report failure");
     Check(elapsed >= std::chrono::milliseconds(15),
-        "timeout: must actually wait ~20ms, not return immediately");
+          "timeout: must actually wait ~20ms, not return immediately");
     Check(elapsed < std::chrono::seconds(2),
-        "timeout: must not wait far longer than asked (unit error)");
+          "timeout: must not wait far longer than asked (unit error)");
 }
 
 // Path translation. The console's file systems are case-insensitive and titles
@@ -165,16 +167,22 @@ void TestPathResolution()
 {
     gears::FileSystem fs;
     Check(!fs.HasGameDirectory(), "filesystem: starts with no game directory");
+    Check(fs.SaveDirectory().empty(),
+          "filesystem: no title-neutral fallback save namespace is invented");
+    Check(fs.SetSaveNamespace("fixture-title"),
+          "filesystem: an exact title namespace activates once");
+    Check(!fs.SetSaveNamespace("replacement-title"),
+          "filesystem: an active title namespace cannot be replaced");
 
     // Resolve must fail cleanly rather than crash when unconfigured.
     Check(fs.Resolve("\\Device\\Cdrom0\\WarGame\\x.dat").empty(),
-        "filesystem: unconfigured resolve returns empty");
+          "filesystem: unconfigured resolve returns empty");
 
     fs.SetGameDirectory("/nonexistent-gears-test-dir");
     Check(fs.Resolve("\\SomeUnmappedDevice\\x.dat").empty(),
-        "filesystem: unmapped device returns empty");
+          "filesystem: unmapped device returns empty");
     Check(fs.Resolve("\\Device\\Cdrom0\\nope.dat").empty(),
-        "filesystem: missing file returns empty");
+          "filesystem: missing file returns empty");
 }
 
 // Guest heap. The allocator has to RECYCLE freed address space: a bump
@@ -241,7 +249,7 @@ void TestHeapReuse()
     uint32_t aligned = 0x1000;
     const uint32_t alignedAddr = heap.Allocate(0, aligned, gears::kMemCommit, 0x10000);
     Check(alignedAddr != 0 && (alignedAddr & 0xFFFF) == 0,
-        "heap: alignment is honoured when carving a free block");
+          "heap: alignment is honoured when carving a free block");
     heap.Free(head);
     heap.Free(alignedAddr);
 
@@ -258,16 +266,16 @@ void TestHeapReuse()
     // create a second bookkeeping entry -- otherwise freeing the reservation
     // leaves a stale entry that later releases space somebody else owns.
     uint32_t reserveSize = 0x40000;
-    const uint32_t reserved = heap.Allocate(0, reserveSize,
-        gears::kMemReserve | gears::kMemLargePages);
+    const uint32_t reserved =
+        heap.Allocate(0, reserveSize, gears::kMemReserve | gears::kMemLargePages);
     Check(reserved != 0, "heap: reservation succeeds");
     const uint32_t liveBefore = heap.GetUsage().regions;
     uint32_t commitSize = 0x10000;
-    const uint32_t committed = heap.Allocate(reserved + 0x10000, commitSize,
-        gears::kMemCommit | gears::kMemLargePages);
+    const uint32_t committed =
+        heap.Allocate(reserved + 0x10000, commitSize, gears::kMemCommit | gears::kMemLargePages);
     Check(committed == reserved + 0x10000, "heap: re-commit returns the requested address");
     Check(heap.GetUsage().regions == liveBefore,
-        "heap: re-commit inside a reservation adds no second region");
+          "heap: re-commit inside a reservation adds no second region");
     Check(heap.Free(reserved), "heap: the reservation frees as one region");
     Check(heap.GetUsage().allocated == 0, "heap: reservation accounting balances");
 
@@ -279,7 +287,7 @@ void TestHeapReuse()
         uint32_t s = 0x10000;
         const uint32_t first = heap.Allocate(0, s, gears::kMemCommit | gears::kMemLargePages);
         Check(first != 0, "heap: allocation for the zero-fill check succeeds");
-        uint8_t* p = memory.Base() + first;
+        uint8_t *p = memory.Base() + first;
         for (uint32_t i = 0; i < 0x10000; ++i)
             p[i] = 0xA5;
         Check(heap.Free(first), "heap: free before reuse");
@@ -305,7 +313,7 @@ void TestHeapReuse()
         uint32_t big = 0x1000;
         const uint32_t far = heap.Allocate(0, big, gears::kMemCommit, 0x10000);
         Check(low != 0 && far > low + 0x1000,
-            "heap: the aligned allocation leaves an uncommitted head fragment");
+              "heap: the aligned allocation leaves an uncommitted head fragment");
         Check(heap.Free(low) && heap.Free(far), "heap: free both sides of the fragment");
         uint32_t frag = 0x2000;
         const uint32_t inFragment = heap.Allocate(0, frag, gears::kMemCommit);
@@ -326,14 +334,15 @@ void TestHeapReuse()
     {
         uint32_t s1 = 0x10000, s2 = 0x10000;
         const uint32_t lo = heap.Allocate(0, s1, gears::kMemCommit | gears::kMemLargePages);
-        const uint32_t hi = heap.Allocate(lo + 0x10000, s2, gears::kMemCommit | gears::kMemLargePages);
+        const uint32_t hi =
+            heap.Allocate(lo + 0x10000, s2, gears::kMemCommit | gears::kMemLargePages);
         Check(lo != 0 && hi == lo + 0x10000, "heap: two adjacent commits land adjacently");
         const uint32_t before = heap.GetUsage().regions;
         uint32_t wide = 0x20000;
         const uint32_t fused = heap.Allocate(lo, wide, gears::kMemCommit | gears::kMemLargePages);
         Check(fused == lo, "heap: the widening commit returns its base");
         Check(heap.GetUsage().regions == before - 1,
-            "heap: the widening commit absorbs the neighbour instead of overlapping it");
+              "heap: the widening commit absorbs the neighbour instead of overlapping it");
         Check(heap.Free(lo), "heap: the fused region frees as one");
         Check(heap.GetUsage().allocated == 0, "heap: fused-region accounting balances");
     }
@@ -341,7 +350,7 @@ void TestHeapReuse()
     // Exhaustion must still be reported rather than wrapping or overlapping.
     uint32_t huge = 0x00200000;
     Check(heap.Allocate(0, huge, gears::kMemCommit | gears::kMemLargePages) == 0,
-        "heap: an allocation larger than the heap fails");
+          "heap: an allocation larger than the heap fails");
 
     memory.Release();
 }
@@ -363,8 +372,8 @@ void TestHeapRouting()
     Check(memory.Reserve(), "routing: guest memory reserves");
     gears::InitialiseHeaps(memory);
 
-    gears::GuestHeap& title = gears::TitleHeap();
-    gears::GuestHeap& physical = gears::PhysicalHeap();
+    gears::GuestHeap &title = gears::TitleHeap();
+    gears::GuestHeap &physical = gears::PhysicalHeap();
     Check(title.Base() == 0x40000000, "routing: the title heap is the 0x40000000 window");
     Check(physical.Base() == 0xA0000000, "routing: the physical heap is the 0xA0000000 window");
 
@@ -378,31 +387,32 @@ void TestHeapRouting()
     Check(!physical.Contains(0), "routing: 0 is not in the physical heap");
 
     Check(gears::HeapForAddress(0x40000000) == &title,
-        "routing: the first byte of the title window routes to the title heap");
+          "routing: the first byte of the title window routes to the title heap");
     Check(gears::HeapForAddress(0x5FFFFFFF) == &title,
-        "routing: the last byte of the title window routes to the title heap");
+          "routing: the last byte of the title window routes to the title heap");
     Check(gears::HeapForAddress(0x60000000) == nullptr,
-        "routing: one byte past the title window belongs to no heap");
+          "routing: one byte past the title window belongs to no heap");
 
     Check(gears::HeapForAddress(0xA0000000) == &physical,
-        "routing: the first byte of the physical window routes to the physical heap");
+          "routing: the first byte of the physical window routes to the physical heap");
     Check(gears::HeapForAddress(0xBFFFFFFF) == &physical,
-        "routing: the last byte of the physical window routes to the physical heap");
+          "routing: the last byte of the physical window routes to the physical heap");
     Check(gears::HeapForAddress(0xC0000000) == nullptr,
-        "routing: one byte past the physical window belongs to no heap");
+          "routing: one byte past the physical window belongs to no heap");
 
     // The image, the stack and the import variables live below the title heap
     // and are not the allocator's to release.
     Check(gears::HeapForAddress(0x82000000) == nullptr,
-        "routing: the loaded image belongs to no heap");
+          "routing: the loaded image belongs to no heap");
 
     // An address really handed out by one heap must not resolve to the other,
     // which is the case that produced frees reported as unknown.
     uint32_t size = 0x10000;
-    const uint32_t gpuBuffer = physical.Allocate(0, size, gears::kMemCommit | gears::kMemLargePages);
+    const uint32_t gpuBuffer =
+        physical.Allocate(0, size, gears::kMemCommit | gears::kMemLargePages);
     Check(gpuBuffer != 0, "routing: a physical allocation succeeds");
     Check(gears::HeapForAddress(gpuBuffer) == &physical,
-        "routing: a physical allocation routes back to the physical heap");
+          "routing: a physical allocation routes back to the physical heap");
     Check(!title.Contains(gpuBuffer), "routing: a physical allocation is not in the title heap");
     Check(physical.Free(gpuBuffer), "routing: the physical allocation frees from its own heap");
 
@@ -435,29 +445,29 @@ void TestProcessorNumberFromMask()
     // a conversion that answered 0 here would silently pin every such thread to
     // hardware thread 0.
     Check(gears::ProcessorNumberFromMask(0x00) == gears::kProcessorInherit,
-        "affinity: an empty mask means inherit, not processor 0");
+          "affinity: an empty mask means inherit, not processor 0");
 
     // Bits above the console's six name no hardware thread that exists. The
     // previous conversion reduced them modulo six -- 0x40 became processor 0,
     // 0x100 became processor 2 -- which invents a processor the title never
     // asked for, and per-CPU tables then disagree without saying so.
     Check(gears::ProcessorNumberFromMask(0x40) == gears::kProcessorNone,
-        "affinity: mask 0x40 names no hardware thread of the six");
+          "affinity: mask 0x40 names no hardware thread of the six");
     Check(gears::ProcessorNumberFromMask(0x80) == gears::kProcessorNone,
-        "affinity: mask 0x80 names no hardware thread of the six");
+          "affinity: mask 0x80 names no hardware thread of the six");
     Check(gears::ProcessorNumberFromMask(0x100) == gears::kProcessorNone,
-        "affinity: mask 0x100 names no hardware thread of the six");
+          "affinity: mask 0x100 names no hardware thread of the six");
     Check(gears::ProcessorNumberFromMask(0xFFFFFFC0) == gears::kProcessorNone,
-        "affinity: a mask entirely outside the six names no hardware thread");
+          "affinity: a mask entirely outside the six names no hardware thread");
 
     // The two sentinels have to be distinguishable from each other and from
     // every legal processor, because the callers do different things with them:
     // inherit resolves to the creator's processor, no-processor leaves the
     // thread where it was.
     Check(gears::kProcessorInherit != gears::kProcessorNone,
-        "affinity: inherit and no-processor are distinct answers");
+          "affinity: inherit and no-processor are distinct answers");
     Check(gears::kProcessorInherit >= 6 && gears::kProcessorNone >= 6,
-        "affinity: neither sentinel can be mistaken for a processor");
+          "affinity: neither sentinel can be mistaken for a processor");
 
     // A mask naming several processors resolves to the HIGHEST named one. That
     // is the console's rule, not a choice made here, and it comes from two
@@ -471,11 +481,11 @@ void TestProcessorNumberFromMask()
     // invisible wrong table that satisfies every lookup is the failure mode
     // this project keeps hitting.
     Check(gears::ProcessorNumberFromMask(0x30) == 5,
-        "affinity: a multi-processor mask answers with the HIGHEST it names");
+          "affinity: a multi-processor mask answers with the HIGHEST it names");
     // 0x144 names bits 8, 6 and 2; only bit 2 is a processor this console has,
     // and the bits above it must be dropped rather than folded back into range.
     Check(gears::ProcessorNumberFromMask(0x144) == 2,
-        "affinity: bits outside the six are ignored, not folded back in");
+          "affinity: bits outside the six are ignored, not folded back in");
 }
 
 // A lookup out of a handle table must hand back OWNERSHIP, not a borrowed
@@ -503,14 +513,14 @@ void TestHandleLookupOwnsItsResult()
     // returns; this does not.
     static_assert(std::is_same_v<decltype(gears::Handles().Lookup(uint32_t(0))),
                                  std::shared_ptr<gears::KernelObject>>,
-        "HandleTable::Lookup must return an owning shared_ptr: a raw pointer is"
-        " valid only until the next close on any thread");
+                  "HandleTable::Lookup must return an owning shared_ptr: a raw pointer is"
+                  " valid only until the next close on any thread");
     static_assert(std::is_same_v<decltype(gears::LookupByGuestAddress(uint32_t(0))),
                                  std::shared_ptr<gears::KernelObject>>,
-        "LookupByGuestAddress must return an owning shared_ptr for the same reason");
+                  "LookupByGuestAddress must return an owning shared_ptr for the same reason");
 
-    auto object = std::make_shared<gears::KernelObject>(
-        gears::KernelObject::Kind::NotificationEvent, false);
+    auto object =
+        std::make_shared<gears::KernelObject>(gears::KernelObject::Kind::NotificationEvent, false);
     std::weak_ptr<gears::KernelObject> observer = object;
     const uint32_t handle = gears::Handles().Insert(object);
     object.reset(); // the table is now the only owner, as it is in the runtime
@@ -524,23 +534,22 @@ void TestHandleLookupOwnsItsResult()
     // ...and, in between, another thread closes it. This is the exact race.
     Check(gears::Handles().Close(handle), "handle lifetime: close reports it removed one");
     Check(gears::Handles().Lookup(handle) == nullptr,
-        "handle lifetime: a closed handle must be unfindable IMMEDIATELY --"
-        " keeping the caller alive must not keep the handle usable");
+          "handle lifetime: a closed handle must be unfindable IMMEDIATELY --"
+          " keeping the caller alive must not keep the handle usable");
 
     // The held reference must still be a live object. With a raw pointer this
     // is a use-after-free: the Set() below writes through freed memory, and
     // whether it crashes depends on what the allocator has since put there,
     // which is why the file-table version surfaced as an unrelated crash.
     Check(!observer.expired(),
-        "handle lifetime: an object a caller is still holding must OUTLIVE the close");
+          "handle lifetime: an object a caller is still holding must OUTLIVE the close");
     held->Set();
-    Check(held->Wait(0),
-        "handle lifetime: the held object is still functional after the close");
+    Check(held->Wait(0), "handle lifetime: the held object is still functional after the close");
 
     // And it goes away when the last holder does, not before and not never.
     held.reset();
     Check(observer.expired(),
-        "handle lifetime: the object is destroyed once the last holder drops it");
+          "handle lifetime: the object is destroyed once the last holder drops it");
 }
 
 } // namespace

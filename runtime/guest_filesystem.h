@@ -58,7 +58,7 @@ class FileSystem
     mutable std::mutex mutex_;
     std::filesystem::path gameDirectory_;
     mutable std::filesystem::path saveDirectory_;
-    std::string saveNamespace_ = "gears1";
+    std::string saveNamespace_;
     std::map<std::string, std::filesystem::path, std::less<>> mounts_;
 };
 

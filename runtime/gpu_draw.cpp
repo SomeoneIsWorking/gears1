@@ -14,6 +14,7 @@
 #include "frame_probe_capture.h"
 #include "gpu_device_features.h"
 #include "guest_texture_hash.h"
+#include "host_product_identity.h"
 #include "native_pass.h"
 #include "spirv_clamp.h"
 #include "gpu_shared_device.h"
@@ -21,7 +22,6 @@
 #include "gpu_queue_access.h"
 #include <lucent/config.h>
 #include <lucent/log.h>
-
 #ifdef GEARS_HAVE_GUEST_DRAW
 
 #include <algorithm>
@@ -175,7 +175,7 @@ bool Renderer::Init()
     }
 
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    app.pApplicationName = "gears1-draw";
+    app.pApplicationName = kHostDrawApplicationName;
     app.apiVersion = VK_API_VERSION_1_2;
     VkInstanceCreateInfo ii{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ii.pApplicationInfo = &app;

@@ -43,6 +43,7 @@
 #include <lucent/log.h>
 
 #include "gpu_device_features.h"
+#include "host_product_identity.h"
 #include "gpu_present_stage.h"
 #include "gpu_present_source.h"
 #include "gpu_shared_device.h"
@@ -58,7 +59,6 @@
 #include <cstring>
 #include <mutex>
 #include <thread>
-#include <vector>
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_vulkan.h>
@@ -70,8 +70,8 @@
 namespace
 {
 
-constexpr uint32_t kWindowWidth = 1280;
-constexpr uint32_t kWindowHeight = 720;
+constexpr int kWindowWidth = 1280;
+constexpr int kWindowHeight = 720;
 
 const char *ResultName(VkResult r)
 {
@@ -260,7 +260,7 @@ bool Presenter::CreateInstanceAndDevice()
     }
 
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    app.pApplicationName = "gears1";
+    app.pApplicationName = gears::kHostProductName;
     app.apiVersion = VK_API_VERSION_1_1;
 
     VkInstanceCreateInfo instanceInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
@@ -1199,8 +1199,8 @@ void Presenter::Thread()
     }
 
     if (!headlessSurface)
-        window =
-            SDL_CreateWindow("gears1", int(kWindowWidth), int(kWindowHeight), SDL_WINDOW_VULKAN);
+        window = SDL_CreateWindow(gears::kHostProductName, kWindowWidth, kWindowHeight,
+                                  SDL_WINDOW_VULKAN);
     if (!headlessSurface && window == nullptr)
     {
         lucent::warn("present", "SDL_CreateWindow failed: {} -- running headless", SDL_GetError());

@@ -25,6 +25,7 @@ FORMATTED = [
     "runtime/guest_write_watch.h",
     "runtime/hle_d3d.cpp",
     "runtime/hle_d3d.h",
+    "runtime/host_product_identity.h",
     "runtime/guest_memory.h",
     "runtime/kernel_misc.cpp",
     "runtime/main.cpp",
@@ -193,6 +194,7 @@ FORMATTED = [
     "tests/test_guest_texture_hash.cpp",
     "tests/test_guest_write_watch.cpp",
     "tests/test_bugcheck_policy.cpp",
+    "tests/test_host_product_identity.cpp",
     "tests/test_gpu_diagnostics_profile.cpp",
     "tests/test_hle_d3d.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
@@ -228,6 +230,7 @@ FORMATTED = [
     "tests/test_title_executable.cpp",
     "tests/test_title_profile.cpp",
     "tests/test_frame_production_timing.cpp",
+    "tests/test_runtime_logic.cpp",
 ]
 
 TIDY_TRANSLATION_UNITS = [
@@ -334,6 +337,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_guest_texture_hash.cpp",
     "tests/test_guest_write_watch.cpp",
     "tests/test_bugcheck_policy.cpp",
+    "tests/test_host_product_identity.cpp",
     "tests/test_gpu_diagnostics_profile.cpp",
     "tests/test_hle_d3d.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
@@ -366,6 +370,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_title_executable.cpp",
     "tests/test_title_profile.cpp",
     "tests/test_frame_production_timing.cpp",
+    "tests/test_runtime_logic.cpp",
 ]
 
 FORMAT_RANGES = {}
@@ -436,9 +441,12 @@ def selftest():
     assert "runtime/titles/gears1/guest_probe_state.h" in FORMATTED
     assert "runtime/bugcheck_policy.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/bugcheck_policy.h" in FORMATTED
+    assert "runtime/host_product_identity.h" in FORMATTED
     assert "runtime/kernel_misc.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/bugcheck_policy.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_bugcheck_policy.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_host_product_identity.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_runtime_logic.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_diagnostics_profile.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_diagnostics_profile.h" in FORMATTED
     assert "runtime/titles/gears1/gpu_diagnostics_profile.cpp" in TIDY_TRANSLATION_UNITS
