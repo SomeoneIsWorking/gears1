@@ -269,15 +269,21 @@ add_executable(gears1
     kernel_file.cpp
     "${IMPORT_STUBS}")
 
-execute_process(COMMAND git -C "${CMAKE_CURRENT_SOURCE_DIR}/.." rev-parse --short HEAD
-                OUTPUT_VARIABLE GEARS_GIT_REV OUTPUT_STRIP_TRAILING_WHITESPACE
-                ERROR_QUIET)
-if(NOT GEARS_GIT_REV)
-    set(GEARS_GIT_REV "unknown")
-endif()
-set_source_files_properties(main.cpp PROPERTIES COMPILE_DEFINITIONS
-                            "GEARS_BUILD_REVISION=\"${GEARS_GIT_REV}\"")
-target_include_directories(gears1 PRIVATE . "${THIRDPARTY_ROOT}/xxHash")
+set(GEARS_BUILD_REVISION_HEADER
+    "${CMAKE_CURRENT_BINARY_DIR}/generated/build_revision.h")
+add_custom_target(gears_build_revision
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/write_build_revision.py"
+            --repository "${CMAKE_SOURCE_DIR}"
+            --output "${GEARS_BUILD_REVISION_HEADER}"
+    BYPRODUCTS "${GEARS_BUILD_REVISION_HEADER}"
+    DEPENDS "${CMAKE_SOURCE_DIR}/tools/write_build_revision.py"
+    COMMENT "Refreshing the runtime build revision"
+    VERBATIM)
+add_dependencies(gears1 gears_build_revision)
+target_include_directories(gears1 PRIVATE .
+    "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    "${THIRDPARTY_ROOT}/xxHash")
 target_link_libraries(gears1 PRIVATE gears_ppc gears_generated_title_profile
     gears_title_executable XenonUtils lucent::lucent)
 
