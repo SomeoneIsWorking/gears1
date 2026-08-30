@@ -47,6 +47,14 @@ add_executable(test_hle_d3d
 target_include_directories(test_hle_d3d PRIVATE ../runtime)
 add_test(NAME hle_d3d COMMAND test_hle_d3d)
 
+add_executable(test_bugcheck_policy
+    test_bugcheck_policy.cpp
+    ../runtime/bugcheck_policy.cpp
+    ../runtime/titles/gears1/bugcheck_policy.cpp)
+target_include_directories(test_bugcheck_policy PRIVATE ../runtime)
+target_link_libraries(test_bugcheck_policy PRIVATE lucent::lucent)
+add_test(NAME bugcheck_policy COMMAND test_bugcheck_policy)
+
 add_executable(test_gpu_diagnostics_profile
     test_gpu_diagnostics_profile.cpp
     ../runtime/titles/gears1/gpu_diagnostics_profile.cpp)
