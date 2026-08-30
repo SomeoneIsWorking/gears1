@@ -4,9 +4,9 @@ kind: claim
 status: holds
 created: 2026-08-30
 tags: native-rhi
-depends: runtime/rhi_renderer_input.cpp#CompareRhiRendererDraws, runtime/gpu_draw.cpp#Renderer::RenderFrameImpl
+depends: runtime/gpu_draw_native_input.cpp#NativeFrameMaterializationRecorder, runtime/rhi_renderer_input.cpp#CompareRhiRendererDraws, runtime/render_thread.cpp#RenderThreadMain
 reconfirmed: 2026-08-30
-verified_at: 2026-08-30 03:59:06
+verified_at: 2026-08-30 05:10:13
 ---
 
 ## Claim
@@ -28,3 +28,7 @@ Final-tree Clang build, 90-test CTest suite, clang-format/clang-tidy gate, focus
 ## Re-confirmed 2026-08-30
 
 Committed Clang source tree 1eb0f94 passed the full build, 90 non-cpp_quality tests, repository-wide quality gate, final focused lint/tests, and current headless observation through frame 124 with zero value mismatches, unkeyed draws, duplicates, mixed outcomes, or source conflicts.
+
+## Re-confirmed 2026-08-30
+
+Committed c19182d frame-660 headless materialization join correlated 10,945 semantic draws with zero missing, value mismatches, unkeyed inputs, or duplicates before any queue drop; focused arrival, duplicate, tile-replay, alias, and field-mutation controls pass.

@@ -5,8 +5,8 @@ status: holds
 created: 2026-08-28
 tags: native-rhi,vertex-buffer,gears1
 depends: runtime/rhi_semantic_state.cpp#RhiSemanticStateTracker, runtime/titles/gears1/rhi_bindings.cpp#CaptureBoundVertexStreams, runtime/rhi_semantic_stream.cpp#CompareRhiDrawVertexState
-reconfirmed: 2026-08-28
-verified_at: 2026-08-28 00:48:35
+reconfirmed: 2026-08-30
+verified_at: 2026-08-30 05:10:12
 ---
 
 ## Claim
@@ -24,3 +24,7 @@ Falsified if a retained caller supplies slot 16 or greater as a valid stream, a 
 ## Re-confirmed 2026-08-28
 
 A corrected headless observation run through frame 780 matched all 3,715 bound-index draw snapshots against the independently decoded ordered 16-slot device state, plus all 24,239 draw packets, 86,061 bindings, and 780 presents, with zero missing or mismatched observations. The prior 18-slot implementation produced live slot-17 mismatches, so the instrument demonstrated both answers.
+
+## Re-confirmed 2026-08-30
+
+Committed c19182d headless frame-660 report matched 1,068 vertex-stream bindings and all 1,620 bound-index draw snapshots with streams, plus 91 direct stream resets, with zero semantic state errors.
