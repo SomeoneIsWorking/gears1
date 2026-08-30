@@ -56,6 +56,23 @@ int main()
         .kind = gears::RhiSemanticBindingKind::PixelShader,
         .object = 0x40106000,
     });
+    gears::RhiBindingStateEvidence patchedTextureState{
+        .present = true,
+        .observedObject = 0x40106000,
+        .textureFetchStatePresent = true,
+    };
+    patchedTextureState.textureFetchState[3] = {6, 5, 4, 3, 2, 1};
+    tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::PixelShader, .object = 0x40106000},
+                         patchedTextureState);
+    tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::TextureState,
+                          .slot = 3,
+                          .object = 0x40103000,
+                          .descriptor = {6, 5, 4, 0x00280C14, 2, 1},
+                          .descriptorDwords = 6},
+                         {.present = true,
+                          .observedObject = 0x40103000,
+                          .descriptor = {6, 5, 4, 0x00280C14, 2, 1},
+                          .descriptorDwords = 6});
     tracker.ApplyBinding({
         .kind = gears::RhiSemanticBindingKind::VertexShader,
         .object = 0x40107000,
@@ -113,7 +130,9 @@ int main()
     assert(state.textures.size() == 1);
     assert(state.textures[0].slot == 3);
     assert(state.textures[0].descriptorDwords == 6);
-    assert(state.textures[0].descriptor[5] == 6);
+    assert(state.textures[0].descriptor[0] == 6);
+    assert(state.textures[0].descriptor[3] == 0x00280C14);
+    assert(state.textures[0].descriptor[5] == 1);
     assert(state.pixelShader.has_value());
     assert(state.pixelShader->object == 0x40106000);
     assert(state.vertexShader.has_value());

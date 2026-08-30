@@ -6,6 +6,7 @@
 #include "rhi_resource_identity.h"
 #include "rhi_semantic_stream.h"
 #include "rhi_target_descriptor_watch.h"
+#include "rhi_texture_descriptor_watch.h"
 #include "rhi_vertex_buffer.h"
 #include "rhi_vertex_stream_watch.h"
 
@@ -123,21 +124,21 @@ CaptureBoundRenderTargets(std::uint32_t device);
                                                                    std::uint32_t slot)
 {
     constexpr std::uint32_t kTextureFetchShadowOffset = 1024;
-    constexpr std::uint32_t kTextureFetchDwords = 6;
     constexpr std::uint32_t kTextureObjectTableIndex = 3068;
 
-    if (device == 0)
+    if (device == 0 || slot >= gears::kRhiTextureSlotCount)
         return {};
 
     gears::RhiBindingStateEvidence state{
         .present = true,
         .observedObject = ReadGuestBe32(device + (slot + kTextureObjectTableIndex) * 4),
-        .descriptorDwords = kTextureFetchDwords,
+        .descriptorDwords = static_cast<std::uint32_t>(gears::kRhiTextureDescriptorDwords),
     };
-    const std::uint32_t shadow =
-        device + slot * kTextureFetchDwords * 4 + kTextureFetchShadowOffset;
-    for (std::uint32_t index = 0; index < kTextureFetchDwords; ++index)
-        state.descriptor[index] = ReadGuestBe32(shadow + index * 4);
+    const std::uint32_t shadow = device +
+                                 slot * gears::kRhiTextureDescriptorDwords * sizeof(std::uint32_t) +
+                                 kTextureFetchShadowOffset;
+    for (std::uint32_t index = 0; index < gears::kRhiTextureDescriptorDwords; ++index)
+        state.descriptor[index] = ReadGuestBe32(shadow + index * sizeof(std::uint32_t));
     state.identity = gears::titles::gears1::CaptureRhiResourceIdentity(state.observedObject);
     return state;
 }
@@ -292,6 +293,7 @@ void ObserveAfterSuper(const gears::RhiSemanticDraw &draw, std::uint32_t device,
 {
     gears::ObserveRhiSemanticDraw(draw, CaptureLastDrawPacket(device, staged, draw.kind));
     gears::gears1::ReportRhiTargetDescriptorWriteWatch();
+    gears::titles::gears1::ReportRhiTextureDescriptorWriteWatch();
     gears::gears1::ReportRhiVertexStreamResetWriteWatch();
 }
 
@@ -312,8 +314,80 @@ PPC_FUNC(sub_82220858)
         .slot = slot,
         .object = ctx.r5.u32,
     };
+    gears::titles::gears1::PauseRhiTextureDescriptorWriteWatch();
     __imp__sub_82220858(ctx, base);
     gears::ObserveRhiSemanticBinding(binding, CaptureTextureBinding(device, slot));
+    gears::titles::gears1::MaybeArmRhiTextureDescriptorWriteWatch(device, slot);
+    gears::titles::gears1::ResumeRhiTextureDescriptorWriteWatch();
+}
+
+namespace
+{
+
+using TextureStateSetter = void (*)(PPCContext &, std::uint8_t *);
+
+void ObserveTextureState(std::uint32_t device, std::uint32_t slot)
+{
+    const gears::RhiBindingStateEvidence state = CaptureTextureBinding(device, slot);
+    gears::ObserveRhiSemanticBinding({.kind = gears::RhiSemanticBindingKind::TextureState,
+                                      .slot = slot,
+                                      .object = state.observedObject,
+                                      .descriptor = state.descriptor,
+                                      .descriptorDwords = state.descriptorDwords},
+                                     state);
+}
+
+void ObserveTextureStateSetter(PPCContext &ctx, std::uint8_t *base, TextureStateSetter super)
+{
+    if (!gears::RhiSemanticObservationEnabled())
+    {
+        super(ctx, base);
+        return;
+    }
+
+    const std::uint32_t device = ctx.r3.u32;
+    const std::uint32_t slot = ctx.r4.u32;
+    gears::titles::gears1::PauseRhiTextureDescriptorWriteWatch();
+    super(ctx, base);
+    ObserveTextureState(device, slot);
+    gears::titles::gears1::ResumeRhiTextureDescriptorWriteWatch();
+}
+
+} // namespace
+
+extern "C" PPC_FUNC(__imp__sub_8222A150);
+PPC_FUNC(sub_8222A150)
+{
+    ObserveTextureStateSetter(ctx, base, __imp__sub_8222A150);
+}
+
+extern "C" PPC_FUNC(__imp__sub_8222A2D8);
+PPC_FUNC(sub_8222A2D8)
+{
+    ObserveTextureStateSetter(ctx, base, __imp__sub_8222A2D8);
+}
+
+extern "C" PPC_FUNC(__imp__sub_8222A550);
+PPC_FUNC(sub_8222A550)
+{
+    ObserveTextureStateSetter(ctx, base, __imp__sub_8222A550);
+}
+
+extern "C" PPC_FUNC(__imp__sub_8254E9E0);
+PPC_FUNC(sub_8254E9E0)
+{
+    if (!gears::RhiSemanticObservationEnabled())
+    {
+        __imp__sub_8254E9E0(ctx, base);
+        return;
+    }
+
+    const std::uint32_t device = ctx.r3.u32;
+    const std::uint32_t slot = ctx.r5.u32;
+    gears::titles::gears1::PauseRhiTextureDescriptorWriteWatch();
+    __imp__sub_8254E9E0(ctx, base);
+    ObserveTextureState(device, slot);
+    gears::titles::gears1::ResumeRhiTextureDescriptorWriteWatch();
 }
 
 extern "C" PPC_FUNC(__imp__sub_8222AE20);

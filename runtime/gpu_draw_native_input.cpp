@@ -29,6 +29,15 @@ bool BuildNativeDrawInput(const uint32_t *registerFile, uint32_t primitiveType, 
     input.indexGuestBase = indexGuestBase;
     input.vertexShaderHash = vertexShaderHash;
     input.pixelShaderHash = pixelShaderHash;
+    constexpr std::uint32_t kTextureFetchRegisterBase = 0x4800;
+    for (std::size_t slot = 0; slot < kNativeTextureFetchSlots; ++slot)
+    {
+        for (std::size_t dword = 0; dword < kNativeTextureFetchDwords; ++dword)
+        {
+            input.textureFetches[slot][dword] =
+                registerFile[kTextureFetchRegisterBase + slot * kNativeTextureFetchDwords + dword];
+        }
+    }
 
     const uint32_t colorInfo = registerFile[0x2001];
     const RhiRenderTargetDescriptorState colorTarget = DecodeRhiColorTargetDescriptor(colorInfo);

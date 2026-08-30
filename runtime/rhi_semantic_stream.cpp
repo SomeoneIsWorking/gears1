@@ -40,7 +40,7 @@ struct RhiSemanticReportTotals
     std::uint64_t bindingsMatched = 0;
     std::uint64_t bindingsMissing = 0;
     std::uint64_t bindingsMismatched = 0;
-    std::array<std::uint64_t, 7> bindingKinds{};
+    std::array<std::uint64_t, kRhiSemanticBindingKindCount> bindingKinds{};
     std::uint64_t resourceLifetimeCalls = 0;
     std::uint64_t resourceLifetimeMatched = 0;
     std::uint64_t resourceLifetimeMissing = 0;
@@ -145,6 +145,8 @@ RenderTargetOrEmpty(const std::vector<RhiSemanticRenderTarget> &targets, std::si
     {
     case RhiSemanticBindingKind::Texture:
         return "texture";
+    case RhiSemanticBindingKind::TextureState:
+        return "texture-state";
     case RhiSemanticBindingKind::PixelShader:
         return "pixel-shader";
     case RhiSemanticBindingKind::VertexShader:

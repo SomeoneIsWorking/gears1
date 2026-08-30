@@ -9,6 +9,7 @@
 // Xenos register storage, or translated shader objects. The retained Vulkan
 // renderer currently consumes the same value as its oracle.
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -19,9 +20,15 @@
 #include "gpu_draw_formats.h"
 #include "gpu_draw_sample_layout.h"
 #include "gpu_draw_xlate.h"
+#include "rhi_texture_state.h"
 
 namespace gears::draw
 {
+
+inline constexpr std::size_t kNativeTextureFetchSlots = kRhiTextureSlotCount;
+inline constexpr std::size_t kNativeTextureFetchDwords = kRhiTextureDescriptorDwords;
+using NativeTextureFetch = RhiTextureDescriptor;
+using NativeTextureFetchFile = RhiTextureFetchState;
 
 struct NativeDrawInputOptions
 {
@@ -64,6 +71,10 @@ struct NativeDrawInput
     uint32_t indexGuestBase = 0;
     uint64_t vertexShaderHash = 0;
     uint64_t pixelShaderHash = 0;
+    // The complete title-neutral hardware fetch file. Shader analysis decides
+    // which slots are sampled; keeping all slots here preserves the one input
+    // authority without teaching it title object identity or PM4 ownership.
+    NativeTextureFetchFile textureFetches{};
 
     uint32_t surfaceBase = 0;
     uint32_t colorFormat = 0;

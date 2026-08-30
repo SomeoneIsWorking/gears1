@@ -196,13 +196,10 @@ the zero-construction result in the frame-1440 walk remains unresolved.
 
 Exercise the separate bound-vertex entry dynamically if the title reaches it.
 Then add resource creation and live release-to-zero retirement effects and
-compare complete resource ranges, shader/constant/texture inputs, output state,
-and pixels with the materialized renderer inputs. The next independently grounded
-renderer-input group is normalized render/depth target state, but the semantic
-tracker must first represent post-bind descriptor mutations such as the native
-colour-write-gamma transition; comparing stale bind-time words would repeat the
-previously observed false mismatch. The packet-keyed draw/index comparison now
-exists, but it is not full renderer-input parity. Keep the recompiled
+compare shader modules/constants, texture content and backing-resource realization, remaining output
+state, and pixels with the materialized renderer inputs. Normalized render/depth target state and
+active six-dword texture fetch descriptors are now compared. The packet-keyed draw/index/target/
+texture-descriptor comparison is still not full renderer-input parity. Keep the recompiled
 compatibility bodies available and super-called until a deliberately wrong
 semantic control is rejected and a same-run complete-stream and pixel-parity
 gate agrees. Transient and bound-buffer agreement alone does not authorize a
@@ -312,11 +309,36 @@ current unmatched packet. Claim C103 records the ownership classification and
 its falsifier.
 
 This closes queued-versus-materialized draw-shape and index-address evidence.
-It does not close issue #141: shader modules/constants, textures/samplers,
-vertex ranges, complete render/depth target state, viewport/scissor/output
-state, and pixels are not yet compared. Internal initialization and clear draws
+It does not close issue #141: shader modules/constants, texture content and backing-resource
+realization, vertex ranges, remaining viewport/scissor/output state, and pixels are not yet
+compared. Internal initialization and clear draws
 also remain outside the normal title semantic stream by design; their grounded
 classification does not turn them into native frontend commands.
 
 ### Note (2026-08-30)
-Renderer target-state progress: added one title-neutral decoder for RT0/depth base+format, signed color exponent, and surface pitch/sample state; the Gears 1 adapter now emits `0x82229B28` as a distinct ordered post-bind color-write transition, and the terminal compatibility projection compares only active semantic targets while treating backend attachment allocation as implementation detail. The first gameplay arm exposed a separate terminal-join defect: bound-index semantic addresses used a CPU alias while NativeDrawInput carried the physical DMA address. Canonicalizing both through `kGuestPhysicalAddressMask` removed every value mismatch. A Clang headless run through frame 660 then matched 10,945/10,945 correlated draws with zero missing/value mismatches and matched 15,306 color-write transitions, 2,854 color-target binds, and 1,566 depth-target binds. Field-specific controls reject every target field, missing state, unsupported MRT slots, and index-address changes. Complete texture/shader/constants/output/pixel parity and ownership of the larger gameplay unmatched-packet population remain open.
+Renderer target-state progress: added one title-neutral decoder for RT0/depth base+format, signed color exponent, and surface pitch/sample state; the Gears 1 adapter now emits `0x82229B28` as a distinct ordered post-bind color-write transition, and the terminal compatibility projection compares only active semantic targets while treating backend attachment allocation as implementation detail. The first gameplay arm exposed a separate terminal-join defect: bound-index semantic addresses used a CPU alias while NativeDrawInput carried the physical DMA address. Canonicalizing both through `kGuestPhysicalAddressMask` removed every value mismatch. A Clang headless run through frame 660 then matched 10,945/10,945 correlated draws with zero missing/value mismatches and matched 15,306 color-write transitions, 2,854 color-target binds, and 1,566 depth-target binds. Field-specific controls reject every target field, missing state, unsupported MRT slots, and index-address changes. Texture fetch descriptors were still open at this point and are closed by the later note; texture content/resource realization, shaders/constants, remaining output state, pixels, and ownership of the larger gameplay unmatched-packet population remain open.
+
+### Note (2026-08-30) — active texture-fetch descriptor parity
+
+The first renderer-input texture arm carried only SetTexture bind-time descriptors and was rejected
+66,429 times by frame 1172. Capturing the post-call fetch file from shader setters reduced the
+failure to 325, consistently slot 0 dword 3 (`0x00000c14` semantic versus `0x00280c14` renderer).
+A binder-paused descriptor write watch then identified the missing retained owners: `0x8222A150`
+and `0x8222A2D8` update minimum and magnification filter state, `0x8222A550` updates anisotropy, and composite state block
+`0x8254E9E0` calls SetTexture/filter setters and performs final direct descriptor writes. The exact
+Gears 1 wrappers preserve and super-call all four bodies, capture their final device-shadow state,
+and publish ordered texture-state mutations.
+
+That investigation also fixed two defects in the write-watch instrument itself. ET_EXEC executables
+have ELF load bias zero, so subtracting `dladdr().dli_fbase` had misidentified raw RIP `0xe962f1`;
+the watch now resolves the containing PT_LOAD segment with `dl_iterate_phdr` and reports both raw RIP
+and ELF address. Nested composite setters also require a pause depth: a Boolean paused state could
+re-arm protected pages inside an outer retained call. Focused controls cover ET_EXEC, PIE, address
+underflow, nested pauses, every one of the six descriptor dwords, missing state, duplicate and
+unsupported slots.
+
+The terminal compatibility projection now carries all 32 six-dword texture fetch descriptors but
+compares only slots active in the semantic draw snapshot. A final uninstrumented Clang headless run
+through frame 1607 produced 118,553 correlated semantic matches, zero missing joins, and zero value
+mismatches. This closes active fetch-descriptor parity only. Texture content, backing-resource
+realization, shader modules/constants, remaining output state, and pixels keep issue #141 open.

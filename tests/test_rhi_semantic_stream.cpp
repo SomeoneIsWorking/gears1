@@ -362,6 +362,54 @@ int main()
     assert(gears::InspectRhiRendererDrawInput(unsupportedMrt, matchingRendererTargets).reason ==
            gears::RhiRendererDrawEvidenceReason::UnsupportedColorTargetSlot);
 
+    const gears::RhiSemanticDrawState textureDrawState{
+        .draw = autoIndexed,
+        .textures = {{.kind = RhiSemanticBindingKind::Texture,
+                      .slot = 3,
+                      .object = 0x40106000,
+                      .descriptor = {2, 0x10, 0x20, 0x30, 0x40, 0x50},
+                      .descriptorDwords = 6}},
+    };
+    RhiRendererDrawInput matchingRendererTexture{
+        .outcome = gears::draw::NativeDrawMaterializationOutcome::Materialized,
+        .primitiveType = 4,
+        .elementCount = 300,
+        .textureFetchStatePresent = true,
+    };
+    matchingRendererTexture.textureFetches[3] = {2, 0x10, 0x20, 0x30, 0x40, 0x50};
+    assert(gears::CompareRhiRendererDrawInput(textureDrawState, matchingRendererTexture) ==
+           RhiRendererDrawEvidenceResult::Match);
+    for (std::size_t dword = 0; dword < gears::draw::kNativeTextureFetchDwords; ++dword)
+    {
+        RhiRendererDrawInput alteredTexture = matchingRendererTexture;
+        alteredTexture.textureFetches[3][dword] ^= 1;
+        const gears::RhiRendererDrawEvidence evidence =
+            gears::InspectRhiRendererDrawInput(textureDrawState, alteredTexture);
+        assert(evidence.result == RhiRendererDrawEvidenceResult::Mismatch);
+        assert(evidence.reason == gears::RhiRendererDrawEvidenceReason::TextureState);
+        assert(evidence.textureMismatchPresent);
+        assert(evidence.textureSlot == 3);
+        assert(evidence.textureDword == dword);
+        assert(evidence.semanticTextureValue == textureDrawState.textures[0].descriptor[dword]);
+        assert(evidence.rendererTextureValue == alteredTexture.textureFetches[3][dword]);
+    }
+    RhiRendererDrawInput missingRendererTexture = matchingRendererTexture;
+    missingRendererTexture.textureFetchStatePresent = false;
+    assert(gears::InspectRhiRendererDrawInput(textureDrawState, missingRendererTexture).reason ==
+           gears::RhiRendererDrawEvidenceReason::RendererTextureStateMissing);
+    auto missingSemanticTexture = textureDrawState;
+    missingSemanticTexture.textures[0].descriptorDwords = 0;
+    assert(gears::InspectRhiRendererDrawInput(missingSemanticTexture, matchingRendererTexture)
+               .reason == gears::RhiRendererDrawEvidenceReason::SemanticTextureStateMissing);
+    auto unsupportedTexture = textureDrawState;
+    unsupportedTexture.textures[0].slot = gears::draw::kNativeTextureFetchSlots;
+    assert(gears::InspectRhiRendererDrawInput(unsupportedTexture, matchingRendererTexture).reason ==
+           gears::RhiRendererDrawEvidenceReason::UnsupportedTextureSlot);
+    auto duplicateTexture = textureDrawState;
+    duplicateTexture.textures.push_back(duplicateTexture.textures[0]);
+    assert(gears::InspectRhiRendererDrawInput(duplicateTexture, matchingRendererTexture).reason ==
+           gears::RhiRendererDrawEvidenceReason::DuplicateTextureSlot);
+
     const RhiSemanticBinding indexBufferBinding{
         .kind = RhiSemanticBindingKind::IndexBuffer,
         .object = 0x40105000,
@@ -652,7 +700,7 @@ int main()
         frame, {.status = gears::draw::NativeFrameMaterializationStatus::Dropped});
     assert(missingRenderer.semanticDraws == 2);
     assert(missingRenderer.missing == 2);
-    const gears::RhiRendererFrameInput wrongRendererInput{
+    gears::RhiRendererFrameInput wrongRendererInput{
         .draws =
             {
                 {.sourceOrdinal = 0,
@@ -681,6 +729,8 @@ int main()
                  .outcome = gears::draw::NativeDrawMaterializationOutcome::Refused},
             },
     };
+    wrongRendererInput.draws[1].textureFetchStatePresent = true;
+    wrongRendererInput.draws[1].textureFetches[3] = {1, 2, 3, 4, 5, 6};
     const gears::RhiRendererFrameComparison wrongRenderer =
         gears::CompareRhiRendererDraws(frame, wrongRendererInput);
     assert(wrongRenderer.matched == 1);
@@ -762,17 +812,21 @@ int main()
     gears::ObserveRhiSemanticDraw(autoIndexed, matchingAuto);
     const gears::RhiSemanticFrame semanticFirst = gears::SealRhiSemanticFrame(18);
     assert(semanticFirst.draws == 1);
+    gears::RhiRendererFrameInput semanticFirstRenderer{
+        .draws = {{.sourceOrdinal = 0,
+                   .packetGuestAddress = 0x00010000,
+                   .outcome = gears::draw::NativeDrawMaterializationOutcome::Materialized,
+                   .primitiveType = 4,
+                   .elementCount = 300,
+                   .textureFetchStatePresent = true,
+                   .targetStatePresent = true,
+                   .colorTargetStatePresent = true,
+                   .colorTarget = {.base = 0x2D0, .format = 12},
+                   .surfaceState = {.pitch = 1280, .msaaSamples = 0}}},
+    };
+    semanticFirstRenderer.draws[0].textureFetches[3] = {1, 2, 3, 4, 5, 6};
     const std::optional<gears::RhiRendererFrameComparison> joined =
-        gears::PublishRhiRendererFrameInput(
-            18, {.draws = {{.sourceOrdinal = 0,
-                            .packetGuestAddress = 0x00010000,
-                            .outcome = gears::draw::NativeDrawMaterializationOutcome::Materialized,
-                            .primitiveType = 4,
-                            .elementCount = 300,
-                            .targetStatePresent = true,
-                            .colorTargetStatePresent = true,
-                            .colorTarget = {.base = 0x2D0, .format = 12},
-                            .surfaceState = {.pitch = 1280, .msaaSamples = 0}}}});
+        gears::PublishRhiRendererFrameInput(18, std::move(semanticFirstRenderer));
     assert(joined.has_value());
     assert(joined->matched == 1);
     assert(joined->missing == 0);

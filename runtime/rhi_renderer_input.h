@@ -33,6 +33,8 @@ struct RhiRendererDrawInput
     bool indexIs32 = false;
     std::uint32_t indexEndian = 0;
     std::uint32_t indexGuestBase = 0;
+    bool textureFetchStatePresent = false;
+    draw::NativeTextureFetchFile textureFetches{};
     // These flags mean the terminal renderer supplied comparable normalized
     // register state. Semantic bindings remain the authority for whether a
     // title resource is active; backend attachment allocation is not presence.
@@ -67,6 +69,11 @@ enum class RhiRendererDrawEvidenceReason : std::uint8_t
     IndexWidth,
     IndexAddress,
     IndexEndian,
+    DuplicateTextureSlot,
+    UnsupportedTextureSlot,
+    RendererTextureStateMissing,
+    SemanticTextureStateMissing,
+    TextureState,
     DuplicateColorTarget,
     DuplicateDepthTarget,
     UnsupportedColorTargetSlot,
@@ -85,6 +92,11 @@ struct RhiRendererDrawEvidence
 {
     RhiRendererDrawEvidenceResult result = RhiRendererDrawEvidenceResult::Missing;
     RhiRendererDrawEvidenceReason reason = RhiRendererDrawEvidenceReason::None;
+    bool textureMismatchPresent = false;
+    std::uint32_t textureSlot = 0;
+    std::uint32_t textureDword = 0;
+    std::uint32_t semanticTextureValue = 0;
+    std::uint32_t rendererTextureValue = 0;
 };
 
 struct RhiRendererFrameComparison
@@ -110,6 +122,11 @@ struct RhiRendererFrameComparison
     std::uint32_t firstMissingSemanticPacket = 0;
     std::uint32_t firstMismatchedSemanticPacket = 0;
     RhiRendererDrawEvidenceReason firstMismatchReason = RhiRendererDrawEvidenceReason::None;
+    bool firstTextureMismatchPresent = false;
+    std::uint32_t firstTextureMismatchSlot = 0;
+    std::uint32_t firstTextureMismatchDword = 0;
+    std::uint32_t firstSemanticTextureValue = 0;
+    std::uint32_t firstRendererTextureValue = 0;
     std::uint32_t firstUnmatchedRendererPacket = 0;
     std::uint32_t firstUnmatchedRendererBuffer = 0;
     bool firstUnmatchedRendererFromIndirectBuffer = false;

@@ -6,7 +6,7 @@
 #include <array>
 #include <atomic>
 #include <csignal>
-#include <dlfcn.h>
+#include <link.h>
 #include <sys/mman.h>
 #include <ucontext.h>
 #include <unistd.h>
@@ -39,8 +39,9 @@ struct GuestWriteWatch
     uint64_t targetSampleLimit = 0;
     std::atomic<uint64_t> hits{0};
     std::atomic<uint64_t> otherFaults{0};
+    std::atomic<uint32_t> pauseDepth{0};
     WatchSlot slots[kWatchSlots]{};
-    uintptr_t moduleBase = 0;
+    uintptr_t loadBias = 0;
     struct sigaction oldTrap{};
     bool reported = false;
 } g_watch;
@@ -61,6 +62,8 @@ const char *OwnerName(GuestWriteWatchOwner owner)
         return "draw-packet";
     case GuestWriteWatchOwner::kRhiTargetDescriptor:
         return "RHI target-descriptor";
+    case GuestWriteWatchOwner::kRhiTextureDescriptor:
+        return "RHI texture-descriptor";
     case GuestWriteWatchOwner::kRhiVertexStreamReset:
         return "RHI vertex-stream reset";
     }
@@ -180,6 +183,30 @@ void ClearSamples()
     g_watch.otherFaults.store(0, std::memory_order_relaxed);
 }
 
+struct LoadBiasQuery
+{
+    uintptr_t instruction = 0;
+    uintptr_t loadBias = 0;
+};
+
+int FindLoadBias(dl_phdr_info *info, size_t, void *opaque)
+{
+    auto &query = *static_cast<LoadBiasQuery *>(opaque);
+    for (ElfW(Half) index = 0; index < info->dlpi_phnum; ++index)
+    {
+        const ElfW(Phdr) &header = info->dlpi_phdr[index];
+        if (header.p_type != PT_LOAD)
+            continue;
+        const uintptr_t start = info->dlpi_addr + header.p_vaddr;
+        if (query.instruction >= start && query.instruction - start < header.p_memsz)
+        {
+            query.loadBias = info->dlpi_addr;
+            return 1;
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
@@ -203,6 +230,7 @@ bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
     g_watch.pageSize = pageSize;
     g_watch.guestTarget = guestAddress;
     g_watch.targetSampleLimit = targetSampleLimit;
+    g_watch.pauseDepth.store(0, std::memory_order_relaxed);
 
     bool isPhysicalAlias = false;
     for (size_t i = 0; i < GuestMemory::kAliasCount; ++i)
@@ -226,9 +254,9 @@ bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
         g_watch.pages[i] = target - (address % pageSize);
     }
 
-    Dl_info info{};
-    if (dladdr(reinterpret_cast<void *>(&ArmGuestWriteWatch), &info))
-        g_watch.moduleBase = uintptr_t(info.dli_fbase);
+    LoadBiasQuery loadBias{.instruction = reinterpret_cast<uintptr_t>(&ArmGuestWriteWatch)};
+    dl_iterate_phdr(&FindLoadBias, &loadBias);
+    g_watch.loadBias = loadBias.loadBias;
 
     if (!RegisterSegvObserver(&OnSegv))
     {
@@ -250,16 +278,24 @@ bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
     ProtectWatchPages(PROT_READ);
     lucent::info("hle",
                  "{} write watch armed on guest {:#x} across {} host alias page(s)"
-                 " (module base {:#x})",
-                 OwnerName(owner), guestAddress, g_watch.aliasCount, g_watch.moduleBase);
+                 " (ELF load bias {:#x})",
+                 OwnerName(owner), guestAddress, g_watch.aliasCount, g_watch.loadBias);
     return true;
 }
 
 bool PauseGuestWriteWatch(GuestWriteWatchOwner owner)
 {
-    if (g_watch.aliasCount == 0 || g_watch.owner != owner ||
-        !g_watch.armed.exchange(false, std::memory_order_acq_rel))
+    if (g_watch.aliasCount == 0 || g_watch.owner != owner || g_watch.reported ||
+        g_watch.hits.load(std::memory_order_relaxed) >= g_watch.targetSampleLimit)
         return false;
+    const uint32_t priorDepth = g_watch.pauseDepth.fetch_add(1, std::memory_order_acq_rel);
+    if (priorDepth != 0)
+        return true;
+    if (!g_watch.armed.exchange(false, std::memory_order_acq_rel))
+    {
+        g_watch.pauseDepth.fetch_sub(1, std::memory_order_acq_rel);
+        return false;
+    }
     ProtectWatchPages(PROT_READ | PROT_WRITE);
     return true;
 }
@@ -269,6 +305,16 @@ bool ResumeGuestWriteWatch(GuestWriteWatchOwner owner)
     if (g_watch.aliasCount == 0 || g_watch.owner != owner || g_watch.reported ||
         g_watch.hits.load(std::memory_order_relaxed) >= g_watch.targetSampleLimit)
         return false;
+    uint32_t depth = g_watch.pauseDepth.load(std::memory_order_acquire);
+    while (depth != 0)
+    {
+        if (g_watch.pauseDepth.compare_exchange_weak(depth, depth - 1, std::memory_order_acq_rel))
+        {
+            if (depth > 1)
+                return true;
+            break;
+        }
+    }
     ProtectWatchPages(PROT_READ);
     g_watch.armed.store(true, std::memory_order_release);
     return true;
@@ -291,8 +337,9 @@ bool ReportGuestWriteWatch(GuestWriteWatchOwner owner, bool rearm)
         const uintptr_t instruction = slot.instruction.load(std::memory_order_relaxed);
         if (instruction == 0)
             break;
-        line.add("  rip {:#x} (module-relative {:#x}) x{}", instruction,
-                 instruction - g_watch.moduleBase, slot.count.load(std::memory_order_relaxed));
+        line.add("  rip {:#x} (ELF address {:#x}) x{}", instruction,
+                 GuestWriteWatchImageAddress(instruction, g_watch.loadBias),
+                 slot.count.load(std::memory_order_relaxed));
     }
     line.flush(rearm ? lucent::Level::Debug : lucent::Level::Info, "hle");
 
