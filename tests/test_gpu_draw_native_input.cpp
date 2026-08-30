@@ -54,6 +54,10 @@ int main()
     registers[0x2112] = std::bit_cast<uint32_t>(-5.0f);
     registers[0x2113] = std::bit_cast<uint32_t>(0.75f);
     registers[0x2114] = std::bit_cast<uint32_t>(0.25f);
+    constexpr std::uint32_t textureSlot = 5;
+    for (std::uint32_t dword = 0; dword < gears::draw::kNativeTextureFetchDwords; ++dword)
+        registers[0x4800 + textureSlot * gears::draw::kNativeTextureFetchDwords + dword] =
+            0xA0000000u + dword;
 
     options.msaaModel = true;
     options.hasDepthClamp = true;
@@ -77,6 +81,9 @@ int main()
     check(input.vertexShaderHash == 0x1122334455667788ULL &&
               input.pixelShaderHash == 0x8877665544332211ULL,
           "shader identities are carried through the native boundary");
+    check(input.textureFetches[textureSlot][0] == 0xA0000000 &&
+              input.textureFetches[textureSlot][5] == 0xA0000005,
+          "the complete texture fetch descriptor crosses the native boundary");
     check(input.surfaceBase == 0x2D0 && input.colorFormat == 7 && input.colorExpBias == -1 &&
               input.depthBase == 0x5A0 && input.depthIsFloat24,
           "colour and depth target state is decoded once");

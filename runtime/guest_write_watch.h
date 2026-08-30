@@ -11,6 +11,7 @@ enum class GuestWriteWatchOwner : uint8_t
     kQueue,
     kDrawPacket,
     kRhiTargetDescriptor,
+    kRhiTextureDescriptor,
     kRhiVertexStreamReset,
 };
 
@@ -38,6 +39,11 @@ constexpr bool GuestWriteWatchContains(uintptr_t target, size_t targetBytes, uin
     return targetBytes != 0 && fault >= target && fault - target < targetBytes;
 }
 
+constexpr uintptr_t GuestWriteWatchImageAddress(uintptr_t instruction, uintptr_t loadBias)
+{
+    return instruction >= loadBias ? instruction - loadBias : instruction;
+}
+
 // Arms one process-wide guest-memory write watch. Only one owner may hold the
 // signal/mprotect facility at a time; a conflicting request refuses loudly.
 // The page is reopened after each fault and protected again after the faulting
@@ -51,7 +57,7 @@ bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
 bool PauseGuestWriteWatch(GuestWriteWatchOwner owner);
 bool ResumeGuestWriteWatch(GuestWriteWatchOwner owner);
 
-// Publishes the captured host instruction offsets. With rearm=true the counts
+// Publishes the captured host instruction addresses. With rearm=true the counts
 // are per-report interval. A one-shot watch remains armed across empty reports
 // and disarms only after it catches the requested target.
 bool ReportGuestWriteWatch(GuestWriteWatchOwner owner, bool rearm);

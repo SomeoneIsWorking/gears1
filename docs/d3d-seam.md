@@ -88,6 +88,24 @@ The same wrap falsified the draw-flush identification -- see 0x82544148 below an
 `catalog.py show 58`. That is what this seam is for: each function read here is
 either confirmed against the renderer's own account of the frame, or corrected.
 
+### Texture fetch-state setters — 0x8222A150 / 0x8222A2D8 / 0x8222A550 / 0x8254E9E0 **V**
+
+SetTexture is not the final owner of its six fetch words. Selective binary inspection and a scoped
+write watch identify `0x8222A150` and `0x8222A2D8` as per-slot minimum/magnification filter setters and
+`0x8222A550` as the anisotropy setter. The composite state block at `0x8254E9E0` calls SetTexture
+and the filter family, then performs final direct descriptor writes. Each exact-revision wrapper
+super-calls its retained body and publishes the complete post-call descriptor, so nested mutations
+retain their real order and final state.
+
+The first bind-only renderer comparison produced 66,429 texture mismatches by frame 1172. Shader
+post-state capture reduced that to 325 and localized the remaining difference to slot 0 dword 3.
+After the four owners above were represented, an uninstrumented headless run through frame 1607
+matched all 118,553 correlated semantic draws with zero missing or value-mismatched renderer inputs.
+The renderer side is the compatibility draw's independently captured PM4 register file, not the
+semantic device-shadow snapshot. Six per-dword negative controls and missing/duplicate/unsupported
+slot controls prove the comparer reports the other answer. This validates active fetch-descriptor
+state; it does not validate backing texture content or sampled pixels.
+
 ### Normal semantic draw family **V**
 
 Raw packet-construction scans, direct disassembly, scoped guest-memory write
@@ -244,12 +262,14 @@ so this set IS the "first presented frame" target. **V**
 | Function | hits/swap | Identification (confidence) |
 |---|---|---|
 | 0x82220858 | 6.2 | SetTexture: copies fetch-constant words from a guest texture object (+0x1C..+0x30) into the device's fetch shadow (slot index r4, shadow at dev + (slot+0xBFC)*4) (high) |
+| 0x8222A150 / 0x8222A2D8 / 0x8222A550 | workload-dependent | Per-slot texture fetch minimum-filter / magnification-filter / anisotropy state setters; exact field mutations recovered from retained bodies and live descriptor write attribution (high) |
+| 0x8254E9E0 | workload-dependent | Composite SetTexture + sampler-state block; calls the setter family and owns final direct fetch-descriptor writes (high) |
 | 0x8222CFF8 | 1.02 in the movie sample | transient-vertex draw; auto-index `DRAW_INDX`, with vertex reservation and staged command end (high) |
 | 0x82221980 | 1.01 | ring segment flush / space wait (internal, high) |
 | 0x82222460 | 1.0 | dirty-mask OR helper + cache touch (high) |
 | 0x8221CBA8 | ~1 per render command | UE3 render-command ring alloc — NOT D3D (high) |
 | 0x82229B28 | ~167 per scene frame | color-write gamma/sRGB state: stores the requested mode, maps bound-target format pairs 2↔10 and 3↔12, mirrors the format nibble into the slot-zero descriptor, and marks dirty bit 37 (high) |
-| 0x82228998 + 7 siblings (0x82228A28, AB8, B48, D28, BD8, C48, CB8) | not remeasured | adjacent render-state setters applied with 0x82229B28 by the state block at 0x8254ED40; the former sampler-state label was unsupported (low) |
+| 0x82228998 + 7 siblings (0x82228A28, AB8, B48, D28, BD8, C48, CB8) | not remeasured | adjacent render-state setters applied with 0x82229B28 by the separate state block at 0x8254ED40; the former sampler-state label remains unsupported and is not the grounded texture family above (low) |
 | 0x82222350 | 0.38 | state setter (unidentified) |
 | 0x822193D8 / 0x822193B0 | 0.28 / — | free / alloc utility pair (575/420 static callers) (medium) |
 | 0x8222ABF8 / 0x8222AB30 | 0.15 | paired begin/end-shaped calls (per movie frame) (low) |

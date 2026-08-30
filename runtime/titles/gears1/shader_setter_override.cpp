@@ -3,6 +3,7 @@
 #include "import_stub.h"
 #include "rhi_resource_identity.h"
 #include "rhi_semantic_stream.h"
+#include "rhi_texture_descriptor_watch.h"
 #include "shader_setter_state.h"
 
 #include <algorithm>
@@ -95,7 +96,18 @@ std::atomic<std::uint64_t> g_reportOrdinal{0};
     gears::RhiBindingStateEvidence state{
         .present = true,
         .observedObject = ReadGuestBe32(device + fieldOffset),
+        .textureFetchStatePresent = true,
     };
+    constexpr std::uint32_t kDeviceRegisterShadowOffset = 0x400;
+    for (std::size_t slot = 0; slot < gears::kRhiTextureSlotCount; ++slot)
+    {
+        for (std::size_t dword = 0; dword < gears::kRhiTextureDescriptorDwords; ++dword)
+        {
+            state.textureFetchState[slot][dword] = ReadGuestBe32(
+                device + kDeviceRegisterShadowOffset +
+                (slot * gears::kRhiTextureDescriptorDwords + dword) * sizeof(std::uint32_t));
+        }
+    }
     state.identity = gears::titles::gears1::CaptureRhiResourceIdentity(state.observedObject);
     return state;
 }
@@ -279,9 +291,11 @@ PPC_FUNC(sub_82222808)
 {
     const std::uint32_t device = ctx.r3.u32;
     const std::uint32_t shader = ctx.r4.u32;
+    gears::titles::gears1::PauseRhiTextureDescriptorWriteWatch();
     ExecuteShaderSetter(ctx, base, ShaderStage::Pixel, __imp__sub_82222808);
     if (gears::RhiSemanticObservationEnabled())
         ObserveShaderBinding(ShaderStage::Pixel, device, shader);
+    gears::titles::gears1::ResumeRhiTextureDescriptorWriteWatch();
 }
 
 extern "C" PPC_FUNC(__imp__sub_82222B98);
@@ -289,7 +303,9 @@ PPC_FUNC(sub_82222B98)
 {
     const std::uint32_t device = ctx.r3.u32;
     const std::uint32_t shader = ctx.r4.u32;
+    gears::titles::gears1::PauseRhiTextureDescriptorWriteWatch();
     ExecuteShaderSetter(ctx, base, ShaderStage::Vertex, __imp__sub_82222B98);
     if (gears::RhiSemanticObservationEnabled())
         ObserveShaderBinding(ShaderStage::Vertex, device, shader);
+    gears::titles::gears1::ResumeRhiTextureDescriptorWriteWatch();
 }

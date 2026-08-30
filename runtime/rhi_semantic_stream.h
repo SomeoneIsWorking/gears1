@@ -2,6 +2,7 @@
 
 #include "rhi_resource_reference.h"
 #include "rhi_target_state.h"
+#include "rhi_texture_state.h"
 
 #include <array>
 #include <cstdint>
@@ -107,6 +108,7 @@ enum class RhiDrawEvidenceResult : std::uint8_t
 enum class RhiSemanticBindingKind : std::uint8_t
 {
     Texture,
+    TextureState,
     PixelShader,
     VertexShader,
     VertexStream,
@@ -114,6 +116,9 @@ enum class RhiSemanticBindingKind : std::uint8_t
     ColorRenderTarget,
     DepthStencilTarget,
 };
+
+inline constexpr std::size_t kRhiSemanticBindingKindCount =
+    static_cast<std::size_t>(RhiSemanticBindingKind::DepthStencilTarget) + 1;
 
 struct RhiSemanticBinding
 {
@@ -148,6 +153,11 @@ struct RhiBindingStateEvidence
     RhiRenderTargetDescriptorState targetState;
     bool surfaceStatePresent = false;
     RhiSurfaceState surfaceState;
+    // Shader setters may patch the register shadow after SetTexture. The
+    // post-call fetch file lets the state tracker apply that ordered mutation
+    // instead of preserving stale bind-time descriptors.
+    bool textureFetchStatePresent = false;
+    RhiTextureFetchState textureFetchState;
     RhiResourceIdentityEvidence identity;
 };
 

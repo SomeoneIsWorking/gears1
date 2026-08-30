@@ -20,6 +20,16 @@ void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding,
         effective.bufferViewPresent = state.bufferViewPresent;
         effective.bufferView = state.bufferView;
     }
+    if (state.textureFetchStatePresent)
+    {
+        for (auto &[slot, texture] : textures_)
+        {
+            if (slot >= kRhiTextureSlotCount)
+                continue;
+            texture.descriptor = state.textureFetchState[slot];
+            texture.descriptorDwords = kRhiTextureDescriptorDwords;
+        }
+    }
 
     if (binding.kind == RhiSemanticBindingKind::ColorRenderTarget)
     {
@@ -57,7 +67,8 @@ void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding,
         return;
     }
 
-    if (effective.kind == RhiSemanticBindingKind::Texture)
+    if (effective.kind == RhiSemanticBindingKind::Texture ||
+        effective.kind == RhiSemanticBindingKind::TextureState)
     {
         if (effective.object == 0)
             textures_.erase(effective.slot);

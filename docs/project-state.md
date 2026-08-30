@@ -82,8 +82,20 @@ surface pitch/sample count, missing target state, and unsupported semantic MRT s
 renderer-queue drop remains explicit missing coverage, and the much larger gameplay population of
 unmatched internal compatibility packets remains outside normal title draw ownership; neither is
 misreported as target-state agreement.
-Complete resource ranges, shader/constant/texture inputs, remaining output state, and pixels are not
-yet compared. Claims C102/C103/C104 and instrument I067 record this materialization evidence. The resolve observer's false negative on
+The terminal `NativeDrawInput` projection now carries the complete 32-slot, six-dword texture-fetch
+register file. The semantic tracker applies ordered post-bind mutations from the grounded
+`0x8222A150`, `0x8222A2D8`, `0x8222A550`, and `0x8254E9E0` retained bodies, while the renderer side
+comes independently from the PM4 register file. Only active semantic texture slots are compared;
+duplicate or unsupported slots, missing state, and every descriptor dword have explicit negative
+controls and first-mismatch details. The initial bind-only model produced 66,429 mismatches, and a
+shader-only post-state model reduced that to 325 before scoped write attribution identified the
+remaining sampler-state owners. A final Clang headless run through frame 1607 matched 118,553
+correlated semantic draws with zero missing or value-mismatched renderer inputs. This closes active
+fetch-descriptor parity, not texture content, backing-resource realization, or sampled pixels.
+
+Complete shader modules/constants, texture content/resource realization, remaining output state,
+and pixels are not yet compared. Claims C102/C103/C104/C105 and instruments I067/I068 record this
+materialization evidence. The resolve observer's false negative on
 a retained command-buffer allocation transition is fixed with a bounded lower-pointer retry, and a headless walk
 crossed the prior refusal region through frame 2280. The new `native_rhi.*` plan boundary accepts the
 complete ordered semantic stream on the same live path, but remains capture-only. See issues #141,

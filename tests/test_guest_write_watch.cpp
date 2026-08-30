@@ -1,4 +1,5 @@
 #include "guest_write_watch.h"
+#include "titles/gears1/rhi_texture_descriptor_watch.h"
 
 #include <cassert>
 
@@ -18,6 +19,12 @@ int main()
     assert(!GuestWriteWatchContains(0x1000, 4, 0x0FFF));
     assert(!GuestWriteWatchContains(0x1000, 4, 0x1004));
     assert(!GuestWriteWatchContains(0x1000, 0, 0x1000));
+    assert(gears::GuestWriteWatchImageAddress(0xE962F1, 0) == 0xE962F1);
+    assert(gears::GuestWriteWatchImageAddress(0x7F00E962F1, 0x7F00000000) == 0xE962F1);
+    assert(gears::GuestWriteWatchImageAddress(0x1000, 0x2000) == 0x1000);
+    assert(gears::titles::gears1::RhiTextureDescriptorWatchMayArm(1));
+    assert(!gears::titles::gears1::RhiTextureDescriptorWatchMayArm(0));
+    assert(!gears::titles::gears1::RhiTextureDescriptorWatchMayArm(2));
 
     gears::DrawPacketWatchSelector selector;
     assert(!selector.Observe(499, 1, 500, 2));
@@ -47,9 +54,16 @@ int main()
     assert(stats.otherPageWrites == 1);
 
     assert(gears::PauseGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket));
+    assert(gears::PauseGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket));
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(!stats.armed);
     *memory.Translate<volatile uint32_t>(0xC0123000) = 0x51504A4D;
+    stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
+    assert(stats.targetWrites == 0);
+    assert(gears::ResumeGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket));
+    stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
+    assert(!stats.armed);
+    *memory.Translate<volatile uint32_t>(0xC0123000) = 0x51504A4E;
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.targetWrites == 0);
     assert(gears::ResumeGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket));
