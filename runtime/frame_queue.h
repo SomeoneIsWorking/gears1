@@ -22,6 +22,7 @@ struct FrameQueueSubmitResult
 {
     FrameQueueSubmitStatus status = FrameQueueSubmitStatus::RejectedClosed;
     std::optional<uint64_t> displacedFrameId;
+    std::optional<uint64_t> displacedFrameSequence;
 
     [[nodiscard]] bool accepted() const
     {

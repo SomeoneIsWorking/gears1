@@ -40,6 +40,7 @@
 #include "gpu_draw.h"
 #include "gpu_endian.h"
 #include "render_thread.h"
+#include "rhi_renderer_input.h"
 #include "rhi_semantic_stream.h"
 #include "native_rhi.h"
 #include "frame_capture.h"
@@ -1346,6 +1347,7 @@ struct CommandProcessor
         item.indexIs32 = indexSizeBit != 0;
         item.indexEndian = indexEndian;
         item.indexGuestBase = indexGuestBase;
+        gears::SetRhiPacketIdentity(item, sourceBase, g_ringBuffer.base, sourceIndex);
         frameDraws.push_back(std::move(item));
         // For GEARS_GPU_REG_WATCH: which draw of this frame a later register
         // write precedes. A bulk census of a SHARED constant register cannot
@@ -1370,12 +1372,10 @@ struct CommandProcessor
         lucent::info("gpu", "cp-stall: resumed");
     }
 
-    // At the frame boundary, render every accumulated draw into the renderer's
-    // persistent target. GEARS_DRAW_FRAME_COUNT=N renders N consecutive frames
-    // from GEARS_DRAW_FRAME_AT instead of one, which is how the per-frame cost
-    // of a WARM renderer is measured -- the first frame pays for translating
-    // every shader and building every pipeline, and says nothing about the
-    // steady state.
+    // At the frame boundary, render every accumulated draw into the persistent
+    // target. A positive DRAW_FRAME_COUNT renders consecutive frames from
+    // DRAW_FRAME_AT; the first pays translation/pipeline costs and later frames
+    // measure the warm renderer.
     void SetFrontBuffer(uint32_t address) { frontBufferAddress = address; }
     void SetFrontBufferFetch(const uint32_t *six)
     {
@@ -1384,6 +1384,7 @@ struct CommandProcessor
 
     void TriggerFrameRender()
     {
+        gears::RhiRendererMaterializationGuard materializationGuard(lastSwapSequence);
         const bool pendingProbe = gears::PendingGraphicsProbeRequest() != 0;
         if (frameProbeCapture.ArmNextFrameAtBoundary(frameRenderDone, pendingProbe))
         {
@@ -1870,8 +1871,7 @@ struct CommandProcessor
         if (in.report && frameCount <= 0 && reportEvery > 0)
             reportedAtPresent = guestPresents / uint64_t(reportEvery);
         in.sequence = long(guestPresents);
-        gears::ObserveRhiRendererFrameInputs(guestPresents, in.draws);
-
+        materializationGuard.Attach(in);
         // GEARS_DRAW_FRAME_DUMP=<path>: write this frame's whole draw stream to a
         // file that tools/frame_replay renders offline. Reaching a gameplay frame
         // costs a scripted 200-second walk through the menus, and two such runs

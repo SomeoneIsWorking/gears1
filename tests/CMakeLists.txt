@@ -699,6 +699,7 @@ add_test(NAME rhi_resolve COMMAND test_rhi_resolve)
 add_executable(test_gpu_swap_packet
     test_gpu_swap_packet.cpp
     ../runtime/gpu_swap_packet.cpp
+    ../runtime/rhi_renderer_input.cpp
     ../runtime/rhi_semantic_state.cpp
     ../runtime/rhi_semantic_stream.cpp)
 target_include_directories(test_gpu_swap_packet PRIVATE ../runtime)

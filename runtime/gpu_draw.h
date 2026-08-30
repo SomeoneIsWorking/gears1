@@ -15,6 +15,13 @@
 // no display still exercise and verify the draw. When the presenter IS up, both
 // sides share one device and the rendered image is handed over as an image
 // (gpu_shared_device.h) rather than through host memory.
+namespace gears::draw
+{
+struct NativeFrameMaterialization;
+using NativeFrameMaterializationCallback =
+    std::function<void(uint64_t, NativeFrameMaterialization)>;
+} // namespace gears::draw
+
 namespace gears
 {
 
@@ -77,6 +84,9 @@ struct FrameDrawItem
     // different triangles while leaving all primitive counts plausible.
     uint32_t indexEndian = 0;
     uint32_t indexGuestBase = 0;
+    // Live command-buffer identity for semantic correlation. Frame captures do
+    // not persist it because offline replay has no title-call stream to join.
+    uint32_t packetGuestAddress = 0;
 };
 
 struct FrameDrawInputs
@@ -134,6 +144,11 @@ struct FrameDrawInputs
     // frame_<sequence>.ppm rather than overwriting frame.ppm, so a menu walk
     // leaves a filmstrip instead of only its last frame.
     long sequence = -1;
+    // Optional runtime observer for the renderer's terminal materialization
+    // result. Offline replay leaves this empty; the live semantic comparer
+    // installs it without coupling the standalone renderer library back to the
+    // guest runtime.
+    draw::NativeFrameMaterializationCallback materializationCallback;
 };
 
 // Renders every draw of the frame into one persistent target and writes a PPM

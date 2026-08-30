@@ -21,6 +21,12 @@ enum class RhiSemanticDrawKind : std::uint8_t
     BoundIndices,
 };
 
+[[nodiscard]] inline constexpr bool RhiDrawUsesDmaIndices(RhiSemanticDrawKind kind)
+{
+    return kind == RhiSemanticDrawKind::TransientVerticesAndIndices ||
+           kind == RhiSemanticDrawKind::BoundIndices;
+}
+
 struct RhiSemanticBufferRange
 {
     std::uint32_t guestAddress = 0;
@@ -71,6 +77,7 @@ struct RhiSemanticDraw
 struct RhiDrawPacketEvidence
 {
     bool present = false;
+    std::uint32_t packetGuestAddress = 0;
     std::uint32_t opcode = 0;
     std::uint32_t primitiveType = 0;
     std::uint32_t sourceSelect = 0;
@@ -153,19 +160,6 @@ struct RhiSemanticDrawState
     std::optional<RhiSemanticBinding> pixelShader;
     std::optional<RhiSemanticBinding> vertexShader;
     std::optional<RhiSemanticBinding> indexBuffer;
-};
-
-// The compatibility renderer receives this small, PM4-free draw shape after
-// the command processor accepts a guest draw. It is deliberately limited to
-// facts FrameDrawItem owns today; a native frontend must not reconstruct an
-// absent field from Xenos state.
-struct RhiRendererDrawInput
-{
-    std::uint32_t primitiveType = 0;
-    std::uint32_t elementCount = 0;
-    bool indexed = false;
-    bool indexIs32 = false;
-    std::uint32_t indexEndian = 0;
 };
 
 struct RhiSemanticPresent
@@ -393,28 +387,6 @@ struct RhiSemanticFrame
     std::uint64_t presentsMatched = 0;
     std::uint64_t presentsMissing = 0;
     std::uint64_t presentsMismatched = 0;
-    bool rendererInputsPresent = false;
-    std::uint64_t rendererDraws = 0;
-    std::uint64_t rendererDrawsMatched = 0;
-    std::uint64_t rendererDrawsMissing = 0;
-    std::uint64_t rendererDrawsMismatched = 0;
-};
-
-enum class RhiRendererDrawEvidenceResult : std::uint8_t
-{
-    Match,
-    Missing,
-    Mismatch,
-};
-
-struct RhiRendererFrameComparison
-{
-    bool rendererInputsPresent = false;
-    std::uint64_t semanticDraws = 0;
-    std::uint64_t rendererDraws = 0;
-    std::uint64_t matched = 0;
-    std::uint64_t missing = 0;
-    std::uint64_t mismatched = 0;
 };
 
 [[nodiscard]] bool RhiSemanticObservationEnabled();
@@ -437,12 +409,6 @@ CompareRhiVertexStreamReset(const RhiSemanticVertexStreamReset &reset,
                             const RhiVertexStreamResetEvidence &state);
 [[nodiscard]] RhiResolveEvidenceResult
 CompareRhiResolvePacket(const RhiSemanticResolve &resolve, const RhiResolvePacketEvidence &packet);
-[[nodiscard]] RhiRendererDrawEvidenceResult
-CompareRhiRendererDrawInput(const RhiSemanticDrawState &state,
-                            const RhiRendererDrawInput &renderer);
-[[nodiscard]] RhiRendererFrameComparison
-CompareRhiRendererDraws(const RhiSemanticFrame &frame, bool rendererInputsPresent,
-                        const std::vector<RhiRendererDrawInput> &renderer);
 void ObserveRhiSemanticDraw(const RhiSemanticDraw &draw, const RhiDrawPacketEvidence &packet);
 void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
                                const RhiBindingStateEvidence &state);
@@ -456,10 +422,6 @@ void ObserveRhiSemanticVertexStreamReset(const RhiSemanticVertexStreamReset &res
                                          const RhiVertexStreamResetEvidence &state);
 void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,
                                const RhiResolvePacketEvidence &packet);
-void ObserveRhiRendererDraws(std::uint64_t frameSequence,
-                             const std::vector<RhiRendererDrawInput> &draws);
-void ObserveRhiRendererFrameInputs(std::uint64_t frameSequence,
-                                   const std::vector<FrameDrawItem> &draws);
 [[nodiscard]] RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence);
 [[nodiscard]] RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence);
 

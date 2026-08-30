@@ -5,6 +5,7 @@
 #include "gpu_frame_timing.h"
 #include "graphics_probe_render.h"
 #include "frame_production_timing.h"
+#include "rhi_renderer_input.h"
 
 #include <algorithm>
 #include <atomic>
@@ -150,6 +151,8 @@ bool SubmitFrameForRender(FrameDrawInputs &&in)
     if (g_stopping)
     {
         g_dropped.fetch_add(1);
+        if (in.sequence >= 0)
+            ObserveRhiRendererFrameDropped(static_cast<uint64_t>(in.sequence));
         return false;
     }
     if (!g_started)
@@ -165,7 +168,11 @@ bool SubmitFrameForRender(FrameDrawInputs &&in)
     const uint64_t generation = g_retirement.AcceptFrame();
     const FrameQueueSubmitResult result = g_frames.Submit(frameId, generation, std::move(in));
     if (result.status == FrameQueueSubmitStatus::ReplacedPending)
+    {
         g_dropped.fetch_add(1);
+        if (result.displacedFrameSequence.has_value())
+            ObserveRhiRendererFrameDropped(*result.displacedFrameSequence);
+    }
     if (!result.accepted())
     {
         // Stop and submission are serialized by g_stateMutex, and frame IDs
