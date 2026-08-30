@@ -9,6 +9,7 @@ namespace color_write_gamma
 {
 
 constexpr std::uint32_t kDirtyMaskOffset = 0x18;
+constexpr std::uint32_t kSurfaceInfoOffset = 0x2800;
 constexpr std::uint32_t kColorDescriptorOffset = 0x2804;
 constexpr std::uint32_t kRequestedStateOffset = 0x2DEC;
 constexpr std::uint32_t kColorTargetObjectOffset = 0x2F88;

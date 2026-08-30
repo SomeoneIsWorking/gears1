@@ -62,6 +62,16 @@ IdentityFromLifetime(const RhiSemanticResourceLifetime &lifetime)
     return evidence == RhiVertexStreamResetEvidenceResult::Mismatch;
 }
 
+[[nodiscard]] bool IsEvidenceMissing(RhiColorWriteStateEvidenceResult evidence)
+{
+    return evidence == RhiColorWriteStateEvidenceResult::Missing;
+}
+
+[[nodiscard]] bool IsEvidenceMismatch(RhiColorWriteStateEvidenceResult evidence)
+{
+    return evidence == RhiColorWriteStateEvidenceResult::Mismatch;
+}
+
 [[nodiscard]] bool IsEvidenceMissing(RhiResolveEvidenceResult evidence)
 {
     return evidence == RhiResolveEvidenceResult::Missing;
@@ -190,6 +200,20 @@ BuildResult BuildFrame(const RhiSemanticFrame &observed)
                 {.sequence = event.sequence,
                  .payload = VertexStreamResetCommand{.reset = reset->reset}});
             ++result.frame.vertexStreamResets;
+            continue;
+        }
+        if (const auto *colorWrite = std::get_if<RhiObservedColorWriteState>(&event.payload))
+        {
+            const BuildStatus status = EvidenceStatus(colorWrite->evidence);
+            if (status != BuildStatus::Accepted)
+            {
+                result.status = status;
+                return result;
+            }
+            result.frame.commands.push_back(
+                {.sequence = event.sequence,
+                 .payload = ColorWriteStateCommand{.state = colorWrite->state}});
+            ++result.frame.colorWriteStates;
             continue;
         }
         if (const auto *resolve = std::get_if<RhiObservedResolve>(&event.payload))

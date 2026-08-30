@@ -41,6 +41,11 @@ struct VertexStreamResetCommand
     RhiSemanticVertexStreamReset reset;
 };
 
+struct ColorWriteStateCommand
+{
+    RhiSemanticColorWriteState state;
+};
+
 struct ResolveCommand
 {
     RhiSemanticResolve resolve;
@@ -53,7 +58,7 @@ struct PresentCommand
 
 using CommandPayload =
     std::variant<DrawCommand, BindingCommand, ResourceLifetimeCommand, ResourceConstructionCommand,
-                 VertexStreamResetCommand, ResolveCommand, PresentCommand>;
+                 VertexStreamResetCommand, ColorWriteStateCommand, ResolveCommand, PresentCommand>;
 
 struct Command
 {
@@ -70,6 +75,7 @@ struct Frame
     std::uint64_t resourceLifetimeCalls = 0;
     std::uint64_t resourceConstructions = 0;
     std::uint64_t vertexStreamResets = 0;
+    std::uint64_t colorWriteStates = 0;
     std::uint64_t resolves = 0;
     std::uint64_t presents = 0;
     bool complete = false;

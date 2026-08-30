@@ -54,6 +54,10 @@ struct RhiSemanticReportTotals
     std::uint64_t vertexStreamResetsMatched = 0;
     std::uint64_t vertexStreamResetsMissing = 0;
     std::uint64_t vertexStreamResetsMismatched = 0;
+    std::uint64_t colorWriteStates = 0;
+    std::uint64_t colorWriteStatesMatched = 0;
+    std::uint64_t colorWriteStatesMissing = 0;
+    std::uint64_t colorWriteStatesMismatched = 0;
     std::uint64_t resolves = 0;
     std::uint64_t resolvesMatched = 0;
     std::uint64_t resolvesMissing = 0;
@@ -423,6 +427,19 @@ void ObserveRhiSemanticVertexStreamReset(const RhiSemanticVertexStreamReset &res
     g_stream.semanticState.ApplyVertexStreamReset(reset);
 }
 
+void ObserveRhiSemanticColorWriteState(const RhiSemanticColorWriteState &state)
+{
+    if (!RhiSemanticObservationEnabled())
+        return;
+
+    std::lock_guard guard(g_stream.mutex);
+    const RhiColorWriteStateEvidenceResult evidence =
+        g_stream.semanticState.ApplyColorWriteState(state);
+    g_stream.pendingEvents.push_back(
+        {.sequence = g_stream.nextSequence++,
+         .payload = RhiObservedColorWriteState{.state = state, .evidence = evidence}});
+}
+
 void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,
                                const RhiResolvePacketEvidence &packet)
 {
@@ -525,6 +542,23 @@ RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
             }
             continue;
         }
+        if (const auto *observed = std::get_if<RhiObservedColorWriteState>(&event.payload))
+        {
+            ++frame.colorWriteStates;
+            switch (observed->evidence)
+            {
+            case RhiColorWriteStateEvidenceResult::Match:
+                ++frame.colorWriteStatesMatched;
+                break;
+            case RhiColorWriteStateEvidenceResult::Missing:
+                ++frame.colorWriteStatesMissing;
+                break;
+            case RhiColorWriteStateEvidenceResult::Mismatch:
+                ++frame.colorWriteStatesMismatched;
+                break;
+            }
+            continue;
+        }
         if (const auto *observed = std::get_if<RhiObservedResolve>(&event.payload))
         {
             ++frame.resolves;
@@ -619,6 +653,10 @@ RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence)
     g_reportTotals.vertexStreamResetsMatched += frame.vertexStreamResetsMatched;
     g_reportTotals.vertexStreamResetsMissing += frame.vertexStreamResetsMissing;
     g_reportTotals.vertexStreamResetsMismatched += frame.vertexStreamResetsMismatched;
+    g_reportTotals.colorWriteStates += frame.colorWriteStates;
+    g_reportTotals.colorWriteStatesMatched += frame.colorWriteStatesMatched;
+    g_reportTotals.colorWriteStatesMissing += frame.colorWriteStatesMissing;
+    g_reportTotals.colorWriteStatesMismatched += frame.colorWriteStatesMismatched;
     g_reportTotals.resolves += frame.resolves;
     g_reportTotals.resolvesMatched += frame.resolvesMatched;
     g_reportTotals.resolvesMissing += frame.resolvesMissing;
@@ -631,6 +669,7 @@ RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence)
         frame.mismatched != 0 || frame.bindingsMissing != 0 || frame.bindingsMismatched != 0 ||
         frame.resourceLifetimeMissing != 0 || frame.resourceLifetimeMismatched != 0 ||
         frame.vertexStreamResetsMissing != 0 || frame.vertexStreamResetsMismatched != 0 ||
+        frame.colorWriteStatesMissing != 0 || frame.colorWriteStatesMismatched != 0 ||
         frame.resolvesMissing != 0 || frame.resolvesMismatched != 0 || frame.presentsMissing != 0 ||
         frame.presentsMismatched != 0)
     {
@@ -641,7 +680,9 @@ RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence)
                  " lifetime call(s), {} match(es), {} missing result(s), {} mismatch(es), {}"
                  " retirement(s) ({} add-reference, {} release), {} construction(s); {}"
                  " vertex-stream reset(s),"
-                 " {} match(es), {} missing state observation(s), {} mismatch(es); {} resolve"
+                 " {} match(es), {} missing state observation(s), {} mismatch(es); {} color-write"
+                 " state transition(s), {} match(es), {} missing active target(s), {}"
+                 " mismatch(es); {} resolve"
                  " call(s), {} packet match(es), {} missing packet(s), {} mismatch(es);"
                  " {} present call(s),"
                  " {} packet match(es), {} missing packet(s), {} mismatch(es)",
@@ -654,7 +695,9 @@ RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence)
                  g_reportTotals.resourceAddReferences, g_reportTotals.resourceReleases,
                  g_reportTotals.resourceConstructions, g_reportTotals.vertexStreamResets,
                  g_reportTotals.vertexStreamResetsMatched, g_reportTotals.vertexStreamResetsMissing,
-                 g_reportTotals.vertexStreamResetsMismatched, g_reportTotals.resolves,
+                 g_reportTotals.vertexStreamResetsMismatched, g_reportTotals.colorWriteStates,
+                 g_reportTotals.colorWriteStatesMatched, g_reportTotals.colorWriteStatesMissing,
+                 g_reportTotals.colorWriteStatesMismatched, g_reportTotals.resolves,
                  g_reportTotals.resolvesMatched, g_reportTotals.resolvesMissing,
                  g_reportTotals.resolvesMismatched, g_reportTotals.presents,
                  g_reportTotals.presentsMatched, g_reportTotals.presentsMissing,
@@ -821,6 +864,27 @@ RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence)
                     event.sequence, observed->reset.firstSlot,
                     observed->reset.firstSlot + observed->reset.slotCount, observed->state.present,
                     observed->state.activeStreams.size());
+            }
+            continue;
+        }
+
+        if (const auto *observed = std::get_if<RhiObservedColorWriteState>(&event.payload))
+        {
+            if (observed->evidence != RhiColorWriteStateEvidenceResult::Match)
+            {
+                lucent::error(
+                    "rhi",
+                    "semantic color-write state {} (requested {:#x}) did not match the active"
+                    " target: target present={} slot={} object={:#x} descriptor present={}"
+                    " base={:#x} format={} exponent={}; result={}",
+                    event.sequence, observed->state.requested, observed->state.targetPresent,
+                    observed->state.target.slot, observed->state.target.object,
+                    observed->state.target.normalizedStatePresent,
+                    observed->state.target.normalizedState.base,
+                    observed->state.target.normalizedState.format,
+                    observed->state.target.normalizedState.colorExponentBias,
+                    observed->evidence == RhiColorWriteStateEvidenceResult::Missing ? "missing"
+                                                                                    : "mismatch");
             }
             continue;
         }

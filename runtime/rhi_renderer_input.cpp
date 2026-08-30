@@ -106,6 +106,52 @@ constexpr std::size_t kRendererJoinHistory = 64;
     return "unknown";
 }
 
+[[nodiscard]] const char *EvidenceReasonName(RhiRendererDrawEvidenceReason reason)
+{
+    switch (reason)
+    {
+    case RhiRendererDrawEvidenceReason::None:
+        return "none";
+    case RhiRendererDrawEvidenceReason::RendererRefused:
+        return "renderer-refused";
+    case RhiRendererDrawEvidenceReason::DrawShape:
+        return "draw-shape";
+    case RhiRendererDrawEvidenceReason::IndexBufferViewMissing:
+        return "index-buffer-view-missing";
+    case RhiRendererDrawEvidenceReason::IndexWidth:
+        return "index-width";
+    case RhiRendererDrawEvidenceReason::IndexAddress:
+        return "index-address";
+    case RhiRendererDrawEvidenceReason::IndexEndian:
+        return "index-endian";
+    case RhiRendererDrawEvidenceReason::DuplicateColorTarget:
+        return "duplicate-color-target";
+    case RhiRendererDrawEvidenceReason::DuplicateDepthTarget:
+        return "duplicate-depth-target";
+    case RhiRendererDrawEvidenceReason::UnsupportedColorTargetSlot:
+        return "unsupported-color-target-slot";
+    case RhiRendererDrawEvidenceReason::RendererTargetStateMissing:
+        return "renderer-target-state-missing";
+    case RhiRendererDrawEvidenceReason::SemanticSurfaceStateMissing:
+        return "semantic-surface-state-missing";
+    case RhiRendererDrawEvidenceReason::ColorTargetStateUnavailable:
+        return "color-target-state-unavailable";
+    case RhiRendererDrawEvidenceReason::DepthTargetStateUnavailable:
+        return "depth-target-state-unavailable";
+    case RhiRendererDrawEvidenceReason::ColorTargetStateMissing:
+        return "color-target-state-missing";
+    case RhiRendererDrawEvidenceReason::DepthTargetStateMissing:
+        return "depth-target-state-missing";
+    case RhiRendererDrawEvidenceReason::SurfaceState:
+        return "surface-state";
+    case RhiRendererDrawEvidenceReason::ColorTargetState:
+        return "color-target-state";
+    case RhiRendererDrawEvidenceReason::DepthTargetState:
+        return "depth-target-state";
+    }
+    return "unknown";
+}
+
 [[nodiscard]] std::uint32_t CanonicalPacketAddress(std::uint32_t guestAddress)
 {
     return guestAddress & kGuestPhysicalAddressMask & ~std::uint32_t{3};
@@ -173,7 +219,8 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
             " packet(s) ({} materialized, {} refused, {} mixed outcome; {} indirect, {} ring,"
             " {} source conflict), {} unkeyed"
             " renderer draw(s), {} duplicate frame(s); current frame"
-            " {}{}; first missing semantic packet {:#x}, first"
+            " {}{}; first missing semantic packet {:#x}, first mismatched semantic packet"
+            " {:#x} ({}), first"
             " unmatched renderer packet {}",
             frameSequence, g_reportTotals.frames, g_reportTotals.unavailableFrames,
             g_reportTotals.droppedFrames, g_reportTotals.sourceDraws,
@@ -188,7 +235,8 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
             g_reportTotals.unmatchedRendererInconsistentSourcePackets,
             g_reportTotals.unkeyedRendererDraws, g_reportTotals.duplicateFrames,
             FrameStatusName(comparison.status), comparison.duplicate ? ", duplicate" : "",
-            comparison.firstMissingSemanticPacket,
+            comparison.firstMissingSemanticPacket, comparison.firstMismatchedSemanticPacket,
+            EvidenceReasonName(comparison.firstMismatchReason),
             DescribeFirstUnmatchedRendererPacket(comparison));
     }
 }
@@ -300,37 +348,112 @@ void ReportAll(const std::vector<PendingReport> &reports)
 
 } // namespace
 
-RhiRendererDrawEvidenceResult CompareRhiRendererDrawInput(const RhiSemanticDrawState &state,
-                                                          const RhiRendererDrawInput &renderer)
+RhiRendererDrawEvidence InspectRhiRendererDrawInput(const RhiSemanticDrawState &state,
+                                                    const RhiRendererDrawInput &renderer)
 {
     if (renderer.outcome != draw::NativeDrawMaterializationOutcome::Materialized)
-        return RhiRendererDrawEvidenceResult::Missing;
+        return {RhiRendererDrawEvidenceResult::Missing,
+                RhiRendererDrawEvidenceReason::RendererRefused};
     const RhiSemanticDraw &draw = state.draw;
     const bool expectedIndexed = RhiDrawUsesDmaIndices(draw.kind);
     if (renderer.primitiveType != (draw.primitiveType & 0x3F) ||
         renderer.elementCount != draw.elementCount || renderer.indexed != expectedIndexed)
-        return RhiRendererDrawEvidenceResult::Mismatch;
-    if (!expectedIndexed)
-        return RhiRendererDrawEvidenceResult::Match;
+        return {RhiRendererDrawEvidenceResult::Mismatch, RhiRendererDrawEvidenceReason::DrawShape};
+    if (expectedIndexed)
+    {
+        bool expected32 = false;
+        std::uint32_t expectedEndian = 0;
+        if (draw.kind == RhiSemanticDrawKind::BoundIndices)
+        {
+            if (!draw.indexBufferViewPresent)
+                return {RhiRendererDrawEvidenceResult::Missing,
+                        RhiRendererDrawEvidenceReason::IndexBufferViewMissing};
+            expected32 = draw.indexBuffer.elementStrideBytes == 4;
+            expectedEndian = draw.indexBuffer.endianSwap;
+        }
+        else
+        {
+            expected32 = (draw.indexFormatFlags & 4) != 0;
+        }
+        if (renderer.indexIs32 != expected32)
+            return {RhiRendererDrawEvidenceResult::Mismatch,
+                    RhiRendererDrawEvidenceReason::IndexWidth};
+        if ((renderer.indexGuestBase & kGuestPhysicalAddressMask) !=
+            (draw.indexData.guestAddress & kGuestPhysicalAddressMask))
+            return {RhiRendererDrawEvidenceResult::Mismatch,
+                    RhiRendererDrawEvidenceReason::IndexAddress};
+        if (draw.kind == RhiSemanticDrawKind::BoundIndices &&
+            renderer.indexEndian != expectedEndian)
+        {
+            return {RhiRendererDrawEvidenceResult::Mismatch,
+                    RhiRendererDrawEvidenceReason::IndexEndian};
+        }
+    }
 
-    bool expected32 = false;
-    std::uint32_t expectedEndian = 0;
-    if (draw.kind == RhiSemanticDrawKind::BoundIndices)
+    bool targetParityExpected = state.surfaceStatePresent;
+    const RhiSemanticRenderTarget *colorTarget = nullptr;
+    const RhiSemanticRenderTarget *depthTarget = nullptr;
+    for (const RhiSemanticRenderTarget &target : state.renderTargets)
     {
-        if (!draw.indexBufferViewPresent)
-            return RhiRendererDrawEvidenceResult::Missing;
-        expected32 = draw.indexBuffer.elementStrideBytes == 4;
-        expectedEndian = draw.indexBuffer.endianSwap;
+        targetParityExpected = targetParityExpected || target.normalizedStatePresent;
+        if (target.depthStencil)
+        {
+            if (depthTarget != nullptr)
+                return {RhiRendererDrawEvidenceResult::Mismatch,
+                        RhiRendererDrawEvidenceReason::DuplicateDepthTarget};
+            depthTarget = &target;
+        }
+        else if (target.slot == 0)
+        {
+            if (colorTarget != nullptr)
+                return {RhiRendererDrawEvidenceResult::Mismatch,
+                        RhiRendererDrawEvidenceReason::DuplicateColorTarget};
+            colorTarget = &target;
+        }
+        else if (targetParityExpected)
+        {
+            // The compatibility renderer materializes RT0 only. A semantic
+            // MRT binding is unsupported parity coverage, not an agreement.
+            return {RhiRendererDrawEvidenceResult::Missing,
+                    RhiRendererDrawEvidenceReason::UnsupportedColorTargetSlot};
+        }
     }
-    else
-    {
-        expected32 = (draw.indexFormatFlags & 4) != 0;
-    }
-    if (renderer.indexIs32 != expected32 || renderer.indexGuestBase != draw.indexData.guestAddress)
-        return RhiRendererDrawEvidenceResult::Mismatch;
-    if (draw.kind == RhiSemanticDrawKind::BoundIndices && renderer.indexEndian != expectedEndian)
-        return RhiRendererDrawEvidenceResult::Mismatch;
-    return RhiRendererDrawEvidenceResult::Match;
+    if (!targetParityExpected)
+        return {RhiRendererDrawEvidenceResult::Match, RhiRendererDrawEvidenceReason::None};
+    if (!renderer.targetStatePresent)
+        return {RhiRendererDrawEvidenceResult::Missing,
+                RhiRendererDrawEvidenceReason::RendererTargetStateMissing};
+    if (!state.surfaceStatePresent)
+        return {RhiRendererDrawEvidenceResult::Missing,
+                RhiRendererDrawEvidenceReason::SemanticSurfaceStateMissing};
+    if (colorTarget != nullptr && !renderer.colorTargetStatePresent)
+        return {RhiRendererDrawEvidenceResult::Missing,
+                RhiRendererDrawEvidenceReason::ColorTargetStateUnavailable};
+    if (depthTarget != nullptr && !renderer.depthTargetStatePresent)
+        return {RhiRendererDrawEvidenceResult::Missing,
+                RhiRendererDrawEvidenceReason::DepthTargetStateUnavailable};
+    if (colorTarget != nullptr && !colorTarget->normalizedStatePresent)
+        return {RhiRendererDrawEvidenceResult::Missing,
+                RhiRendererDrawEvidenceReason::ColorTargetStateMissing};
+    if (depthTarget != nullptr && !depthTarget->normalizedStatePresent)
+        return {RhiRendererDrawEvidenceResult::Missing,
+                RhiRendererDrawEvidenceReason::DepthTargetStateMissing};
+    if (state.surfaceState != renderer.surfaceState)
+        return {RhiRendererDrawEvidenceResult::Mismatch,
+                RhiRendererDrawEvidenceReason::SurfaceState};
+    if (colorTarget != nullptr && colorTarget->normalizedState != renderer.colorTarget)
+        return {RhiRendererDrawEvidenceResult::Mismatch,
+                RhiRendererDrawEvidenceReason::ColorTargetState};
+    if (depthTarget != nullptr && depthTarget->normalizedState != renderer.depthTarget)
+        return {RhiRendererDrawEvidenceResult::Mismatch,
+                RhiRendererDrawEvidenceReason::DepthTargetState};
+    return {RhiRendererDrawEvidenceResult::Match, RhiRendererDrawEvidenceReason::None};
+}
+
+RhiRendererDrawEvidenceResult CompareRhiRendererDrawInput(const RhiSemanticDrawState &state,
+                                                          const RhiRendererDrawInput &renderer)
+{
+    return InspectRhiRendererDrawInput(state, renderer).result;
 }
 
 RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame,
@@ -412,9 +535,12 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
 
         bool missing = false;
         bool mismatch = false;
+        RhiRendererDrawEvidenceReason mismatchReason = RhiRendererDrawEvidenceReason::None;
         for (const RhiRendererDrawInput *input : executions->second)
         {
-            switch (CompareRhiRendererDrawInput(observed->state, *input))
+            const RhiRendererDrawEvidence evidence =
+                InspectRhiRendererDrawInput(observed->state, *input);
+            switch (evidence.result)
             {
             case RhiRendererDrawEvidenceResult::Match:
                 break;
@@ -423,11 +549,20 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
                 break;
             case RhiRendererDrawEvidenceResult::Mismatch:
                 mismatch = true;
+                if (mismatchReason == RhiRendererDrawEvidenceReason::None)
+                    mismatchReason = evidence.reason;
                 break;
             }
         }
         if (mismatch)
+        {
             ++result.mismatched;
+            if (result.firstMismatchedSemanticPacket == 0)
+            {
+                result.firstMismatchedSemanticPacket = packetGuestAddress;
+                result.firstMismatchReason = mismatchReason;
+            }
+        }
         else if (missing)
             ++result.missing;
         else
@@ -568,17 +703,30 @@ void ObserveRhiRendererMaterialization(std::uint64_t frameSequence,
     frame.draws.reserve(materialization.draws.size());
     for (const draw::NativeDrawMaterialization &draw : materialization.draws)
     {
-        frame.draws.push_back({.sourceOrdinal = draw.sourceOrdinal,
-                               .packetGuestAddress = draw.packetGuestAddress,
-                               .packetBufferBase = draw.packetBufferBase,
-                               .packetFromIndirectBuffer = draw.packetFromIndirectBuffer,
-                               .outcome = draw.outcome,
-                               .primitiveType = draw.input.primitiveType,
-                               .elementCount = draw.input.indexCount,
-                               .indexed = draw.input.indexed,
-                               .indexIs32 = draw.input.indexIs32,
-                               .indexEndian = draw.input.indexEndian,
-                               .indexGuestBase = draw.input.indexGuestBase});
+        frame.draws.push_back(
+            {.sourceOrdinal = draw.sourceOrdinal,
+             .packetGuestAddress = draw.packetGuestAddress,
+             .packetBufferBase = draw.packetBufferBase,
+             .packetFromIndirectBuffer = draw.packetFromIndirectBuffer,
+             .outcome = draw.outcome,
+             .primitiveType = draw.input.primitiveType,
+             .elementCount = draw.input.indexCount,
+             .indexed = draw.input.indexed,
+             .indexIs32 = draw.input.indexIs32,
+             .indexEndian = draw.input.indexEndian,
+             .indexGuestBase = draw.input.indexGuestBase,
+             .targetStatePresent =
+                 draw.outcome == draw::NativeDrawMaterializationOutcome::Materialized,
+             .colorTargetStatePresent =
+                 draw.outcome == draw::NativeDrawMaterializationOutcome::Materialized,
+             .depthTargetStatePresent =
+                 draw.outcome == draw::NativeDrawMaterializationOutcome::Materialized,
+             .colorTarget = {.base = draw.input.surfaceBase,
+                             .format = draw.input.colorFormat,
+                             .colorExponentBias = draw.input.colorExpBias},
+             .depthTarget = {.base = draw.input.depthBase,
+                             .format = draw.input.depthIsFloat24 ? 1u : 0u},
+             .surfaceState = DecodeRhiSurfaceState(draw.input.surfaceInfo)});
     }
     (void)PublishRhiRendererFrameInput(frameSequence, std::move(frame));
 }

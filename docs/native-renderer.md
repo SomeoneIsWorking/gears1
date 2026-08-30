@@ -134,6 +134,22 @@ the same captured inputs. A valid gate must:
 Until the full native RHI parity gate exists, the PM4 path is the authoritative
 renderer and native-RHI work remains observation-only.
 
+The terminal state comparison now includes normalized active RT0/depth base and
+format, signed color exponent, and surface pitch/sample count. One shared
+`rhi_target_state.h` decoder is used by the Gears 1 post-call semantic adapter
+and the compatibility renderer's register-snapshot projection. The separate
+`0x82229B28` color-write operation emits an ordered state transition because it
+mutates slot-zero format after binding; folding that write into bind-time state
+previously produced thousands of false descriptor mismatches. Renderer target
+fields mean comparable register state is available, not that a backend-created
+attachment proves a title resource is bound. A headless gameplay-transition
+run through frame 660 matched all 10,945 correlated draws with zero missing or
+value mismatches while exercising 15,306 color-write transitions and repeated
+color/depth binding. Focused controls falsify every compared target field and
+unsupported semantic MRT slots. This closes one renderer-input group only;
+textures, shader/constants, remaining output state, and pixels still gate a
+native bypass.
+
 ## PM4-independent frame-plan boundary
 
 `runtime/native_rhi.*` now converts an observed, evidence-checked semantic frame
