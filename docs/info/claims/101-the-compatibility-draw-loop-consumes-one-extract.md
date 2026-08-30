@@ -6,7 +6,7 @@ created: 2026-08-30
 tags:
 depends: runtime/gpu_draw_native_input.cpp#BuildNativeDrawInput, runtime/gpu_draw.cpp#Renderer::RenderFrameImpl
 reconfirmed: 2026-08-30
-verified_at: 2026-08-30 03:15:07
+verified_at: 2026-08-30 03:59:06
 ---
 
 ## Claim
@@ -24,3 +24,7 @@ The focused boundary test fails, RenderFrameImpl rereads the extracted fields, o
 ## Re-confirmed 2026-08-30
 
 Final-tree Clang build, test_gpu_draw_native_input one-shot terminal materialization/refusal controls, all 90 non-cpp_quality CTests, standalone clang-format/clang-tidy, and a frame-60 headless run passed after terminal renderer observation was added around the same NativeDrawInput boundary.
+
+## Re-confirmed 2026-08-30
+
+Committed Clang source tree 1eb0f94 retained the single NativeDrawInput extraction boundary; the full build, 90 non-cpp_quality tests, repository-wide clang-format/clang-tidy gate, and focused terminal-provenance controls passed.
