@@ -10,6 +10,8 @@ from pathlib import Path
 
 
 FORMATTED = [
+    "runtime/bugcheck_policy.cpp",
+    "runtime/bugcheck_policy.h",
     "runtime/generated_title_profile.cpp",
     "runtime/generated_title_profile.h",
     "runtime/guest_address.h",
@@ -24,6 +26,7 @@ FORMATTED = [
     "runtime/hle_d3d.cpp",
     "runtime/hle_d3d.h",
     "runtime/guest_memory.h",
+    "runtime/kernel_misc.cpp",
     "runtime/main.cpp",
     "runtime/debug_http.cpp",
     "runtime/debug_http.h",
@@ -154,6 +157,7 @@ FORMATTED = [
     "runtime/titles/gears1/guest_probe_runtime.cpp",
     "runtime/titles/gears1/guest_probe_state.h",
     "runtime/titles/gears1/guest_state_memory.h",
+    "runtime/titles/gears1/bugcheck_policy.cpp",
     "runtime/titles/gears1/gpu_diagnostics_profile.cpp",
     "runtime/titles/gears1/hle_d3d.cpp",
     "runtime/titles/gears1/rhi_bindings.cpp",
@@ -188,6 +192,7 @@ FORMATTED = [
     "tests/test_guest_dirty_pages.cpp",
     "tests/test_guest_texture_hash.cpp",
     "tests/test_guest_write_watch.cpp",
+    "tests/test_bugcheck_policy.cpp",
     "tests/test_gpu_diagnostics_profile.cpp",
     "tests/test_hle_d3d.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
@@ -226,13 +231,16 @@ FORMATTED = [
 ]
 
 TIDY_TRANSLATION_UNITS = [
+    "runtime/bugcheck_policy.cpp",
     "runtime/generated_title_profile.cpp",
     "runtime/guest_filesystem.cpp",
     "runtime/guest_texture_hash.cpp",
     "runtime/guest_write_watch.cpp",
     "runtime/gpu_diagnostics_profile.cpp",
     "runtime/hle_d3d.cpp",
+    "runtime/kernel_misc.cpp",
     "runtime/main.cpp",
+    "runtime/titles/gears1/bugcheck_policy.cpp",
     "runtime/titles/gears1/color_write_gamma_override.cpp",
     "runtime/titles/gears1/guest_probe_core.cpp",
     "runtime/titles/gears1/guest_probe_loader.cpp",
@@ -325,6 +333,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_guest_dirty_pages.cpp",
     "tests/test_guest_texture_hash.cpp",
     "tests/test_guest_write_watch.cpp",
+    "tests/test_bugcheck_policy.cpp",
     "tests/test_gpu_diagnostics_profile.cpp",
     "tests/test_hle_d3d.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
@@ -425,6 +434,11 @@ def selftest():
     assert "runtime/titles/gears1/guest_probe_loader.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/guest_probe_runtime.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/guest_probe_state.h" in FORMATTED
+    assert "runtime/bugcheck_policy.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/bugcheck_policy.h" in FORMATTED
+    assert "runtime/kernel_misc.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/bugcheck_policy.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_bugcheck_policy.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_diagnostics_profile.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/gpu_diagnostics_profile.h" in FORMATTED
     assert "runtime/titles/gears1/gpu_diagnostics_profile.cpp" in TIDY_TRANSLATION_UNITS

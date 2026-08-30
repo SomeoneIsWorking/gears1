@@ -187,6 +187,7 @@ add_executable(gears1
     xam_overlapped.cpp
     xnet_null.cpp
     kernel_misc.cpp
+    bugcheck_policy.cpp
     guest_clock.cpp
     kernel_time.cpp
     kernel_timer.cpp
@@ -216,6 +217,7 @@ add_executable(gears1
     native_rhi_present.cpp
     gpu_ticket_wait.cpp
     frame_production_timing.cpp
+    titles/gears1/bugcheck_policy.cpp
     titles/gears1/gpu_diagnostics_profile.cpp
     titles/gears1/hle_d3d.cpp
     titles/gears1/color_write_gamma_override.cpp
