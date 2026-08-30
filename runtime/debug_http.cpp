@@ -1,6 +1,7 @@
 #include "debug_http.h"
 
 #include "graphics_probe.h"
+#include "host_product_identity.h"
 #include "input.h"
 #include "render_thread.h"
 
@@ -141,23 +142,24 @@ std::string StatusJson()
     const PadState pad = CurrentPad(packet);
     const InputSource source = CurrentInputSource();
     const RenderThreadStats renderer = RenderThreadCounters();
-    return std::format(
-        "{{\"service\":\"gears1-debug\",\"guest_frames_presented\":{},"
-        "\"input\":{{\"connected\":{},\"source\":\"{}\",\"packet\":{},"
-        "\"buttons\":{},\"lt\":{},\"rt\":{},\"lx\":{},\"ly\":{},"
-        "\"rx\":{},\"ry\":{}}},"
-        "\"renderer\":{{\"submitted\":{},\"dropped\":{},\"rendered\":{},"
-        "\"busy_ms\":{},\"cpu_ms\":{},\"runqueue_ms\":{},"
-        "\"gpu_timing_available\":{},\"gpu_samples\":{},\"gpu_ns\":{},"
-        "\"gpu_max_ns\":{},"
-        "\"gpu_failed_samples\":{}}},"
-        "\"probe\":{}}}\n",
-        CurrentGuestFrame(), PadConnected() ? "true" : "false", InputSourceName(source), packet,
-        pad.buttons, pad.leftTrigger, pad.rightTrigger, pad.thumbLX, pad.thumbLY, pad.thumbRX,
-        pad.thumbRY, renderer.submitted, renderer.dropped, renderer.rendered, renderer.busyMillis,
-        renderer.cpuMillis, renderer.runqueueMillis, renderer.gpuTimingAvailable ? "true" : "false",
-        renderer.gpuSamples, renderer.gpuNanoseconds, renderer.gpuMaximumNanoseconds,
-        renderer.gpuFailedSamples, ProbeJson(LatestGraphicsProbe()));
+    return std::format("{{\"service\":\"{}-debug\",\"guest_frames_presented\":{},"
+                       "\"input\":{{\"connected\":{},\"source\":\"{}\",\"packet\":{},"
+                       "\"buttons\":{},\"lt\":{},\"rt\":{},\"lx\":{},\"ly\":{},"
+                       "\"rx\":{},\"ry\":{}}},"
+                       "\"renderer\":{{\"submitted\":{},\"dropped\":{},\"rendered\":{},"
+                       "\"busy_ms\":{},\"cpu_ms\":{},\"runqueue_ms\":{},"
+                       "\"gpu_timing_available\":{},\"gpu_samples\":{},\"gpu_ns\":{},"
+                       "\"gpu_max_ns\":{},"
+                       "\"gpu_failed_samples\":{}}},"
+                       "\"probe\":{}}}\n",
+                       kHostProductKey, CurrentGuestFrame(), PadConnected() ? "true" : "false",
+                       InputSourceName(source), packet, pad.buttons, pad.leftTrigger,
+                       pad.rightTrigger, pad.thumbLX, pad.thumbLY, pad.thumbRX, pad.thumbRY,
+                       renderer.submitted, renderer.dropped, renderer.rendered, renderer.busyMillis,
+                       renderer.cpuMillis, renderer.runqueueMillis,
+                       renderer.gpuTimingAvailable ? "true" : "false", renderer.gpuSamples,
+                       renderer.gpuNanoseconds, renderer.gpuMaximumNanoseconds,
+                       renderer.gpuFailedSamples, ProbeJson(LatestGraphicsProbe()));
 }
 
 lucent::http::Response PpmResponse(const GraphicsProbeFrame &frame)
@@ -183,12 +185,14 @@ lucent::http::Response HandleRequest(const lucent::http::Request &request)
     {
         return lucent::http::Response::text(
             200, "OK",
-            "gears1 interactive debug API\n\n"
-            "GET    /api/status\n"
-            "POST   /api/input  buttons=A,START&lx=-32767&ly=32767&rx=0&ry=0&lt=0&rt=0\n"
-            "POST   /api/input/release\n"
-            "DELETE /api/input\n"
-            "GET    /api/frame.ppm  (waits for the next renderer readback)\n");
+            std::format(
+                "{} interactive debug API\n\n"
+                "GET    /api/status\n"
+                "POST   /api/input  buttons=A,START&lx=-32767&ly=32767&rx=0&ry=0&lt=0&rt=0\n"
+                "POST   /api/input/release\n"
+                "DELETE /api/input\n"
+                "GET    /api/frame.ppm  (waits for the next renderer readback)\n",
+                kHostProductName));
     }
     if (request.method == "GET" && path == "/api/status")
         return lucent::http::Response::json(200, "OK", StatusJson());

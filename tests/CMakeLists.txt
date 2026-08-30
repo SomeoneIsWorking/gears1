@@ -47,6 +47,10 @@ add_executable(test_hle_d3d
 target_include_directories(test_hle_d3d PRIVATE ../runtime)
 add_test(NAME hle_d3d COMMAND test_hle_d3d)
 
+add_executable(test_host_product_identity test_host_product_identity.cpp)
+target_include_directories(test_host_product_identity PRIVATE ../runtime)
+add_test(NAME host_product_identity COMMAND test_host_product_identity)
+
 add_executable(test_bugcheck_policy
     test_bugcheck_policy.cpp
     ../runtime/bugcheck_policy.cpp

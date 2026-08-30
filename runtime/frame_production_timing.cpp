@@ -116,7 +116,7 @@ FrameProductionTiming &GlobalFrameProductionTiming()
 void ReportFrameProductionTiming(const FrameProductionTimingReport &report)
 {
     lucent::info("timing",
-                 "Gears 1 frame chain: scheduler {:.1f}/s ({}), producer {:.1f}/s ({}),"
+                 "frame chain: scheduler {:.1f}/s ({}), producer {:.1f}/s ({}),"
                  " producer-present {} calls, blocked {} calls, render-ring reserve {:.1f}/s ({}),"
                  " present boundary {:.1f}/s ({}), render handoff {:.1f}/s ({}), over {:.2f}s",
                  report.schedulerHz, report.schedulerTicks, report.producerHz,

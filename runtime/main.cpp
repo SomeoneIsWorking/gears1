@@ -15,6 +15,7 @@
 #include "guest_memory.h"
 #include "guest_heap.h"
 #include "guest_filesystem.h"
+#include "host_product_identity.h"
 #include "user_profile.h"
 #include "guest_thread.h"
 #include "fatal_exit.h"
@@ -134,7 +135,8 @@ int main(int argc, char *argv[])
     // WHICH BUILD IS THIS. Screenshots and logs from a run get compared against
     // fixes that landed at a known time, and "did that binary contain the fix" was
     // guessed at twice. It is one line and it removes the guess.
-    lucent::info("boot", "gears1 built {} {} from {}", __DATE__, __TIME__, GEARS_BUILD_REVISION);
+    lucent::info("boot", "{} built {} {} from {}", gears::kHostProductName, __DATE__, __TIME__,
+                 GEARS_BUILD_REVISION);
     lucent::info("boot", "read {} ({} bytes)", xexPath.string(), xex.size());
 
     gears::LoadedTitleExecutable loaded;
