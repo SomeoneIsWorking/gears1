@@ -21,6 +21,8 @@ FORMATTED = [
     "runtime/guest_texture_hash.h",
     "runtime/guest_write_watch.cpp",
     "runtime/guest_write_watch.h",
+    "runtime/hle_d3d.cpp",
+    "runtime/hle_d3d.h",
     "runtime/guest_memory.h",
     "runtime/main.cpp",
     "runtime/debug_http.cpp",
@@ -150,6 +152,7 @@ FORMATTED = [
     "runtime/titles/gears1/guest_probe_runtime.cpp",
     "runtime/titles/gears1/guest_probe_state.h",
     "runtime/titles/gears1/guest_state_memory.h",
+    "runtime/titles/gears1/hle_d3d.cpp",
     "runtime/titles/gears1/rhi_bindings.cpp",
     "runtime/titles/gears1/rhi_device_state_reset_binding.cpp",
     "runtime/titles/gears1/rhi_index_buffer.cpp",
@@ -182,6 +185,7 @@ FORMATTED = [
     "tests/test_guest_dirty_pages.cpp",
     "tests/test_guest_texture_hash.cpp",
     "tests/test_guest_write_watch.cpp",
+    "tests/test_hle_d3d.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
     "tests/test_gpu_draw_native_input.cpp",
     "tests/test_gpu_draw_untile.cpp",
@@ -222,11 +226,13 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/guest_filesystem.cpp",
     "runtime/guest_texture_hash.cpp",
     "runtime/guest_write_watch.cpp",
+    "runtime/hle_d3d.cpp",
     "runtime/main.cpp",
     "runtime/titles/gears1/color_write_gamma_override.cpp",
     "runtime/titles/gears1/guest_probe_core.cpp",
     "runtime/titles/gears1/guest_probe_loader.cpp",
     "runtime/titles/gears1/guest_probe_runtime.cpp",
+    "runtime/titles/gears1/hle_d3d.cpp",
     "runtime/debug_http.cpp",
     "runtime/graphics_probe.cpp",
     "runtime/graphics_probe_render.cpp",
@@ -313,6 +319,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_guest_dirty_pages.cpp",
     "tests/test_guest_texture_hash.cpp",
     "tests/test_guest_write_watch.cpp",
+    "tests/test_hle_d3d.cpp",
     "tests/test_gpu_draw_sample_layout.cpp",
     "tests/test_gpu_draw_native_input.cpp",
     "tests/test_gpu_draw_untile.cpp",
@@ -411,6 +418,9 @@ def selftest():
     assert "runtime/titles/gears1/guest_probe_loader.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/guest_probe_runtime.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/guest_probe_state.h" in FORMATTED
+    assert "runtime/hle_d3d.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/hle_d3d.cpp" in TIDY_TRANSLATION_UNITS
+    assert "tests/test_hle_d3d.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resolve.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resolve_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resource_construction_binding.cpp" in TIDY_TRANSLATION_UNITS

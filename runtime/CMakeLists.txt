@@ -215,6 +215,7 @@ add_executable(gears1
     native_rhi_present.cpp
     gpu_ticket_wait.cpp
     frame_production_timing.cpp
+    titles/gears1/hle_d3d.cpp
     titles/gears1/color_write_gamma_override.cpp
     titles/gears1/rhi_bindings.cpp
     titles/gears1/rhi_device_state_reset_binding.cpp

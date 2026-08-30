@@ -41,6 +41,12 @@ add_test(NAME gears1_native_pass_enabled COMMAND test_gears1_native_pass)
 set_tests_properties(gears1_native_pass_enabled PROPERTIES
     ENVIRONMENT "GEARS_NATIVE_PASSES=1")
 
+add_executable(test_hle_d3d
+    test_hle_d3d.cpp
+    ../runtime/hle_d3d.cpp)
+target_include_directories(test_hle_d3d PRIVATE ../runtime)
+add_test(NAME hle_d3d COMMAND test_hle_d3d)
+
 add_executable(test_gpu_ticket_wait
     test_gpu_ticket_wait.cpp
     ../runtime/gpu_ticket_wait.cpp)
