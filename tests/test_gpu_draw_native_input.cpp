@@ -122,7 +122,7 @@ int main()
                 published = std::move(result);
             });
         recorder.MarkResolve(1);
-        recorder.SetPacketIdentity(2, 0xA0012000);
+        recorder.SetPacketIdentity(2, 0xA0012000, 0xA0010000, true);
         recorder.MarkMaterialized(2, input);
         recorder.Publish();
     }
@@ -137,6 +137,8 @@ int main()
             published.draws[2].outcome ==
                 gears::draw::NativeDrawMaterializationOutcome::Materialized &&
             published.draws[2].packetGuestAddress == 0xA0012000 &&
+            published.draws[2].packetBufferBase == 0xA0010000 &&
+            published.draws[2].packetFromIndirectBuffer &&
             published.draws[2].input.indexGuestBase == input.indexGuestBase,
         "refused, resolve, and materialized ordinals remain explicit");
 

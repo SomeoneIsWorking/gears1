@@ -87,6 +87,8 @@ struct FrameDrawItem
     // Live command-buffer identity for semantic correlation. Frame captures do
     // not persist it because offline replay has no title-call stream to join.
     uint32_t packetGuestAddress = 0;
+    uint32_t packetBufferBase = 0;
+    bool packetFromIndirectBuffer = false;
 };
 
 struct FrameDrawInputs

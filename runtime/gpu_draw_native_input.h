@@ -104,6 +104,8 @@ struct NativeDrawMaterialization
 {
     size_t sourceOrdinal = 0;
     uint32_t packetGuestAddress = 0;
+    uint32_t packetBufferBase = 0;
+    bool packetFromIndirectBuffer = false;
     NativeDrawMaterializationOutcome outcome = NativeDrawMaterializationOutcome::Refused;
     NativeDrawInput input;
 };
@@ -148,10 +150,12 @@ class NativeFrameMaterializationRecorder
     NativeFrameMaterializationRecorder &
     operator=(const NativeFrameMaterializationRecorder &) = delete;
 
-    [[nodiscard]] size_t BeginDraw(uint32_t packetGuestAddress)
+    [[nodiscard]] size_t BeginDraw(uint32_t packetGuestAddress, uint32_t packetBufferBase,
+                                   bool packetFromIndirectBuffer)
     {
         const size_t sourceOrdinal = nextOrdinal_++;
-        SetPacketIdentity(sourceOrdinal, packetGuestAddress);
+        SetPacketIdentity(sourceOrdinal, packetGuestAddress, packetBufferBase,
+                          packetFromIndirectBuffer);
         return sourceOrdinal;
     }
 
@@ -161,10 +165,15 @@ class NativeFrameMaterializationRecorder
             result_.draws[sourceOrdinal].outcome = NativeDrawMaterializationOutcome::Resolve;
     }
 
-    void SetPacketIdentity(size_t sourceOrdinal, uint32_t packetGuestAddress)
+    void SetPacketIdentity(size_t sourceOrdinal, uint32_t packetGuestAddress,
+                           uint32_t packetBufferBase = 0, bool packetFromIndirectBuffer = false)
     {
         if (sourceOrdinal < result_.draws.size())
+        {
             result_.draws[sourceOrdinal].packetGuestAddress = packetGuestAddress;
+            result_.draws[sourceOrdinal].packetBufferBase = packetBufferBase;
+            result_.draws[sourceOrdinal].packetFromIndirectBuffer = packetFromIndirectBuffer;
+        }
     }
 
     void MarkMaterialized(size_t sourceOrdinal, const NativeDrawInput &input)

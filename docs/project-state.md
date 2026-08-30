@@ -63,8 +63,14 @@ inputs separately. It compares primitive, count, indexed mode, index width/endia
 guest base. A current Clang headless run through frame 300 produced 293 semantic matches, one
 explicit missing result for one replaced renderer frame, zero value mismatches, zero unkeyed
 inputs, zero duplicates, and 30 renderer packet groups with no title-level semantic observation.
+Command-buffer provenance now proves that all 30 groups came from indirect buffers. A complete
+literal packet-writer census and the observed packet shapes classify 24 refused groups as the fixed
+device-initialization point-draw batch at `0x8222B678` and the six materialized groups as internal
+rectangle clears emitted below `0x8222BC18`; the four normal title draw wrappers cover the actual
+content draws. Tile replays with mixed terminal outcomes and inconsistent source provenance are
+reported explicitly instead of being classified from their first execution.
 Complete resource ranges, shader/constant/texture inputs, output state, and pixels are not yet
-compared. Claim C102 and instrument I067 record this materialization evidence. The resolve observer's false negative on
+compared. Claims C102/C103 and instrument I067 record this materialization evidence. The resolve observer's false negative on
 a retained command-buffer allocation transition is fixed with a bounded lower-pointer retry, and a headless walk
 crossed the prior refusal region through frame 2280. The new `native_rhi.*` plan boundary accepts the
 complete ordered semantic stream on the same live path, but remains capture-only. See issues #141,
