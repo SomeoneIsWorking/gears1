@@ -121,6 +121,8 @@ FORMATTED = [
     "runtime/native_rhi_resources.h",
     "runtime/rhi_semantic_state.cpp",
     "runtime/rhi_semantic_state.h",
+    "runtime/rhi_renderer_input.cpp",
+    "runtime/rhi_renderer_input.h",
     "runtime/rhi_semantic_stream.cpp",
     "runtime/rhi_semantic_stream.h",
     "runtime/native_rhi.cpp",
@@ -263,6 +265,7 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/input.cpp",
     "runtime/native_pass.cpp",
     "runtime/render_thread.cpp",
+    "runtime/rhi_renderer_input.cpp",
     "runtime/rhi_semantic_state.cpp",
     "runtime/rhi_semantic_stream.cpp",
     "runtime/native_rhi.cpp",
@@ -403,6 +406,9 @@ def selftest():
     assert "runtime/titles/gears1/rhi_resolve_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resource_construction_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/rhi_resource_reference.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/rhi_renderer_input.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/rhi_renderer_input.cpp" in FORMATTED
+    assert "runtime/rhi_renderer_input.h" in FORMATTED
     assert "runtime/titles/gears1/rhi_device_state_reset_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resource_lifetime_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_vertex_stream_watch.cpp" in TIDY_TRANSLATION_UNITS

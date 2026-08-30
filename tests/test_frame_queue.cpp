@@ -30,6 +30,7 @@ int main()
         assert(submitted.status == gears::FrameQueueSubmitStatus::Accepted);
         assert(submitted.accepted());
         assert(!submitted.displacedFrameId.has_value());
+        assert(!submitted.displacedFrameSequence.has_value());
 
         std::optional<gears::QueuedFrame> active = queue.WaitTake();
         assert(active.has_value());
@@ -54,6 +55,7 @@ int main()
         assert(replaced.status == gears::FrameQueueSubmitStatus::ReplacedPending);
         assert(replaced.accepted());
         assert(replaced.displacedFrameId == 4);
+        assert(replaced.displacedFrameSequence == 20);
         assert(oldLifetime.expired());
 
         auto staleSnapshot = std::make_shared<const std::vector<uint32_t>>(1, 43);

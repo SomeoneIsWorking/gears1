@@ -388,7 +388,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     const uint32_t W = in.width ? in.width : kWidth;
     const uint32_t H = in.height ? in.height : kHeight;
     const draw::FrameOptions options = draw::ReadFrameOptions();
-
+    draw::NativeFrameMaterializationRecorder materialization(in.sequence, in.draws.size(),
+                                                             in.materializationCallback);
     // Phase timing names the owner of the cost instead of assuming it is the
     // caches.
     using Clock = std::chrono::steady_clock;
@@ -973,9 +974,9 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     std::map<std::pair<uint64_t, uint64_t>, uint32_t> rawCounts;
     static const std::string &rawStreamPath = lucent::config::text("DRAW_STREAM_RAW");
     const bool wantRawStream = !rawStreamPath.empty();
-
     for (const FrameDrawItem &d : in.draws)
     {
+        const size_t sourceOrdinal = materialization.BeginDraw(d.packetGuestAddress);
         const double stateBegin = sinceStartMs();
         const uint32_t *R = d.registers();
         if (!R)
@@ -1096,9 +1097,8 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
         // Handled before anything else because it needs no shaders at all.
         if ((R[0x2208] & 0x7) == 6 /*kCopy*/)
         {
-            // A kCopy draw is decoded in gpu_draw_resolve_decode.{h,cpp}: it is
-            // a resolve, not geometry, and it needs no shaders at all.
             draw::PrepareResolveDraw(R, d, in, W, H, plan.routing, msaaModel, RT, CN, prepared);
+            materialization.MarkResolve(sourceOrdinal);
             continue;
         }
         if (!d.vsUcode || !d.psUcode)
@@ -1493,10 +1493,10 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
         if (listDraws || psConstsHit)
             draw::ListDraw(R, d, in, *vsX, *psX, UC, issued);
         prepared.push_back(pd);
+        materialization.MarkMaterialized(sourceOrdinal, nativeInput);
         msPrepare += sinceStartMs() - prepareBegin;
         ++issued;
     }
-
     // Consume dirty bits before arming the next observation period.
     TX.EndStalenessFrame();
 

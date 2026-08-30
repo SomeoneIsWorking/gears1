@@ -10,18 +10,22 @@ FrameQueueSubmitResult FrameQueue::Submit(uint64_t frameId, uint64_t retirementG
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (closed_)
-        return {FrameQueueSubmitStatus::RejectedClosed, std::nullopt};
+        return {FrameQueueSubmitStatus::RejectedClosed, std::nullopt, std::nullopt};
     if (lastSubmittedFrameId_.has_value() && frameId <= *lastSubmittedFrameId_)
-        return {FrameQueueSubmitStatus::RejectedStale, std::nullopt};
+        return {FrameQueueSubmitStatus::RejectedStale, std::nullopt, std::nullopt};
 
     lastSubmittedFrameId_ = frameId;
     const std::optional<uint64_t> displacedFrameId =
         pending_.has_value() ? std::optional<uint64_t>(pending_->frameId) : std::nullopt;
+    const std::optional<uint64_t> displacedFrameSequence =
+        pending_.has_value() && pending_->inputs.sequence >= 0
+            ? std::optional<uint64_t>(static_cast<uint64_t>(pending_->inputs.sequence))
+            : std::nullopt;
     pending_.emplace(QueuedFrame{frameId, retirementGeneration, std::move(inputs)});
     changed_.notify_one();
     return {displacedFrameId.has_value() ? FrameQueueSubmitStatus::ReplacedPending
                                          : FrameQueueSubmitStatus::Accepted,
-            displacedFrameId};
+            displacedFrameId, displacedFrameSequence};
 }
 
 std::optional<QueuedFrame> FrameQueue::WaitTake()

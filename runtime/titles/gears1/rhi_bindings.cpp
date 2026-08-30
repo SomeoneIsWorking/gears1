@@ -55,6 +55,7 @@ CaptureBoundRenderTargets(std::uint32_t device);
     {
         gears::RhiDrawPacketEvidence evidence{
             .present = true,
+            .packetGuestAddress = draw.headerAddress,
             .opcode = draw.opcode,
             .primitiveType = draw.primitiveType,
             .sourceSelect = draw.sourceSelect,

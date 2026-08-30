@@ -1,9 +1,9 @@
 #include "rhi_semantic_stream.h"
 
+#include "rhi_renderer_input.h"
 #include "rhi_semantic_state.h"
 
 #include <array>
-#include <map>
 #include <mutex>
 #include <utility>
 
@@ -21,12 +21,6 @@ struct RhiSemanticStreamState
     std::vector<RhiSemanticEvent> pendingEvents;
     std::uint64_t nextSequence = 1;
     RhiSemanticStateTracker semanticState;
-    struct RendererFrame
-    {
-        bool valid = true;
-        std::vector<RhiRendererDrawInput> draws;
-    };
-    std::map<std::uint64_t, RendererFrame> rendererFrames;
 };
 
 RhiSemanticStreamState g_stream;
@@ -68,20 +62,9 @@ struct RhiSemanticReportTotals
     std::uint64_t presentsMatched = 0;
     std::uint64_t presentsMissing = 0;
     std::uint64_t presentsMismatched = 0;
-    std::uint64_t rendererDraws = 0;
-    std::uint64_t rendererDrawsMatched = 0;
-    std::uint64_t rendererDrawsMissing = 0;
-    std::uint64_t rendererDrawsMismatched = 0;
-    std::uint64_t rendererFramesMissing = 0;
 };
 
 RhiSemanticReportTotals g_reportTotals;
-
-[[nodiscard]] bool ExpectsDmaIndices(RhiSemanticDrawKind kind)
-{
-    return kind == RhiSemanticDrawKind::TransientVerticesAndIndices ||
-           kind == RhiSemanticDrawKind::BoundIndices;
-}
 
 [[nodiscard]] bool ExpectsTransientData(RhiSemanticDrawKind kind)
 {
@@ -192,7 +175,7 @@ RhiDrawEvidenceResult CompareRhiDrawPacket(const RhiSemanticDraw &draw,
     constexpr std::uint32_t kDrawIndx = 0x22;
     constexpr std::uint32_t kDrawIndx2 = 0x36;
     const bool drawOpcode = packet.opcode == kDrawIndx || packet.opcode == kDrawIndx2;
-    const std::uint32_t expectedSource = ExpectsDmaIndices(draw.kind) ? 0u : 2u;
+    const std::uint32_t expectedSource = RhiDrawUsesDmaIndices(draw.kind) ? 0u : 2u;
     if (!drawOpcode || packet.primitiveType != (draw.primitiveType & 0x3Fu) ||
         packet.sourceSelect != expectedSource || packet.elementCount != draw.elementCount)
     {
@@ -351,75 +334,6 @@ RhiResolveEvidenceResult CompareRhiResolvePacket(const RhiSemanticResolve &resol
     return RhiResolveEvidenceResult::Match;
 }
 
-RhiRendererDrawEvidenceResult CompareRhiRendererDrawInput(const RhiSemanticDrawState &state,
-                                                          const RhiRendererDrawInput &renderer)
-{
-    const RhiSemanticDraw &draw = state.draw;
-    const bool expectedIndexed = ExpectsDmaIndices(draw.kind);
-    if (renderer.primitiveType != (draw.primitiveType & 0x3F) ||
-        renderer.elementCount != draw.elementCount || renderer.indexed != expectedIndexed)
-        return RhiRendererDrawEvidenceResult::Mismatch;
-    if (!expectedIndexed)
-        return RhiRendererDrawEvidenceResult::Match;
-
-    bool expected32 = false;
-    std::uint32_t expectedEndian = 0;
-    if (draw.kind == RhiSemanticDrawKind::BoundIndices)
-    {
-        if (!draw.indexBufferViewPresent)
-            return RhiRendererDrawEvidenceResult::Missing;
-        expected32 = draw.indexBuffer.elementStrideBytes == 4;
-        expectedEndian = draw.indexBuffer.endianSwap;
-    }
-    else
-    {
-        expected32 = (draw.indexFormatFlags & 4) != 0;
-    }
-    if (renderer.indexIs32 != expected32)
-        return RhiRendererDrawEvidenceResult::Mismatch;
-    if (draw.kind == RhiSemanticDrawKind::BoundIndices && renderer.indexEndian != expectedEndian)
-        return RhiRendererDrawEvidenceResult::Mismatch;
-    return RhiRendererDrawEvidenceResult::Match;
-}
-
-RhiRendererFrameComparison
-CompareRhiRendererDraws(const RhiSemanticFrame &frame, bool rendererInputsPresent,
-                        const std::vector<RhiRendererDrawInput> &renderer)
-{
-    RhiRendererFrameComparison result{.rendererInputsPresent = rendererInputsPresent,
-                                      .rendererDraws = renderer.size()};
-    std::size_t rendererIndex = 0;
-    for (const RhiSemanticEvent &event : frame.events)
-    {
-        const auto *observed = std::get_if<RhiObservedDraw>(&event.payload);
-        if (observed == nullptr)
-            continue;
-        ++result.semanticDraws;
-        if (!rendererInputsPresent || rendererIndex >= renderer.size())
-        {
-            ++result.missing;
-            ++rendererIndex;
-            continue;
-        }
-        switch (CompareRhiRendererDrawInput(observed->state, renderer[rendererIndex]))
-        {
-        case RhiRendererDrawEvidenceResult::Match:
-            ++result.matched;
-            break;
-        case RhiRendererDrawEvidenceResult::Missing:
-            ++result.missing;
-            break;
-        case RhiRendererDrawEvidenceResult::Mismatch:
-            ++result.mismatched;
-            break;
-        }
-        ++rendererIndex;
-    }
-    if (rendererInputsPresent && renderer.size() > rendererIndex)
-        result.missing += renderer.size() - rendererIndex;
-    return result;
-}
-
 void ObserveRhiSemanticDraw(const RhiSemanticDraw &draw, const RhiDrawPacketEvidence &packet)
 {
     if (!RhiSemanticObservationEnabled())
@@ -523,41 +437,13 @@ void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,
                                        .evidence = CompareRhiResolvePacket(resolve, packet)}});
 }
 
-void ObserveRhiRendererDraws(std::uint64_t frameSequence,
-                             const std::vector<RhiRendererDrawInput> &draws)
-{
-    if (!RhiSemanticObservationEnabled())
-        return;
-
-    std::lock_guard guard(g_stream.mutex);
-    const auto [it, inserted] = g_stream.rendererFrames.emplace(
-        frameSequence, RhiSemanticStreamState::RendererFrame{.draws = draws});
-    if (!inserted)
-    {
-        it->second.valid = false;
-        it->second.draws.clear();
-        lucent::error("rhi", "renderer draw inputs were submitted twice for frame {}",
-                      frameSequence);
-    }
-}
-
 RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
 {
     RhiSemanticFrame frame{.frameSequence = frameSequence};
-    bool rendererInputsPresent = false;
-    std::vector<RhiRendererDrawInput> rendererDraws;
     {
         std::lock_guard guard(g_stream.mutex);
         frame.events = std::move(g_stream.pendingEvents);
         g_stream.pendingEvents.clear();
-        const auto renderer = g_stream.rendererFrames.find(frameSequence);
-        if (renderer != g_stream.rendererFrames.end())
-        {
-            rendererInputsPresent = renderer->second.valid;
-            if (rendererInputsPresent)
-                rendererDraws = std::move(renderer->second.draws);
-            g_stream.rendererFrames.erase(renderer);
-        }
     }
     for (const RhiSemanticEvent &event : frame.events)
     {
@@ -672,13 +558,7 @@ RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
             break;
         }
     }
-    const RhiRendererFrameComparison rendererComparison =
-        CompareRhiRendererDraws(frame, rendererInputsPresent, rendererDraws);
-    frame.rendererInputsPresent = rendererComparison.rendererInputsPresent;
-    frame.rendererDraws = rendererComparison.rendererDraws;
-    frame.rendererDrawsMatched = rendererComparison.matched;
-    frame.rendererDrawsMissing = rendererComparison.missing;
-    frame.rendererDrawsMismatched = rendererComparison.mismatched;
+    (void)ObserveRhiSemanticFrameSealed(frame);
     return frame;
 }
 
@@ -747,20 +627,12 @@ RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence)
     g_reportTotals.presentsMatched += frame.presentsMatched;
     g_reportTotals.presentsMissing += frame.presentsMissing;
     g_reportTotals.presentsMismatched += frame.presentsMismatched;
-    g_reportTotals.rendererDraws += frame.rendererDraws;
-    g_reportTotals.rendererDrawsMatched += frame.rendererDrawsMatched;
-    g_reportTotals.rendererDrawsMissing += frame.rendererDrawsMissing;
-    g_reportTotals.rendererDrawsMismatched += frame.rendererDrawsMismatched;
-    if (!frame.rendererInputsPresent)
-        ++g_reportTotals.rendererFramesMissing;
-
     if (frame.frameSequence == 1 || frame.frameSequence % 60 == 0 || frame.missing != 0 ||
         frame.mismatched != 0 || frame.bindingsMissing != 0 || frame.bindingsMismatched != 0 ||
         frame.resourceLifetimeMissing != 0 || frame.resourceLifetimeMismatched != 0 ||
         frame.vertexStreamResetsMissing != 0 || frame.vertexStreamResetsMismatched != 0 ||
         frame.resolvesMissing != 0 || frame.resolvesMismatched != 0 || frame.presentsMissing != 0 ||
-        frame.presentsMismatched != 0 || !frame.rendererInputsPresent ||
-        frame.rendererDrawsMissing != 0 || frame.rendererDrawsMismatched != 0)
+        frame.presentsMismatched != 0)
     {
         lucent::Line line;
         line.add("native RHI semantic through frame {}: {} draw call(s), {} packet match(es),"
@@ -772,9 +644,7 @@ RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence)
                  " {} match(es), {} missing state observation(s), {} mismatch(es); {} resolve"
                  " call(s), {} packet match(es), {} missing packet(s), {} mismatch(es);"
                  " {} present call(s),"
-                 " {} packet match(es), {} missing packet(s), {} mismatch(es); {} renderer"
-                 " draw input(s), {} match(es), {} missing, {} mismatch(es), {} frame input"
-                 " set(s) missing",
+                 " {} packet match(es), {} missing packet(s), {} mismatch(es)",
                  frame.frameSequence, g_reportTotals.draws, g_reportTotals.matched,
                  g_reportTotals.missing, g_reportTotals.mismatched, g_reportTotals.bindings,
                  g_reportTotals.bindingsMatched, g_reportTotals.bindingsMissing,
@@ -788,9 +658,7 @@ RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence)
                  g_reportTotals.resolvesMatched, g_reportTotals.resolvesMissing,
                  g_reportTotals.resolvesMismatched, g_reportTotals.presents,
                  g_reportTotals.presentsMatched, g_reportTotals.presentsMissing,
-                 g_reportTotals.presentsMismatched, g_reportTotals.rendererDraws,
-                 g_reportTotals.rendererDrawsMatched, g_reportTotals.rendererDrawsMissing,
-                 g_reportTotals.rendererDrawsMismatched, g_reportTotals.rendererFramesMissing);
+                 g_reportTotals.presentsMismatched);
         for (std::size_t index = 0; index < g_reportTotals.drawKinds.size(); ++index)
         {
             if (g_reportTotals.drawKinds[index] != 0)

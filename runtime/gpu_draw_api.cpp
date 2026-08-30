@@ -1,4 +1,5 @@
 #include "gpu_draw.h"
+#include "gpu_draw_native_input.h"
 
 #include <utility>
 
@@ -39,6 +40,10 @@ bool RenderFrame(const FrameDrawInputs &in)
     if (renderer.device == VK_NULL_HANDLE)
     {
         draw::g_frame.clear();
+        if (in.materializationCallback)
+            in.materializationCallback(
+                in.sequence >= 0 ? static_cast<uint64_t>(in.sequence) : 0,
+                {.status = draw::NativeFrameMaterializationStatus::RendererUnavailable});
         return false;
     }
     const bool rendered = renderer.RenderFrameImpl(in);
@@ -55,6 +60,10 @@ bool SubmitFrameRender(const FrameDrawInputs &in, FrameRenderCompletion &&comple
     if (renderer.device == VK_NULL_HANDLE)
     {
         draw::g_frame.clear();
+        if (in.materializationCallback)
+            in.materializationCallback(
+                in.sequence >= 0 ? static_cast<uint64_t>(in.sequence) : 0,
+                {.status = draw::NativeFrameMaterializationStatus::RendererUnavailable});
         completion(false);
         return false;
     }
@@ -110,15 +119,23 @@ uint32_t GuestFrameHeight()
 namespace gears
 {
 
-bool RenderFrame(const FrameDrawInputs &)
+bool RenderFrame(const FrameDrawInputs &in)
 {
     lucent::warn("draw", "built without the guest-draw backend"
                          " (needs Vulkan + the Xenos translator)");
+    if (in.materializationCallback)
+        in.materializationCallback(
+            in.sequence >= 0 ? static_cast<uint64_t>(in.sequence) : 0,
+            {.status = draw::NativeFrameMaterializationStatus::RendererUnavailable});
     return false;
 }
 
-bool SubmitFrameRender(const FrameDrawInputs &, FrameRenderCompletion &&completion)
+bool SubmitFrameRender(const FrameDrawInputs &in, FrameRenderCompletion &&completion)
 {
+    if (in.materializationCallback)
+        in.materializationCallback(
+            in.sequence >= 0 ? static_cast<uint64_t>(in.sequence) : 0,
+            {.status = draw::NativeFrameMaterializationStatus::RendererUnavailable});
     if (completion)
         completion(false);
     return false;

@@ -11,6 +11,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <utility>
+#include <vector>
 
 #include "gpu_draw_depth_bias.h"
 #include "gpu_draw_formats.h"
@@ -88,6 +91,103 @@ struct NativeDrawInput
     float viewportZScale = 0.0f;
     float viewportZOffset = 0.0f;
     bool viewportClamped = false;
+};
+
+enum class NativeDrawMaterializationOutcome : uint8_t
+{
+    Refused,
+    Resolve,
+    Materialized,
+};
+
+struct NativeDrawMaterialization
+{
+    size_t sourceOrdinal = 0;
+    uint32_t packetGuestAddress = 0;
+    NativeDrawMaterializationOutcome outcome = NativeDrawMaterializationOutcome::Refused;
+    NativeDrawInput input;
+};
+
+enum class NativeFrameMaterializationStatus : uint8_t
+{
+    Complete,
+    RendererUnavailable,
+    Dropped,
+};
+
+struct NativeFrameMaterialization
+{
+    NativeFrameMaterializationStatus status = NativeFrameMaterializationStatus::Complete;
+    std::vector<NativeDrawMaterialization> draws;
+};
+
+using NativeFrameMaterializationCallback =
+    std::function<void(uint64_t, NativeFrameMaterialization)>;
+
+// One terminal publication per renderer attempt. Every source draw gets one
+// stable ordinal and defaults to Refused, so a skipped draw cannot compact the
+// evidence vector and shift every later semantic comparison.
+class NativeFrameMaterializationRecorder
+{
+  public:
+    NativeFrameMaterializationRecorder(int64_t frameSequence, size_t drawCount,
+                                       NativeFrameMaterializationCallback callback)
+        : frameSequence_(frameSequence >= 0 ? static_cast<uint64_t>(frameSequence) : 0),
+          callback_(std::move(callback))
+    {
+        if (!callback_)
+            return;
+        result_.draws.resize(drawCount);
+        for (size_t ordinal = 0; ordinal < drawCount; ++ordinal)
+            result_.draws[ordinal].sourceOrdinal = ordinal;
+    }
+
+    ~NativeFrameMaterializationRecorder() { Publish(); }
+
+    NativeFrameMaterializationRecorder(const NativeFrameMaterializationRecorder &) = delete;
+    NativeFrameMaterializationRecorder &
+    operator=(const NativeFrameMaterializationRecorder &) = delete;
+
+    [[nodiscard]] size_t BeginDraw(uint32_t packetGuestAddress)
+    {
+        const size_t sourceOrdinal = nextOrdinal_++;
+        SetPacketIdentity(sourceOrdinal, packetGuestAddress);
+        return sourceOrdinal;
+    }
+
+    void MarkResolve(size_t sourceOrdinal)
+    {
+        if (sourceOrdinal < result_.draws.size())
+            result_.draws[sourceOrdinal].outcome = NativeDrawMaterializationOutcome::Resolve;
+    }
+
+    void SetPacketIdentity(size_t sourceOrdinal, uint32_t packetGuestAddress)
+    {
+        if (sourceOrdinal < result_.draws.size())
+            result_.draws[sourceOrdinal].packetGuestAddress = packetGuestAddress;
+    }
+
+    void MarkMaterialized(size_t sourceOrdinal, const NativeDrawInput &input)
+    {
+        if (sourceOrdinal >= result_.draws.size())
+            return;
+        result_.draws[sourceOrdinal].outcome = NativeDrawMaterializationOutcome::Materialized;
+        result_.draws[sourceOrdinal].input = input;
+    }
+
+    void Publish()
+    {
+        if (!callback_)
+            return;
+        NativeFrameMaterializationCallback callback = std::move(callback_);
+        callback(frameSequence_, std::move(result_));
+    }
+
+  private:
+    uint64_t frameSequence_ = 0;
+    size_t nextOrdinal_ = 0;
+    NativeFrameMaterializationCallback callback_;
+    NativeFrameMaterialization result_;
 };
 
 // Returns false when the retained snapshot is absent or viewport derivation

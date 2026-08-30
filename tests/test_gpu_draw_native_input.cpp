@@ -109,6 +109,37 @@ int main()
               input.viewport.scissorHeight == 360,
           "host viewport and scissor are derived in the selected sample space");
 
+    std::uint32_t publications = 0;
+    std::uint64_t publishedSequence = 0;
+    gears::draw::NativeFrameMaterialization published;
+    {
+        gears::draw::NativeFrameMaterializationRecorder recorder(
+            77, 3,
+            [&](std::uint64_t sequence, gears::draw::NativeFrameMaterialization result)
+            {
+                ++publications;
+                publishedSequence = sequence;
+                published = std::move(result);
+            });
+        recorder.MarkResolve(1);
+        recorder.SetPacketIdentity(2, 0xA0012000);
+        recorder.MarkMaterialized(2, input);
+        recorder.Publish();
+    }
+    check(publications == 1 && publishedSequence == 77 && published.draws.size() == 3,
+          "one terminal materialization result is published");
+    check(
+        published.draws[0].sourceOrdinal == 0 &&
+            published.draws[0].outcome == gears::draw::NativeDrawMaterializationOutcome::Refused &&
+            published.draws[1].sourceOrdinal == 1 &&
+            published.draws[1].outcome == gears::draw::NativeDrawMaterializationOutcome::Resolve &&
+            published.draws[2].sourceOrdinal == 2 &&
+            published.draws[2].outcome ==
+                gears::draw::NativeDrawMaterializationOutcome::Materialized &&
+            published.draws[2].packetGuestAddress == 0xA0012000 &&
+            published.draws[2].input.indexGuestBase == input.indexGuestBase,
+        "refused, resolve, and materialized ordinals remain explicit");
+
     if (failures == 0)
         std::puts("GPU draw native-input tests passed");
     return failures != 0;

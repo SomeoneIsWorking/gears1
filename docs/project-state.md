@@ -54,10 +54,17 @@ reset-owner evidence.
 Gap: The construction contracts at `0x8222EA18` and `0x8222EB78` are statically grounded but had
 zero calls in the current headless walk through frame 1440; release-to-zero destruction is also not
 covered live. The registry is unit-tested but has no live construction input and does not allocate
-API resources. The separate bound-vertex draw entry lacks dynamic coverage. The stream now compares
-ordered semantic draw shape with the accepted compatibility-renderer draw list, including primitive,
-count, indexed mode, index width, and bound-index endian; complete resource ranges, shader/constant/
-texture inputs, output state, and pixels are not yet compared. The resolve observer's false negative on
+API resources. The separate bound-vertex draw entry lacks dynamic coverage. The stream now joins
+each sealed semantic frame with the compatibility renderer's terminal `NativeDrawInput`
+materialization result rather than its queued draw list. The bounded, duplicate-detecting join
+correlates logical packets by guest-present sequence and canonical physical packet address, groups
+predicated tile replays, and reports refused, dropped, unkeyed, unmatched, and value-mismatched
+inputs separately. It compares primitive, count, indexed mode, index width/endian, and index-buffer
+guest base. A current Clang headless run through frame 300 produced 293 semantic matches, one
+explicit missing result for one replaced renderer frame, zero value mismatches, zero unkeyed
+inputs, zero duplicates, and 30 renderer packet groups with no title-level semantic observation.
+Complete resource ranges, shader/constant/texture inputs, output state, and pixels are not yet
+compared. Claim C102 and instrument I067 record this materialization evidence. The resolve observer's false negative on
 a retained command-buffer allocation transition is fixed with a bounded lower-pointer retry, and a headless walk
 crossed the prior refusal region through frame 2280. The new `native_rhi.*` plan boundary accepts the
 complete ordered semantic stream on the same live path, but remains capture-only. See issues #141,
@@ -96,8 +103,9 @@ adoption. The focused tests prove those transaction and registry rules; they do 
 or alter the shipping renderer.
 
 The draw-input extraction removes a duplicate state-decoding owner and gives future native draw
-execution one bounded input contract. It does not authorize native draw execution or change the
-retained renderer's output.
+execution one bounded input contract. Actual compatibility-renderer materialization now supplies
+the parity side of that contract, including explicit refusal and queue-drop outcomes, but does not
+authorize native draw execution or change the retained renderer's output.
 
 The native-pass seam now contains independently authored scene-composite
 vertex and pixel modules whose descriptor contracts validate as Vulkan 1.1
@@ -123,8 +131,10 @@ explicitly enabled Gears 1 audio mix, and the one direct native scene-composite 
 authorized. Zero-to-one backing ownership, one-to-zero destruction, resource construction, the
 remaining draw submissions, and renderer bypass remain on the retained path. `native_rhi.*` now
 builds a PM4-independent ordered frame plan when explicitly enabled, and `native_rhi_backend.*`
-plus `native_rhi_resources.*` define the host execution and resource-identity contracts. The
-isolated `native_rhi_vulkan_resolve.*` slice now records a real host-owned Vulkan colour copy and
+plus `native_rhi_resources.*` define the host execution and resource-identity contracts. The actual
+renderer-input join closes the former queued-input false positive, but it also confirms that the
+live plan still lacks a native producer for those complete draw inputs and backend-owned source
+images. The isolated `native_rhi_vulkan_resolve.*` slice now records a real host-owned Vulkan colour copy and
 passes a headless pixel test with an unsupported-flags negative control. The companion
 `native_rhi_vulkan_resources.*` owner now creates host buffers/images and retains them through
 leases, but neither owner is connected to the live plan because native source-image production

@@ -197,8 +197,10 @@ the zero-construction result in the frame-1440 walk remains unresolved.
 Exercise the separate bound-vertex entry dynamically if the title reaches it.
 Then add resource creation and live release-to-zero retirement effects and
 compare complete resource ranges, shader/constant/texture inputs, output state,
-and pixels with the accepted renderer inputs. The ordered draw-shape comparison
-now exists, but it is not full renderer-input parity. Keep the recompiled
+and pixels with the materialized renderer inputs. Classify the remaining
+unmatched renderer packet groups by a grounded title-call owner or explicit
+non-semantic role. The packet-keyed draw/index comparison now exists, but it is
+not full renderer-input parity. Keep the recompiled
 compatibility bodies available and super-called until a deliberately wrong
 semantic control is rejected and a same-run complete-stream and pixel-parity
 gate agrees. Transient and bound-buffer agreement alone does not authorize a
@@ -255,21 +257,43 @@ meaning from absent title evidence, so the issue remains open.
 
 ## Renderer-input comparison
 
-At the guest-present boundary, `runtime/vd_null_gpu.cpp` publishes the accepted
-compatibility-renderer draw shape keyed by the same guest-present sequence that
-seals the semantic stream. The title-neutral stream compares ordered semantic
-draw events with those renderer inputs for primitive type, element count,
-indexed/auto-index source, index width, and bound-index endian mode. Missing
-renderer input is reported as missing rather than a zero-draw match; duplicate
-publication invalidates the frame. Focused tests cover matching, absent
-renderer input, altered count, and altered ordered input.
+The old comparison was a false-positive seam: `runtime/vd_null_gpu.cpp`
+published queued `FrameDrawItem` shape before the asynchronous renderer built
+`NativeDrawInput`. It could not falsify a decode defect introduced by the real
+renderer materialization path. That publication is removed.
 
-The compatibility renderer's per-draw register decoding is now isolated in the
-title-neutral `gpu_draw_native_input.*` boundary. It produces one complete
-`NativeDrawInput` containing draw identity, target identity, sample layout,
-output-merger state, depth bias, diagnostic controls, and host viewport/scissor
-values. The renderer consumes that value instead of rereading those fields in
-its orchestration body. `test_gpu_draw_native_input` covers the refused-input
-path and a valid 2X fixed-viewport decode, including output-merger and target
-fields. This is an input ownership improvement and a native-producer seam; it
-does not claim full resource/shader/constant/texture parity or enable a bypass.
+`gpu_draw_native_input.*` now publishes one optional terminal record from the
+shipping renderer attempt. Every source ordinal remains explicit as
+materialized, refused, or resolve; renderer absence and latest-frame queue
+replacement publish terminal frame outcomes. Observation-disabled runs do not
+allocate the record vector. `rhi_renderer_input.*` owns the projection,
+thread-safe two-sided join, bounded stale retirement, duplicate invalidation,
+and reporting separately from semantic capture.
+
+The first live join produced zero matches because it compared title CPU aliases
+such as `0xA00D2384` directly with GPU physical packet addresses such as
+`0x000D2384`. The existing `kGuestPhysicalAddressMask` contract names the root
+cause. Correlation now uses `(guest-present sequence, canonical dword-aligned
+physical packet address)`. Renderer executions sharing that key are checked as
+predicated tile replays of one logical title draw; draw shape validates the
+join but is never its identity. Repeated semantic keys, zero-key renderer
+draws, extra renderer packet groups, missing sides, and duplicate publications
+are explicit failures or coverage results.
+
+A current Clang headless run through frame 300 observed 293 materialized
+semantic matches, one explicit missing result from one replaced renderer frame,
+zero value mismatches, zero unkeyed renderer draws, and zero duplicates. Thirty
+renderer packet groups had no title-level semantic observation, including the
+startup family; those are reported separately rather than being mislabeled as
+semantic value mismatches. Focused controls cover altered index base, physical
+alias normalization, matching and failing tile replays, repeated semantic-key
+collision, zero-key input, semantic-first and renderer-first arrival,
+pre/post-completion duplicates, history eviction, and both one-sided expiry
+paths. Claim C102 and trusted instrument I067 record the live result and its
+negative controls.
+
+This closes queued-versus-materialized draw-shape and index-address evidence.
+It does not close issue #141: shader modules/constants, textures/samplers,
+vertex ranges, complete render/depth target state, viewport/scissor/output
+state, and pixels are not yet compared, and unmatched renderer packets still
+need a grounded title-call owner or an explicit non-semantic classification.
