@@ -968,15 +968,15 @@ bool Renderer::RenderFrameImpl(const FrameDrawInputs &in, FrameRenderCompletion 
     // -- is invisible to it. That is the stated falsifier on claim C023: the
     // eight pixel shaders the oracle binds and our stream never shows could be
     // shaders the guest never asks for, OR shaders it asks for and we throw
-    // away, and the prepared-level recording cannot tell those apart. This map
-    // is filled at the TOP of the loop body, above every early exit, so the
-    // difference between it and the prepared counts IS the set we drop.
+    // away, and the prepared-level recording cannot tell those apart. This map is filled above
+    // every early exit, so its difference from the prepared counts is the set we drop.
     std::map<std::pair<uint64_t, uint64_t>, uint32_t> rawCounts;
     static const std::string &rawStreamPath = lucent::config::text("DRAW_STREAM_RAW");
     const bool wantRawStream = !rawStreamPath.empty();
     for (const FrameDrawItem &d : in.draws)
     {
-        const size_t sourceOrdinal = materialization.BeginDraw(d.packetGuestAddress);
+        const size_t sourceOrdinal = materialization.BeginDraw(
+            d.packetGuestAddress, d.packetBufferBase, d.packetFromIndirectBuffer);
         const double stateBegin = sinceStartMs();
         const uint32_t *R = d.registers();
         if (!R)

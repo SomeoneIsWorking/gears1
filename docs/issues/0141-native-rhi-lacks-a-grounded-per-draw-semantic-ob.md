@@ -197,10 +197,12 @@ the zero-construction result in the frame-1440 walk remains unresolved.
 Exercise the separate bound-vertex entry dynamically if the title reaches it.
 Then add resource creation and live release-to-zero retirement effects and
 compare complete resource ranges, shader/constant/texture inputs, output state,
-and pixels with the materialized renderer inputs. Classify the remaining
-unmatched renderer packet groups by a grounded title-call owner or explicit
-non-semantic role. The packet-keyed draw/index comparison now exists, but it is
-not full renderer-input parity. Keep the recompiled
+and pixels with the materialized renderer inputs. The next independently grounded
+renderer-input group is normalized render/depth target state, but the semantic
+tracker must first represent post-bind descriptor mutations such as the native
+colour-write-gamma transition; comparing stale bind-time words would repeat the
+previously observed false mismatch. The packet-keyed draw/index comparison now
+exists, but it is not full renderer-input parity. Keep the recompiled
 compatibility bodies available and super-called until a deliberately wrong
 semantic control is rejected and a same-run complete-stream and pixel-parity
 gate agrees. Transient and bound-buffer agreement alone does not authorize a
@@ -292,8 +294,26 @@ pre/post-completion duplicates, history eviction, and both one-sided expiry
 paths. Claim C102 and trusted instrument I067 record the live result and its
 negative controls.
 
+The unmatched population is now classified rather than left as an assumed
+wrapper gap. The command processor carries the packet's source-buffer base and
+ring-versus-indirect provenance through the terminal materialization record. A
+headless run through frame 360 reported 30 cumulative unmatched packet groups:
+24 refused and six materialized, all from indirect buffers, with no mixed tile
+outcomes or source conflicts. The complete literal writer census for this exact
+title revision shows that `0x8222B678` emits exactly the observed 24 point-list,
+auto-index, one-vertex startup packets. The remaining six have the observed
+rectangle-list auto-index shape emitted by `0x8222BC18` beneath the internal
+clear chain rooted at `0x8222CC48`; none of that family has a normal semantic
+draw wrapper. The movie content draw itself reaches the wrapped transient draw
+path through `0x8221D3A8 -> 0x8222D4B0 -> 0x8222CFF8`. The reporter now also
+classifies mixed-outcome tile replays and inconsistent source provenance as
+their own packet-group results and prints `none` on cadence frames without a
+current unmatched packet. Claim C103 records the ownership classification and
+its falsifier.
+
 This closes queued-versus-materialized draw-shape and index-address evidence.
 It does not close issue #141: shader modules/constants, textures/samplers,
 vertex ranges, complete render/depth target state, viewport/scissor/output
-state, and pixels are not yet compared, and unmatched renderer packets still
-need a grounded title-call owner or an explicit non-semantic classification.
+state, and pixels are not yet compared. Internal initialization and clear draws
+also remain outside the normal title semantic stream by design; their grounded
+classification does not turn them into native frontend commands.

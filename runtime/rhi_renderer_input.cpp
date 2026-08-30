@@ -5,6 +5,7 @@
 #include "rhi_semantic_stream.h"
 
 #include <algorithm>
+#include <format>
 #include <map>
 #include <mutex>
 #include <set>
@@ -52,6 +53,12 @@ struct RendererReportTotals
     std::uint64_t missing = 0;
     std::uint64_t mismatched = 0;
     std::uint64_t unmatchedRendererPackets = 0;
+    std::uint64_t unmatchedRendererMaterializedPackets = 0;
+    std::uint64_t unmatchedRendererRefusedPackets = 0;
+    std::uint64_t unmatchedRendererMixedOutcomePackets = 0;
+    std::uint64_t unmatchedRendererIndirectPackets = 0;
+    std::uint64_t unmatchedRendererRingPackets = 0;
+    std::uint64_t unmatchedRendererInconsistentSourcePackets = 0;
     std::uint64_t unkeyedRendererDraws = 0;
     std::uint64_t duplicateFrames = 0;
     bool reportedFailure = false;
@@ -85,9 +92,39 @@ constexpr std::size_t kRendererJoinHistory = 64;
     return "unknown";
 }
 
+[[nodiscard]] const char *DrawOutcomeName(draw::NativeDrawMaterializationOutcome outcome)
+{
+    switch (outcome)
+    {
+    case draw::NativeDrawMaterializationOutcome::Refused:
+        return "refused";
+    case draw::NativeDrawMaterializationOutcome::Resolve:
+        return "resolve";
+    case draw::NativeDrawMaterializationOutcome::Materialized:
+        return "materialized";
+    }
+    return "unknown";
+}
+
 [[nodiscard]] std::uint32_t CanonicalPacketAddress(std::uint32_t guestAddress)
 {
     return guestAddress & kGuestPhysicalAddressMask & ~std::uint32_t{3};
+}
+
+[[nodiscard]] std::string
+DescribeFirstUnmatchedRendererPacket(const RhiRendererFrameComparison &comparison)
+{
+    if (comparison.unmatchedRendererPackets == 0)
+        return "none";
+    const char *outcome = comparison.firstUnmatchedRendererMixedOutcome
+                              ? "mixed outcome"
+                              : DrawOutcomeName(comparison.firstUnmatchedRendererOutcome);
+    if (comparison.firstUnmatchedRendererInconsistentSource)
+        return std::format("{:#x} with source conflict ({})",
+                           comparison.firstUnmatchedRendererPacket, outcome);
+    return std::format("{:#x} from {} buffer {:#x} ({})", comparison.firstUnmatchedRendererPacket,
+                       comparison.firstUnmatchedRendererFromIndirectBuffer ? "indirect" : "ring",
+                       comparison.firstUnmatchedRendererBuffer, outcome);
 }
 
 void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameComparison &comparison)
@@ -106,6 +143,15 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
     g_reportTotals.missing += comparison.missing;
     g_reportTotals.mismatched += comparison.mismatched;
     g_reportTotals.unmatchedRendererPackets += comparison.unmatchedRendererPackets;
+    g_reportTotals.unmatchedRendererMaterializedPackets +=
+        comparison.unmatchedRendererMaterializedPackets;
+    g_reportTotals.unmatchedRendererRefusedPackets += comparison.unmatchedRendererRefusedPackets;
+    g_reportTotals.unmatchedRendererMixedOutcomePackets +=
+        comparison.unmatchedRendererMixedOutcomePackets;
+    g_reportTotals.unmatchedRendererIndirectPackets += comparison.unmatchedRendererIndirectPackets;
+    g_reportTotals.unmatchedRendererRingPackets += comparison.unmatchedRendererRingPackets;
+    g_reportTotals.unmatchedRendererInconsistentSourcePackets +=
+        comparison.unmatchedRendererInconsistentSourcePackets;
     g_reportTotals.unkeyedRendererDraws += comparison.unkeyedRendererDraws;
     if (comparison.duplicate)
         ++g_reportTotals.duplicateFrames;
@@ -115,7 +161,8 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
                         comparison.unkeyedRendererDraws != 0 || comparison.duplicate;
     const bool firstFailure = failed && !g_reportTotals.reportedFailure;
     g_reportTotals.reportedFailure = g_reportTotals.reportedFailure || failed;
-    if (frameSequence == 1 || frameSequence % 60 == 0 || firstFailure || comparison.duplicate ||
+    if (frameSequence == 1 || frameSequence % 60 == 0 || firstFailure ||
+        comparison.unmatchedRendererPackets != 0 || comparison.duplicate ||
         comparison.status == draw::NativeFrameMaterializationStatus::RendererUnavailable)
     {
         lucent::info(
@@ -123,17 +170,26 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
             "native RHI renderer materialization through frame {}: {} frame(s), {} unavailable,"
             " {} dropped; {} source draw(s), {} materialized, {} refused, {} resolve; {}"
             " semantic match(es), {} missing, {} mismatch(es), {} unmatched renderer"
-            " packet(s), {} unkeyed renderer draw(s), {} duplicate frame(s); current frame"
+            " packet(s) ({} materialized, {} refused, {} mixed outcome; {} indirect, {} ring,"
+            " {} source conflict), {} unkeyed"
+            " renderer draw(s), {} duplicate frame(s); current frame"
             " {}{}; first missing semantic packet {:#x}, first"
-            " unmatched renderer packet {:#x}",
+            " unmatched renderer packet {}",
             frameSequence, g_reportTotals.frames, g_reportTotals.unavailableFrames,
             g_reportTotals.droppedFrames, g_reportTotals.sourceDraws,
             g_reportTotals.materializedDraws, g_reportTotals.refusedDraws,
             g_reportTotals.resolveDraws, g_reportTotals.matched, g_reportTotals.missing,
             g_reportTotals.mismatched, g_reportTotals.unmatchedRendererPackets,
+            g_reportTotals.unmatchedRendererMaterializedPackets,
+            g_reportTotals.unmatchedRendererRefusedPackets,
+            g_reportTotals.unmatchedRendererMixedOutcomePackets,
+            g_reportTotals.unmatchedRendererIndirectPackets,
+            g_reportTotals.unmatchedRendererRingPackets,
+            g_reportTotals.unmatchedRendererInconsistentSourcePackets,
             g_reportTotals.unkeyedRendererDraws, g_reportTotals.duplicateFrames,
             FrameStatusName(comparison.status), comparison.duplicate ? ", duplicate" : "",
-            comparison.firstMissingSemanticPacket, comparison.firstUnmatchedRendererPacket);
+            comparison.firstMissingSemanticPacket,
+            DescribeFirstUnmatchedRendererPacket(comparison));
     }
 }
 
@@ -383,8 +439,38 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
         if (!matchedPackets.contains(packetGuestAddress))
         {
             ++result.unmatchedRendererPackets;
+            const RhiRendererDrawInput &first = *executions.front();
+            const bool consistentOutcome =
+                std::ranges::all_of(executions, [&first](const RhiRendererDrawInput *input)
+                                    { return input->outcome == first.outcome; });
+            if (!consistentOutcome)
+                ++result.unmatchedRendererMixedOutcomePackets;
+            else if (first.outcome == draw::NativeDrawMaterializationOutcome::Materialized)
+                ++result.unmatchedRendererMaterializedPackets;
+            else
+                ++result.unmatchedRendererRefusedPackets;
+            const bool consistentSource = std::ranges::all_of(
+                executions,
+                [&first](const RhiRendererDrawInput *input)
+                {
+                    return input->packetBufferBase == first.packetBufferBase &&
+                           input->packetFromIndirectBuffer == first.packetFromIndirectBuffer;
+                });
+            if (!consistentSource)
+                ++result.unmatchedRendererInconsistentSourcePackets;
+            else if (first.packetFromIndirectBuffer)
+                ++result.unmatchedRendererIndirectPackets;
+            else
+                ++result.unmatchedRendererRingPackets;
             if (result.firstUnmatchedRendererPacket == 0)
+            {
                 result.firstUnmatchedRendererPacket = packetGuestAddress;
+                result.firstUnmatchedRendererBuffer = first.packetBufferBase;
+                result.firstUnmatchedRendererFromIndirectBuffer = first.packetFromIndirectBuffer;
+                result.firstUnmatchedRendererOutcome = first.outcome;
+                result.firstUnmatchedRendererMixedOutcome = !consistentOutcome;
+                result.firstUnmatchedRendererInconsistentSource = !consistentSource;
+            }
         }
     }
     return result;
@@ -484,6 +570,8 @@ void ObserveRhiRendererMaterialization(std::uint64_t frameSequence,
     {
         frame.draws.push_back({.sourceOrdinal = draw.sourceOrdinal,
                                .packetGuestAddress = draw.packetGuestAddress,
+                               .packetBufferBase = draw.packetBufferBase,
+                               .packetFromIndirectBuffer = draw.packetFromIndirectBuffer,
                                .outcome = draw.outcome,
                                .primitiveType = draw.input.primitiveType,
                                .elementCount = draw.input.indexCount,
@@ -507,6 +595,8 @@ void SetRhiPacketIdentity(FrameDrawItem &draw, std::uint32_t sourceBase, std::ui
                           std::uint32_t sourceIndex)
 {
     draw.packetGuestAddress = (sourceBase != 0 ? sourceBase : ringBase) + sourceIndex * 4;
+    draw.packetBufferBase = sourceBase != 0 ? sourceBase : ringBase;
+    draw.packetFromIndirectBuffer = sourceBase != 0;
 }
 
 RhiRendererMaterializationGuard::RhiRendererMaterializationGuard(std::uint64_t frameSequence)

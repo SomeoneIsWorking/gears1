@@ -529,16 +529,54 @@ int main()
                  .indexGuestBase = 0x2010},
                 {.sourceOrdinal = 2,
                  .packetGuestAddress = 0x00030000,
+                 .packetBufferBase = 0x00030000,
                  .outcome = gears::draw::NativeDrawMaterializationOutcome::Materialized,
                  .primitiveType = 4,
                  .elementCount = 6},
+                {.sourceOrdinal = 3,
+                 .packetGuestAddress = 0x00040000,
+                 .packetBufferBase = 0x0003F000,
+                 .packetFromIndirectBuffer = true,
+                 .outcome = gears::draw::NativeDrawMaterializationOutcome::Refused},
             },
     };
     const gears::RhiRendererFrameComparison wrongRenderer =
         gears::CompareRhiRendererDraws(frame, wrongRendererInput);
     assert(wrongRenderer.matched == 1);
     assert(wrongRenderer.mismatched == 1);
-    assert(wrongRenderer.unmatchedRendererPackets == 1);
+    assert(wrongRenderer.unmatchedRendererPackets == 2);
+    assert(wrongRenderer.unmatchedRendererMaterializedPackets == 1);
+    assert(wrongRenderer.unmatchedRendererRefusedPackets == 1);
+    assert(wrongRenderer.unmatchedRendererRingPackets == 1);
+    assert(wrongRenderer.unmatchedRendererIndirectPackets == 1);
+    assert(wrongRenderer.firstUnmatchedRendererPacket == 0x00030000);
+    assert(wrongRenderer.firstUnmatchedRendererBuffer == 0x00030000);
+    assert(!wrongRenderer.firstUnmatchedRendererFromIndirectBuffer);
+    assert(wrongRenderer.firstUnmatchedRendererOutcome ==
+           gears::draw::NativeDrawMaterializationOutcome::Materialized);
+
+    const gears::RhiRendererFrameInput unmatchedReplayInput{
+        .draws = {{.sourceOrdinal = 0,
+                   .packetGuestAddress = 0x00050000,
+                   .packetBufferBase = 0x0004F000,
+                   .packetFromIndirectBuffer = true,
+                   .outcome = gears::draw::NativeDrawMaterializationOutcome::Materialized},
+                  {.sourceOrdinal = 1,
+                   .packetGuestAddress = 0x00050000,
+                   .packetBufferBase = 0x00050000,
+                   .outcome = gears::draw::NativeDrawMaterializationOutcome::Refused}},
+    };
+    const gears::RhiRendererFrameComparison unmatchedReplay =
+        gears::CompareRhiRendererDraws({}, unmatchedReplayInput);
+    assert(unmatchedReplay.unmatchedRendererPackets == 1);
+    assert(unmatchedReplay.unmatchedRendererMaterializedPackets == 0);
+    assert(unmatchedReplay.unmatchedRendererRefusedPackets == 0);
+    assert(unmatchedReplay.unmatchedRendererMixedOutcomePackets == 1);
+    assert(unmatchedReplay.unmatchedRendererIndirectPackets == 0);
+    assert(unmatchedReplay.unmatchedRendererRingPackets == 0);
+    assert(unmatchedReplay.unmatchedRendererInconsistentSourcePackets == 1);
+    assert(unmatchedReplay.firstUnmatchedRendererMixedOutcome);
+    assert(unmatchedReplay.firstUnmatchedRendererInconsistentSource);
 
     const gears::RhiSemanticFrame tileReplayFrame{
         .frameSequence = 30,

@@ -22,6 +22,8 @@ struct RhiRendererDrawInput
 {
     std::size_t sourceOrdinal = 0;
     std::uint32_t packetGuestAddress = 0;
+    std::uint32_t packetBufferBase = 0;
+    bool packetFromIndirectBuffer = false;
     draw::NativeDrawMaterializationOutcome outcome =
         draw::NativeDrawMaterializationOutcome::Refused;
     std::uint32_t primitiveType = 0;
@@ -59,9 +61,21 @@ struct RhiRendererFrameComparison
     std::uint64_t missing = 0;
     std::uint64_t mismatched = 0;
     std::uint64_t unmatchedRendererPackets = 0;
+    std::uint64_t unmatchedRendererMaterializedPackets = 0;
+    std::uint64_t unmatchedRendererRefusedPackets = 0;
+    std::uint64_t unmatchedRendererMixedOutcomePackets = 0;
+    std::uint64_t unmatchedRendererIndirectPackets = 0;
+    std::uint64_t unmatchedRendererRingPackets = 0;
+    std::uint64_t unmatchedRendererInconsistentSourcePackets = 0;
     std::uint64_t unkeyedRendererDraws = 0;
     std::uint32_t firstMissingSemanticPacket = 0;
     std::uint32_t firstUnmatchedRendererPacket = 0;
+    std::uint32_t firstUnmatchedRendererBuffer = 0;
+    bool firstUnmatchedRendererFromIndirectBuffer = false;
+    draw::NativeDrawMaterializationOutcome firstUnmatchedRendererOutcome =
+        draw::NativeDrawMaterializationOutcome::Refused;
+    bool firstUnmatchedRendererMixedOutcome = false;
+    bool firstUnmatchedRendererInconsistentSource = false;
     bool duplicate = false;
 };
 
