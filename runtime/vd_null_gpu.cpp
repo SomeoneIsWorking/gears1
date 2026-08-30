@@ -38,6 +38,7 @@
 #include "graphics_probe_render.h"
 #include "frame_probe_capture.h"
 #include "gpu_draw.h"
+#include "gpu_diagnostics_profile.h"
 #include "gpu_endian.h"
 #include "render_thread.h"
 #include "rhi_renderer_input.h"
@@ -138,12 +139,14 @@ struct InterruptThreadState
             if (inner != lastInnerCallback)
             {
                 lastInnerCallback = inner;
-                // The observed event array is per CPU within the graphics
-                // worker pool; include its selected slot in the diagnostic.
-                const uint32_t pool = ReadGuest32(ReadGuest32(0x82000868));
-                lucent::debug(
-                    "gpu", "graphics ISR inner callback -> {:#x} (pool {:#x}, cpu{} event {:#x})",
-                    inner, pool, cpu, pool + 0x2BDC + cpu * 0x38);
+                gears::GpuGraphicsInterruptDiagnosticState diagnostic;
+                if (gears::ResolveGpuGraphicsInterruptDiagnostics(cpu, diagnostic))
+                {
+                    lucent::debug("gpu",
+                                  "graphics ISR inner callback -> {:#x}"
+                                  " (pool {:#x}, cpu{} event {:#x})",
+                                  inner, diagnostic.workerPool, cpu, diagnostic.event);
+                }
             }
         }
         (PPC_LOOKUP_FUNC(base, g_graphicsInterruptCallback))(ctx, base);
@@ -676,12 +679,11 @@ struct CommandProcessor
     uint64_t type0AluWrites = 0;   // TYPE0 dwords into 0x4000..0x47FF
     uint64_t type0FetchWrites = 0; // TYPE0 dwords into 0x4800..0x48FF
     bool constDumpDone = false;    // one-shot verification dump latch
-    bool drawCaptureDone = false;  // one-shot hot-pair draw-param capture latch
+    bool drawCaptureDone = false;  // one-shot representative-draw capture latch
 
     // Per-run draw census (GEARS_DRAW_CENSUS): every DRAW_INDX/_2 the CP
-    // executes, keyed by (vs,ps) hash, so the real distribution of draws a run
-    // reaches -- not just the hot pair -- is measured before generalising the
-    // backend. Reported at the first swap and at shutdown.
+    // executes, keyed by (vs,ps) hash, so every pair reached -- not only the
+    // profile-selected representative -- is measured. Reported at shutdown.
     uint64_t drawsSeen = 0;
     std::map<std::pair<uint64_t, uint64_t>, uint64_t> drawPairs; // (vs,ps) -> count
     bool drawCensusReported = false;
@@ -1052,13 +1054,6 @@ struct CommandProcessor
         }
     }
 
-    // One-shot verification dump of the constant files. The default selects a
-    // repeatedly observed draw profile with a populated vertex stream; the ANY
-    // mode accepts the first populated profile. Captured fetch words are decoded
-    // through the platform descriptor types rather than a title instruction
-    // listing.
-    static constexpr uint64_t kHotVertexHash = 0x5363d0746b3ef666ull;
-
     void DumpConstantFiles(uint32_t drawOpcode)
     {
         if (constDumpDone || !lucent::config::flag("CONST_DUMP"))
@@ -1069,8 +1064,13 @@ struct CommandProcessor
         // the ALU float file must be populated (skips the movie-phase quad, whose
         // built-in shader uses no float constants).
         const bool anyShader = lucent::config::flag("CONST_DUMP_ANY");
-        if (!anyShader && g_shaderCapture.activeVertexHash != kHotVertexHash)
-            return;
+        if (!anyShader)
+        {
+            const auto *representative = gears::CurrentGpuRepresentativeDrawDiagnostics();
+            if (representative == nullptr ||
+                g_shaderCapture.activeVertexHash != representative->vertexShaderHash)
+                return;
+        }
         uint32_t aluNonZeroGate = 0;
         for (uint32_t i = 0; i < 1024; ++i)
             aluNonZeroGate += g_gpuRegisters[kConstBaseAlu + i] != 0;
@@ -1217,11 +1217,11 @@ struct CommandProcessor
     }
 
     // ----------------------------------------------------------------------
-    // Hot-pair draw-parameter capture.
+    // Representative draw-parameter capture.
     //
-    // At a DRAW_INDX / DRAW_INDX_2 whose bound shaders are the hot pair, capture
-    // the full draw parameters and the geometry source, so a pipeline could be
-    // fed. Packet layout mirrors extern/xenia
+    // At a DRAW_INDX / DRAW_INDX_2 selected by the linked title profile,
+    // capture the full draw parameters and geometry source, so a pipeline could
+    // be fed. Packet layout mirrors extern/xenia
     // src/xenia/gpu/pm4_command_processor_implement.h
     // (ExecutePacketType3_DRAW_INDX / _DRAW_INDX_2 / ExecutePacketType3Draw) and
     // the bitfields in src/xenia/gpu/registers.h (VGT_DRAW_INITIATOR,
@@ -1237,12 +1237,6 @@ struct CommandProcessor
     //                       index_size[11] (0=int16,1=int32), num_indices[16:31].
     //   VGT_DMA_SIZE:       num_words[0:23], swap_mode[30:31].
     //
-    // The draw packet does not carry its vertex stream. Captured descriptor
-    // state for this diagnostic profile identifies fetch slot 95 with a
-    // 12-dword stride; its first word supplies the stream base.
-    static constexpr uint32_t kHotVertexFetchIndex = 95;
-    static constexpr uint32_t kHotVertexStrideDwords = 12;
-
     // Accumulate one DRAW_INDX/_2 for the whole-frame backend: snapshot the
     // register file live at this draw (constants/fetch/initiator change between
     // draws) plus the bound shader pair and the index-buffer parameters. Nothing
@@ -1971,12 +1965,15 @@ struct CommandProcessor
         return endian == 1 ? uint16_t((v >> 8) | (v << 8)) : v;
     }
 
-    void CaptureHotDraw(uint32_t opcode, const uint32_t *raw, uint32_t usable)
+    void CaptureRepresentativeDraw(uint32_t opcode, const uint32_t *raw, uint32_t usable)
     {
         if (drawCaptureDone || !lucent::config::flag("DRAW_CAPTURE"))
             return;
+        const auto *representative = gears::CurrentGpuRepresentativeDrawDiagnostics();
+        if (representative == nullptr)
+            return;
         const bool anyShader = lucent::config::flag("DRAW_CAPTURE_ANY");
-        if (!anyShader && g_shaderCapture.activeVertexHash != kHotVertexHash)
+        if (!anyShader && g_shaderCapture.activeVertexHash != representative->vertexShaderHash)
             return;
 
         // DRAW_INDX carries a viz-query token before VGT_DRAW_INITIATOR;
@@ -1992,9 +1989,9 @@ struct CommandProcessor
         const uint32_t indexSizeBit = (initiator >> 11) & 0x1; // 0=int16,1=int32
         const uint32_t numIndices = (initiator >> 16) & 0xFFFF;
 
-        // A hot-pair draw with a populated fetch #95 is the target; gate the
-        // one-shot on that so we do not latch on an early degenerate draw.
-        const uint32_t fetchBase = kConstBaseFetch + kHotVertexFetchIndex * 2;
+        // Gate on a populated profile-selected fetch so the one-shot does not
+        // latch on an early degenerate draw.
+        const uint32_t fetchBase = kConstBaseFetch + representative->vertexFetchIndex * 2;
         const uint32_t vf0 = g_gpuRegisters[fetchBase];
         const uint32_t vf1 = g_gpuRegisters[fetchBase + 1];
         if (!anyShader && vf0 == 0)
@@ -2023,7 +2020,7 @@ struct CommandProcessor
         static const char *kSrc[4] = {"kDMA(indexed)", "kImmediate(inline)", "kAutoIndex",
                                       "invalid"};
 
-        emit(std::format("=== hot-pair {} draw parameters ===", OpcodeName(opcode)));
+        emit(std::format("=== representative {} draw parameters ===", OpcodeName(opcode)));
         emit(std::format("bound shaders: vertex {:#018x} pixel {:#018x}",
                          g_shaderCapture.activeVertexHash, g_shaderCapture.activePixelHash));
         emit(std::format("VGT_DRAW_INITIATOR = {:#010x}", initiator));
@@ -2064,18 +2061,19 @@ struct CommandProcessor
             emit("index source: kAutoIndex (no index buffer; indices 0..num_indices-1)");
         }
 
-        // Geometry source: the captured draw profile uses fetch constant #95.
+        // Geometry source: the linked title profile identifies the fetch
+        // constant and stride for its representative draw.
         const uint32_t vfType = vf0 & 0x3;
         const uint32_t vertexBaseBytes = (vf0 >> 2) << 2; // address<<2, byte addr
         const uint32_t vfEndian = vf1 & 0x3;
         const uint32_t vfSizeWords = (vf1 >> 2) & 0xFFFFFF;
-        const uint32_t strideBytes = kHotVertexStrideDwords * 4;
-        emit(std::format("vertex fetch constant #95 (reg {:#x}): {:#010x} {:#010x}", fetchBase, vf0,
-                         vf1));
+        const uint32_t strideBytes = representative->vertexStrideDwords * 4;
+        emit(std::format("vertex fetch constant #{} (reg {:#x}): {:#010x} {:#010x}",
+                         representative->vertexFetchIndex, fetchBase, vf0, vf1));
         emit(std::format("  type {} vertex_base {:#x} (dword addr {:#x}) stride {} dwords"
                          " ({} bytes) endian {} size {} words ({} bytes)",
-                         vfType, vertexBaseBytes, vf0 >> 2, kHotVertexStrideDwords, strideBytes,
-                         vfEndian, vfSizeWords, vfSizeWords * 4));
+                         vfType, vertexBaseBytes, vf0 >> 2, representative->vertexStrideDwords,
+                         strideBytes, vfEndian, vfSizeWords, vfSizeWords * 4));
 
         // First N indices from guest memory.
         const uint32_t nIdx = std::min(numIndices, 32u);
@@ -2750,7 +2748,7 @@ struct CommandProcessor
             }
 
             DumpConstantFiles(opcode);
-            CaptureHotDraw(opcode, data, copy);
+            CaptureRepresentativeDraw(opcode, data, copy);
             CaptureFrameDraw(opcode, data, copy, initiator);
         }
 

@@ -197,6 +197,7 @@ add_executable(gears1
     kernel_video.cpp
     pm4_trace.cpp
     vd_null_gpu.cpp
+    gpu_diagnostics_profile.cpp
     gpu_present.cpp
     gpu_present_source.cpp
     gpu_present_stage.cpp
@@ -215,6 +216,7 @@ add_executable(gears1
     native_rhi_present.cpp
     gpu_ticket_wait.cpp
     frame_production_timing.cpp
+    titles/gears1/gpu_diagnostics_profile.cpp
     titles/gears1/hle_d3d.cpp
     titles/gears1/color_write_gamma_override.cpp
     titles/gears1/rhi_bindings.cpp
