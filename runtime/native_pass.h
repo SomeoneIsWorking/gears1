@@ -1,14 +1,13 @@
-// Native passes: rendering a known UE3 pass with our own shader instead of the
-// title's translated microcode.
+// Native passes: rendering an exact adapter's known UE3 pass with an
+// independently authored shader instead of translated title microcode.
 //
 // WHY THIS IS THE SEAM. A native renderer needs somewhere to attach, and the
 // obvious candidate -- the guest function that emits the draws -- is still
 // unidentified (catalog #58). It is not needed. By the time a frame reaches
 // gpu_draw.cpp every draw already carries the thing that identifies a UE3 pass:
-// the hash of the microcode the title bound. Gears binds the same shader for the
-// same pass every frame, so a hash IS a pass identity, and the renderer can
-// substitute its own module for that pass without knowing which guest function
-// emitted the draw.
+// the hash of the microcode the title bound. The exact title adapter owns that
+// identity and its observed interface; the renderer can substitute the supplied
+// module without knowing which guest function emitted the draw.
 //
 // WHAT A NATIVE PASS IS. An independently authored SPIR-V implementation of an
 // observed pass contract, plus the binding layout it expects. Everything else
@@ -62,7 +61,12 @@ struct Pass
     gears::draw::ShaderInterface vertexShaderInterface;
 };
 
-// The passes this build knows how to render itself. Empty entries are declarations,
+// Supplied by exactly one linked title/revision adapter. Shared renderer code
+// must not provide a fallback roster because an unknown revision must refuse,
+// not inherit another title's shader identities.
+const std::vector<Pass> &ExactTitleRoster();
+
+// The exact adapter's passes for this build. Empty entries are declarations,
 // not implementations; Enabled() and Find() both refuse them.
 const std::vector<Pass> &Roster();
 

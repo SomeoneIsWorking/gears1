@@ -254,7 +254,6 @@ add_executable(gears1
     gpu_packet_memory.cpp
     gpu_swap_packet.cpp
     render_thread.cpp
-    native_pass.cpp
     guest_indirect_call.cpp
     user_profile.cpp
     xam_apps.cpp
@@ -352,7 +351,15 @@ target_include_directories(gears_draw PUBLIC . PRIVATE "${THIRDPARTY_ROOT}/xxHas
 target_link_libraries(gears_draw PRIVATE lucent::lucent)
 target_link_libraries(gears_draw PRIVATE gears_gpu_queue_access)
 target_link_libraries(gears_draw PRIVATE gears_guest_texture_hash)
-target_link_libraries(gears1 PRIVATE gears_draw)
+
+# Exact-title renderer composition. gears_draw remains title-neutral and leaves
+# ExactTitleRoster unresolved; every final Gears 1 consumer links this interface
+# so a future title can supply a different adapter without cloning the renderer.
+add_library(gears1_native_pass STATIC titles/gears1/native_pass.cpp)
+target_include_directories(gears1_native_pass PUBLIC .)
+add_library(gears1_draw INTERFACE)
+target_link_libraries(gears1_draw INTERFACE gears_draw gears1_native_pass)
+target_link_libraries(gears1 PRIVATE gears1_draw)
 target_link_libraries(gears1 PRIVATE gears_gpu_queue_access)
 
 # The host graphics backend. Vulkan because extern/xenia's SPIR-V shader
@@ -414,7 +421,7 @@ if(Vulkan_FOUND AND GEARS_HAVE_XENOS_TRANSLATOR)
     # is the instrument the renderer is debugged with -- one capture, then every
     # arm of a comparison renders byte-identical input in about a second.
     add_executable(frame_replay ${CMAKE_CURRENT_SOURCE_DIR}/../tools/frame_replay/main.cpp)
-    target_link_libraries(frame_replay PRIVATE gears_draw lucent::lucent)
+    target_link_libraries(frame_replay PRIVATE gears1_draw lucent::lucent)
     message(STATUS "gears1: frame_replay enabled")
 else()
     message(WARNING
@@ -433,7 +440,7 @@ endif()
 option(GEARS_ASAN "Build the runtime, but not the translated guest code, with AddressSanitizer" OFF)
 if(GEARS_ASAN)
     set(GEARS_ASAN_FLAGS -fsanitize=address -fno-omit-frame-pointer -g)
-    foreach(asan_target gears1 gears_draw gears_draw_xlate)
+    foreach(asan_target gears1 gears_draw gears1_native_pass gears_draw_xlate)
         if(TARGET ${asan_target})
             target_compile_options(${asan_target} PRIVATE ${GEARS_ASAN_FLAGS})
         endif()
@@ -457,7 +464,7 @@ target_link_options(gears1 PRIVATE -rdynamic)
 # and nobody silently ships an -O0 renderer again.
 foreach(gears_host_target gears1 gears_title_profile gears_generated_title_profile
                           gears_title_executable gears_gpu_queue_access
-                          gears_guest_texture_hash gears_draw
+                          gears_guest_texture_hash gears_draw gears1_native_pass
                           gears_draw_xlate frame_replay xxhash)
     gears_optimise_host(${gears_host_target})
 endforeach()

@@ -1,5 +1,8 @@
 #include "native_pass.h"
 
+// Exact Gears 1 roster contract. Generic enable/find behavior is exercised
+// through the shipping implementation linked beside the exact adapter.
+
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -14,6 +17,7 @@ constexpr std::uint32_t kSpirvMagic = 0x07230203u;
 void TestSceneCompositeModuleIsImplemented()
 {
     const auto &roster = gears::native::Roster();
+    assert(&roster == &gears::native::ExactTitleRoster());
     const auto scene =
         std::find_if(roster.begin(), roster.end(), [](const gears::native::Pass &pass)
                      { return pass.pixelShaderHash == kSceneComposite; });
@@ -53,9 +57,15 @@ void TestSceneCompositeModuleIsImplemented()
     assert(scene->vertexShaderInterface.vertexBindings.front().strideWords == 12);
     assert(scene->vertexShaderInterface.requiredInterpolatorMask == 0x3);
     if (gears::native::Enabled())
+    {
+        assert(gears::native::Find(kSceneComposite) == &*scene);
         assert(gears::native::FindVertex(kSceneCompositeVertex) != nullptr);
+    }
     else
+    {
+        assert(gears::native::Find(kSceneComposite) == nullptr);
         assert(gears::native::FindVertex(kSceneCompositeVertex) == nullptr);
+    }
 }
 
 void TestUnimplementedDeclarationsRemainRefused()
@@ -66,6 +76,9 @@ void TestUnimplementedDeclarationsRemainRefused()
                      { return pass.pixelShaderHash == 0xea0007942db096adull; });
     assert(movie != roster.end());
     assert(movie->spirv.empty());
+    assert(gears::native::Find(movie->pixelShaderHash) == nullptr);
+    assert(gears::native::Find(0) == nullptr);
+    assert(gears::native::FindVertex(0) == nullptr);
 }
 
 } // namespace
