@@ -212,6 +212,7 @@ std::vector<gears::RhiSemanticVertexStream> CaptureBoundVertexStreams(std::uint3
 [[nodiscard]] gears::RhiBindingStateEvidence CaptureColorRenderTargetBinding(std::uint32_t device,
                                                                              std::uint32_t slot)
 {
+    constexpr std::uint32_t kSurfaceInfoOffset = 0x2800;
     constexpr std::uint32_t kRenderTargetObjectTableOffset = 0x2F88;
     constexpr std::uint32_t kRenderTargetDescriptorOffset = 0x2804;
     if (device == 0)
@@ -225,12 +226,17 @@ std::vector<gears::RhiSemanticVertexStream> CaptureBoundVertexStreams(std::uint3
                                      descriptorIndex * sizeof(std::uint32_t))},
         .descriptorDwords = 1,
     };
+    state.targetStatePresent = state.observedObject != 0;
+    state.targetState = gears::DecodeRhiColorTargetDescriptor(state.descriptor[0]);
+    state.surfaceStatePresent = true;
+    state.surfaceState = gears::DecodeRhiSurfaceState(ReadGuestBe32(device + kSurfaceInfoOffset));
     state.identity = gears::titles::gears1::CaptureRhiResourceIdentity(state.observedObject);
     return state;
 }
 
 [[nodiscard]] gears::RhiBindingStateEvidence CaptureDepthStencilTargetBinding(std::uint32_t device)
 {
+    constexpr std::uint32_t kSurfaceInfoOffset = 0x2800;
     constexpr std::uint32_t kDepthStencilObjectOffset = 0x2F98;
     constexpr std::uint32_t kDepthDescriptorWord0Offset = 0x2808;
     constexpr std::uint32_t kDepthDescriptorWord1Offset = 0x28C0;
@@ -243,6 +249,10 @@ std::vector<gears::RhiSemanticVertexStream> CaptureBoundVertexStreams(std::uint3
                        ReadGuestBe32(device + kDepthDescriptorWord1Offset)},
         .descriptorDwords = 2,
     };
+    state.targetStatePresent = state.observedObject != 0;
+    state.targetState = gears::DecodeRhiDepthTargetDescriptor(state.descriptor[0]);
+    state.surfaceStatePresent = true;
+    state.surfaceState = gears::DecodeRhiSurfaceState(ReadGuestBe32(device + kSurfaceInfoOffset));
     state.identity = gears::titles::gears1::CaptureRhiResourceIdentity(state.observedObject);
     return state;
 }
@@ -257,6 +267,8 @@ MakeObservedRenderTarget(bool depthStencil, std::uint32_t slot,
         .object = state.observedObject,
         .descriptor = state.descriptor,
         .descriptorDwords = state.descriptorDwords,
+        .normalizedStatePresent = state.targetStatePresent,
+        .normalizedState = state.targetState,
     };
 }
 

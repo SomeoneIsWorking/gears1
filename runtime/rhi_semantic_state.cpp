@@ -23,6 +23,8 @@ void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding,
 
     if (binding.kind == RhiSemanticBindingKind::ColorRenderTarget)
     {
+        if (state.surfaceStatePresent)
+            surfaceState_ = state.surfaceState;
         if (effective.object == 0)
             colorTargets_.erase(effective.slot);
         else
@@ -31,11 +33,15 @@ void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding,
                 .object = effective.object,
                 .descriptor = effective.descriptor,
                 .descriptorDwords = effective.descriptorDwords,
+                .normalizedStatePresent = state.targetStatePresent,
+                .normalizedState = state.targetState,
             };
         return;
     }
     if (binding.kind == RhiSemanticBindingKind::DepthStencilTarget)
     {
+        if (state.surfaceStatePresent)
+            surfaceState_ = state.surfaceState;
         if (effective.object == 0)
             depthStencilTarget_.reset();
         else
@@ -45,6 +51,8 @@ void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding,
                 .object = effective.object,
                 .descriptor = effective.descriptor,
                 .descriptorDwords = effective.descriptorDwords,
+                .normalizedStatePresent = state.targetStatePresent,
+                .normalizedState = state.targetState,
             };
         return;
     }
@@ -96,6 +104,28 @@ void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding,
     };
 }
 
+RhiColorWriteStateEvidenceResult
+RhiSemanticStateTracker::ApplyColorWriteState(const RhiSemanticColorWriteState &state)
+{
+    constexpr std::uint32_t kColorSlot = 0;
+    const auto active = colorTargets_.find(kColorSlot);
+    if (!state.targetPresent)
+        return active == colorTargets_.end() ? RhiColorWriteStateEvidenceResult::Match
+                                             : RhiColorWriteStateEvidenceResult::Mismatch;
+    if (active == colorTargets_.end())
+        return RhiColorWriteStateEvidenceResult::Missing;
+    if (active->second.object != state.target.object || state.target.slot != kColorSlot ||
+        state.target.depthStencil)
+    {
+        return RhiColorWriteStateEvidenceResult::Mismatch;
+    }
+
+    active->second = state.target;
+    if (state.surfaceStatePresent)
+        surfaceState_ = state.surfaceState;
+    return RhiColorWriteStateEvidenceResult::Match;
+}
+
 void RhiSemanticStateTracker::ApplyVertexStreamReset(const RhiSemanticVertexStreamReset &reset)
 {
     const std::uint64_t end = std::uint64_t{reset.firstSlot} + reset.slotCount;
@@ -134,6 +164,11 @@ RhiSemanticDrawState RhiSemanticStateTracker::SnapshotDraw(const RhiSemanticDraw
     state.pixelShader = pixelShader_;
     state.vertexShader = vertexShader_;
     state.indexBuffer = indexBuffer_;
+    if (surfaceState_.has_value())
+    {
+        state.surfaceStatePresent = true;
+        state.surfaceState = *surfaceState_;
+    }
     return state;
 }
 
@@ -146,6 +181,7 @@ void RhiSemanticStateTracker::Reset()
     indexBuffer_.reset();
     colorTargets_.clear();
     depthStencilTarget_.reset();
+    surfaceState_.reset();
 }
 
 } // namespace gears

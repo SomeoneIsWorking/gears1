@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gpu_draw_native_input.h"
+#include "rhi_target_state.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -32,6 +33,15 @@ struct RhiRendererDrawInput
     bool indexIs32 = false;
     std::uint32_t indexEndian = 0;
     std::uint32_t indexGuestBase = 0;
+    // These flags mean the terminal renderer supplied comparable normalized
+    // register state. Semantic bindings remain the authority for whether a
+    // title resource is active; backend attachment allocation is not presence.
+    bool targetStatePresent = false;
+    bool colorTargetStatePresent = false;
+    bool depthTargetStatePresent = false;
+    RhiRenderTargetDescriptorState colorTarget;
+    RhiRenderTargetDescriptorState depthTarget;
+    RhiSurfaceState surfaceState;
 };
 
 struct RhiRendererFrameInput
@@ -46,6 +56,35 @@ enum class RhiRendererDrawEvidenceResult : std::uint8_t
     Match,
     Missing,
     Mismatch,
+};
+
+enum class RhiRendererDrawEvidenceReason : std::uint8_t
+{
+    None,
+    RendererRefused,
+    DrawShape,
+    IndexBufferViewMissing,
+    IndexWidth,
+    IndexAddress,
+    IndexEndian,
+    DuplicateColorTarget,
+    DuplicateDepthTarget,
+    UnsupportedColorTargetSlot,
+    RendererTargetStateMissing,
+    SemanticSurfaceStateMissing,
+    ColorTargetStateUnavailable,
+    DepthTargetStateUnavailable,
+    ColorTargetStateMissing,
+    DepthTargetStateMissing,
+    SurfaceState,
+    ColorTargetState,
+    DepthTargetState,
+};
+
+struct RhiRendererDrawEvidence
+{
+    RhiRendererDrawEvidenceResult result = RhiRendererDrawEvidenceResult::Missing;
+    RhiRendererDrawEvidenceReason reason = RhiRendererDrawEvidenceReason::None;
 };
 
 struct RhiRendererFrameComparison
@@ -69,6 +108,8 @@ struct RhiRendererFrameComparison
     std::uint64_t unmatchedRendererInconsistentSourcePackets = 0;
     std::uint64_t unkeyedRendererDraws = 0;
     std::uint32_t firstMissingSemanticPacket = 0;
+    std::uint32_t firstMismatchedSemanticPacket = 0;
+    RhiRendererDrawEvidenceReason firstMismatchReason = RhiRendererDrawEvidenceReason::None;
     std::uint32_t firstUnmatchedRendererPacket = 0;
     std::uint32_t firstUnmatchedRendererBuffer = 0;
     bool firstUnmatchedRendererFromIndirectBuffer = false;
@@ -81,6 +122,9 @@ struct RhiRendererFrameComparison
 
 [[nodiscard]] RhiRendererDrawEvidenceResult
 CompareRhiRendererDrawInput(const RhiSemanticDrawState &state,
+                            const RhiRendererDrawInput &renderer);
+[[nodiscard]] RhiRendererDrawEvidence
+InspectRhiRendererDrawInput(const RhiSemanticDrawState &state,
                             const RhiRendererDrawInput &renderer);
 [[nodiscard]] RhiRendererFrameComparison
 CompareRhiRendererDraws(const RhiSemanticFrame &frame, const RhiRendererFrameInput &renderer);

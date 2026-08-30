@@ -21,6 +21,7 @@ class Backend
     virtual bool ApplyResourceLifetime(const ResourceLifetimeCommand &command) = 0;
     virtual bool ConstructResource(const ResourceConstructionCommand &command) = 0;
     virtual bool ResetVertexStreams(const VertexStreamResetCommand &command) = 0;
+    virtual bool SetColorWriteState(const ColorWriteStateCommand &command) = 0;
     virtual bool Draw(const DrawCommand &command) = 0;
     virtual bool Resolve(const ResolveCommand &command) = 0;
     virtual bool Present(const PresentCommand &command) = 0;

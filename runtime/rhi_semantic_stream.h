@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rhi_resource_reference.h"
+#include "rhi_target_state.h"
 
 #include <array>
 #include <cstdint>
@@ -57,6 +58,8 @@ struct RhiSemanticRenderTarget
     std::uint32_t object = 0;
     std::array<std::uint32_t, 6> descriptor{};
     std::uint32_t descriptorDwords = 0;
+    bool normalizedStatePresent = false;
+    RhiRenderTargetDescriptorState normalizedState;
 };
 
 struct RhiSemanticDraw
@@ -141,6 +144,10 @@ struct RhiBindingStateEvidence
     std::uint32_t descriptorDwords = 0;
     bool bufferViewPresent = false;
     RhiSemanticBufferView bufferView;
+    bool targetStatePresent = false;
+    RhiRenderTargetDescriptorState targetState;
+    bool surfaceStatePresent = false;
+    RhiSurfaceState surfaceState;
     RhiResourceIdentityEvidence identity;
 };
 
@@ -160,6 +167,24 @@ struct RhiSemanticDrawState
     std::optional<RhiSemanticBinding> pixelShader;
     std::optional<RhiSemanticBinding> vertexShader;
     std::optional<RhiSemanticBinding> indexBuffer;
+    bool surfaceStatePresent = false;
+    RhiSurfaceState surfaceState;
+};
+
+struct RhiSemanticColorWriteState
+{
+    std::uint64_t requested = 0;
+    bool targetPresent = false;
+    RhiSemanticRenderTarget target;
+    bool surfaceStatePresent = false;
+    RhiSurfaceState surfaceState;
+};
+
+enum class RhiColorWriteStateEvidenceResult : std::uint8_t
+{
+    Match,
+    Missing,
+    Mismatch,
 };
 
 struct RhiSemanticPresent
@@ -346,10 +371,16 @@ struct RhiObservedVertexStreamReset
     RhiVertexStreamResetEvidenceResult evidence = RhiVertexStreamResetEvidenceResult::Missing;
 };
 
+struct RhiObservedColorWriteState
+{
+    RhiSemanticColorWriteState state;
+    RhiColorWriteStateEvidenceResult evidence = RhiColorWriteStateEvidenceResult::Missing;
+};
+
 using RhiSemanticEventPayload =
     std::variant<RhiObservedDraw, RhiObservedBinding, RhiObservedResourceLifetime,
-                 RhiObservedResourceConstruction, RhiObservedVertexStreamReset, RhiObservedResolve,
-                 RhiObservedPresent>;
+                 RhiObservedResourceConstruction, RhiObservedVertexStreamReset,
+                 RhiObservedColorWriteState, RhiObservedResolve, RhiObservedPresent>;
 
 struct RhiSemanticEvent
 {
@@ -381,6 +412,10 @@ struct RhiSemanticFrame
     std::uint64_t vertexStreamResetsMatched = 0;
     std::uint64_t vertexStreamResetsMissing = 0;
     std::uint64_t vertexStreamResetsMismatched = 0;
+    std::uint64_t colorWriteStates = 0;
+    std::uint64_t colorWriteStatesMatched = 0;
+    std::uint64_t colorWriteStatesMissing = 0;
+    std::uint64_t colorWriteStatesMismatched = 0;
     std::uint64_t resolvesMatched = 0;
     std::uint64_t resolvesMissing = 0;
     std::uint64_t resolvesMismatched = 0;
@@ -420,6 +455,7 @@ void ObserveRhiSemanticResourceConstruction(const RhiSemanticResourceConstructio
                                             const RhiResourceConstructionEvidence &retained);
 void ObserveRhiSemanticVertexStreamReset(const RhiSemanticVertexStreamReset &reset,
                                          const RhiVertexStreamResetEvidence &state);
+void ObserveRhiSemanticColorWriteState(const RhiSemanticColorWriteState &state);
 void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,
                                const RhiResolvePacketEvidence &packet);
 [[nodiscard]] RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence);

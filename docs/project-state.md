@@ -69,8 +69,21 @@ device-initialization point-draw batch at `0x8222B678` and the six materialized 
 rectangle clears emitted below `0x8222BC18`; the four normal title draw wrappers cover the actual
 content draws. Tile replays with mixed terminal outcomes and inconsistent source provenance are
 reported explicitly instead of being classified from their first execution.
-Complete resource ranges, shader/constant/texture inputs, output state, and pixels are not yet
-compared. Claims C102/C103 and instrument I067 record this materialization evidence. The resolve observer's false negative on
+The shared target-state owner now normalizes active RT0/depth base and format, signed color
+exponent, and surface pitch/sample state on both sides of that terminal join. The semantic tracker
+applies `0x82229B28` as a distinct ordered post-bind color-write transition rather than pretending
+it was a target rebind. A Clang headless gameplay-transition run through frame 660 matched 10,945
+correlated semantic draws with zero missing or value-mismatched renderer inputs; the same interval
+matched all 15,306 color-write transitions, 2,854 color-target binds, and 1,566 depth-target binds.
+That run also exposed and fixed a separate renderer-evidence defect: bound-index guest CPU aliases
+were compared directly with physical DMA addresses instead of through the existing physical-address
+contract. Field-specific controls reject changed color/depth base and format, color exponent,
+surface pitch/sample count, missing target state, and unsupported semantic MRT slots. A later
+renderer-queue drop remains explicit missing coverage, and the much larger gameplay population of
+unmatched internal compatibility packets remains outside normal title draw ownership; neither is
+misreported as target-state agreement.
+Complete resource ranges, shader/constant/texture inputs, remaining output state, and pixels are not
+yet compared. Claims C102/C103/C104 and instrument I067 record this materialization evidence. The resolve observer's false negative on
 a retained command-buffer allocation transition is fixed with a bounded lower-pointer retry, and a headless walk
 crossed the prior refusal region through frame 2280. The new `native_rhi.*` plan boundary accepts the
 complete ordered semantic stream on the same live path, but remains capture-only. See issues #141,

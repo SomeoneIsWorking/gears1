@@ -20,6 +20,8 @@ template <typename Command> bool Dispatch(Backend &backend, const Command &comma
         return backend.ConstructResource(command);
     else if constexpr (std::is_same_v<Command, VertexStreamResetCommand>)
         return backend.ResetVertexStreams(command);
+    else if constexpr (std::is_same_v<Command, ColorWriteStateCommand>)
+        return backend.SetColorWriteState(command);
     else if constexpr (std::is_same_v<Command, ResolveCommand>)
         return backend.Resolve(command);
     else

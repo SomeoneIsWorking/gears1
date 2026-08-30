@@ -260,6 +260,108 @@ int main()
     assert(CompareRhiBindingState(depthTargetBinding, alteredDepthTarget) ==
            RhiBindingEvidenceResult::Mismatch);
 
+    const gears::RhiSemanticDrawState normalizedTargetDraw{
+        .draw = autoIndexed,
+        .renderTargets =
+            {{.slot = 0,
+              .object = 0x40104000,
+              .normalizedStatePresent = true,
+              .normalizedState = {.base = 0x2D0, .format = 12, .colorExponentBias = -2}},
+             {.depthStencil = true,
+              .object = 0x40104800,
+              .normalizedStatePresent = true,
+              .normalizedState = {.base = 0x5A0, .format = 1}}},
+        .surfaceStatePresent = true,
+        .surfaceState = {.pitch = 1280, .msaaSamples = 1},
+    };
+    const RhiRendererDrawInput matchingRendererTargets{
+        .outcome = gears::draw::NativeDrawMaterializationOutcome::Materialized,
+        .primitiveType = 4,
+        .elementCount = 300,
+        .targetStatePresent = true,
+        .colorTargetStatePresent = true,
+        .depthTargetStatePresent = true,
+        .colorTarget = {.base = 0x2D0, .format = 12, .colorExponentBias = -2},
+        .depthTarget = {.base = 0x5A0, .format = 1},
+        .surfaceState = {.pitch = 1280, .msaaSamples = 1},
+    };
+    assert(gears::CompareRhiRendererDrawInput(normalizedTargetDraw, matchingRendererTargets) ==
+           RhiRendererDrawEvidenceResult::Match);
+    constexpr std::array targetMismatchReasons{
+        gears::RhiRendererDrawEvidenceReason::ColorTargetState,
+        gears::RhiRendererDrawEvidenceReason::ColorTargetState,
+        gears::RhiRendererDrawEvidenceReason::ColorTargetState,
+        gears::RhiRendererDrawEvidenceReason::DepthTargetState,
+        gears::RhiRendererDrawEvidenceReason::DepthTargetState,
+        gears::RhiRendererDrawEvidenceReason::SurfaceState,
+        gears::RhiRendererDrawEvidenceReason::SurfaceState,
+    };
+    for (const auto alteredTarget : {0, 1, 2, 3, 4, 5, 6})
+    {
+        RhiRendererDrawInput renderer = matchingRendererTargets;
+        switch (alteredTarget)
+        {
+        case 0:
+            renderer.colorTarget.base ^= 1;
+            break;
+        case 1:
+            renderer.colorTarget.format ^= 1;
+            break;
+        case 2:
+            renderer.colorTarget.colorExponentBias += 1;
+            break;
+        case 3:
+            renderer.depthTarget.base ^= 1;
+            break;
+        case 4:
+            renderer.depthTarget.format ^= 1;
+            break;
+        case 5:
+            renderer.surfaceState.pitch += 1;
+            break;
+        case 6:
+            renderer.surfaceState.msaaSamples ^= 1;
+            break;
+        }
+        const gears::RhiRendererDrawEvidence evidence =
+            gears::InspectRhiRendererDrawInput(normalizedTargetDraw, renderer);
+        assert(evidence.result == RhiRendererDrawEvidenceResult::Mismatch);
+        assert(evidence.reason == targetMismatchReasons[alteredTarget]);
+    }
+    RhiRendererDrawInput missingColorTarget = matchingRendererTargets;
+    missingColorTarget.colorTargetStatePresent = false;
+    assert(gears::CompareRhiRendererDrawInput(normalizedTargetDraw, missingColorTarget) ==
+           RhiRendererDrawEvidenceResult::Missing);
+    assert(gears::InspectRhiRendererDrawInput(normalizedTargetDraw, missingColorTarget).reason ==
+           gears::RhiRendererDrawEvidenceReason::ColorTargetStateUnavailable);
+    auto noSemanticDepthTarget = normalizedTargetDraw;
+    noSemanticDepthTarget.renderTargets.erase(noSemanticDepthTarget.renderTargets.begin() + 1);
+    assert(
+        gears::InspectRhiRendererDrawInput(noSemanticDepthTarget, matchingRendererTargets).result ==
+        RhiRendererDrawEvidenceResult::Match);
+    RhiRendererDrawInput missingDepthTarget = matchingRendererTargets;
+    missingDepthTarget.depthTargetStatePresent = false;
+    const gears::RhiRendererDrawEvidence missingDepthEvidence =
+        gears::InspectRhiRendererDrawInput(normalizedTargetDraw, missingDepthTarget);
+    assert(missingDepthEvidence.result == RhiRendererDrawEvidenceResult::Missing);
+    assert(missingDepthEvidence.reason ==
+           gears::RhiRendererDrawEvidenceReason::DepthTargetStateUnavailable);
+    auto missingDescriptor = normalizedTargetDraw;
+    missingDescriptor.renderTargets[0].normalizedStatePresent = false;
+    assert(gears::CompareRhiRendererDrawInput(missingDescriptor, matchingRendererTargets) ==
+           RhiRendererDrawEvidenceResult::Missing);
+    assert(gears::InspectRhiRendererDrawInput(missingDescriptor, matchingRendererTargets).reason ==
+           gears::RhiRendererDrawEvidenceReason::ColorTargetStateMissing);
+    auto unsupportedMrt = normalizedTargetDraw;
+    unsupportedMrt.renderTargets.push_back({.slot = 1,
+                                            .object = 0x40105000,
+                                            .normalizedStatePresent = true,
+                                            .normalizedState = {.base = 0x600, .format = 3}});
+    assert(gears::CompareRhiRendererDrawInput(unsupportedMrt, matchingRendererTargets) ==
+           RhiRendererDrawEvidenceResult::Missing);
+    assert(gears::InspectRhiRendererDrawInput(unsupportedMrt, matchingRendererTargets).reason ==
+           gears::RhiRendererDrawEvidenceReason::UnsupportedColorTargetSlot);
+
     const RhiSemanticBinding indexBufferBinding{
         .kind = RhiSemanticBindingKind::IndexBuffer,
         .object = 0x40105000,
@@ -368,9 +470,14 @@ int main()
     };
     assert(gears::CompareRhiRendererDrawInput(boundDrawState, rendererIndexed) ==
            RhiRendererDrawEvidenceResult::Match);
+    rendererIndexed.indexGuestBase |= 0xA0000000;
+    assert(gears::InspectRhiRendererDrawInput(boundDrawState, rendererIndexed).result ==
+           RhiRendererDrawEvidenceResult::Match);
     rendererIndexed.indexGuestBase += 2;
-    assert(gears::CompareRhiRendererDrawInput(boundDrawState, rendererIndexed) ==
-           RhiRendererDrawEvidenceResult::Mismatch);
+    const gears::RhiRendererDrawEvidence wrongIndexAddress =
+        gears::InspectRhiRendererDrawInput(boundDrawState, rendererIndexed);
+    assert(wrongIndexAddress.result == RhiRendererDrawEvidenceResult::Mismatch);
+    assert(wrongIndexAddress.reason == gears::RhiRendererDrawEvidenceReason::IndexAddress);
     rendererIndexed.indexGuestBase = 0x2010;
     rendererIndexed.outcome = gears::draw::NativeDrawMaterializationOutcome::Refused;
     assert(gears::CompareRhiRendererDrawInput(boundDrawState, rendererIndexed) ==
@@ -440,6 +547,35 @@ int main()
 
     assert(setenv("GEARS_NATIVE_RHI_OBSERVE", "1", 1) == 0);
     lucent::config::set_prefix("GEARS_");
+    const RhiSemanticBinding activeColorTarget{
+        .kind = RhiSemanticBindingKind::ColorRenderTarget,
+        .slot = 0,
+        .object = 0x40104000,
+        .descriptor = {0x000302D0},
+        .descriptorDwords = 1,
+    };
+    const RhiBindingStateEvidence activeColorTargetState{
+        .present = true,
+        .observedObject = activeColorTarget.object,
+        .descriptor = activeColorTarget.descriptor,
+        .descriptorDwords = 1,
+        .targetStatePresent = true,
+        .targetState = {.base = 0x2D0, .format = 3},
+        .surfaceStatePresent = true,
+        .surfaceState = {.pitch = 1280, .msaaSamples = 0},
+    };
+    const gears::RhiSemanticColorWriteState observedGammaWrite{
+        .requested = 1,
+        .targetPresent = true,
+        .target = {.slot = 0,
+                   .object = activeColorTarget.object,
+                   .descriptor = {0x000C02D0},
+                   .descriptorDwords = 1,
+                   .normalizedStatePresent = true,
+                   .normalizedState = {.base = 0x2D0, .format = 12}},
+        .surfaceStatePresent = true,
+        .surfaceState = activeColorTargetState.surfaceState,
+    };
     gears::ObserveRhiSemanticDraw(autoIndexed, matchingAuto);
     gears::ObserveRhiSemanticBinding(textureBinding, matchingBinding);
     gears::ObserveRhiSemanticResourceLifetime(release, matchingRelease);
@@ -449,25 +585,23 @@ int main()
     altered = matchingIndexed;
     altered.sourceSelect = 2;
     gears::ObserveRhiSemanticDraw(indexed, altered);
+    gears::ObserveRhiSemanticBinding(activeColorTarget, activeColorTargetState);
+    gears::ObserveRhiSemanticColorWriteState(observedGammaWrite);
     gears::ObserveRhiSemanticPresent(present, matchingPresent);
     const gears::RhiSemanticFrame frame = gears::SealRhiSemanticFrame(17);
     assert(frame.frameSequence == 17);
-    assert(frame.events.size() == 8);
+    assert(frame.events.size() == 10);
     assert(frame.draws == 2);
-    assert(frame.bindings == 1);
+    assert(frame.bindings == 2);
     assert(frame.resourceLifetimeCalls == 1);
     assert(frame.resourceRetirements == 1);
     assert(frame.resourceConstructions == 1);
     assert(frame.vertexStreamResets == 1);
+    assert(frame.colorWriteStates == 1);
     assert(frame.resolves == 1);
     assert(frame.presents == 1);
-    assert(frame.events[0].sequence + 1 == frame.events[1].sequence);
-    assert(frame.events[1].sequence + 1 == frame.events[2].sequence);
-    assert(frame.events[2].sequence + 1 == frame.events[3].sequence);
-    assert(frame.events[3].sequence + 1 == frame.events[4].sequence);
-    assert(frame.events[4].sequence + 1 == frame.events[5].sequence);
-    assert(frame.events[5].sequence + 1 == frame.events[6].sequence);
-    assert(frame.events[6].sequence + 1 == frame.events[7].sequence);
+    for (std::size_t index = 1; index < frame.events.size(); ++index)
+        assert(frame.events[index - 1].sequence + 1 == frame.events[index].sequence);
     assert(std::holds_alternative<gears::RhiObservedDraw>(frame.events[0].payload));
     assert(std::holds_alternative<gears::RhiObservedBinding>(frame.events[1].payload));
     assert(std::holds_alternative<gears::RhiObservedResourceLifetime>(frame.events[2].payload));
@@ -475,7 +609,9 @@ int main()
     assert(std::holds_alternative<gears::RhiObservedVertexStreamReset>(frame.events[4].payload));
     assert(std::holds_alternative<gears::RhiObservedResolve>(frame.events[5].payload));
     assert(std::holds_alternative<gears::RhiObservedDraw>(frame.events[6].payload));
-    assert(std::holds_alternative<gears::RhiObservedPresent>(frame.events[7].payload));
+    assert(std::holds_alternative<gears::RhiObservedBinding>(frame.events[7].payload));
+    assert(std::holds_alternative<gears::RhiObservedColorWriteState>(frame.events[8].payload));
+    assert(std::holds_alternative<gears::RhiObservedPresent>(frame.events[9].payload));
     assert(std::get<gears::RhiObservedDraw>(frame.events[0].payload).state.draw.elementCount ==
            300);
     assert(std::get<gears::RhiObservedBinding>(frame.events[1].payload).binding.slot == 3);
@@ -487,12 +623,14 @@ int main()
         std::get<gears::RhiObservedResolve>(frame.events[5].payload).resolve.destinationAddress ==
         0x0BCC0000);
     assert(std::get<gears::RhiObservedDraw>(frame.events[6].payload).state.draw.elementCount == 42);
-    assert(std::get<gears::RhiObservedPresent>(frame.events[7].payload).present.frontBuffer ==
+    assert(std::get<gears::RhiObservedColorWriteState>(frame.events[8].payload)
+               .state.target.normalizedState.format == 12);
+    assert(std::get<gears::RhiObservedPresent>(frame.events[9].payload).present.frontBuffer ==
            0xA0311000);
     assert(frame.matched == 1);
     assert(frame.missing == 0);
     assert(frame.mismatched == 1);
-    assert(frame.bindingsMatched == 1);
+    assert(frame.bindingsMatched == 2);
     assert(frame.bindingsMissing == 0);
     assert(frame.bindingsMismatched == 0);
     assert(frame.resourceLifetimeMatched == 1);
@@ -501,6 +639,9 @@ int main()
     assert(frame.vertexStreamResetsMatched == 1);
     assert(frame.vertexStreamResetsMissing == 0);
     assert(frame.vertexStreamResetsMismatched == 0);
+    assert(frame.colorWriteStatesMatched == 1);
+    assert(frame.colorWriteStatesMissing == 0);
+    assert(frame.colorWriteStatesMismatched == 0);
     assert(frame.resolvesMatched == 1);
     assert(frame.resolvesMissing == 0);
     assert(frame.resolvesMismatched == 0);
@@ -627,7 +768,11 @@ int main()
                             .packetGuestAddress = 0x00010000,
                             .outcome = gears::draw::NativeDrawMaterializationOutcome::Materialized,
                             .primitiveType = 4,
-                            .elementCount = 300}}});
+                            .elementCount = 300,
+                            .targetStatePresent = true,
+                            .colorTargetStatePresent = true,
+                            .colorTarget = {.base = 0x2D0, .format = 12},
+                            .surfaceState = {.pitch = 1280, .msaaSamples = 0}}}});
     assert(joined.has_value());
     assert(joined->matched == 1);
     assert(joined->missing == 0);

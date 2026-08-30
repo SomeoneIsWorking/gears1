@@ -1,4 +1,5 @@
 #include "gpu_draw_native_input.h"
+#include "rhi_target_state.h"
 
 #ifdef GEARS_HAVE_GUEST_DRAW
 
@@ -7,19 +8,6 @@
 
 namespace gears::draw
 {
-
-namespace
-{
-
-int32_t SignedColorExponent(uint32_t colorInfo)
-{
-    int32_t exponent = int32_t((colorInfo >> 20) & 0x3F);
-    if (exponent & 0x20)
-        exponent -= 64;
-    return exponent;
-}
-
-} // namespace
 
 bool BuildNativeDrawInput(const uint32_t *registerFile, uint32_t primitiveType, uint32_t indexCount,
                           bool indexed, bool indexIs32, uint32_t indexEndian,
@@ -43,12 +31,15 @@ bool BuildNativeDrawInput(const uint32_t *registerFile, uint32_t primitiveType, 
     input.pixelShaderHash = pixelShaderHash;
 
     const uint32_t colorInfo = registerFile[0x2001];
-    input.surfaceBase = colorInfo & 0xFFF;
-    input.colorFormat = (colorInfo >> 16) & 0xF;
-    input.colorExpBias = SignedColorExponent(colorInfo);
+    const RhiRenderTargetDescriptorState colorTarget = DecodeRhiColorTargetDescriptor(colorInfo);
+    input.surfaceBase = colorTarget.base;
+    input.colorFormat = colorTarget.format;
+    input.colorExpBias = colorTarget.colorExponentBias;
     input.surfaceInfo = registerFile[0x2000];
-    input.depthBase = registerFile[0x2002] & 0xFFF;
-    input.depthIsFloat24 = ((registerFile[0x2002] >> 16) & 1) != 0;
+    const RhiRenderTargetDescriptorState depthTarget =
+        DecodeRhiDepthTargetDescriptor(registerFile[0x2002]);
+    input.depthBase = depthTarget.base;
+    input.depthIsFloat24 = depthTarget.format != 0;
     const uint32_t msaaSamples = options.msaaModel ? ((input.surfaceInfo >> 16) & 3) : 0;
     input.sampleLayout =
         DeriveDrawSampleLayout(msaaSamples, options.sampleGridWidth, options.sampleGridHeight);

@@ -60,6 +60,15 @@ gears::RhiSemanticFrame CompleteFrame()
         .state = {.present = true},
         .evidence = gears::RhiVertexStreamResetEvidenceResult::Match,
     };
+    const gears::RhiObservedColorWriteState colorWrite{
+        .state = {.requested = 1,
+                  .targetPresent = true,
+                  .target = {.slot = 0,
+                             .object = 0x4500,
+                             .normalizedStatePresent = true,
+                             .normalizedState = {.base = 0x2D0, .format = 12}}},
+        .evidence = gears::RhiColorWriteStateEvidenceResult::Match,
+    };
     const gears::RhiObservedResolve resolve{
         .resolve = {.sourceObject = 0x5000, .destinationObject = 0x6000},
         .evidence = gears::RhiResolveEvidenceResult::Match,
@@ -76,8 +85,9 @@ gears::RhiSemanticFrame CompleteFrame()
         {.sequence = 12, .payload = observedLifetime},
         {.sequence = 13, .payload = construction},
         {.sequence = 14, .payload = reset},
-        {.sequence = 15, .payload = resolve},
-        {.sequence = 16, .payload = present},
+        {.sequence = 15, .payload = colorWrite},
+        {.sequence = 16, .payload = resolve},
+        {.sequence = 17, .payload = present},
     };
     return frame;
 }
@@ -110,6 +120,11 @@ class RecordingBackend final : public gears::native_rhi::Backend
     bool ResetVertexStreams(const gears::native_rhi::VertexStreamResetCommand &) override
     {
         calls.push_back("reset");
+        return commandResult;
+    }
+    bool SetColorWriteState(const gears::native_rhi::ColorWriteStateCommand &) override
+    {
+        calls.push_back("color-write");
         return commandResult;
     }
     bool Draw(const gears::native_rhi::DrawCommand &) override
@@ -146,12 +161,13 @@ int main()
     assert(accepted.status == gears::native_rhi::BuildStatus::Accepted);
     assert(accepted.frame.complete);
     assert(accepted.frame.frameSequence == 42);
-    assert(accepted.frame.commands.size() == 7);
+    assert(accepted.frame.commands.size() == 8);
     assert(accepted.frame.draws == 1);
     assert(accepted.frame.bindings == 1);
     assert(accepted.frame.resourceLifetimeCalls == 1);
     assert(accepted.frame.resourceConstructions == 1);
     assert(accepted.frame.vertexStreamResets == 1);
+    assert(accepted.frame.colorWriteStates == 1);
     assert(accepted.frame.resolves == 1);
     assert(accepted.frame.presents == 1);
     assert(
@@ -192,6 +208,11 @@ int main()
         .retained.present = false;
     assert(gears::native_rhi::BuildFrame(missingConstruction).status ==
            gears::native_rhi::BuildStatus::ConstructionEvidenceMissing);
+    gears::RhiSemanticFrame missingColorWrite = CompleteFrame();
+    std::get<gears::RhiObservedColorWriteState>(missingColorWrite.events[5].payload).evidence =
+        gears::RhiColorWriteStateEvidenceResult::Missing;
+    assert(gears::native_rhi::BuildFrame(missingColorWrite).status ==
+           gears::native_rhi::BuildStatus::EvidenceMissing);
     assert(std::string_view(gears::native_rhi::BuildStatusText(
                gears::native_rhi::BuildStatus::Accepted)) == "accepted");
 
@@ -303,8 +324,8 @@ int main()
     (void)executed;
     assert(executed.status == gears::native_rhi::ExecutionStatus::Accepted);
     assert((backend.calls == std::vector<std::string_view>{"begin", "draw", "binding", "lifetime",
-                                                           "construction", "reset", "resolve",
-                                                           "present", "finish"}));
+                                                           "construction", "reset", "color-write",
+                                                           "resolve", "present", "finish"}));
 
     RecordingBackend refusingBackend;
     refusingBackend.commandResult = false;

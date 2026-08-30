@@ -25,16 +25,20 @@ int main()
     tracker.ApplyBinding(
         {
             .kind = gears::RhiSemanticBindingKind::ColorRenderTarget,
-            .slot = 2,
+            .slot = 0,
             .object = 0x40103000,
-            .descriptor = {0x97813},
+            .descriptor = {0x000302D0},
             .descriptorDwords = 1,
         },
         {
             .present = true,
             .observedObject = 0x40103000,
-            .descriptor = {0xabcde},
+            .descriptor = {0x000302D0},
             .descriptorDwords = 1,
+            .targetStatePresent = true,
+            .targetState = {.base = 0x2D0, .format = 3},
+            .surfaceStatePresent = true,
+            .surfaceState = {.pitch = 1280, .msaaSamples = 0},
         });
     tracker.ApplyBinding(
         {
@@ -95,12 +99,17 @@ int main()
     assert(state.vertexStreams[1].view.elementStrideBytes == 20);
     assert(state.renderTargets.size() == 2);
     assert(!state.renderTargets[0].depthStencil);
-    assert(state.renderTargets[0].slot == 2);
+    assert(state.renderTargets[0].slot == 0);
     assert(state.renderTargets[0].object == 0x40103000);
     assert(state.renderTargets[1].depthStencil);
     assert(state.renderTargets[1].object == 0x40104000);
     assert(state.renderTargets[0].descriptorDwords == 1);
-    assert(state.renderTargets[0].descriptor[0] == 0xabcde);
+    assert(state.renderTargets[0].descriptor[0] == 0x000302D0);
+    assert(state.renderTargets[0].normalizedStatePresent);
+    assert(state.renderTargets[0].normalizedState.base == 0x2D0);
+    assert(state.renderTargets[0].normalizedState.format == 3);
+    assert(state.surfaceStatePresent);
+    assert(state.surfaceState.pitch == 1280);
     assert(state.textures.size() == 1);
     assert(state.textures[0].slot == 3);
     assert(state.textures[0].descriptorDwords == 6);
@@ -111,6 +120,28 @@ int main()
     assert(state.vertexShader->object == 0x40107000);
     assert(state.indexBuffer.has_value());
     assert(state.indexBuffer->bufferView.elementStrideBytes == 2);
+
+    const gears::RhiSemanticColorWriteState gammaWrite{
+        .requested = 1,
+        .targetPresent = true,
+        .target = {.slot = 0,
+                   .object = 0x40103000,
+                   .descriptor = {0x000C02D0},
+                   .descriptorDwords = 1,
+                   .normalizedStatePresent = true,
+                   .normalizedState = {.base = 0x2D0, .format = 12}},
+        .surfaceStatePresent = true,
+        .surfaceState = {.pitch = 1280, .msaaSamples = 0},
+    };
+    assert(tracker.ApplyColorWriteState(gammaWrite) ==
+           gears::RhiColorWriteStateEvidenceResult::Match);
+    state = tracker.SnapshotDraw(draw);
+    assert(state.renderTargets[0].normalizedState.format == 12);
+    auto wrongTarget = gammaWrite;
+    wrongTarget.target.object ^= 4;
+    assert(tracker.ApplyColorWriteState(wrongTarget) ==
+           gears::RhiColorWriteStateEvidenceResult::Mismatch);
+    assert(tracker.SnapshotDraw(draw).renderTargets[0].normalizedState.format == 12);
 
     tracker.ApplyBinding({
         .kind = gears::RhiSemanticBindingKind::VertexStream,
@@ -134,7 +165,7 @@ int main()
 
     tracker.ApplyBinding({
         .kind = gears::RhiSemanticBindingKind::ColorRenderTarget,
-        .slot = 2,
+        .slot = 0,
     });
     tracker.ApplyBinding({
         .kind = gears::RhiSemanticBindingKind::DepthStencilTarget,
@@ -157,6 +188,10 @@ int main()
 
     tracker.Reset();
     assert(tracker.SnapshotDraw(draw).vertexStreams.empty());
+    assert(tracker.ApplyColorWriteState(gammaWrite) ==
+           gears::RhiColorWriteStateEvidenceResult::Missing);
+    assert(tracker.ApplyColorWriteState({.requested = 1}) ==
+           gears::RhiColorWriteStateEvidenceResult::Match);
 
     return 0;
 }

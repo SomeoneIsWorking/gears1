@@ -125,6 +125,7 @@ FORMATTED = [
     "runtime/rhi_renderer_input.h",
     "runtime/rhi_semantic_stream.cpp",
     "runtime/rhi_semantic_stream.h",
+    "runtime/rhi_target_state.h",
     "runtime/native_rhi.cpp",
     "runtime/native_rhi.h",
     "runtime/native_rhi_present.cpp",
@@ -409,6 +410,7 @@ def selftest():
     assert "runtime/rhi_renderer_input.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/rhi_renderer_input.cpp" in FORMATTED
     assert "runtime/rhi_renderer_input.h" in FORMATTED
+    assert "runtime/rhi_target_state.h" in FORMATTED
     assert "runtime/titles/gears1/rhi_device_state_reset_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resource_lifetime_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_vertex_stream_watch.cpp" in TIDY_TRANSLATION_UNITS

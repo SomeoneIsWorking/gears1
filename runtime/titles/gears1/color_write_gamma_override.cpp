@@ -1,6 +1,7 @@
 #include "color_write_gamma_state.h"
 #include "guest_state_memory.h"
 #include "import_stub.h"
+#include "rhi_semantic_stream.h"
 
 #include <algorithm>
 #include <array>
@@ -55,7 +56,35 @@ bool g_auditEnabled = false;
 bool g_abEnabled = false;
 bool g_timingEnabled = false;
 bool g_overrideOrDiagnosticsRequested = false;
+bool g_semanticObservationEnabled = false;
 std::uint64_t g_auditLimit = 0;
+
+void ObserveColorWriteState(std::uint8_t *base, std::uint32_t device, std::uint64_t requested)
+{
+    GuestStateMemory memory(base);
+    gears::RhiSemanticColorWriteState state{
+        .requested = requested,
+        .surfaceStatePresent = device != 0,
+    };
+    if (device != 0)
+    {
+        state.surfaceState = gears::DecodeRhiSurfaceState(
+            memory.Read32(device + gears::titles::gears1::color_write_gamma::kSurfaceInfoOffset));
+        state.target.object = memory.Read32(
+            device + gears::titles::gears1::color_write_gamma::kColorTargetObjectOffset);
+        state.targetPresent = state.target.object != 0;
+        if (state.targetPresent)
+        {
+            state.target.descriptor = {memory.Read32(
+                device + gears::titles::gears1::color_write_gamma::kColorDescriptorOffset)};
+            state.target.descriptorDwords = 1;
+            state.target.normalizedStatePresent = true;
+            state.target.normalizedState =
+                gears::DecodeRhiColorTargetDescriptor(state.target.descriptor[0]);
+        }
+    }
+    gears::ObserveRhiSemanticColorWriteState(state);
+}
 
 [[nodiscard]] bool SameRequiredContext(const PPCContext &expected, const PPCContext &actual)
 {
@@ -199,6 +228,7 @@ void MaybeReport(std::uint64_t calls)
                        g_timingEnabled = lucent::config::flag("COLOR_WRITE_GAMMA_TIMING");
                        g_overrideOrDiagnosticsRequested =
                            g_nativeRequested || g_auditEnabled || g_abEnabled || g_timingEnabled;
+                       g_semanticObservationEnabled = gears::RhiSemanticObservationEnabled();
                        g_auditLimit = static_cast<std::uint64_t>(std::max<long>(
                            0, lucent::config::number("NATIVE_COLOR_WRITE_GAMMA_AUDIT_CALLS", 256)));
                        g_configInitialized.store(true, std::memory_order_release);
@@ -214,15 +244,15 @@ void MaybeReport(std::uint64_t calls)
 extern "C" PPC_FUNC(__imp__sub_82229B28);
 PPC_FUNC(sub_82229B28)
 {
+    const std::uint32_t device = ctx.r3.u32;
+    const std::uint64_t requested = ctx.r4.u64;
     if (!g_configInitialized.load(std::memory_order_acquire))
-    {
         InitializeConfigAndExecute(ctx, base, __imp__sub_82229B28);
-        return;
-    }
-    if (!g_overrideOrDiagnosticsRequested)
-    {
+    else if (!g_overrideOrDiagnosticsRequested)
         __imp__sub_82229B28(ctx, base);
-        return;
-    }
-    ExecuteSetter(ctx, base, __imp__sub_82229B28);
+    else
+        ExecuteSetter(ctx, base, __imp__sub_82229B28);
+
+    if (g_semanticObservationEnabled)
+        ObserveColorWriteState(base, device, requested);
 }
