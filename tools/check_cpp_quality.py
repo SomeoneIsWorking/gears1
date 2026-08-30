@@ -145,6 +145,10 @@ FORMATTED = [
     "runtime/title_profile.h",
     "runtime/titles/gears1/color_write_gamma_override.cpp",
     "runtime/titles/gears1/color_write_gamma_state.h",
+    "runtime/titles/gears1/guest_probe_core.cpp",
+    "runtime/titles/gears1/guest_probe_loader.cpp",
+    "runtime/titles/gears1/guest_probe_runtime.cpp",
+    "runtime/titles/gears1/guest_probe_state.h",
     "runtime/titles/gears1/guest_state_memory.h",
     "runtime/titles/gears1/rhi_bindings.cpp",
     "runtime/titles/gears1/rhi_device_state_reset_binding.cpp",
@@ -220,6 +224,9 @@ TIDY_TRANSLATION_UNITS = [
     "runtime/guest_write_watch.cpp",
     "runtime/main.cpp",
     "runtime/titles/gears1/color_write_gamma_override.cpp",
+    "runtime/titles/gears1/guest_probe_core.cpp",
+    "runtime/titles/gears1/guest_probe_loader.cpp",
+    "runtime/titles/gears1/guest_probe_runtime.cpp",
     "runtime/debug_http.cpp",
     "runtime/graphics_probe.cpp",
     "runtime/graphics_probe_render.cpp",
@@ -338,9 +345,7 @@ TIDY_TRANSLATION_UNITS = [
     "tests/test_frame_production_timing.cpp",
 ]
 
-FORMAT_RANGES = {
-    "runtime/guest_probes.cpp": [[1245, 1249]],
-}
+FORMAT_RANGES = {}
 
 VD_TIDY_RANGES = [
     [445, 456],
@@ -402,7 +407,10 @@ def selftest():
     assert "runtime/frame_production_timing.h" in FORMATTED
     assert "runtime/titles/gears1/frame_production_timing_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "tests/test_frame_production_timing.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/guest_probes.cpp" in FORMAT_RANGES
+    assert "runtime/titles/gears1/guest_probe_core.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/guest_probe_loader.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/guest_probe_runtime.cpp" in TIDY_TRANSLATION_UNITS
+    assert "runtime/titles/gears1/guest_probe_state.h" in FORMATTED
     assert "runtime/titles/gears1/rhi_resolve.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resolve_binding.cpp" in TIDY_TRANSLATION_UNITS
     assert "runtime/titles/gears1/rhi_resource_construction_binding.cpp" in TIDY_TRANSLATION_UNITS

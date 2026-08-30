@@ -2,23 +2,11 @@
 
 #include "fault_report.h"
 #include "guest_memory.h"
+#include "guest_probe_state.h"
 
 #include <atomic>
 
 #include <lucent/log.h>
-
-namespace gears
-{
-
-// Gears 1 probe-state reports still live in guest_probes.cpp. This adapter is
-// their sole caller from the shared indirect-call boundary.
-void ReportLinkerState(std::uint32_t holder);
-void ReportMapNameProbe();
-void ReportFStringProbe();
-void ReportLoaderThunks();
-void ReportEarlyThunks();
-
-} // namespace gears
 
 namespace gears::titles::gears1
 {
@@ -71,11 +59,11 @@ void ReportBadIndirectCallContext(std::uint32_t, PPCContext &ctx, std::uint8_t *
     // The victim pointer alone does not name the Gears 1 subsystem that owns
     // it. These exact call ranges and probe reports are revision policy.
     if (ctx.lr >= kLinkerCallStart && ctx.lr < kLinkerCallEnd)
-        gears::ReportLinkerState(ctx.r24.u32);
-    gears::ReportMapNameProbe();
-    gears::ReportFStringProbe();
-    gears::ReportLoaderThunks();
-    gears::ReportEarlyThunks();
+        ReportLinkerState(ctx.r24.u32);
+    ReportMapNameProbe();
+    ReportFStringProbe();
+    ReportLoaderThunks();
+    ReportEarlyThunks();
 
     // Issue #50: this gather maps one byte array through a separate object
     // table, checks only the 255 sentinel, and performs no table-length check.
