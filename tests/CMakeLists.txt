@@ -317,6 +317,9 @@ add_test(NAME source_structure
 add_test(NAME source_structure_selftest
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py" --selftest)
+add_test(NAME build_revision_selftest
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/write_build_revision.py" --selftest)
 
 # Keep the project-local registry entry point executable from a build
 # directory. It delegates to the canonical shared/re-harness implementation,

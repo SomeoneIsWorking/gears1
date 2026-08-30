@@ -7,6 +7,7 @@
 #include <lucent/config.h>
 #include <lucent/log.h>
 
+#include "build_revision.h"
 #include "fault_report.h"
 #include "generated_title_profile.h"
 #include "guest_clock.h"
