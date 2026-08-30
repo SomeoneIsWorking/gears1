@@ -199,4 +199,4 @@ Strict title identity, bounded GDF extraction, ignored content-addressed title s
 distribution gates exist.
 
 Gap: Extraction, analysis metadata, recompilation, validation, build, and launch are not yet one
-fresh-clone `./run.sh` flow. See `docs/re-frontier.md` (`rom-only-provisioning`).
+fresh-clone `./run.sh` flow. See `docs/re-frontier.md` (`rom-only-provisioning`) and issue #166.
