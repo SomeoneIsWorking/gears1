@@ -26,14 +26,16 @@
 #include <cstdint>
 
 #include "ppc_config.h"
-#include "guest_indirect_call.h"
+#include "titles/gears1/guest_indirect_call.h"
 
 namespace
 {
 
 int g_failures = 0;
+bool g_contextReported = false;
+uint32_t g_reportedTarget = 0;
 
-void Check(bool ok, const char* what)
+void Check(bool ok, const char *what)
 {
     if (!ok)
     {
@@ -42,30 +44,33 @@ void Check(bool ok, const char* what)
     }
 }
 
+void ReportTestContext(uint32_t target, PPCContext &, uint8_t *)
+{
+    g_contextReported = true;
+    g_reportedTarget = target;
+}
+
 void TestRealCodeRangeIsAccepted()
 {
     Check(gears::IsValidGuestCallTarget(uint32_t(PPC_CODE_BASE)),
-        "range: the first byte of the code section is a valid target");
-    Check(gears::IsValidGuestCallTarget(
-              uint32_t(PPC_CODE_BASE + PPC_CODE_SIZE - 4)),
-        "range: the last instruction slot is a valid target");
+          "range: the first byte of the code section is a valid target");
+    Check(gears::IsValidGuestCallTarget(uint32_t(PPC_CODE_BASE + PPC_CODE_SIZE - 4)),
+          "range: the last instruction slot is a valid target");
     Check(gears::IsValidGuestCallTarget(0x824961D0u),
-        "range: a function the title actually calls is accepted -- if this fails"
-        " the check would reject real work and break the title");
+          "range: a function the title actually calls is accepted -- if this fails"
+          " the check would reject real work and break the title");
 }
 
 void TestOutsideTheCodeRangeIsRejected()
 {
     Check(!gears::IsValidGuestCallTarget(uint32_t(PPC_CODE_BASE - 4)),
-        "range: one word below the code section is rejected");
-    Check(!gears::IsValidGuestCallTarget(
-              uint32_t(PPC_CODE_BASE + PPC_CODE_SIZE)),
-        "range: one past the end is rejected");
+          "range: one word below the code section is rejected");
+    Check(!gears::IsValidGuestCallTarget(uint32_t(PPC_CODE_BASE + PPC_CODE_SIZE)),
+          "range: one past the end is rejected");
     Check(!gears::IsValidGuestCallTarget(0u),
-        "range: a null target is rejected -- and this is the common case, since"
-        " a freed object's vtable slot reads as zero once the memory is reused");
-    Check(!gears::IsValidGuestCallTarget(0xFFFFFFFFu),
-        "range: an all-ones target is rejected");
+          "range: a null target is rejected -- and this is the common case, since"
+          " a freed object's vtable slot reads as zero once the memory is reused");
+    Check(!gears::IsValidGuestCallTarget(0xFFFFFFFFu), "range: an all-ones target is rejected");
 }
 
 // The values seen in the real crash. A garbage pointer read out of recycled
@@ -74,11 +79,11 @@ void TestOutsideTheCodeRangeIsRejected()
 void TestGarbageFromRecycledMemoryIsRejected()
 {
     const uint32_t garbage[] = {
-        0x00470075u,    // the misread holder value from an earlier probe
-        0x42babc40u,    // a pool block address
-        0x41dec690u,    // the cached object from the crash
-        0x0000000cu,    // a small integer where a pointer was expected
-        0x80000000u,    // the kernel half of the address space
+        0x00470075u, // the misread holder value from an earlier probe
+        0x42babc40u, // a pool block address
+        0x41dec690u, // the cached object from the crash
+        0x0000000cu, // a small integer where a pointer was expected
+        0x80000000u, // the kernel half of the address space
     };
     for (const uint32_t value : garbage)
     {
@@ -96,12 +101,35 @@ void TestGarbageFromRecycledMemoryIsRejected()
 void TestUnalignedTargetsAreRejected()
 {
     Check(!gears::IsValidGuestCallTarget(uint32_t(PPC_CODE_BASE) + 1),
-        "alignment: an unaligned address inside the code range is still invalid,"
-        " because it cannot be an instruction boundary");
+          "alignment: an unaligned address inside the code range is still invalid,"
+          " because it cannot be an instruction boundary");
     Check(!gears::IsValidGuestCallTarget(uint32_t(PPC_CODE_BASE) + 2),
-        "alignment: two bytes in is invalid too");
+          "alignment: two bytes in is invalid too");
     Check(gears::IsValidGuestCallTarget(uint32_t(PPC_CODE_BASE) + 4),
-        "alignment: and the next aligned word is fine");
+          "alignment: and the next aligned word is fine");
+}
+
+void TestExactTitleObservationSelector()
+{
+    using gears::titles::gears1::ShouldObserveStreamingObject;
+    Check(ShouldObserveStreamingObject(0x823EDB50u),
+          "title selector: the measured Gears 1 streaming return is observed");
+    Check(!ShouldObserveStreamingObject(0x823EDB4Cu),
+          "title selector: the preceding return address is not observed");
+    Check(!ShouldObserveStreamingObject(0x823EDB54u),
+          "title selector: the following return address is not observed");
+}
+
+void TestTitleContextDispatch()
+{
+    PPCContext context{};
+    uint8_t base = 0;
+    gears::DispatchGuestIndirectCallContext(&ReportTestContext, 0x12345678u, context, &base);
+    Check(g_contextReported && g_reportedTarget == 0x12345678u,
+          "context dispatch: the exact title reporter receives the original target");
+    gears::DispatchGuestIndirectCallContext(nullptr, 0x87654321u, context, &base);
+    Check(g_reportedTarget == 0x12345678u,
+          "context dispatch: a title without an extension leaves state untouched");
 }
 
 } // namespace
@@ -112,10 +140,11 @@ int main()
     TestOutsideTheCodeRangeIsRejected();
     TestGarbageFromRecycledMemoryIsRejected();
     TestUnalignedTargetsAreRejected();
+    TestExactTitleObservationSelector();
+    TestTitleContextDispatch();
 
-    printf("code range checked: %#llx .. %#llx\n",
-        (unsigned long long)PPC_CODE_BASE,
-        (unsigned long long)(PPC_CODE_BASE + PPC_CODE_SIZE));
+    printf("code range checked: %#llx .. %#llx\n", (unsigned long long)PPC_CODE_BASE,
+           (unsigned long long)(PPC_CODE_BASE + PPC_CODE_SIZE));
 
     if (g_failures == 0)
     {
