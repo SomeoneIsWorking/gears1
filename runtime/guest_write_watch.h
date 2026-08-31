@@ -5,6 +5,8 @@
 #include <optional>
 #include <string_view>
 
+#include "guest_address.h"
+
 namespace gears
 {
 
@@ -44,6 +46,17 @@ constexpr bool GuestWriteWatchContains(uintptr_t target, size_t targetBytes, uin
     return targetBytes != 0 && fault >= target && fault - target < targetBytes;
 }
 
+constexpr bool GuestWriteWatchCopyCoversTarget(std::uint32_t destination, std::uint32_t bytes,
+                                               std::uint32_t target)
+{
+    if (bytes == 0)
+        return false;
+    const std::uint32_t physicalDestination = destination & kGuestPhysicalAddressMask;
+    const std::uint32_t physicalTarget = target & kGuestPhysicalAddressMask;
+    return physicalTarget >= physicalDestination &&
+           std::uint64_t(physicalTarget) - physicalDestination < bytes;
+}
+
 constexpr uintptr_t GuestWriteWatchImageAddress(uintptr_t instruction, uintptr_t loadBias)
 {
     return instruction >= loadBias ? instruction - loadBias : instruction;
@@ -72,6 +85,14 @@ bool ResumeGuestWriteWatch(GuestWriteWatchOwner owner);
 bool ReportGuestWriteWatch(GuestWriteWatchOwner owner, bool rearm);
 bool DisarmGuestWriteWatch(GuestWriteWatchOwner owner);
 GuestWriteWatchStats CurrentGuestWriteWatchStats(GuestWriteWatchOwner owner);
+
+// True when the title-specific packet-copy attribution hook should be active.
+[[nodiscard]] bool DrawPacketWriteWatchRequested();
+// Called by the title's existing generic copy override before the retained body.
+// This reports the guest caller/stack route for the selected packet; page faults
+// remain the independent write confirmation.
+void ObserveDrawPacketCopy(std::uint32_t destination, std::uint32_t bytes, std::uint32_t caller,
+                           std::uint32_t stackPointer);
 
 // Opt-in image-load diagnostic. Arm after the image range is committed but
 // before copying its bytes, then report immediately after the copy. This

@@ -154,12 +154,7 @@ std::optional<std::uint32_t> ParseShaderLoadWatchAfterSwap(std::string_view text
 bool ShaderLoadWatchCopyCoversTarget(std::uint32_t destination, std::uint32_t bytes,
                                      std::uint32_t target)
 {
-    if (bytes == 0)
-        return false;
-    const std::uint32_t physicalDestination = destination & GuestMemory::kAliasMask;
-    const std::uint32_t physicalTarget = target & GuestMemory::kAliasMask;
-    return physicalTarget >= physicalDestination &&
-           std::uint64_t(physicalTarget) - physicalDestination < bytes;
+    return GuestWriteWatchCopyCoversTarget(destination, bytes, target);
 }
 
 bool ShaderLoadPacketWatchEnabled()

@@ -454,3 +454,17 @@ device shadow as `1280x720`. This is a semantic-owner/representation gap, not ev
 renderer clamp or permission to hardcode 512. The next RE step is to identify which title state
 producer owns that command-stream transition and capture its complete contract; until then the
 viewport state remains partial and no native bypass is authorized.
+
+### Note (2026-08-31) — packet-write attribution resolves the guest writer
+
+The existing bounded `GEARS_WATCH_DRAW_PACKET=1` run was extended to resolve the
+faulting host instruction through the current runtime symbol table. The selected
+packet at guest `0xF448` was written once after the first swap, and the report now
+identifies the instruction as `__imp__sub_82233900`, exact guest function
+`0x82233900`, rather than leaving only a host ELF address. The same 35-second
+headless route reached gameplay frames 570–579 and recorded 84 unrelated faults on
+the protected page. This narrows the producer boundary to the title's vectorized
+writer, but does not yet identify its caller or prove that this function owns the
+viewport/scissor transition; the next step remains decoding its arguments and
+caller contract from a grounded trace. No state value was changed and no native
+bypass is authorized.
