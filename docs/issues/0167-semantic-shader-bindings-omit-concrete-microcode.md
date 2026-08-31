@@ -116,13 +116,15 @@ dynamically selected method, not a direct static call site. The next grounded pr
 construction or vtable installation for that callback object, rather than keep walking the caller's
 linear control flow.
 
-The selected recurrence identifies that callback vtable as `0x820E40B8`. The static Ghidra image has
-zero words at that address and no code references to it, so it cannot identify the table's owner or
-constructor. This is a static-analysis limit, not evidence that the table is absent at runtime. The
-next discriminator must attribute the runtime construction or installation of that table/object;
-further static caller walking cannot establish the missing ownership.
+The selected recurrence identifies that callback vtable as `0x820E40B8`. At runtime its `+0x0` slot
+is `0x8257A7A0` and `+0x4` dispatches the serializer at `0x82327E00`. The static Ghidra image has
+zero words at that address and no code references to it, so it cannot recover the loaded table data.
+That is a static-analysis limit, not evidence that the table is absent.
 
-An opt-in image-load write watch now arms before the loaded title image is copied into guest memory
-and reports immediately afterwards. The bounded headless run watched `0x820E40B8` and saw zero target
-writes while observing 128 other writes on the same page. The mapped title image therefore does not
-populate this callback table; the remaining owner is a later runtime initialization or guest write.
+The image-load write watch initially missed this table because it classified only stores whose fault
+address began within the watched word; the title-image copy uses an overlapping store. The corrected
+watcher compares the word before and after each stepped same-page store, and its focused regression
+exercises an eight-byte store spanning the target. A bounded headless run then captured one target
+write at `0x820E40B8` while mapping the title image. The vtable is loaded title content, not a
+runtime-constructed table. The next discriminator is the dynamic outer callback object that points to
+it, rather than the static table itself.

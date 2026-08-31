@@ -53,6 +53,9 @@ static_assert(std::atomic<uintptr_t>::is_always_lock_free);
 static_assert(std::atomic<uint64_t>::is_always_lock_free);
 
 thread_local uint8_t *g_singleStepPage = nullptr;
+thread_local uint8_t *g_singleStepTarget = nullptr;
+thread_local uint32_t g_singleStepTargetValue = 0;
+thread_local uintptr_t g_singleStepInstruction = 0;
 thread_local uint32_t g_ignoredTargetWriteDepth = 0;
 
 const char *OwnerName(GuestWriteWatchOwner owner)
@@ -128,7 +131,19 @@ bool OnSegv(uintptr_t fault, void *context) noexcept
         g_watch.hits.fetch_add(1, std::memory_order_relaxed);
     }
     else if (!targetsWatchedWord)
+    {
         g_watch.otherFaults.fetch_add(1, std::memory_order_relaxed);
+        if (g_ignoredTargetWriteDepth == 0)
+        {
+            // A vectorized store can start before the watched four-byte word
+            // and still overwrite it. SIGSEGV gives that store's start address,
+            // not its full span, so an exact-address check alone misses this
+            // class of writes. Compare around the one stepped instruction.
+            g_singleStepTarget = g_watch.targets[alias];
+            g_singleStepTargetValue = *reinterpret_cast<volatile uint32_t *>(g_singleStepTarget);
+            g_singleStepInstruction = uintptr_t(machine->uc_mcontext.gregs[REG_RIP]);
+        }
+    }
 
     g_singleStepPage = g_watch.pages[alias];
     mprotect(g_singleStepPage, g_watch.pageSize, PROT_READ | PROT_WRITE);
@@ -177,9 +192,23 @@ void OnTrap(int signal, siginfo_t *info, void *context)
 
     auto *machine = static_cast<ucontext_t *>(context);
     machine->uc_mcontext.gregs[REG_EFL] &= ~0x100;
-    if (g_watch.armed.load(std::memory_order_acquire) && g_singleStepPage != nullptr)
+    if (g_watch.armed.load(std::memory_order_acquire) && g_singleStepTarget != nullptr &&
+        *reinterpret_cast<volatile uint32_t *>(g_singleStepTarget) != g_singleStepTargetValue)
+    {
+        RecordInstruction(g_singleStepInstruction);
+        g_watch.hits.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    if (g_watch.armed.load(std::memory_order_acquire) &&
+        g_watch.hits.load(std::memory_order_relaxed) >= g_watch.targetSampleLimit)
+    {
+        g_watch.armed.store(false, std::memory_order_release);
+        ProtectWatchPages(PROT_READ | PROT_WRITE);
+    }
+    else if (g_watch.armed.load(std::memory_order_acquire) && g_singleStepPage != nullptr)
         mprotect(g_singleStepPage, g_watch.pageSize, PROT_READ);
     g_singleStepPage = nullptr;
+    g_singleStepTarget = nullptr;
 }
 
 void ClearSamples()

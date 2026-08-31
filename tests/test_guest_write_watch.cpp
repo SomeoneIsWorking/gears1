@@ -59,14 +59,14 @@ int main()
     gears::SetMemory(memory);
     gears::InstallFaultReporter();
 
-    constexpr uint32_t kTarget = 0x00123000;
-    assert(gears::ArmGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket, kTarget, 2));
+    constexpr uint32_t kTarget = 0x00123004;
+    assert(gears::ArmGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket, kTarget, 3));
     gears::GuestWriteWatchStats stats =
         gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.armed);
     assert(stats.aliasPages == gears::GuestMemory::kAliasCount);
 
-    *memory.Translate<volatile uint32_t>(0xA0123004) = 0xBAD0BAD0;
+    *memory.Translate<volatile uint32_t>(0xA0123008) = 0xBAD0BAD0;
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.targetWrites == 0);
     assert(stats.otherPageWrites == 1);
@@ -76,30 +76,34 @@ int main()
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.armed);
     std::thread unrelatedWriter([&memory]
-                                { *memory.Translate<volatile uint32_t>(0xC0123004) = 0x51504A4C; });
+                                { *memory.Translate<volatile uint32_t>(0xC0123008) = 0x51504A4C; });
     unrelatedWriter.join();
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.otherPageWrites == 2);
-    *memory.Translate<volatile uint32_t>(0xC0123000) = 0x51504A4D;
+    *memory.Translate<volatile uint32_t>(0xC0123004) = 0x51504A4D;
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.targetWrites == 0);
     assert(gears::ResumeGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket));
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.armed);
-    *memory.Translate<volatile uint32_t>(0xC0123000) = 0x51504A4E;
+    *memory.Translate<volatile uint32_t>(0xC0123004) = 0x51504A4E;
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.targetWrites == 0);
     assert(gears::ResumeGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket));
 
-    *memory.Translate<volatile uint32_t>(0xC0123000) = 0xC001C0DE;
+    *memory.Translate<volatile uint64_t>(0xC0123000) = 0xC001C0DE51504A4EULL;
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.armed);
     assert(stats.targetWrites == 1);
-    assert(stats.otherPageWrites == 2);
-    *memory.Translate<volatile uint32_t>(0xC0123000) = 0xC001D00D;
+    assert(stats.otherPageWrites == 3);
+    *memory.Translate<volatile uint32_t>(0xC0123004) = 0xC001D00D;
+    stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
+    assert(stats.armed);
+    assert(stats.targetWrites == 2);
+    *memory.Translate<volatile uint32_t>(0xC0123004) = 0xC001D00E;
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(!stats.armed);
-    assert(stats.targetWrites == 2);
+    assert(stats.targetWrites == 3);
     assert(!gears::ResumeGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket));
     assert(gears::ReportGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket, false));
 
