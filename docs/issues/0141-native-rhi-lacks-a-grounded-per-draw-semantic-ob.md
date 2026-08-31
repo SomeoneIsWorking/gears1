@@ -202,6 +202,14 @@ the earlier zero-missing join reports as current-build parity: the missing
 join population must be classified at the packet/materialization boundary
 before it can support a native-bypass decision.
 
+The existing command-buffer-transition scan was then applied to every normal
+draw wrapper and retested through frame 1,032. It left the zero-key missing
+population unchanged (46,477 matches, 5,710 missing, zero mismatches), so a
+cross-buffer packet scan is not the cause. That speculative wiring was removed.
+The next discriminator is a bounded census of the retained draw kinds whose
+post-call packet evidence is absent; do not relabel those as renderer misses
+until that producer-side evidence is classified.
+
 Exercise the separate bound-vertex entry dynamically if the title reaches it.
 Then add resource creation and live release-to-zero retirement effects and
 compare shader modules/constants, texture content and backing-resource realization, remaining output
