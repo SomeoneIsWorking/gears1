@@ -207,9 +207,10 @@ it. The compatibility renderer is still the shipping rendering authority.
 
 ### S006 — Multi-title compatibility
 
-Missing capability: Gears 2, Gears 3, and Judgment have no locally proven exact revision,
-provisioned module, headless gameplay evidence, or renderer compatibility/native parity report.
-The conformance reporter exists, but no title has passed its complete report.
+Missing capability: Gears 2 now has a locally verified disc/XEX/image identity, but it has no
+title profile, provisioned module, headless gameplay evidence, or renderer compatibility/native
+parity report. Gears 3 and Judgment have no locally proven exact revision or any of those later
+gates. The conformance reporter exists, but no title has passed its complete report.
 
 ### S007 — Native 200 fps budget
 
@@ -228,7 +229,11 @@ user-owned Gears 1 XGD ISO then completed `./run.sh --headless --prepare`, verif
 files, the generated module, and the Clang product build; a subsequent bounded headless launch
 selected the exact generated profile and produced retained-runtime frames without opening a window.
 
-Gap: Only the exact Gears 1 profile is implemented. Gears 2 and Gears 3 are present as compressed
-user-owned archives but have no supported profile or provisioned module yet; Judgment is not present.
-Additional-title conformance remains outstanding. See `docs/re-frontier.md`
+Gap: Only the exact Gears 1 profile is implemented. A user-owned Gears 2 archive now passes the
+shared basic-compressed-XEX identity boundary (disc SHA-256
+`1e76f91fa3bd804381c0ce5458bdb8dd2329c783b1be03b67d111136ce337230`, XEX SHA-256
+`e98c25b4b9d173ac7ff69c84e7f1b4240c6be77c5fd7f672041a95221f68247c`, normalized image
+SHA-256 `340f71de1cfaac7d98ff0478fc8c2954967aeb449f9e9916860592f7ee0b070c`), but it has no
+supported profile or provisioned module. Gears 3 remains archive-only without a profile; Judgment
+is not present. Additional-title conformance remains outstanding. See `docs/re-frontier.md`
 (`rom-only-provisioning`).
