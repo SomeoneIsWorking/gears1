@@ -312,12 +312,12 @@ struct ShaderCaptureState
 // `ucode` holds the microcode as big-endian bytes, exactly as the GPU reads it,
 // which is also what tools/xenos_translate consumes (std::endian::big).
 void RecordBoundShader(uint32_t type, uint32_t address, uint32_t packetGuestAddress, bool immediate,
-                       const std::vector<uint8_t> &ucode)
+                       uint32_t completedSwapSequence, const std::vector<uint8_t> &ucode)
 {
     auto &cap = g_shaderCapture;
     const uint64_t hash = gears::Fnv1a64(ucode);
     (type == 0 ? cap.activeVertexHash : cap.activePixelHash) = hash;
-    gears::ObserveShaderLoadPacketWrite(hash, packetGuestAddress, immediate);
+    gears::ObserveShaderLoadPacketWrite(hash, packetGuestAddress, immediate, completedSwapSequence);
     auto it = cap.shaders.find(hash);
     if (it != cap.shaders.end())
     {
@@ -925,7 +925,7 @@ struct CommandProcessor
         }
         const uint32_t packetBase = sourceBase != 0 ? sourceBase : g_ringBuffer.base;
         RecordBoundShader(type, address, packetBase + sourceIndex * sizeof(uint32_t), immediate,
-                          ucode);
+                          lastSwapSequence, ucode);
     }
 
     // Resolve a SET_CONSTANT/LOAD_ALU_CONSTANT (index,type) pair to the base

@@ -175,3 +175,9 @@ occurred only after the scene transition had already accumulated 130 missing sem
 That copy proves command-buffer reuse, not the initial replacement-module producer. Future packet
 attribution must select a PM4 load by its executing frame/occurrence, rather than retain one watched
 guest packet address across frame boundaries.
+
+The completed-swap interval selector now does that without guessing a guest address. Selecting the
+same hash after swap 571 found an inline packet at `0x7FA34`, distinct from the startup packet, and
+the corresponding PM4 frame 572 retained the exact 13 missing semantic pixel bindings. This grounds
+the replacement module's execution interval, but its write necessarily predates command-processor
+decoding; the next attribution seam must arm from the zero-object marker before that writer runs.
