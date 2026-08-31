@@ -230,3 +230,12 @@ as `[translated-record-address, 0x82000000 | size-dwords, buffer-address, 0xC000
 `0x822212D8`. For the selected load, the observed parent therefore represents a 189-dword submission
 to indirect buffer `0x7F740`; this closes the ring-packet construction question without identifying
 shader state. The remaining target is the title-side producer that supplies that command record.
+
+The existing HLE census, enabled only for one bounded headless run, reports the normal submission
+helper's callers as `0x82221858` and `0x822219F8` (about 1,049 each in the final frame), with replay
+submissions at `0x8223BC00` and `0x8223BC48` (about 159 each). The static flush body at `0x82221720`
+builds the current command-buffer end, translates its guest address, and passes the resulting address
+and dword count to `0x822218C0`; `0x82221640` only seeds the fixed command-buffer protocol header and
+returns the next cursor. These are producer boundaries, not shader-state evidence. The next probe
+must correlate the specific `0x82221720` flush whose command end is `0x7F740` rather than attributing
+the selected module to every normal submission.
