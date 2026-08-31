@@ -2,6 +2,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <string_view>
 
 namespace gears
 {
@@ -15,6 +17,7 @@ enum class GuestWriteWatchOwner : uint8_t
     kRhiTextureDescriptor,
     kRhiPixelShaderObject,
     kRhiVertexStreamReset,
+    kImageLoad,
 };
 
 struct GuestWriteWatchStats
@@ -46,6 +49,9 @@ constexpr uintptr_t GuestWriteWatchImageAddress(uintptr_t instruction, uintptr_t
     return instruction >= loadBias ? instruction - loadBias : instruction;
 }
 
+// Parses the hexadecimal guest address selected by GEARS_WATCH_IMAGE_LOAD_ADDRESS.
+[[nodiscard]] std::optional<std::uint32_t> ParseGuestWriteWatchAddress(std::string_view text);
+
 // Arms one process-wide guest-memory write watch. Only one owner may hold the
 // signal/mprotect facility at a time; a conflicting request refuses loudly.
 // The page is reopened after each fault and protected again after the faulting
@@ -64,7 +70,15 @@ bool ResumeGuestWriteWatch(GuestWriteWatchOwner owner);
 // are per-report interval. A one-shot watch remains armed across empty reports
 // and disarms only after it catches the requested target.
 bool ReportGuestWriteWatch(GuestWriteWatchOwner owner, bool rearm);
+bool DisarmGuestWriteWatch(GuestWriteWatchOwner owner);
 GuestWriteWatchStats CurrentGuestWriteWatchStats(GuestWriteWatchOwner owner);
+
+// Opt-in image-load diagnostic. Arm after the image range is committed but
+// before copying its bytes, then report immediately after the copy. This
+// establishes whether the title image populates an address before guest code
+// can build or install it later.
+void MaybeArmImageLoadWriteWatch();
+void ReportImageLoadWriteWatch();
 
 // Command-processor integration kept here so the legacy protocol owner needs
 // only one observation call and does not acquire diagnostic policy/state.

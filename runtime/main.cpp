@@ -13,6 +13,7 @@
 #include "guest_clock.h"
 #include "guest_dirty_pages.h"
 #include "guest_memory.h"
+#include "guest_write_watch.h"
 #include "guest_heap.h"
 #include "guest_filesystem.h"
 #include "host_product_identity.h"
@@ -202,7 +203,9 @@ int main(int argc, char *argv[])
 
     if (!memory.Commit(uint32_t(image.base), image.size))
         return EXIT_FAILURE;
+    gears::MaybeArmImageLoadWriteWatch();
     memcpy(memory.Base() + image.base, image.data.get(), image.size);
+    gears::ReportImageLoadWriteWatch();
     lucent::info("loader", "mapped image into guest memory");
 
     if (gears::InstallFunctionTable(memory) == 0)

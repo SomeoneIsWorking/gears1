@@ -25,6 +25,11 @@ int main()
     assert(gears::GuestWriteWatchImageAddress(0xE962F1, 0) == 0xE962F1);
     assert(gears::GuestWriteWatchImageAddress(0x7F00E962F1, 0x7F00000000) == 0xE962F1);
     assert(gears::GuestWriteWatchImageAddress(0x1000, 0x2000) == 0x1000);
+    assert(gears::ParseGuestWriteWatchAddress("820e40b8") == 0x820E40B8U);
+    assert(gears::ParseGuestWriteWatchAddress("0X820e40b8") == 0x820E40B8U);
+    assert(!gears::ParseGuestWriteWatchAddress("0x"));
+    assert(!gears::ParseGuestWriteWatchAddress("not-an-address"));
+    assert(!gears::ParseGuestWriteWatchAddress("100000000"));
     assert(gears::ParseShaderLoadWatchHash("63c971f5e9d59913") == 0x63C971F5E9D59913ULL);
     assert(gears::ParseShaderLoadWatchHash("0X63c971f5e9d59913") == 0x63C971F5E9D59913ULL);
     assert(!gears::ParseShaderLoadWatchHash("not-a-hash"));

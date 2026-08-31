@@ -5,8 +5,11 @@
 
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <csignal>
 #include <link.h>
+#include <string>
+#include <system_error>
 #include <sys/mman.h>
 #include <ucontext.h>
 #include <unistd.h>
@@ -70,6 +73,8 @@ const char *OwnerName(GuestWriteWatchOwner owner)
         return "RHI pixel-shader object";
     case GuestWriteWatchOwner::kRhiVertexStreamReset:
         return "RHI vertex-stream reset";
+    case GuestWriteWatchOwner::kImageLoad:
+        return "image-load";
     }
     return "unknown";
 }
@@ -214,6 +219,20 @@ int FindLoadBias(dl_phdr_info *info, size_t, void *opaque)
 
 } // namespace
 
+std::optional<std::uint32_t> ParseGuestWriteWatchAddress(std::string_view text)
+{
+    if (text.starts_with("0x") || text.starts_with("0X"))
+        text.remove_prefix(2);
+    if (text.empty())
+        return std::nullopt;
+
+    std::uint32_t address = 0;
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), address, 16);
+    if (error != std::errc{} || end != text.data() + text.size())
+        return std::nullopt;
+    return address;
+}
+
 bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
                         uint64_t targetSampleLimit)
 {
@@ -342,6 +361,15 @@ bool ReportGuestWriteWatch(GuestWriteWatchOwner owner, bool rearm)
     return hits != 0;
 }
 
+bool DisarmGuestWriteWatch(GuestWriteWatchOwner owner)
+{
+    if (g_watch.aliasCount == 0 || g_watch.owner != owner)
+        return false;
+    g_watch.armed.store(false, std::memory_order_release);
+    ProtectWatchPages(PROT_READ | PROT_WRITE);
+    return true;
+}
+
 GuestWriteWatchStats CurrentGuestWriteWatchStats(GuestWriteWatchOwner owner)
 {
     if (g_watch.aliasCount == 0 || g_watch.owner != owner)
@@ -350,6 +378,38 @@ GuestWriteWatchStats CurrentGuestWriteWatchStats(GuestWriteWatchOwner owner)
             .aliasPages = g_watch.aliasCount,
             .targetWrites = g_watch.hits.load(std::memory_order_relaxed),
             .otherPageWrites = g_watch.otherFaults.load(std::memory_order_relaxed)};
+}
+
+void MaybeArmImageLoadWriteWatch()
+{
+    const std::string &configured = lucent::config::text("WATCH_IMAGE_LOAD_ADDRESS");
+    if (configured.empty())
+        return;
+    const std::optional<std::uint32_t> address = ParseGuestWriteWatchAddress(configured);
+    if (!address || *address == 0)
+    {
+        lucent::error("hle",
+                      "WATCH_IMAGE_LOAD_ADDRESS must be one non-zero hexadecimal guest "
+                      "address, got {}",
+                      configured);
+        return;
+    }
+    (void)ArmGuestWriteWatch(GuestWriteWatchOwner::kImageLoad, *address, 1);
+}
+
+void ReportImageLoadWriteWatch()
+{
+    const GuestWriteWatchStats stats =
+        CurrentGuestWriteWatchStats(GuestWriteWatchOwner::kImageLoad);
+    if (stats.aliasPages == 0)
+        return;
+    const bool targetWritten = ReportGuestWriteWatch(GuestWriteWatchOwner::kImageLoad, false);
+    if (!targetWritten)
+        lucent::info("hle",
+                     "image-load write watch saw no target write while mapping the title "
+                     "image ({} other page write(s)); the image did not populate the target",
+                     stats.otherPageWrites);
+    (void)DisarmGuestWriteWatch(GuestWriteWatchOwner::kImageLoad);
 }
 
 bool DrawPacketWatchSelector::Observe(uint32_t swapSequence, int depth, uint32_t afterSwap,
