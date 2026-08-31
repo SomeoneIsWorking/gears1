@@ -101,6 +101,7 @@ enum class RhiRendererDrawEvidenceReason : std::uint8_t
     SurfaceState,
     ColorTargetState,
     DepthTargetState,
+    Count,
 };
 
 struct RhiRendererDrawEvidence
@@ -134,6 +135,9 @@ struct RhiRendererFrameComparison
     std::uint64_t matched = 0;
     std::uint64_t missing = 0;
     std::uint64_t mismatched = 0;
+    std::array<std::uint64_t, 4> unkeyedSemanticPacketKinds{};
+    std::array<std::uint64_t, static_cast<std::size_t>(RhiRendererDrawEvidenceReason::Count)>
+        missingEvidenceReasons{};
     std::uint64_t vertexShaderModuleMatches = 0;
     std::uint64_t pixelShaderModuleMatches = 0;
     std::uint64_t unmatchedRendererPackets = 0;

@@ -2,10 +2,10 @@
 
 #include "guest_address.h"
 #include "gpu_draw.h"
+#include "rhi_renderer_report_diagnostics.h"
 #include "rhi_semantic_stream.h"
 
 #include <algorithm>
-#include <format>
 #include <map>
 #include <mutex>
 #include <set>
@@ -110,100 +110,6 @@ constexpr std::size_t kRendererJoinHistory = 64;
     return "unknown";
 }
 
-[[nodiscard]] const char *DrawOutcomeName(draw::NativeDrawMaterializationOutcome outcome)
-{
-    switch (outcome)
-    {
-    case draw::NativeDrawMaterializationOutcome::Refused:
-        return "refused";
-    case draw::NativeDrawMaterializationOutcome::Resolve:
-        return "resolve";
-    case draw::NativeDrawMaterializationOutcome::Materialized:
-        return "materialized";
-    }
-    return "unknown";
-}
-
-[[nodiscard]] const char *EvidenceReasonName(RhiRendererDrawEvidenceReason reason)
-{
-    switch (reason)
-    {
-    case RhiRendererDrawEvidenceReason::None:
-        return "none";
-    case RhiRendererDrawEvidenceReason::RendererRefused:
-        return "renderer-refused";
-    case RhiRendererDrawEvidenceReason::RendererSourceOrdinal:
-        return "renderer-source-ordinal";
-    case RhiRendererDrawEvidenceReason::DuplicateSemanticPacket:
-        return "duplicate-semantic-packet";
-    case RhiRendererDrawEvidenceReason::DrawShape:
-        return "draw-shape";
-    case RhiRendererDrawEvidenceReason::IndexBufferViewMissing:
-        return "index-buffer-view-missing";
-    case RhiRendererDrawEvidenceReason::IndexWidth:
-        return "index-width";
-    case RhiRendererDrawEvidenceReason::IndexAddress:
-        return "index-address";
-    case RhiRendererDrawEvidenceReason::IndexEndian:
-        return "index-endian";
-    case RhiRendererDrawEvidenceReason::SemanticVertexShaderMissing:
-        return "semantic-vertex-shader-missing";
-    case RhiRendererDrawEvidenceReason::SemanticPixelShaderMissing:
-        return "semantic-pixel-shader-missing";
-    case RhiRendererDrawEvidenceReason::RendererVertexShaderMissing:
-        return "renderer-vertex-shader-missing";
-    case RhiRendererDrawEvidenceReason::RendererPixelShaderMissing:
-        return "renderer-pixel-shader-missing";
-    case RhiRendererDrawEvidenceReason::SemanticVertexShaderModulesMissing:
-        return "semantic-vertex-shader-modules-missing";
-    case RhiRendererDrawEvidenceReason::SemanticPixelShaderModulesMissing:
-        return "semantic-pixel-shader-modules-missing";
-    case RhiRendererDrawEvidenceReason::SemanticVertexShaderModulesAmbiguous:
-        return "semantic-vertex-shader-modules-ambiguous";
-    case RhiRendererDrawEvidenceReason::SemanticPixelShaderModulesAmbiguous:
-        return "semantic-pixel-shader-modules-ambiguous";
-    case RhiRendererDrawEvidenceReason::VertexShaderModule:
-        return "vertex-shader-module";
-    case RhiRendererDrawEvidenceReason::PixelShaderModule:
-        return "pixel-shader-module";
-    case RhiRendererDrawEvidenceReason::DuplicateTextureSlot:
-        return "duplicate-texture-slot";
-    case RhiRendererDrawEvidenceReason::UnsupportedTextureSlot:
-        return "unsupported-texture-slot";
-    case RhiRendererDrawEvidenceReason::RendererTextureStateMissing:
-        return "renderer-texture-state-missing";
-    case RhiRendererDrawEvidenceReason::SemanticTextureStateMissing:
-        return "semantic-texture-state-missing";
-    case RhiRendererDrawEvidenceReason::TextureState:
-        return "texture-state";
-    case RhiRendererDrawEvidenceReason::DuplicateColorTarget:
-        return "duplicate-color-target";
-    case RhiRendererDrawEvidenceReason::DuplicateDepthTarget:
-        return "duplicate-depth-target";
-    case RhiRendererDrawEvidenceReason::UnsupportedColorTargetSlot:
-        return "unsupported-color-target-slot";
-    case RhiRendererDrawEvidenceReason::RendererTargetStateMissing:
-        return "renderer-target-state-missing";
-    case RhiRendererDrawEvidenceReason::SemanticSurfaceStateMissing:
-        return "semantic-surface-state-missing";
-    case RhiRendererDrawEvidenceReason::ColorTargetStateUnavailable:
-        return "color-target-state-unavailable";
-    case RhiRendererDrawEvidenceReason::DepthTargetStateUnavailable:
-        return "depth-target-state-unavailable";
-    case RhiRendererDrawEvidenceReason::ColorTargetStateMissing:
-        return "color-target-state-missing";
-    case RhiRendererDrawEvidenceReason::DepthTargetStateMissing:
-        return "depth-target-state-missing";
-    case RhiRendererDrawEvidenceReason::SurfaceState:
-        return "surface-state";
-    case RhiRendererDrawEvidenceReason::ColorTargetState:
-        return "color-target-state";
-    case RhiRendererDrawEvidenceReason::DepthTargetState:
-        return "depth-target-state";
-    }
-    return "unknown";
-}
-
 [[nodiscard]] std::uint32_t CanonicalPacketAddress(std::uint32_t guestAddress)
 {
     return guestAddress & kGuestPhysicalAddressMask & ~std::uint32_t{3};
@@ -227,22 +133,6 @@ ShaderMismatchEvidence(bool vertex, const RhiSemanticBinding &binding, std::uint
     for (std::size_t index = 0; index < count; ++index)
         evidence.semanticShaderModuleHashes[index] = binding.shaderModules[index].hash;
     return evidence;
-}
-
-[[nodiscard]] std::string
-DescribeFirstUnmatchedRendererPacket(const RhiRendererFrameComparison &comparison)
-{
-    if (comparison.unmatchedRendererPackets == 0)
-        return "none";
-    const char *outcome = comparison.firstUnmatchedRendererMixedOutcome
-                              ? "mixed outcome"
-                              : DrawOutcomeName(comparison.firstUnmatchedRendererOutcome);
-    if (comparison.firstUnmatchedRendererInconsistentSource)
-        return std::format("{:#x} with source conflict ({})",
-                           comparison.firstUnmatchedRendererPacket, outcome);
-    return std::format("{:#x} from {} buffer {:#x} ({})", comparison.firstUnmatchedRendererPacket,
-                       comparison.firstUnmatchedRendererFromIndirectBuffer ? "indirect" : "ring",
-                       comparison.firstUnmatchedRendererBuffer, outcome);
 }
 
 void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameComparison &comparison)
@@ -337,7 +227,7 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
             g_reportTotals.unkeyedRendererDraws, g_reportTotals.duplicateFrames,
             FrameStatusName(comparison.status), comparison.duplicate ? ", duplicate" : "",
             g_reportTotals.firstMissingSemanticPacket, g_reportTotals.firstMismatchedSemanticPacket,
-            EvidenceReasonName(g_reportTotals.firstMismatchReason),
+            RhiRendererEvidenceReasonName(g_reportTotals.firstMismatchReason),
             g_reportTotals.firstTextureMismatchPresent ? "present" : "absent",
             g_reportTotals.firstTextureMismatchSlot, g_reportTotals.firstTextureMismatchDword,
             g_reportTotals.firstSemanticTextureValue, g_reportTotals.firstRendererTextureValue,
@@ -347,7 +237,8 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
             g_reportTotals.firstSemanticShaderModuleCount,
             g_reportTotals.firstSemanticShaderModuleHashes[0],
             g_reportTotals.firstSemanticShaderModuleHashes[1],
-            DescribeFirstUnmatchedRendererPacket(comparison));
+            DescribeRhiRendererUnmatchedPacket(comparison));
+        ReportRhiRendererEvidenceCensus(comparison);
     }
 }
 
@@ -673,8 +564,13 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
 
     for (const RhiSemanticEvent &event : frame.events)
     {
-        if (std::holds_alternative<RhiObservedDraw>(event.payload))
-            ++result.semanticDraws;
+        const auto *observed = std::get_if<RhiObservedDraw>(&event.payload);
+        if (observed == nullptr)
+            continue;
+        ++result.semanticDraws;
+        if (CanonicalPacketAddress(observed->packet.packetGuestAddress) == 0)
+            ++result
+                  .unkeyedSemanticPacketKinds[static_cast<std::size_t>(observed->state.draw.kind)];
     }
     if (renderer.status != draw::NativeFrameMaterializationStatus::Complete)
     {
@@ -728,6 +624,7 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
 
         bool missing = false;
         bool mismatch = false;
+        RhiRendererDrawEvidence firstMissingEvidence;
         RhiRendererDrawEvidence firstMismatchEvidence;
         for (const RhiRendererDrawInput *input : executions->second)
         {
@@ -743,6 +640,8 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
                 break;
             case RhiRendererDrawEvidenceResult::Missing:
                 missing = true;
+                if (firstMissingEvidence.reason == RhiRendererDrawEvidenceReason::None)
+                    firstMissingEvidence = evidence;
                 break;
             case RhiRendererDrawEvidenceResult::Mismatch:
                 mismatch = true;
@@ -780,7 +679,10 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
             }
         }
         else if (missing)
+        {
             ++result.missing;
+            ++result.missingEvidenceReasons[static_cast<std::size_t>(firstMissingEvidence.reason)];
+        }
         else
             ++result.matched;
     }

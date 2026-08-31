@@ -421,6 +421,18 @@ int main()
     missingRendererTexture.textureFetchStatePresent = false;
     assert(gears::InspectRhiRendererDrawInput(textureDrawState, missingRendererTexture).reason ==
            gears::RhiRendererDrawEvidenceReason::RendererTextureStateMissing);
+    const gears::RhiSemanticFrame missingRendererTextureFrame{
+        .events = {{.payload = gears::RhiObservedDraw{.state = textureDrawState,
+                                                      .packet = matchingAuto,
+                                                      .evidence = RhiDrawEvidenceResult::Match}}},
+    };
+    missingRendererTexture.packetGuestAddress = matchingAuto.packetGuestAddress;
+    const gears::RhiRendererFrameComparison missingRendererTextureComparison =
+        gears::CompareRhiRendererDraws(missingRendererTextureFrame,
+                                       {.draws = {missingRendererTexture}});
+    assert(missingRendererTextureComparison.missing == 1);
+    assert(missingRendererTextureComparison.missingEvidenceReasons[static_cast<std::size_t>(
+               gears::RhiRendererDrawEvidenceReason::RendererTextureStateMissing)] == 1);
     auto missingSemanticTexture = textureDrawState;
     missingSemanticTexture.textures[0].descriptorDwords = 0;
     assert(gears::InspectRhiRendererDrawInput(missingSemanticTexture, matchingRendererTexture)
@@ -943,6 +955,18 @@ int main()
         gears::PublishRhiRendererFrameInput(1000, {});
     assert(evictedDuplicate.has_value());
     assert(evictedDuplicate->duplicate);
+
+    RhiDrawPacketEvidence unkeyedIndexed = matchingIndexed;
+    unkeyedIndexed.packetGuestAddress = 0;
+    gears::ObserveRhiSemanticDraw(indexed, unkeyedIndexed);
+    const gears::RhiSemanticFrame unkeyedPacketFrame = gears::SealRhiSemanticFrame(4000);
+    assert(unkeyedPacketFrame.draws == 1);
+    assert(unkeyedPacketFrame.missing == 0);
+    const gears::RhiRendererFrameComparison unkeyedPacketComparison =
+        gears::CompareRhiRendererDraws(unkeyedPacketFrame, {});
+    assert(unkeyedPacketComparison.missing == 1);
+    assert(unkeyedPacketComparison.unkeyedSemanticPacketKinds[static_cast<std::size_t>(
+               RhiSemanticDrawKind::BoundIndices)] == 1);
 
     return 0;
 }

@@ -358,3 +358,21 @@ compares only slots active in the semantic draw snapshot. A final uninstrumented
 through frame 1607 produced 118,553 correlated semantic matches, zero missing joins, and zero value
 mismatches. This closes active fetch-descriptor parity only. Texture content, backing-resource
 realization, shader modules/constants, remaining output state, and pixels keep issue #141 open.
+
+### Note (2026-08-31) — terminal join missing-reason census
+
+The terminal renderer join now counts unkeyed semantic packets by draw kind and every concrete
+missing renderer-evidence reason. A focused negative control supplies an unkeyed bound-index draw;
+another supplies a renderer texture-state omission and verifies its reason is counted. This is the
+shipping materialization boundary, not the older semantic-stream reporter that the live product does
+not call.
+
+On the ISO-derived Gears 1 Clang product, the bounded 35-second headless menu route reached frame
+1028 with 46,185 semantic matches, 5,649 missing, and zero value mismatches. All four unkeyed
+semantic-packet categories and unkeyed renderer draws remained zero. Every missing join was instead
+`semantic-pixel-shader-missing`, while the renderer supplied exact pixel-shader module hashes for
+48,479 correlated draws. Thus the gap is an ordered semantic pixel-binding publication, not packet
+address canonicalization or renderer materialization. A module-only shader-flush state transition
+was unit-tested but did not change the live census, so it was removed rather than retained as a
+speculative fix. The next grounded step is to trace the ordered pixel-binding events at the title
+adapter and identify which retained path clears or fails to publish the semantic state.

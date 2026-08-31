@@ -208,6 +208,7 @@ add_executable(gears1
     input.cpp
     hle_d3d.cpp
     rhi_renderer_input.cpp
+    rhi_renderer_report_diagnostics.cpp
     rhi_semantic_state.cpp
     rhi_semantic_stream.cpp
     rhi_resource_reference.cpp
