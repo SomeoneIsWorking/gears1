@@ -178,7 +178,39 @@ void DumpHleD3dCensus(const char *why)
 GEARS_HLE_TRACE(8221D3A8) // movie-phase draw path
 
 // The submission chain, bottom to top.
-GEARS_HLE_TRACE(822218C0) // submit: direct kick, or record into the CPU list
+extern "C" PPC_FUNC(__imp__sub_822218C0);
+namespace
+{
+Probe g_probe_822218C0{"822218C0", 0x822218C0};
+struct Reg_822218C0
+{
+    Reg_822218C0() { Register(&g_probe_822218C0); }
+} g_reg_822218C0;
+} // namespace
+PPC_FUNC(sub_822218C0)
+{
+    const bool shaderPacketWatch = gears::ShaderLoadPacketWatchEnabled();
+    const std::uint64_t targetWritesBefore =
+        shaderPacketWatch
+            ? gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kShaderLoadPacket)
+                  .targetWrites
+            : 0;
+    const std::uint32_t caller = static_cast<std::uint32_t>(ctx.lr);
+    if (HleCensusEnabled())
+        Note(g_probe_822218C0, caller);
+    __imp__sub_822218C0(ctx, base);
+    if (shaderPacketWatch)
+    {
+        const std::uint64_t targetWritesAfter =
+            gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kShaderLoadPacket)
+                .targetWrites;
+        if (targetWritesAfter > targetWritesBefore)
+        {
+            lucent::info("hle", "shader-load selected direct submission helper caller {:#x}",
+                         caller);
+        }
+    }
+}
 extern "C" PPC_FUNC(__imp__sub_82221980);
 namespace
 {
