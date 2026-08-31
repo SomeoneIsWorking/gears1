@@ -121,3 +121,8 @@ zero words at that address and no code references to it, so it cannot identify t
 constructor. This is a static-analysis limit, not evidence that the table is absent at runtime. The
 next discriminator must attribute the runtime construction or installation of that table/object;
 further static caller walking cannot establish the missing ownership.
+
+An opt-in image-load write watch now arms before the loaded title image is copied into guest memory
+and reports immediately afterwards. The bounded headless run watched `0x820E40B8` and saw zero target
+writes while observing 128 other writes on the same page. The mapped title image therefore does not
+populate this callback table; the remaining owner is a later runtime initialization or guest write.
