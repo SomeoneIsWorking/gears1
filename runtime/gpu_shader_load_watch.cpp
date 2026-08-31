@@ -28,6 +28,7 @@ struct ShaderLoadWatchState
 
 ShaderLoadWatchState g_state;
 thread_local bool g_copyObservedInCurrentCall = false;
+thread_local std::uint64_t g_copySequence = 0;
 
 const std::optional<std::uint64_t> &ConfiguredShaderLoadWatchHash()
 {
@@ -108,10 +109,16 @@ void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
     if (g_state.copyReported.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
     {
         g_copyObservedInCurrentCall = true;
+        ++g_copySequence;
         lucent::info("hle",
                      "shader-load packet copy covers guest {:#x} for {} bytes from caller {:#x}",
                      target, bytes, caller);
     }
+}
+
+std::uint64_t ShaderLoadPacketCopySequence()
+{
+    return g_copySequence;
 }
 
 void ReportShaderLoadPacketProducerReturn(std::uint32_t caller, std::uint32_t stackPointer)
@@ -120,6 +127,18 @@ void ReportShaderLoadPacketProducerReturn(std::uint32_t caller, std::uint32_t st
         return;
     lucent::info("hle", "shader-load packet producer returned to caller {:#x}; guest stack: {}",
                  caller, FormatGuestBacktrace(stackPointer, caller));
+}
+
+void ReportShaderLoadPacketProducerParent(std::uint64_t copySequence, std::uint32_t caller,
+                                          std::array<std::uint32_t, 6> arguments)
+{
+    if (copySequence == g_copySequence)
+        return;
+    lucent::info("hle",
+                 "shader-load packet reached enclosing retained routine from caller {:#x}; "
+                 "integer arguments {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}",
+                 caller, arguments[0], arguments[1], arguments[2], arguments[3], arguments[4],
+                 arguments[5]);
 }
 
 } // namespace gears

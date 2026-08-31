@@ -52,3 +52,9 @@ The bounded guest-stack trace now places that helper below callback `0x82327E00`
 larger retained packet routine before the serializer returns. Static reconstruction of that larger
 routine ends at a title save/restore boundary, so this narrows the next dynamic target but still does
 not prove a shader-object transition or authorize semantic publication.
+
+The retained routine's selected-call ABI capture now confirms that the packet reaches it from
+`0x82327E54` with six observed general-purpose arguments. Those arguments have not been identified as
+a shader object or device state, so the observation establishes the callback handoff only. The next
+discriminator must prove an argument's object identity before reading or publishing any of its fields
+as semantic shader state.
