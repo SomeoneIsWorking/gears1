@@ -245,9 +245,11 @@ add_executable(test_guest_write_watch
     ../runtime/guest_backtrace.cpp
     ../runtime/guest_write_watch.cpp
     ../runtime/gpu_shader_load_watch.cpp
+    ../runtime/titles/gears1/rhi_shader_object_watch.cpp
     ../runtime/guest_memory.cpp)
 target_include_directories(test_guest_write_watch PRIVATE
     ../runtime
+    ../runtime/titles/gears1
     "${GEARS_PPC_DIR}"
     "${THIRDPARTY_ROOT}/simde")
 target_link_libraries(test_guest_write_watch PRIVATE lucent::lucent)

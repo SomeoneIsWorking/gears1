@@ -68,3 +68,11 @@ The selected-call before/after capture falsifies this routine as the missing tra
 pixel and vertex shader objects are both unchanged while it emits the inline pixel module. It
 serializes already-active device state, so it must not become a semantic publisher. The remaining
 target is the earlier owner that established the active pixel object before this serialization.
+
+An opt-in pixel-object write watch now arms on `device+0x3080` immediately after a retained
+zero-object pixel setter, while ignoring that known setter only on its calling thread. The first
+implementation globally unprotected the watched page during known setters and faulted on unrelated
+vblank state sharing guest page `0x4015e000`; the corrected thread-local scope kept the page
+protected and completed a bounded 45-second headless run through 1,051 frames after arming.
+That run captured no target write, so it neither identifies an earlier unmodeled writer nor proves
+frame ordering is the cause. It is solely a safe discriminator for the next route that reaches one.

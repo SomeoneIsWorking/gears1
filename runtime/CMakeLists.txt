@@ -240,6 +240,7 @@ add_executable(gears1
     titles/gears1/audio_mix_override.cpp
     titles/gears1/rhi_target_descriptor_watch.cpp
     titles/gears1/rhi_texture_descriptor_watch.cpp
+    titles/gears1/rhi_shader_object_watch.cpp
     titles/gears1/rhi_vertex_buffer.cpp
     titles/gears1/rhi_vertex_stream_watch.cpp
     titles/gears1/shader_binding_capture.cpp

@@ -1,8 +1,10 @@
 #include "guest_write_watch.h"
 #include "gpu_shader_load_watch.h"
 #include "titles/gears1/rhi_texture_descriptor_watch.h"
+#include "titles/gears1/rhi_shader_object_watch.h"
 
 #include <cassert>
+#include <thread>
 
 #include "guest_memory.h"
 #include "fault_report.h"
@@ -33,6 +35,9 @@ int main()
     assert(gears::titles::gears1::RhiTextureDescriptorWatchMayArm(1));
     assert(!gears::titles::gears1::RhiTextureDescriptorWatchMayArm(0));
     assert(!gears::titles::gears1::RhiTextureDescriptorWatchMayArm(2));
+    assert(gears::titles::gears1::RhiPixelShaderObjectWatchMayArm(0, 0));
+    assert(!gears::titles::gears1::RhiPixelShaderObjectWatchMayArm(1, 0));
+    assert(!gears::titles::gears1::RhiPixelShaderObjectWatchMayArm(0, 1));
 
     gears::DrawPacketWatchSelector selector;
     assert(!selector.Observe(499, 1, 500, 2));
@@ -64,13 +69,18 @@ int main()
     assert(gears::PauseGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket));
     assert(gears::PauseGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket));
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
-    assert(!stats.armed);
+    assert(stats.armed);
+    std::thread unrelatedWriter([&memory]
+                                { *memory.Translate<volatile uint32_t>(0xC0123004) = 0x51504A4C; });
+    unrelatedWriter.join();
+    stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
+    assert(stats.otherPageWrites == 2);
     *memory.Translate<volatile uint32_t>(0xC0123000) = 0x51504A4D;
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.targetWrites == 0);
     assert(gears::ResumeGuestWriteWatch(gears::GuestWriteWatchOwner::kDrawPacket));
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
-    assert(!stats.armed);
+    assert(stats.armed);
     *memory.Translate<volatile uint32_t>(0xC0123000) = 0x51504A4E;
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.targetWrites == 0);
@@ -80,7 +90,7 @@ int main()
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(stats.armed);
     assert(stats.targetWrites == 1);
-    assert(stats.otherPageWrites == 1);
+    assert(stats.otherPageWrites == 2);
     *memory.Translate<volatile uint32_t>(0xC0123000) = 0xC001D00D;
     stats = gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kDrawPacket);
     assert(!stats.armed);

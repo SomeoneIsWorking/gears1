@@ -39,7 +39,6 @@ struct GuestWriteWatch
     uint64_t targetSampleLimit = 0;
     std::atomic<uint64_t> hits{0};
     std::atomic<uint64_t> otherFaults{0};
-    std::atomic<uint32_t> pauseDepth{0};
     WatchSlot slots[kWatchSlots]{};
     uintptr_t loadBias = 0;
     struct sigaction oldTrap{};
@@ -51,6 +50,7 @@ static_assert(std::atomic<uintptr_t>::is_always_lock_free);
 static_assert(std::atomic<uint64_t>::is_always_lock_free);
 
 thread_local uint8_t *g_singleStepPage = nullptr;
+thread_local uint32_t g_ignoredTargetWriteDepth = 0;
 
 const char *OwnerName(GuestWriteWatchOwner owner)
 {
@@ -66,6 +66,8 @@ const char *OwnerName(GuestWriteWatchOwner owner)
         return "RHI target-descriptor";
     case GuestWriteWatchOwner::kRhiTextureDescriptor:
         return "RHI texture-descriptor";
+    case GuestWriteWatchOwner::kRhiPixelShaderObject:
+        return "RHI pixel-shader object";
     case GuestWriteWatchOwner::kRhiVertexStreamReset:
         return "RHI vertex-stream reset";
     }
@@ -113,13 +115,14 @@ bool OnSegv(uintptr_t fault, void *context) noexcept
         return false;
 
     auto *machine = static_cast<ucontext_t *>(context);
-    if (GuestWriteWatchContains(reinterpret_cast<uintptr_t>(g_watch.targets[alias]),
-                                sizeof(uint32_t), fault))
+    const bool targetsWatchedWord = GuestWriteWatchContains(
+        reinterpret_cast<uintptr_t>(g_watch.targets[alias]), sizeof(uint32_t), fault);
+    if (targetsWatchedWord && g_ignoredTargetWriteDepth == 0)
     {
         RecordInstruction(uintptr_t(machine->uc_mcontext.gregs[REG_RIP]));
         g_watch.hits.fetch_add(1, std::memory_order_relaxed);
     }
-    else
+    else if (!targetsWatchedWord)
         g_watch.otherFaults.fetch_add(1, std::memory_order_relaxed);
 
     g_singleStepPage = g_watch.pages[alias];
@@ -232,8 +235,6 @@ bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
     g_watch.pageSize = pageSize;
     g_watch.guestTarget = guestAddress;
     g_watch.targetSampleLimit = targetSampleLimit;
-    g_watch.pauseDepth.store(0, std::memory_order_relaxed);
-
     bool isPhysicalAlias = false;
     for (size_t i = 0; i < GuestMemory::kAliasCount; ++i)
     {
@@ -288,37 +289,18 @@ bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
 bool PauseGuestWriteWatch(GuestWriteWatchOwner owner)
 {
     if (g_watch.aliasCount == 0 || g_watch.owner != owner || g_watch.reported ||
+        !g_watch.armed.load(std::memory_order_acquire) ||
         g_watch.hits.load(std::memory_order_relaxed) >= g_watch.targetSampleLimit)
         return false;
-    const uint32_t priorDepth = g_watch.pauseDepth.fetch_add(1, std::memory_order_acq_rel);
-    if (priorDepth != 0)
-        return true;
-    if (!g_watch.armed.exchange(false, std::memory_order_acq_rel))
-    {
-        g_watch.pauseDepth.fetch_sub(1, std::memory_order_acq_rel);
-        return false;
-    }
-    ProtectWatchPages(PROT_READ | PROT_WRITE);
+    ++g_ignoredTargetWriteDepth;
     return true;
 }
 
 bool ResumeGuestWriteWatch(GuestWriteWatchOwner owner)
 {
-    if (g_watch.aliasCount == 0 || g_watch.owner != owner || g_watch.reported ||
-        g_watch.hits.load(std::memory_order_relaxed) >= g_watch.targetSampleLimit)
+    if (g_watch.aliasCount == 0 || g_watch.owner != owner || g_ignoredTargetWriteDepth == 0)
         return false;
-    uint32_t depth = g_watch.pauseDepth.load(std::memory_order_acquire);
-    while (depth != 0)
-    {
-        if (g_watch.pauseDepth.compare_exchange_weak(depth, depth - 1, std::memory_order_acq_rel))
-        {
-            if (depth > 1)
-                return true;
-            break;
-        }
-    }
-    ProtectWatchPages(PROT_READ);
-    g_watch.armed.store(true, std::memory_order_release);
+    --g_ignoredTargetWriteDepth;
     return true;
 }
 
