@@ -59,15 +59,17 @@ a shader object or device state, so the observation establishes the callback han
 discriminator must prove an argument's object identity before reading or publishing any of its fields
 as semantic shader state.
 
-Cross-reference against the independently verified device-reset adapter identifies the fourth captured
-argument as the Gears 1 D3D-device global. The next diagnostic may therefore read that device's
-post-call shader-object fields, but must still demonstrate a concrete module relationship before it
-publishes a semantic binding.
+Fresh local decompilation of `0x82327E00` corrects that ABI interpretation: its second integer
+argument comes from the callback object's `+0x10` field, while the content of global `0x82BECBA0`
+is passed separately as the third integer argument. Neither fact alone proves the ownership of either
+object. The callback is a serializer over that command object, so no state field may become a semantic
+binding until its relation to the emitted module is established.
 
-The selected-call before/after capture falsifies this routine as the missing transition: its active
-pixel and vertex shader objects are both unchanged while it emits the inline pixel module. It
-serializes already-active device state, so it must not become a semantic publisher. The remaining
-target is the earlier owner that established the active pixel object before this serialization.
+The selected-call before/after capture shows the two sampled `+0x3080/+0x3084` fields are unchanged
+while it emits the inline pixel module. That falsifies this routine as a direct mutation of those
+fields, but it does not establish that they are the active semantic shader state. It must not become a
+semantic publisher. The remaining target is the callback object's module-bearing state and its
+earlier owner.
 
 An opt-in pixel-object write watch now arms on `device+0x3080` immediately after a retained
 zero-object pixel setter, while ignoring that known setter only on its calling thread. The first
@@ -80,3 +82,10 @@ reached frame 692, armed once at `0x4015e100`, reached the selected packet, emit
 no-unknown-writer result, and captured no target write. This falsifies a slot change before that
 serializer edge only; it neither identifies an earlier unmodeled writer nor proves frame ordering
 is the cause.
+
+A current 25-second packet-watch control matched semantic and PM4 shader identity through frame 571;
+the first 13 missing semantic draws appeared at frame 572, at the scene-transition boundary. The
+watch still selected the known inline module, but its one-shot page watch armed after the packet had
+already executed, so its lack of a later write attribution is not evidence about that first packet's
+producer. Future instrumentation must select the relevant transition occurrence or observe the
+callback object's module state directly.
