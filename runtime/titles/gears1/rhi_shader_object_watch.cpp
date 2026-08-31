@@ -1,5 +1,6 @@
 #include "rhi_shader_object_watch.h"
 
+#include "gpu_shader_load_watch.h"
 #include "guest_write_watch.h"
 #include "shader_setter_state.h"
 
@@ -55,8 +56,16 @@ void ResumeRhiPixelShaderObjectWriteWatch()
 
 void MaybeArmRhiPixelShaderObjectWriteWatch(std::uint32_t device, std::uint32_t shaderObject)
 {
-    if (!Enabled() || !RhiPixelShaderObjectWatchMayArm(g_knownSetterDepth, shaderObject) ||
-        device == 0)
+    const bool writeWatch = Enabled();
+    const bool transitionWatch = gears::ShaderLoadPacketTransitionWatchEnabled();
+    if ((!writeWatch && !transitionWatch) ||
+        !RhiPixelShaderObjectWatchMayArm(g_knownSetterDepth, shaderObject) || device == 0)
+    {
+        return;
+    }
+    if (transitionWatch)
+        gears::ArmShaderLoadPacketTransitionFromZeroMarker();
+    if (!writeWatch)
         return;
     const GuestWriteWatchStats stats =
         CurrentGuestWriteWatchStats(GuestWriteWatchOwner::kRhiPixelShaderObject);

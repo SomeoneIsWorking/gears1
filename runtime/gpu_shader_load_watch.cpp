@@ -3,9 +3,13 @@
 #include "guest_backtrace.h"
 #include "guest_memory.h"
 #include "guest_write_watch.h"
+#include "fnv1a.h"
+#include "rhi_packet_evidence.h"
 
 #include <atomic>
 #include <charconv>
+#include <cstring>
+#include <span>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -24,6 +28,9 @@ struct ShaderLoadWatchState
     std::atomic<bool> armAttempted{false};
     std::atomic<bool> copyReported{false};
     std::atomic<bool> writeReported{false};
+    std::atomic<std::uint32_t> guestSwapSequence{0};
+    std::atomic<bool> transitionMarkerArmed{false};
+    std::atomic<bool> transitionReported{false};
 };
 
 ShaderLoadWatchState g_state;
@@ -63,6 +70,36 @@ const std::optional<std::uint32_t> &ConfiguredShaderLoadWatchAfterSwap()
         return parsed;
     }();
     return sequence;
+}
+
+[[nodiscard]] bool ConfiguredShaderLoadTransitionWatch()
+{
+    static const bool enabled = lucent::config::flag("WATCH_SHADER_LOAD_ZERO_MARKER");
+    return enabled;
+}
+
+[[nodiscard]] std::uint32_t ReadGuestBe32(std::uint8_t *memory, std::uint32_t address)
+{
+    std::uint32_t value = 0;
+    std::memcpy(&value, memory + address, sizeof(value));
+    return __builtin_bswap32(value);
+}
+
+[[nodiscard]] bool IsSelectedTransitionLoad(const RhiShaderLoadPacketEvidence &load,
+                                            std::uint8_t *memory, std::uint64_t shaderHash)
+{
+    if (load.predicated)
+        return false;
+    if (load.immediate)
+        return Fnv1a64(load.immediateMicrocode) == shaderHash;
+    constexpr std::uint64_t kPhysicalMemoryBytes = std::uint64_t{GuestMemory::kAliasMask} + 1;
+    if (load.guestAddress >= kPhysicalMemoryBytes || load.sizeBytes == 0 ||
+        load.sizeBytes > kPhysicalMemoryBytes - load.guestAddress)
+    {
+        return false;
+    }
+    return Fnv1a64(std::span<const std::uint8_t>(memory + load.guestAddress, load.sizeBytes)) ==
+           shaderHash;
 }
 
 } // namespace
@@ -109,14 +146,37 @@ bool ShaderLoadPacketWatchEnabled()
     return ConfiguredShaderLoadWatchHash().has_value();
 }
 
+bool ShaderLoadPacketTransitionWatchEnabled()
+{
+    return ConfiguredShaderLoadTransitionWatch() && ConfiguredShaderLoadWatchHash().has_value() &&
+           ConfiguredShaderLoadWatchAfterSwap().has_value();
+}
+
 void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packetGuestAddress,
                                   bool immediate, std::uint32_t completedSwapSequence)
 {
     const std::optional<std::uint64_t> &configured = ConfiguredShaderLoadWatchHash();
     const std::optional<std::uint32_t> &afterSwap = ConfiguredShaderLoadWatchAfterSwap();
     if (!configured || *configured != shaderHash ||
-        (afterSwap && *afterSwap != completedSwapSequence) ||
-        g_state.writeReported.load(std::memory_order_acquire))
+        (afterSwap && *afterSwap != completedSwapSequence))
+        return;
+
+    if (ShaderLoadPacketTransitionWatchEnabled() &&
+        g_state.transitionMarkerArmed.exchange(false, std::memory_order_acq_rel))
+    {
+        bool expected = false;
+        if (g_state.transitionReported.compare_exchange_strong(expected, true,
+                                                               std::memory_order_acq_rel))
+        {
+            lucent::error(
+                "hle",
+                "shader-load zero-marker transition after guest swap {} reached its selected PM4"
+                " load without a matching complete generic-copy packet",
+                *afterSwap);
+        }
+    }
+
+    if (g_state.writeReported.load(std::memory_order_acquire))
         return;
     bool expected = false;
     if (g_state.armAttempted.compare_exchange_strong(expected, true, std::memory_order_acq_rel))
@@ -148,6 +208,67 @@ void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
         lucent::info("hle",
                      "shader-load packet copy covers guest {:#x} for {} bytes from caller {:#x}",
                      target, bytes, caller);
+    }
+}
+
+void NoteShaderLoadWatchGuestSwap(std::uint32_t guestSwapSequence)
+{
+    g_state.guestSwapSequence.store(guestSwapSequence, std::memory_order_release);
+}
+
+void ArmShaderLoadPacketTransitionFromZeroMarker()
+{
+    if (!ShaderLoadPacketTransitionWatchEnabled() ||
+        g_state.transitionReported.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
+    const std::uint32_t afterSwap = *ConfiguredShaderLoadWatchAfterSwap();
+    if (g_state.guestSwapSequence.load(std::memory_order_acquire) != afterSwap)
+        return;
+
+    bool expected = false;
+    if (g_state.transitionMarkerArmed.compare_exchange_strong(expected, true,
+                                                              std::memory_order_acq_rel))
+    {
+        lucent::info("hle", "shader-load zero-marker transition armed after guest swap {}",
+                     afterSwap);
+    }
+}
+
+void ObserveShaderLoadPacketTransitionCopy(std::uint8_t *guestMemory, std::uint32_t destination,
+                                           std::uint32_t bytes, std::uint32_t caller)
+{
+    if (!g_state.transitionMarkerArmed.load(std::memory_order_acquire) || destination < 4 ||
+        bytes < 4 || std::uint64_t(destination) + bytes > PPC_MEMORY_SIZE)
+    {
+        return;
+    }
+
+    const auto evidence = InspectRhiShaderLoadRange(
+        destination - 4, destination + bytes - 4,
+        [guestMemory](std::uint32_t address) { return ReadGuestBe32(guestMemory, address); });
+    if (!evidence.complete)
+        return;
+
+    const std::uint64_t shaderHash = *ConfiguredShaderLoadWatchHash();
+    for (const RhiShaderLoadPacketEvidence &load : evidence.loads)
+    {
+        if (!IsSelectedTransitionLoad(load, guestMemory, shaderHash))
+            continue;
+        bool expected = false;
+        if (g_state.transitionReported.compare_exchange_strong(expected, true,
+                                                               std::memory_order_acq_rel))
+        {
+            g_state.transitionMarkerArmed.store(false, std::memory_order_release);
+            lucent::info("hle",
+                         "shader-load zero-marker transition copied selected {} shader {:#018x}"
+                         " at guest {:#x} from caller {:#x}",
+                         load.immediate ? "inline" : "memory-backed", shaderHash,
+                         load.headerAddress, caller);
+        }
+        return;
     }
 }
 

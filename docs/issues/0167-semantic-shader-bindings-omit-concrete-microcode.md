@@ -181,3 +181,10 @@ same hash after swap 571 found an inline packet at `0x7FA34`, distinct from the 
 the corresponding PM4 frame 572 retained the exact 13 missing semantic pixel bindings. This grounds
 the replacement module's execution interval, but its write necessarily predates command-processor
 decoding; the next attribution seam must arm from the zero-object marker before that writer runs.
+
+That marker-to-PM4 seam is now bounded. In one 25-second headless transition capture, the zero-object
+setter armed after guest swap 571 and the command processor then reached the selected frame-572 inline
+load without any complete matching packet in post-marker copies through retained generic helper
+`0x828D2930`. The helper is therefore not the replacement module's post-marker writer. This is a
+negative about that generic-copy boundary only: the writer is direct, uses another copy path, or
+precedes the zero marker; it does not authorize retaining a prior module or changing semantic state.

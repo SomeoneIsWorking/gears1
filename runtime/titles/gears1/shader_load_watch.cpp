@@ -53,8 +53,12 @@ PPC_FUNC(sub_828D2930)
         __imp__sub_828D2930(ctx, base);
         return;
     }
-    gears::ObserveShaderLoadPacketCopy(ctx.r3.u32, ctx.r5.u32, std::uint32_t(ctx.lr));
+    const std::uint32_t destination = ctx.r3.u32;
+    const std::uint32_t bytes = ctx.r5.u32;
+    const std::uint32_t caller = std::uint32_t(ctx.lr);
+    gears::ObserveShaderLoadPacketCopy(destination, bytes, caller);
     __imp__sub_828D2930(ctx, base);
+    gears::ObserveShaderLoadPacketTransitionCopy(base, destination, bytes, caller);
 }
 
 PPC_FUNC(sub_8254F2B0)
