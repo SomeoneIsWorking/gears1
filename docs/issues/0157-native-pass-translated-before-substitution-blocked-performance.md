@@ -38,7 +38,7 @@ native values are directionally lower on average, but the spread is too noisy
 for a stable speedup claim. `tools/compare_frames.py` reported a match within
 0.001 mean channel difference, worst channel 4/255, and `GEARS_DRAW_VALIDATE=1`
 exited without image-interface diagnostics. The complete native RHI frontend
-and the 5 ms/200 fps target remain unresolved.
+and the 8.33 ms/120 fps target remain unresolved.
 
 ## Evidence
 

@@ -82,8 +82,9 @@ overhead as its permanent performance ceiling.
 
 ### Success conditions
 
-- The native renderer sustains a documented 5 ms / 200 frames-per-second budget on the designated
-  target hardware and representative gameplay workloads, including submission and retirement.
+- The native renderer sustains a documented 8.33 ms / 120 frames-per-second budget on the
+  designated target hardware and representative gameplay workloads, including submission and
+  retirement.
 - Presentation is uncapped by the compatibility architecture and remains bounded, monotonic, and
   free of stale-frame glitches under load.
 - Per-title simulation/frame-production limiters are identified semantically and exposed through a
@@ -94,8 +95,8 @@ overhead as its permanent performance ceiling.
 
 ### Constraints
 
-- The 5 ms target applies to the native engine path, not as a requirement to micro-optimize the PM4
-  oracle into the product architecture.
+- The 8.33 ms target applies to the native engine path, not as a requirement to micro-optimize the
+  PM4 oracle into the product architecture.
 - Timing enhancements do not speed the general guest clock or patch unexplained constants.
 
 ### Non-goals

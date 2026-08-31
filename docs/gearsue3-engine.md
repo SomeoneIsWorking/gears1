@@ -126,8 +126,8 @@ limit exists separately from renderer cost. Per-slot Vulkan timestamps now put
 ordinary live title frames at 7-8 ms GPU and a captured 1,742-draw chapter-45
 frame at 13.537 ms; the Release headless CPU path is 5-6 ms after removing an
 unused full-frame readback. These measurements establish useful 60 Hz renderer
-headroom for the bounded workloads, but not a 5 ms/200 fps budget or sustained
-interactive-gameplay proof. The 5 ms target belongs to the native PC engine
+headroom for the bounded workloads, but not an 8.33 ms/120 fps budget or sustained
+interactive-gameplay proof. The 8.33 ms target belongs to the native PC engine
 path. The compatibility result is a migration baseline for Xenos PM4, EDRAM,
 and pass reconstruction, not an accepted product ceiling; the retained
 compatibility arm remains the parity oracle while the native RHI removes that

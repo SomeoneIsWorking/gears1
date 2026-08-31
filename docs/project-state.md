@@ -19,7 +19,7 @@ done/partial/missing inventory.
 | S004 | Grounded native RHI operations replace retained execution with same-binary controls | partial | S003 | G001, G002, G003 |
 | S005 | Complete native RHI frontend bypasses title PM4 construction and compatibility reconstruction | missing | S003, S004 | G001, G002, G003 |
 | S006 | Every Gears UE3 title passes an exact-revision compatibility gate | missing | S001, S002 | G001, G002 |
-| S007 | Native engine sustains the 5 ms / 200 fps renderer budget on representative gameplay | missing | S005 | G003 |
+| S007 | Native engine sustains the 8.33 ms / 120 fps renderer budget on representative gameplay | missing | S005 | G003 |
 | S008 | Public distribution provisions from a user-owned game image through `./run.sh` | partial | — | G004 |
 
 ## Current focus
@@ -212,9 +212,9 @@ title profile, provisioned module, headless gameplay evidence, or renderer compa
 parity report. Gears 3 and Judgment have no locally proven exact revision or any of those later
 gates. The conformance reporter exists, but no title has passed its complete report.
 
-### S007 — Native 200 fps budget
+### S007 — Native 120 fps budget
 
-Missing capability: There is no complete native renderer path to measure against the 5 ms / 200 fps
+Missing capability: There is no complete native renderer path to measure against the 8.33 ms / 120 fps
 goal. Current compatibility frames are useful migration evidence, not proof of the native target;
 the separate title-side approximately 30 Hz gameplay producer limit also remains unidentified.
 

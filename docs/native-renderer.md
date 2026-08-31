@@ -71,7 +71,7 @@ than 4/255. The deliberately wrong-sign control diverged by 5.2155 mean
 channel units and 66/255 worst difference, so issue #155 is resolved for this
 pass and capture. Both stages are now exercised by the same-input comparison.
 This pass is parity-proven for the captured content, but it
-does not establish the complete native renderer or its 5 ms budget.
+does not establish the complete native renderer or its 8.33 ms / 120 fps budget.
 
 A three-run sequential sweep of `title600.gfr` measured 5.574/7.305/7.411 ms
 GPU on the compatibility arm and 5.276/5.709/7.157 ms with the native pass
@@ -81,7 +81,7 @@ the implemented scene-composite vertex and pixel shaders. The screenshots matche
 validation run exited cleanly without image-interface diagnostics. The retained
 inspection control translated the same pixel shader and still matched within the
 same tolerance. The sweep is directionally lower on average but too noisy to
-claim a stable speedup, and neither arm establishes the native renderer's 5 ms
+claim a stable speedup, and neither arm establishes the native renderer's 8.33 ms / 120 fps
 budget: all other draws still use the compatibility renderer, and the complete
 PM4/RHI frontend bypass remains outstanding.
 
