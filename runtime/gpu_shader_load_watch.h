@@ -16,6 +16,7 @@ namespace gears
 [[nodiscard]] bool ShaderLoadWatchCopyCoversTarget(std::uint32_t destination, std::uint32_t bytes,
                                                    std::uint32_t target);
 [[nodiscard]] bool ShaderLoadPacketWatchEnabled();
+[[nodiscard]] bool ShaderLoadPacketTransitionWatchEnabled();
 
 // Observes the exact PM4 packet that selected a shader. The optional watch is
 // diagnostic only: it never changes the command processor's shader state.
@@ -23,6 +24,13 @@ void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packet
                                   bool immediate, std::uint32_t completedSwapSequence);
 void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
                                  std::uint32_t caller);
+// The title records a zero-object marker during the configured guest interval.
+// Inspect complete copied PM4 packets until the command processor reaches the
+// selected module, which can occur after the next guest VdSwap.
+void NoteShaderLoadWatchGuestSwap(std::uint32_t guestSwapSequence);
+void ArmShaderLoadPacketTransitionFromZeroMarker();
+void ObserveShaderLoadPacketTransitionCopy(std::uint8_t *guestMemory, std::uint32_t destination,
+                                           std::uint32_t bytes, std::uint32_t caller);
 [[nodiscard]] std::uint64_t ShaderLoadPacketCopySequence();
 void ReportShaderLoadPacketProducerReturn(std::uint32_t caller, std::uint32_t stackPointer);
 void ReportShaderLoadPacketProducerParent(std::uint64_t copySequence, std::uint32_t caller,
