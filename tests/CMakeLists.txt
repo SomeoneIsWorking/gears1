@@ -242,6 +242,7 @@ add_test(NAME gpu_frame_timing COMMAND test_gpu_frame_timing)
 add_executable(test_guest_write_watch
     test_guest_write_watch.cpp
     ../runtime/fault_report.cpp
+    ../runtime/guest_backtrace.cpp
     ../runtime/guest_write_watch.cpp
     ../runtime/gpu_shader_load_watch.cpp
     ../runtime/guest_memory.cpp)

@@ -1,5 +1,6 @@
 #include "gpu_shader_load_watch.h"
 
+#include "guest_backtrace.h"
 #include "guest_memory.h"
 #include "guest_write_watch.h"
 
@@ -113,11 +114,12 @@ void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
     }
 }
 
-void ReportShaderLoadPacketProducerReturn(std::uint32_t caller)
+void ReportShaderLoadPacketProducerReturn(std::uint32_t caller, std::uint32_t stackPointer)
 {
     if (!std::exchange(g_copyObservedInCurrentCall, false))
         return;
-    lucent::info("hle", "shader-load packet producer returned to caller {:#x}", caller);
+    lucent::info("hle", "shader-load packet producer returned to caller {:#x}; guest stack: {}",
+                 caller, FormatGuestBacktrace(stackPointer, caller));
 }
 
 } // namespace gears
