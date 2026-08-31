@@ -376,3 +376,33 @@ address canonicalization or renderer materialization. A module-only shader-flush
 was unit-tested but did not change the live census, so it was removed rather than retained as a
 speculative fix. The next grounded step is to trace the ordered pixel-binding events at the title
 adapter and identify which retained path clears or fails to publish the semantic state.
+
+### Note (2026-08-31) — pixel-null setter is a marker, not the missing module
+
+The title-neutral event stream now records whether a shader binding came from a setter or the shader
+flush, and every draw snapshot retains its last effective pixel update for terminal attribution. A
+Clang exact-disc headless route through frame 1032 observed 46,471 matches, 5,718 missing joins, and
+zero value mismatches. Every missing logical draw's last pixel update was a zero-object setter;
+there were 1,841 such setter clears, while 44,521 flush bindings produced no clears. This confirms
+the setter clear is the immediate reason the semantic snapshot is absent, but not that preserving the
+previous module is correct.
+
+The required negative control made that distinction concrete. Treating the zero setter as an
+observe-only event changed all missing joins into pixel-module mismatches: through frame 1030 it
+produced 46,429 matches, zero missing joins, and 5,675 mismatches. The first retained semantic module
+hash was `0xea0007942db096ad`, while the materialized renderer used
+`0x63c971f5e9d59913`. That behavior experiment was removed. The next grounded step is to identify the
+retained command path that selects the renderer's replacement pixel module after the zero setter and
+publish its ordered module evidence; retaining the previous module would only hide the observation
+gap.
+
+The first candidate in that path was a genuine parser omission: the flush-range parser accepted
+physical `IM_LOAD` packets but not inline `IM_LOAD_IMMEDIATE` packets, although the compatibility
+command processor executes both. It now validates the inline payload length, stage, start, and
+three-dword instruction alignment, converts the packet words to the same byte order used by the
+renderer hash, and publishes its hash as module evidence. A focused immediate-pixel fixture proves
+that path. The exact Clang run nevertheless remained at 46,957 matches, 5,756 missing joins, and
+zero mismatches through frame 1037. Thus inline packet parsing is necessary observation coverage but
+not the unobserved replacement module in this population. The next discriminator must observe the
+global PM4 sequencer-load execution path that feeds renderer shader hashes, then correlate its
+ordered pixel selections with title semantic frames; the single Gears flush wrapper is not enough.

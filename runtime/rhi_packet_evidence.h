@@ -23,6 +23,8 @@ struct RhiShaderLoadPacketEvidence
     std::uint32_t sizeBytes = 0;
     std::uint32_t headerAddress = 0;
     bool predicated = false;
+    bool immediate = false;
+    std::vector<std::uint8_t> immediateMicrocode;
 };
 
 struct RhiShaderLoadRangeEvidence
@@ -44,6 +46,7 @@ template <typename ReadWord>
 {
     constexpr std::uint32_t kType3 = 3;
     constexpr std::uint32_t kImLoad = 0x27;
+    constexpr std::uint32_t kImLoadImmediate = 0x2B;
 
     RhiShaderLoadRangeEvidence result;
     if ((commandBefore & 3) != 0 || (commandEnd & 3) != 0 || commandEnd < commandBefore)
@@ -75,9 +78,11 @@ template <typename ReadWord>
 
         ++result.packetCount;
         result.dwordCount += static_cast<std::uint32_t>(packetDwords);
-        if (type == kType3 && ((header >> 8) & 0x7F) == kImLoad)
+        const std::uint32_t opcode = (header >> 8) & 0x7F;
+        if (type == kType3 && (opcode == kImLoad || opcode == kImLoadImmediate))
         {
-            if (payloadDwords != 2)
+            const bool immediate = opcode == kImLoadImmediate;
+            if ((!immediate && payloadDwords != 2) || payloadDwords < 2)
             {
                 result.complete = false;
                 return result;
@@ -93,12 +98,33 @@ template <typename ReadWord>
                 result.complete = false;
                 return result;
             }
+            if (immediate && payloadDwords != sizeDwords + 2)
+            {
+                result.complete = false;
+                return result;
+            }
+            std::vector<std::uint8_t> immediateMicrocode;
+            if (immediate)
+            {
+                immediateMicrocode.reserve(sizeDwords * sizeof(std::uint32_t));
+                for (std::uint32_t index = 0; index < sizeDwords; ++index)
+                {
+                    const std::uint32_t word =
+                        readWord(headerAddress + (index + 3) * sizeof(std::uint32_t));
+                    immediateMicrocode.push_back(static_cast<std::uint8_t>(word >> 24));
+                    immediateMicrocode.push_back(static_cast<std::uint8_t>(word >> 16));
+                    immediateMicrocode.push_back(static_cast<std::uint8_t>(word >> 8));
+                    immediateMicrocode.push_back(static_cast<std::uint8_t>(word));
+                }
+            }
             result.loads.push_back({
                 .stage = stage,
-                .guestAddress = addressAndStage & ~std::uint32_t{3},
+                .guestAddress = immediate ? 0 : addressAndStage & ~std::uint32_t{3},
                 .sizeBytes = sizeDwords * std::uint32_t{sizeof(std::uint32_t)},
                 .headerAddress = headerAddress,
                 .predicated = (header & 1) != 0,
+                .immediate = immediate,
+                .immediateMicrocode = std::move(immediateMicrocode),
             });
         }
         cursor = next;

@@ -42,7 +42,9 @@ void PublishShaderModules(ShaderStage stage, std::uint32_t device,
     const auto kind = stage == ShaderStage::Vertex ? RhiSemanticBindingKind::VertexShader
                                                    : RhiSemanticBindingKind::PixelShader;
     const RhiBindingStateEvidence state = CaptureShaderBinding(stage, device, modules, true);
-    ObserveRhiSemanticBinding({.kind = kind, .object = state.observedObject}, state);
+    ObserveRhiSemanticBinding(
+        {.kind = kind, .origin = RhiSemanticBindingOrigin::Flush, .object = state.observedObject},
+        state);
 }
 
 } // namespace
@@ -101,13 +103,17 @@ PPC_FUNC(sub_822346A8)
         for (const gears::RhiShaderLoadPacketEvidence &load : evidence.loads)
         {
             ++loadCounts[load.stage];
-            if (load.predicated || !IsPhysicalRange(load.guestAddress, load.sizeBytes))
+            if (load.predicated ||
+                (!load.immediate && !IsPhysicalRange(load.guestAddress, load.sizeBytes)) ||
+                (load.immediate && load.immediateMicrocode.size() != load.sizeBytes))
             {
                 complete = false;
                 continue;
             }
-            const auto bytes = std::span<const std::uint8_t>(
-                gears::Memory().Base() + load.guestAddress, load.sizeBytes);
+            const auto bytes =
+                load.immediate ? std::span<const std::uint8_t>(load.immediateMicrocode)
+                               : std::span<const std::uint8_t>(
+                                     gears::Memory().Base() + load.guestAddress, load.sizeBytes);
             // Shader loads execute in packet order and no semantic draw can
             // occur inside this retained call. The final unpredicated load is
             // therefore the concrete module active after the flush.

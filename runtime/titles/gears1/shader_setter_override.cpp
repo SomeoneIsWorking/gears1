@@ -207,8 +207,9 @@ void ObserveShaderBinding(ShaderStage stage, std::uint32_t device, std::uint32_t
 {
     const auto kind = stage == ShaderStage::Pixel ? gears::RhiSemanticBindingKind::PixelShader
                                                   : gears::RhiSemanticBindingKind::VertexShader;
-    gears::ObserveRhiSemanticBinding({.kind = kind, .object = shader},
-                                     gears::titles::gears1::CaptureShaderBinding(stage, device));
+    gears::ObserveRhiSemanticBinding(
+        {.kind = kind, .origin = gears::RhiSemanticBindingOrigin::Setter, .object = shader},
+        gears::titles::gears1::CaptureShaderBinding(stage, device));
 }
 
 struct TimingSummary

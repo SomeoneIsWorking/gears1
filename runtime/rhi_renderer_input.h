@@ -1,11 +1,12 @@
 #pragma once
 
 #include "gpu_draw_native_input.h"
+#include "rhi_semantic_stream.h"
 #include "rhi_target_state.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
-#include <array>
 #include <optional>
 #include <vector>
 
@@ -136,6 +137,12 @@ struct RhiRendererFrameComparison
     std::uint64_t missing = 0;
     std::uint64_t mismatched = 0;
     std::array<std::uint64_t, 4> unkeyedSemanticPacketKinds{};
+    std::array<std::uint64_t, kRhiSemanticBindingOriginCount> pixelShaderBindingsByOrigin{};
+    std::array<std::uint64_t, kRhiSemanticBindingOriginCount> pixelShaderClearsByOrigin{};
+    std::array<std::uint64_t, kRhiSemanticBindingOriginCount>
+        missingPixelShaderLastBindingsByOrigin{};
+    std::array<std::uint64_t, kRhiSemanticBindingOriginCount>
+        missingPixelShaderLastClearsByOrigin{};
     std::array<std::uint64_t, static_cast<std::size_t>(RhiRendererDrawEvidenceReason::Count)>
         missingEvidenceReasons{};
     std::uint64_t vertexShaderModuleMatches = 0;

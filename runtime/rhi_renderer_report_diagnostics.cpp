@@ -101,6 +101,12 @@ namespace
 struct RhiRendererEvidenceCensus
 {
     std::array<std::uint64_t, 4> unkeyedSemanticPacketKinds{};
+    std::array<std::uint64_t, kRhiSemanticBindingOriginCount> pixelShaderBindingsByOrigin{};
+    std::array<std::uint64_t, kRhiSemanticBindingOriginCount> pixelShaderClearsByOrigin{};
+    std::array<std::uint64_t, kRhiSemanticBindingOriginCount>
+        missingPixelShaderLastBindingsByOrigin{};
+    std::array<std::uint64_t, kRhiSemanticBindingOriginCount>
+        missingPixelShaderLastClearsByOrigin{};
     std::array<std::uint64_t, static_cast<std::size_t>(RhiRendererDrawEvidenceReason::Count)>
         missingEvidenceReasons{};
 };
@@ -118,6 +124,20 @@ std::mutex g_censusMutex;
         return "resolve";
     case draw::NativeDrawMaterializationOutcome::Materialized:
         return "materialized";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] const char *BindingOriginName(RhiSemanticBindingOrigin origin)
+{
+    switch (origin)
+    {
+    case RhiSemanticBindingOrigin::Unknown:
+        return "unknown";
+    case RhiSemanticBindingOrigin::Setter:
+        return "setter";
+    case RhiSemanticBindingOrigin::Flush:
+        return "flush";
     }
     return "unknown";
 }
@@ -144,6 +164,16 @@ void ReportRhiRendererEvidenceCensus(const RhiRendererFrameComparison &compariso
     std::lock_guard guard(g_censusMutex);
     for (std::size_t index = 0; index < comparison.unkeyedSemanticPacketKinds.size(); ++index)
         g_census.unkeyedSemanticPacketKinds[index] += comparison.unkeyedSemanticPacketKinds[index];
+    for (std::size_t index = 0; index < comparison.pixelShaderBindingsByOrigin.size(); ++index)
+    {
+        g_census.pixelShaderBindingsByOrigin[index] +=
+            comparison.pixelShaderBindingsByOrigin[index];
+        g_census.pixelShaderClearsByOrigin[index] += comparison.pixelShaderClearsByOrigin[index];
+        g_census.missingPixelShaderLastBindingsByOrigin[index] +=
+            comparison.missingPixelShaderLastBindingsByOrigin[index];
+        g_census.missingPixelShaderLastClearsByOrigin[index] +=
+            comparison.missingPixelShaderLastClearsByOrigin[index];
+    }
     for (std::size_t index = 0; index < comparison.missingEvidenceReasons.size(); ++index)
         g_census.missingEvidenceReasons[index] += comparison.missingEvidenceReasons[index];
 
@@ -156,6 +186,21 @@ void ReportRhiRendererEvidenceCensus(const RhiRendererFrameComparison &compariso
                  " transient-vertices-and-indices {}, bound-vertices {}, bound-indices {}",
                  g_census.unkeyedSemanticPacketKinds[0], g_census.unkeyedSemanticPacketKinds[1],
                  g_census.unkeyedSemanticPacketKinds[2], g_census.unkeyedSemanticPacketKinds[3]);
+    for (std::size_t index = 0; index < g_census.pixelShaderBindingsByOrigin.size(); ++index)
+    {
+        if (g_census.pixelShaderBindingsByOrigin[index] != 0)
+            lucent::info("rhi", "  pixel shader {} binding(s) x{}, effective clear(s) x{}",
+                         BindingOriginName(static_cast<RhiSemanticBindingOrigin>(index)),
+                         g_census.pixelShaderBindingsByOrigin[index],
+                         g_census.pixelShaderClearsByOrigin[index]);
+        if (g_census.missingPixelShaderLastBindingsByOrigin[index] != 0)
+            lucent::info("rhi",
+                         "  missing pixel shader draw(s) with last {} binding x{},"
+                         " last clear x{}",
+                         BindingOriginName(static_cast<RhiSemanticBindingOrigin>(index)),
+                         g_census.missingPixelShaderLastBindingsByOrigin[index],
+                         g_census.missingPixelShaderLastClearsByOrigin[index]);
+    }
     for (std::size_t index = 0; index < g_census.missingEvidenceReasons.size(); ++index)
     {
         if (g_census.missingEvidenceReasons[index] != 0)

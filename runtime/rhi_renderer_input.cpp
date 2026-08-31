@@ -564,13 +564,24 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
 
     for (const RhiSemanticEvent &event : frame.events)
     {
-        const auto *observed = std::get_if<RhiObservedDraw>(&event.payload);
-        if (observed == nullptr)
-            continue;
-        ++result.semanticDraws;
-        if (CanonicalPacketAddress(observed->packet.packetGuestAddress) == 0)
-            ++result
-                  .unkeyedSemanticPacketKinds[static_cast<std::size_t>(observed->state.draw.kind)];
+        if (const auto *binding = std::get_if<RhiObservedBinding>(&event.payload);
+            binding != nullptr && binding->binding.kind == RhiSemanticBindingKind::PixelShader)
+        {
+            const std::size_t origin = static_cast<std::size_t>(binding->binding.origin);
+            ++result.pixelShaderBindingsByOrigin[origin];
+            const std::uint32_t effectiveObject =
+                binding->state.present ? binding->state.observedObject : binding->binding.object;
+            if (effectiveObject == 0)
+                ++result.pixelShaderClearsByOrigin[origin];
+        }
+        else if (const auto *observed = std::get_if<RhiObservedDraw>(&event.payload);
+                 observed != nullptr)
+        {
+            ++result.semanticDraws;
+            if (CanonicalPacketAddress(observed->packet.packetGuestAddress) == 0)
+                ++result.unkeyedSemanticPacketKinds[static_cast<std::size_t>(
+                    observed->state.draw.kind)];
+        }
     }
     if (renderer.status != draw::NativeFrameMaterializationStatus::Complete)
     {
@@ -682,6 +693,16 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
         {
             ++result.missing;
             ++result.missingEvidenceReasons[static_cast<std::size_t>(firstMissingEvidence.reason)];
+            if (firstMissingEvidence.reason ==
+                    RhiRendererDrawEvidenceReason::SemanticPixelShaderMissing &&
+                observed->state.lastPixelShaderBinding.has_value())
+            {
+                const RhiSemanticBinding &last = *observed->state.lastPixelShaderBinding;
+                const std::size_t origin = static_cast<std::size_t>(last.origin);
+                ++result.missingPixelShaderLastBindingsByOrigin[origin];
+                if (last.object == 0)
+                    ++result.missingPixelShaderLastClearsByOrigin[origin];
+            }
         }
         else
             ++result.matched;

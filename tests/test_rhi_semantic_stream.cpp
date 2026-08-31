@@ -1,4 +1,5 @@
 #include "rhi_renderer_input.h"
+#include "rhi_renderer_input_origin_test.h"
 #include "rhi_semantic_stream.h"
 #include "gpu_draw.h"
 
@@ -433,6 +434,7 @@ int main()
     assert(missingRendererTextureComparison.missing == 1);
     assert(missingRendererTextureComparison.missingEvidenceReasons[static_cast<std::size_t>(
                gears::RhiRendererDrawEvidenceReason::RendererTextureStateMissing)] == 1);
+    TestRhiRendererPixelBindingOriginCensus();
     auto missingSemanticTexture = textureDrawState;
     missingSemanticTexture.textures[0].descriptorDwords = 0;
     assert(gears::InspectRhiRendererDrawInput(missingSemanticTexture, matchingRendererTexture)
@@ -545,6 +547,28 @@ int main()
     };
     assert(gears::CompareRhiRendererDrawInput(rendererAutoState, rendererAuto) ==
            RhiRendererDrawEvidenceResult::Match);
+    gears::RhiSemanticDrawState missingPixelShaderState = rendererAutoState;
+    missingPixelShaderState.pixelShader.reset();
+    missingPixelShaderState.lastPixelShaderBinding = {
+        .kind = RhiSemanticBindingKind::PixelShader,
+        .origin = gears::RhiSemanticBindingOrigin::Setter,
+    };
+    RhiRendererDrawInput missingPixelShaderRenderer = rendererAuto;
+    missingPixelShaderRenderer.packetGuestAddress = matchingAuto.packetGuestAddress;
+    const gears::RhiRendererFrameComparison missingPixelShaderComparison =
+        gears::CompareRhiRendererDraws(
+            {.events = {{.payload =
+                             gears::RhiObservedDraw{.state = missingPixelShaderState,
+                                                    .packet = matchingAuto,
+                                                    .evidence = RhiDrawEvidenceResult::Match}}}},
+            {.draws = {missingPixelShaderRenderer}});
+    assert(missingPixelShaderComparison.missing == 1);
+    assert(missingPixelShaderComparison
+               .missingPixelShaderLastBindingsByOrigin[static_cast<std::size_t>(
+                   gears::RhiSemanticBindingOrigin::Setter)] == 1);
+    assert(
+        missingPixelShaderComparison.missingPixelShaderLastClearsByOrigin[static_cast<std::size_t>(
+            gears::RhiSemanticBindingOrigin::Setter)] == 1);
     RhiRendererDrawInput alteredRenderer = rendererAuto;
     alteredRenderer.elementCount = 299;
     assert(gears::CompareRhiRendererDrawInput(rendererAutoState, alteredRenderer) ==

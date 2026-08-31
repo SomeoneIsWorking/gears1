@@ -142,6 +142,8 @@ int main()
     assert(state.textures[0].descriptor[5] == 1);
     assert(state.pixelShader.has_value());
     assert(state.pixelShader->object == 0x40106000);
+    assert(state.lastPixelShaderBinding.has_value());
+    assert(state.lastPixelShaderBinding->object == 0x40106000);
     assert(state.pixelShader->shaderModules.size() == 1);
     assert(state.pixelShader->shaderModules[0].hash == 0x123456789ABCDEF0ull);
     assert(state.vertexShader.has_value());
@@ -224,17 +226,22 @@ int main()
         .kind = gears::RhiSemanticBindingKind::Texture,
         .slot = 3,
     });
-    tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::PixelShader});
+    tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::PixelShader,
+                          .origin = gears::RhiSemanticBindingOrigin::Setter});
     tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::VertexShader});
     tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::IndexBuffer});
     state = tracker.SnapshotDraw(draw);
     assert(state.textures.empty());
     assert(!state.pixelShader.has_value());
+    assert(state.lastPixelShaderBinding.has_value());
+    assert(state.lastPixelShaderBinding->origin == gears::RhiSemanticBindingOrigin::Setter);
+    assert(state.lastPixelShaderBinding->object == 0);
     assert(!state.vertexShader.has_value());
     assert(!state.indexBuffer.has_value());
 
     tracker.Reset();
     assert(tracker.SnapshotDraw(draw).vertexStreams.empty());
+    assert(!tracker.SnapshotDraw(draw).lastPixelShaderBinding.has_value());
     assert(tracker.ApplyColorWriteState(gammaWrite) ==
            gears::RhiColorWriteStateEvidenceResult::Missing);
     assert(tracker.ApplyColorWriteState({.requested = 1}) ==
