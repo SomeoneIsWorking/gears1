@@ -3,8 +3,10 @@
 #include "rhi_pm4_shader_evidence.h"
 #include "rhi_renderer_input.h"
 #include "rhi_semantic_state.h"
+#include "guest_address.h"
 
 #include <array>
+#include <map>
 #include <mutex>
 #include <utility>
 
@@ -25,6 +27,14 @@ struct RhiSemanticStreamState
 };
 
 RhiSemanticStreamState g_stream;
+
+std::mutex g_shaderPacketEvidenceMutex;
+std::map<std::uint32_t, RhiShaderPacketModuleEvidence> g_shaderPacketEvidence;
+
+[[nodiscard]] std::uint32_t CanonicalShaderPacketAddress(std::uint32_t address)
+{
+    return address & kGuestPhysicalAddressMask & ~std::uint32_t{3};
+}
 
 struct RhiSemanticReportTotals
 {
@@ -372,6 +382,51 @@ void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
                                        .state = state,
                                        .evidence = CompareRhiBindingState(binding, state)}});
     g_stream.semanticState.ApplyBinding(binding, state);
+}
+
+void ObserveRhiShaderPacketModuleEvidence(
+    const std::vector<RhiShaderPacketModuleEvidence> &evidence)
+{
+    if (!RhiSemanticObservationEnabled())
+        return;
+    std::lock_guard guard(g_shaderPacketEvidenceMutex);
+    for (const RhiShaderPacketModuleEvidence &entry : evidence)
+    {
+        const std::uint32_t packet = CanonicalShaderPacketAddress(entry.packetGuestAddress);
+        if (packet != 0)
+            g_shaderPacketEvidence.insert_or_assign(packet, entry);
+    }
+}
+
+void ApplyRhiShaderPacketModuleEvidence(RhiSemanticDrawState &state,
+                                        std::uint32_t packetGuestAddress)
+{
+    const std::uint32_t packet = CanonicalShaderPacketAddress(packetGuestAddress);
+    if (packet == 0)
+        return;
+    std::lock_guard guard(g_shaderPacketEvidenceMutex);
+    const auto it = g_shaderPacketEvidence.find(packet);
+    if (it == g_shaderPacketEvidence.end())
+        return;
+    const RhiShaderPacketModuleEvidence &evidence = it->second;
+    if (!evidence.vertexModules.empty())
+    {
+        if (!state.vertexShader.has_value())
+            state.vertexShader = {.kind = RhiSemanticBindingKind::VertexShader,
+                                  .origin = RhiSemanticBindingOrigin::Flush,
+                                  .shaderModules = evidence.vertexModules};
+        else if (state.vertexShader->shaderModules.empty())
+            state.vertexShader->shaderModules = evidence.vertexModules;
+    }
+    if (!evidence.pixelModules.empty())
+    {
+        if (!state.pixelShader.has_value())
+            state.pixelShader = {.kind = RhiSemanticBindingKind::PixelShader,
+                                 .origin = RhiSemanticBindingOrigin::Flush,
+                                 .shaderModules = evidence.pixelModules};
+        else if (state.pixelShader->shaderModules.empty())
+            state.pixelShader->shaderModules = evidence.pixelModules;
+    }
 }
 
 void ObserveRhiSemanticPresent(const RhiSemanticPresent &present,

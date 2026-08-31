@@ -128,8 +128,10 @@ CompareFrame(const RhiSemanticFrame &semantic, const std::vector<RhiPm4DrawShade
                                     return execution->vertexShaderHash == first.vertexShaderHash &&
                                            execution->pixelShaderHash == first.pixelShaderHash;
                                 });
-        const ModuleMatch vertex = CompareModule(draw->state.vertexShader, first.vertexShaderHash);
-        const ModuleMatch pixel = CompareModule(draw->state.pixelShader, first.pixelShaderHash);
+        RhiSemanticDrawState state = draw->state;
+        ApplyRhiShaderPacketModuleEvidence(state, packet);
+        const ModuleMatch vertex = CompareModule(state.vertexShader, first.vertexShaderHash);
+        const ModuleMatch pixel = CompareModule(state.pixelShader, first.pixelShaderHash);
         if (!consistent || vertex == ModuleMatch::Mismatch || pixel == ModuleMatch::Mismatch)
         {
             ++result.mismatched;
