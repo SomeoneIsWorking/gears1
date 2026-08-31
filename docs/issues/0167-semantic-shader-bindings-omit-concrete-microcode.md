@@ -89,3 +89,12 @@ watch still selected the known inline module, but its one-shot page watch armed 
 already executed, so its lack of a later write attribution is not evidence about that first packet's
 producer. Future instrumentation must select the relevant transition occurrence or observe the
 callback object's module state directly.
+
+That later recurrence has now occurred in the same bounded run: the selected packet was copied
+through the retained helper chain and reached callback `0x82327E00` from `0x82327E54`. At that edge,
+the callback passed its non-null `+0x10` device field and the sampled device shader slots remained
+unchanged while the packet was serialized. This proves the callback is an ordered serializer edge for
+the selected module, not a device-slot mutation. It still does not identify a module-bearing field
+of the callback object or establish a semantic binding. The next probe must snapshot only fields
+statically consumed by that callback object and correlate them with both a selected-module positive
+and a non-selected negative before any semantic-state change.
