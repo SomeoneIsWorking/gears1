@@ -221,7 +221,8 @@ the separate title-side approximately 30 Hz gameplay producer limit also remains
 ### S008 — Clean image-only provisioning
 
 Strict title identity, bounded GDF extraction, ignored content-addressed title storage, and clean
-distribution gates now compose through the shipping `./run.sh` path. It accepts one user-owned image,
+distribution gates now compose through the shipping `./run.sh` path. It accepts one user-owned image
+or a 7z archive containing exactly one bounded disc-image member,
 refuses missing/unknown input before build work, generates the local title module under
 `scratch/titles/<disc-sha256>/`, and builds the product under `build/titles/`; its focused synthetic
 tests cover the complete provisioning order and a Clang combined gate passed 101/101 checks. A real

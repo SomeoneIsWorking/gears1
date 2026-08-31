@@ -14,10 +14,16 @@ from pathlib import Path
 
 from tools import gdf_extract, merge_switch_tables, title_identity
 
-from .process import CommandError, CommandRunner
+from . import archive
 from .paths import BuildPathError, build_directory
+from .process import CommandError, CommandRunner
 from .profile import TitleProfile
-from .requirements import RequirementError, product_dependency_hint, require_commands
+from .requirements import (
+    RequirementError,
+    product_dependency_hint,
+    require_archive_command,
+    require_commands,
+)
 
 
 class ProvisionError(RuntimeError):
@@ -414,7 +420,18 @@ def prepare_title(
             )
         except title_identity.IdentityError as error:
             raise ProvisionError(str(error)) from error
-        disc_identity = title_identity.build_identity(resolved.path)
+        require_archive_command(resolved.path)
+        disc_image = (
+            archive.materialize_disc_image(
+                resolved.path,
+                repo_root / "scratch/archives",
+                runner=command_runner,
+                cwd=repo_root,
+            )
+            if resolved.path.suffix.lower() == archive.ARCHIVE_SUFFIX
+            else resolved.path
+        )
+        disc_identity = title_identity.build_identity(disc_image)
         identity_path = title_identity.write_identity(repo_root, disc_identity)
         title_root = identity_path.parent
         game_dir = title_root / "game"
@@ -426,7 +443,7 @@ def prepare_title(
         )
         _ensure_submodules(repo_root, command_runner)
         recompiler_build = _build_recompiler(repo_root, command_runner)
-        _extract_disc(resolved.path, game_dir)
+        _extract_disc(disc_image, game_dir)
         executable = game_dir / "default.xex"
         if not executable.is_file():
             raise ProvisionError("selected disc has no root default.xex")
@@ -461,7 +478,7 @@ def prepare_title(
     ) as error:
         raise ProvisionError(str(error)) from error
     return PreparedTitle(
-        disc_image=resolved.path,
+        disc_image=disc_image,
         title_root=title_root,
         game_dir=game_dir,
         ppc_dir=ppc_dir,

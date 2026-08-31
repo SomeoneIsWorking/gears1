@@ -64,8 +64,9 @@ approximate, `docs/codemap.md` says where each subsystem lives, and
 
 **No game or UE3 source is included, fetched, or accepted as a dependency.** To
 build a playable title module, supply your own legally obtained Gears of War
-disc image. Install `uv`, CMake, Ninja, a C/C++ compiler, SDL3 development
-files, and Vulkan development files, then run from the repository root:
+disc image (or a 7z archive containing exactly one disc image). Install `uv`,
+CMake, Ninja, a C/C++ compiler, SDL3 development files, and Vulkan development
+files, then run from the repository root:
 
 ```sh
 export GEARS_ISO="/path/to/your/Gears of War.iso"
@@ -74,7 +75,9 @@ export GEARS_ISO="/path/to/your/Gears of War.iso"
 
 You can put `GEARS_ISO="..."` in a gitignored `.env` instead, pass
 `./run.sh --iso <path>`, or place exactly one image in gitignored `roms/`.
-`./run.sh --prepare` runs the same provisioning and build path without launching.
+For a 7z input, install 7-Zip as well; the launcher validates the archive and
+materializes its one bounded image member under ignored storage. `./run.sh
+--prepare` runs the same provisioning and build path without launching.
 The initializer names missing packages and prints the exact Homebrew, APT, DNF,
 or Windows installation command; it never installs privileged packages itself.
 
