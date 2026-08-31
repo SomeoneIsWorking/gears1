@@ -19,6 +19,6 @@ void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packet
                                   bool immediate);
 void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
                                  std::uint32_t caller);
-void ReportShaderLoadPacketProducerReturn(std::uint32_t caller);
+void ReportShaderLoadPacketProducerReturn(std::uint32_t caller, std::uint32_t stackPointer);
 
 } // namespace gears

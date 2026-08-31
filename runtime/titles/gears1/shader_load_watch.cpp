@@ -25,6 +25,7 @@ PPC_FUNC(sub_8254F2B0)
         return;
     }
     const std::uint32_t caller = std::uint32_t(ctx.lr);
+    const std::uint32_t stackPointer = ctx.r1.u32;
     __imp__sub_8254F2B0(ctx, base);
-    gears::ReportShaderLoadPacketProducerReturn(caller);
+    gears::ReportShaderLoadPacketProducerReturn(caller, stackPointer);
 }

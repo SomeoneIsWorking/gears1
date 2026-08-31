@@ -1,6 +1,6 @@
 #include "guest_backtrace.h"
 
-#include <byteswap.h>
+#include "../extern/XenonRecomp/XenonUtils/byteswap.h"
 
 #include "guest_memory.h"
 
@@ -40,8 +40,7 @@ uint32_t ReadWord(uint32_t address)
 
 } // namespace
 
-std::vector<uint32_t> GuestBacktrace(uint32_t stackPointer, uint32_t lr,
-                                     size_t maxFrames)
+std::vector<uint32_t> GuestBacktrace(uint32_t stackPointer, uint32_t lr, size_t maxFrames)
 {
     std::vector<uint32_t> frames;
     if (InImage(lr))
@@ -65,8 +64,7 @@ std::vector<uint32_t> GuestBacktrace(uint32_t stackPointer, uint32_t lr,
         // whoever used the stack last. Dropping it rather than reporting it
         // keeps the trace honest -- a plausible-looking wrong address is worse
         // than a short trace.
-        if (InImage(returnAddress) &&
-            (frames.empty() || frames.back() != returnAddress))
+        if (InImage(returnAddress) && (frames.empty() || frames.back() != returnAddress))
             frames.push_back(returnAddress);
 
         sp = caller;
@@ -74,8 +72,7 @@ std::vector<uint32_t> GuestBacktrace(uint32_t stackPointer, uint32_t lr,
     return frames;
 }
 
-std::string FormatGuestBacktrace(uint32_t stackPointer, uint32_t lr,
-                                 size_t maxFrames)
+std::string FormatGuestBacktrace(uint32_t stackPointer, uint32_t lr, size_t maxFrames)
 {
     const std::vector<uint32_t> frames = GuestBacktrace(stackPointer, lr, maxFrames);
     if (frames.empty())

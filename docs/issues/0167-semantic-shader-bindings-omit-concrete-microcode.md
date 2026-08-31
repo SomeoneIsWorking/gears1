@@ -47,3 +47,8 @@ serializes the observed packet but is not itself evidence that a shader-object t
 The caller's Ghidra function boundary is not currently valid, so no semantic event was added. The
 remaining discriminator is to establish that caller's ownership and prove a post-call module state
 before publishing anything to the semantic stream.
+
+The bounded guest-stack trace now places that helper below callback `0x82327E00`, which invokes the
+larger retained packet routine before the serializer returns. Static reconstruction of that larger
+routine ends at a title save/restore boundary, so this narrows the next dynamic target but still does
+not prove a shader-object transition or authorize semantic publication.
