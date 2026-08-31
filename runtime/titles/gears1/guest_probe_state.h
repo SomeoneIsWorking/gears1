@@ -11,11 +11,10 @@ struct RenderRingReservationProvenance
     std::uint32_t bytes = 0;
     std::uint32_t caller = 0;
     std::uint32_t recordOwner = 0;
-    std::uint32_t recordVtable = 0;
-    std::uint32_t recordMethod0 = 0;
-    std::uint32_t recordMethod4 = 0;
-    std::uint32_t recordMethod0Entry = 0;
-    std::uint32_t recordMethod4Entry = 0;
+    std::uint32_t recordDispatchTable = 0;
+    std::uint32_t recordPrimaryDescriptor = 0;
+    std::uint32_t recordPrimaryTarget = 0;
+    std::uint32_t recordSecondaryTarget = 0;
     std::uint32_t recordBase = 0;
     std::uint32_t recordIndex = 0;
     std::uint32_t companionWord = 0;
