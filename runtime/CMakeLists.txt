@@ -29,8 +29,8 @@ if(EXISTS "${_ppc_ctx_generated}" AND EXISTS "${_ppc_ctx_source}")
             "body of ${_ppc_ctx_source}. The guest code compiles against the "
             "generated copy, so your edit to the submodule header is not "
             "reaching it. Re-run XenonRecomp, or refresh the copy:\n"
-            "  { printf '#pragma once\\n#include \"ppc_config.h\"\\n\\n'; "
-            "cat ${_ppc_ctx_source}; } > ${_ppc_ctx_generated}")
+            "  uv run --locked python tools/refresh_recompiler_header.py "
+            "--ppc-dir ${GEARS_PPC_DIR}")
     endif()
 endif()
 
@@ -381,6 +381,10 @@ target_link_libraries(gears1 PRIVATE gears_gpu_queue_access)
 # and run the measurement harnesses.
 find_package(Vulkan QUIET)
 find_package(SDL3 QUIET CONFIG)
+if(GEARS_REQUIRE_PRODUCT_DEPS AND (NOT Vulkan_FOUND OR NOT SDL3_FOUND))
+    message(FATAL_ERROR
+        "GearsUE3 product build requires Vulkan and SDL3 development packages")
+endif()
 if(Vulkan_FOUND)
     target_sources(gears1 PRIVATE native_rhi_vulkan_resolve.cpp)
     target_sources(gears1 PRIVATE native_rhi_vulkan_resources.cpp)

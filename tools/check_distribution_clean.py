@@ -62,14 +62,10 @@ HISTORY_TEXT_LITERALS = (
     ("private UE3 implementation symbol", "FSceneRenderer::RenderFog"),
 )
 
-# The checker contains its own negative fixtures. The legacy environment loader
-# still accepts and ignores the retired variable so old local .env files remain
-# harmless; no build target consumes it. Exempt these files from both content
-# and pickaxe history scans so the gate tests external use, not its own pattern
-# definitions.
+# The checker contains its own negative fixtures. Exempt it from content and
+# pickaxe history scans so the gate tests external use, not its own definitions.
 TEXT_SCAN_EXEMPT = {
     "tools/check_distribution_clean.py",
-    "tools/env.sh",
 }
 
 GENERATED_RECOMP = re.compile(r"(?:^|/)ppc_recomp\.\d+\.cpp$")

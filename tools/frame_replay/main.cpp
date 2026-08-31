@@ -8,11 +8,11 @@
 // input in about a second:
 //
 //   # once: reach a gameplay frame and capture it
-//   GEARS_DRAW_FRAME_DUMP=scratch/frames/act1.gfr tools/capture_gameplay_frame.sh
+//   GEARS_DRAW_FRAME_DUMP=scratch/frames/act1.gfr tools/capture_gameplay_frame.py
 //
 //   # then, as often as needed
-//   scratch/build/runtime/frame_replay scratch/frames/act1.gfr
-//   GEARS_DRAW_ONLY_BASE=0x400 scratch/build/runtime/frame_replay scratch/frames/act1.gfr
+//   build/release/runtime/frame_replay scratch/frames/act1.gfr
+//   GEARS_DRAW_ONLY_BASE=0x400 build/release/runtime/frame_replay scratch/frames/act1.gfr
 //
 // Every GEARS_DRAW_* knob the live backend honours works here, because this
 // links the same runtime/gpu_draw.cpp. What it does NOT do is emulate: a capture

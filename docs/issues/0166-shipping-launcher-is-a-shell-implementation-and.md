@@ -1,12 +1,12 @@
 ---
 id: 166
 title: Shipping launcher is a shell implementation and not a fresh-clone initializer
-status: investigating
+status: resolved
 symptom: run.sh contains configuration, build, logging, cleanup, and Gears 1 menu-walk policy, invokes ambient CMake directly, and only runs when extracted and recompiled title outputs already exist
 state_items: S006,S008
 tags: launcher,bootstrap,python,provisioning,title-boundary,architecture,gearsue3
 created: 2026-08-30
-updated: 2026-08-30
+updated: 2026-08-31
 ---
 
 ## Root cause
@@ -23,6 +23,23 @@ user's disc image.
 The menu-walk authority also has four non-launcher shell consumers. Copying its values into a new
 Python bootstrap, parsing shell as data, or retaining a shell wrapper around Python would create a
 second authority rather than fix the ownership defect.
+
+## Resolution
+
+`run.sh` is now a four-line `uv run --frozen` shim. `bootstrap.py` composes the tracked
+Gears 1 profile with focused Python owners for strict machine-local configuration, prerequisites,
+content-addressed disc provisioning, product builds, logging, and child lifetime. A selected image
+is validated before any submodule or compiler work starts; unknown revisions refuse. The old shell
+scenario entry points are now Python callers of the same profile authority and the shell copies are
+removed. Generated PPC headers have an explicit scoped refresher for a locally stale generated tree;
+normal provisioning regenerates them from the title.
+
+Evidence: 24 focused bootstrap tests cover profile/environment ownership, cold synthetic preparation,
+fail-before-build input refusal, process lifetime, and header refresh. A Clang combined build compiled
+all 191 generated PPC units and passed 101/101 CTest checks, including the source-structure,
+distribution, and C++ quality gates. XenonRecomp and Xenia dependency fixes are pinned to portable
+GCC-capable revisions; GCC compiled their affected production layers before the checked generated
+module boundary.
 
 ## Required resolution
 

@@ -528,7 +528,7 @@ def main(argv):
 
     root = Path(__file__).resolve().parents[1]
     build_dir = Path(argv[1]) if len(argv) == 2 else Path(
-        os.environ.get("GEARS_BUILD_DIR", "scratch/build")
+        os.environ.get("GEARS_BUILD_DIR", "build/release")
     )
     if not build_dir.is_absolute():
         build_dir = root / build_dir

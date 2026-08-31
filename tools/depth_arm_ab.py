@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Score the two depth arms against ONE console reference, pass by pass.
 
-Driven by tools/depth_arm_ab.sh, which produces the two arms from the same
+Driven by tools/depth_arm_ab_run.py, which produces the two arms from the same
 frozen camera. This only reads what that produced.
 
     tools/depth_arm_ab.py --pair <pair-dir> --ab <pair-dir>/ab

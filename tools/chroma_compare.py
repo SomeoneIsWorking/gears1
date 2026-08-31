@@ -4,7 +4,7 @@ cannot destroy: CHROMATICITY, and which channel order best explains it.
 
 WHY THIS EXISTS, AND WHAT IT IS NOT
 
-`tools/oracle_compare.sh` produces two filmstrips of the same scripted walk and
+`tools/oracle_compare.py` produces two filmstrips of the same scripted walk and
 says, correctly, that a pixel metric between them is meaningless: the two
 emulations reach different moments, so any per-pixel number measures content as
 much as rendering. That warning has been read as "nothing quantitative can be

@@ -200,7 +200,7 @@ struct OutputMergerState
 // resolved at 0.0209 against the console's 0.7079. Any new site that needs the
 // depth model calls this rather than reading the environment again.
 //
-// DEFAULT ON, measured. tools/depth_arm_ab.sh replays one frozen camera through
+// DEFAULT ON, measured. tools/depth_arm_ab_run.py replays one frozen camera through
 // both models and a repeat of the first as a noise floor: two identical runs
 // differ by 0.0002-0.0059 per pass, and ten passes clear that. Nine favour the
 // split -- the shadow atlas depth resolve 0.3380 -> 0.9994, both HDR resolves,

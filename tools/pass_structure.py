@@ -20,7 +20,7 @@ draw it cannot place is printed with its state.
 
 The TSV comes from a replay:
 
-    GEARS_DRAW_DIAG=out.tsv scratch/build/runtime/frame_replay scratch/frames/X.gfr
+    GEARS_DRAW_DIAG=out.tsv build/release/runtime/frame_replay scratch/frames/X.gfr
 """
 import argparse
 import collections

@@ -372,6 +372,15 @@ add_test(NAME title_identity
 add_test(NAME gdf_extract
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_CURRENT_SOURCE_DIR}/test_gdf_extract.py")
+add_test(NAME bootstrap_profile
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_bootstrap_profile.py")
+add_test(NAME bootstrap_provision
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_bootstrap_provision.py")
+add_test(NAME bootstrap
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_CURRENT_SOURCE_DIR}/test_bootstrap.py")
 add_test(NAME title_conformance_selftest
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/title_conformance.py" --selftest)

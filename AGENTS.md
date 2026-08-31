@@ -65,6 +65,11 @@ Use `${DUSKLIGHT_REPO}` when set, otherwise the sibling checkout at
 `../../dusklight`, as the ownership reference. Adapt its cohesive host
 subsystems rather than copying platform-specific implementations.
 
+- `run.sh` is only the stable locked-environment shim. `bootstrap.py` composes
+  focused owners under `tools/gearsue3_bootstrap/` for profile facts,
+  environment data, prerequisites, provisioning, process lifetime, and launch
+  policy. Do not move those implementations back into the entry point or
+  duplicate them in diagnostics.
 - Shared engine sources compose separately from locally generated title code.
   One executable links one exact title/revision module; do not link multiple
   generated images whose `_xstart`, `sub_*`, and `ppc_config.h` namespaces

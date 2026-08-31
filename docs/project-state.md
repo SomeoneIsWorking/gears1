@@ -204,7 +204,12 @@ the separate title-side approximately 30 Hz gameplay producer limit also remains
 ### S008 — Clean image-only provisioning
 
 Strict title identity, bounded GDF extraction, ignored content-addressed title storage, and clean
-distribution gates exist.
+distribution gates now compose through the shipping `./run.sh` path. It accepts one user-owned image,
+refuses missing/unknown input before build work, generates the local title module under
+`scratch/titles/<disc-sha256>/`, and builds the product under `build/titles/`; its focused synthetic
+tests cover the complete provisioning order and a Clang combined gate passed 101/101 checks.
 
-Gap: Extraction, analysis metadata, recompilation, validation, build, and launch are not yet one
-fresh-clone `./run.sh` flow. See `docs/re-frontier.md` (`rom-only-provisioning`) and issue #166.
+Gap: This workspace has no user-owned disc available for an end-to-end cold headless launch, and only
+the exact Gears 1 profile is implemented. The shipping path and its fail-closed boundaries are
+synthetically verified, but real-disc and additional-title conformance remain outstanding. See
+`docs/re-frontier.md` (`rom-only-provisioning`).

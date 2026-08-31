@@ -19,14 +19,14 @@ chain, because the sequencer rounds after every step -- is left standing.
     tools/ucode_reduce.py --selftest
 
 Get a disassembly with:
-    scratch/build/tools/xenos_translate/xenos_translate --raw OUTDIR \\
+    build/release/tools/xenos_translate/xenos_translate --raw OUTDIR \\
         scratch/shaders/bound/ps_<hash>.ucode
 
 WHAT IT IS NOT. Not a translator and not a substitute for the A/B gate. It has no
 control flow (a shader with `loop`/`jmp`/predication is REFUSED, not
 approximated), no memexport, and no fetch or output epilogue -- the texture sign
 decode, the exponent bias and the gamma encode are the runtime's, and
-`tools/verify_native_pass.sh` is what says whether the shader you write from this
+`tools/verify_native_pass.py` is what says whether the shader you write from this
 is right. Its output is a reading aid with a stated blind spot, not evidence.
 """
 import argparse
@@ -347,7 +347,7 @@ def report(path, inputs):
     print('   exponent bias and the gamma encode are the RUNTIME\'s epilogue, not')
     print('   the microcode\'s, and none of them appear above. Read them off the')
     print('   translated module (GEARS_DRAW_SPV_DUMP) and gate the result with')
-    print('   tools/verify_native_pass.sh -- this listing is a reading aid.')
+    print('   tools/verify_native_pass.py -- this listing is a reading aid.')
     return 0
 
 
@@ -506,7 +506,7 @@ def census(directory):
     print('A fingerprint is a PLAN, not a result. Six saturated dots is what the')
     print('three verified members of this family have; a shader that shares the')
     print('count and not the structure would be misfiled here, and only writing it')
-    print('and running tools/verify_native_pass.sh settles any individual one.')
+    print('and running tools/verify_native_pass.py settles any individual one.')
     return 0
 
 

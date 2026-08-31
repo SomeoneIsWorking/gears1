@@ -9,10 +9,10 @@
 #
 # Configure and build (from the repo root):
 #
-#   cmake -S tools/xenia_oracle -B scratch/oracle/oracle-build -G Ninja \
+#   cmake -S tools/xenia_oracle -B build/oracle -G Ninja \
 #         -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_CXX_FLAGS=-I<abs>/generated \
 #         -DCMAKE_EXE_LINKER_FLAGS=-L<abs>/scratch/oracle/localdev
-#   ninja -C scratch/oracle/oracle-build xenia_oracle
+#   ninja -C build/oracle xenia_oracle
 #
 # RelWithDebInfo rather than Release because Xenia's Release config forces
 # -fuse-ld=lld, which is not installed here; see docs/xenia-reuse.md.
