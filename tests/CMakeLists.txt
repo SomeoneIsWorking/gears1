@@ -243,6 +243,7 @@ add_executable(test_guest_write_watch
     test_guest_write_watch.cpp
     ../runtime/fault_report.cpp
     ../runtime/guest_write_watch.cpp
+    ../runtime/gpu_shader_load_watch.cpp
     ../runtime/guest_memory.cpp)
 target_include_directories(test_guest_write_watch PRIVATE
     ../runtime

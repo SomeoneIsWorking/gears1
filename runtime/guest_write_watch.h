@@ -10,6 +10,7 @@ enum class GuestWriteWatchOwner : uint8_t
 {
     kQueue,
     kDrawPacket,
+    kShaderLoadPacket,
     kRhiTargetDescriptor,
     kRhiTextureDescriptor,
     kRhiVertexStreamReset,

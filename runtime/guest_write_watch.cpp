@@ -60,6 +60,8 @@ const char *OwnerName(GuestWriteWatchOwner owner)
         return "queue";
     case GuestWriteWatchOwner::kDrawPacket:
         return "draw-packet";
+    case GuestWriteWatchOwner::kShaderLoadPacket:
+        return "shader-load packet";
     case GuestWriteWatchOwner::kRhiTargetDescriptor:
         return "RHI target-descriptor";
     case GuestWriteWatchOwner::kRhiTextureDescriptor:
