@@ -31,6 +31,7 @@
 #include "gpu_present.h"
 #include "gpu_packet_memory.h"
 #include "gpu_register_watch.h"
+#include "gpu_shader_load_watch.h"
 #include "gpu_swap_packet.h"
 #include "input.h"
 #include "debug_http.h"
@@ -277,15 +278,8 @@ constexpr uint32_t kConstBaseRegisters = 0x2000;
 // ---------------------------------------------------------------------------
 // Bound-shader capture.
 //
-// The offline corpus (tools/shader_extract.py) is everything that sits
-// uncompressed in the cooked packages. It says nothing about which shaders the
-// running title binds. The sequencer load packets do: whatever microcode the
-// GPU is handed here is, by definition, what the title bound. Capturing at this
-// point needs no knowledge of the D3D shader-set API and covers every path,
-// including the movie player's hand-built command buffer.
-//
-// Enabled with GEARS_SHADER_CAPTURE=1; containers go to
-// GEARS_SHADER_CAPTURE_DIR (default scratch/shaders/bound).
+// Sequencer loads define the active shader pair independently of D3D API paths.
+// GEARS_SHADER_CAPTURE writes their otherwise in-memory payloads to disk.
 // ---------------------------------------------------------------------------
 struct BoundShader
 {
@@ -317,12 +311,13 @@ struct ShaderCaptureState
 
 // `ucode` holds the microcode as big-endian bytes, exactly as the GPU reads it,
 // which is also what tools/xenos_translate consumes (std::endian::big).
-void RecordBoundShader(uint32_t type, uint32_t address, bool immediate,
+void RecordBoundShader(uint32_t type, uint32_t address, uint32_t packetGuestAddress, bool immediate,
                        const std::vector<uint8_t> &ucode)
 {
     auto &cap = g_shaderCapture;
     const uint64_t hash = gears::Fnv1a64(ucode);
     (type == 0 ? cap.activeVertexHash : cap.activePixelHash) = hash;
+    gears::ObserveShaderLoadPacketWrite(hash, packetGuestAddress, immediate);
     auto it = cap.shaders.find(hash);
     if (it != cap.shaders.end())
     {
@@ -928,7 +923,9 @@ struct CommandProcessor
             }
             ++cap.imLoads;
         }
-        RecordBoundShader(type, address, immediate, ucode);
+        const uint32_t packetBase = sourceBase != 0 ? sourceBase : g_ringBuffer.base;
+        RecordBoundShader(type, address, packetBase + sourceIndex * sizeof(uint32_t), immediate,
+                          ucode);
     }
 
     // Resolve a SET_CONSTANT/LOAD_ALU_CONSTANT (index,type) pair to the base

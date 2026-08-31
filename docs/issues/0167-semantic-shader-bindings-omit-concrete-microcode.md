@@ -35,3 +35,15 @@ draw and show that the title adapter publishes the same concrete module before e
 falsifier is a nonzero PM4 pixel hash alongside an absent semantic pixel state; a deliberately changed
 hash must remain a stage-specific mismatch, and malformed or predicated evidence must stay explicitly
 missing rather than preserving a prior module.
+
+## Packet-producer trace (2026-08-31)
+
+The first missing replacement pixel module is inline rather than memory-backed, so its microcode has
+no stable guest source address to watch. A bounded PM4-packet write watch instead armed the exact
+inline packet and demonstrated one writer. Its host instruction is the retained generic copy helper
+`0x828D2930`; a retained Gears 1 wrapper then established the relevant guest chain: the copy returns
+inside command-buffer helper `0x8254F2B0`, which returns to live caller `0x8254E00C`. The helper
+serializes the observed packet but is not itself evidence that a shader-object transition occurred.
+The caller's Ghidra function boundary is not currently valid, so no semantic event was added. The
+remaining discriminator is to establish that caller's ownership and prove a post-call module state
+before publishing anything to the semantic stream.

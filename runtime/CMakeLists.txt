@@ -199,6 +199,7 @@ add_executable(gears1
     pm4_trace.cpp
     vd_null_gpu.cpp
     gpu_diagnostics_profile.cpp
+    gpu_shader_load_watch.cpp
     gpu_present.cpp
     gpu_present_source.cpp
     gpu_present_stage.cpp
@@ -243,6 +244,7 @@ add_executable(gears1
     titles/gears1/rhi_vertex_stream_watch.cpp
     titles/gears1/shader_binding_capture.cpp
     titles/gears1/shader_flush_capture.cpp
+    titles/gears1/shader_load_watch.cpp
     titles/gears1/shader_setter_override.cpp
     guest_write_watch.cpp
     gpu_register_watch.cpp

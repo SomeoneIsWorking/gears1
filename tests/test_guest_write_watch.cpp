@@ -1,4 +1,5 @@
 #include "guest_write_watch.h"
+#include "gpu_shader_load_watch.h"
 #include "titles/gears1/rhi_texture_descriptor_watch.h"
 
 #include <cassert>
@@ -22,6 +23,13 @@ int main()
     assert(gears::GuestWriteWatchImageAddress(0xE962F1, 0) == 0xE962F1);
     assert(gears::GuestWriteWatchImageAddress(0x7F00E962F1, 0x7F00000000) == 0xE962F1);
     assert(gears::GuestWriteWatchImageAddress(0x1000, 0x2000) == 0x1000);
+    assert(gears::ParseShaderLoadWatchHash("63c971f5e9d59913") == 0x63C971F5E9D59913ULL);
+    assert(gears::ParseShaderLoadWatchHash("0X63c971f5e9d59913") == 0x63C971F5E9D59913ULL);
+    assert(!gears::ParseShaderLoadWatchHash("not-a-hash"));
+    assert(!gears::ParseShaderLoadWatchHash("0x"));
+    assert(gears::ShaderLoadWatchCopyCoversTarget(0xA0001000, 16, 0xC000100C));
+    assert(!gears::ShaderLoadWatchCopyCoversTarget(0x001000, 16, 0x001010));
+    assert(!gears::ShaderLoadWatchCopyCoversTarget(0x001000, 0, 0x001000));
     assert(gears::titles::gears1::RhiTextureDescriptorWatchMayArm(1));
     assert(!gears::titles::gears1::RhiTextureDescriptorWatchMayArm(0));
     assert(!gears::titles::gears1::RhiTextureDescriptorWatchMayArm(2));
