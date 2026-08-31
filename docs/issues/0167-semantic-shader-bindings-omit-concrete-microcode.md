@@ -59,11 +59,11 @@ a shader object or device state, so the observation establishes the callback han
 discriminator must prove an argument's object identity before reading or publishing any of its fields
 as semantic shader state.
 
-Fresh local decompilation of `0x82327E00` corrects that ABI interpretation: its second integer
-argument comes from the callback object's `+0x10` field, while the content of global `0x82BECBA0`
-is passed separately as the third integer argument. Neither fact alone proves the ownership of either
-object. The callback is a serializer over that command object, so no state field may become a semantic
-binding until its relation to the emitted module is established.
+Raw PPC reconstruction of `0x82327E00` establishes the actual call ABI: its outer callback object's
+`+0x10` field is passed in `r3`, the content of global `0x82BECBA0` is passed in `r4`, and outer
+fields `+0x20/+0x60/+0x64/+0x68` supply the remaining integer arguments. Neither fact alone proves
+the ownership of any of those objects. The callback is a serializer over the `r3` command object, so
+no state field may become a semantic binding until its relation to the emitted module is established.
 
 The selected-call before/after capture shows the two sampled `+0x3080/+0x3084` fields are unchanged
 while it emits the inline pixel module. That falsifies this routine as a direct mutation of those
@@ -92,9 +92,19 @@ callback object's module state directly.
 
 That later recurrence has now occurred in the same bounded run: the selected packet was copied
 through the retained helper chain and reached callback `0x82327E00` from `0x82327E54`. At that edge,
-the callback passed its non-null `+0x10` device field and the sampled device shader slots remained
-unchanged while the packet was serialized. This proves the callback is an ordered serializer edge for
-the selected module, not a device-slot mutation. It still does not identify a module-bearing field
-of the callback object or establish a semantic binding. The next probe must snapshot only fields
-statically consumed by that callback object and correlate them with both a selected-module positive
-and a non-selected negative before any semantic-state change.
+the outer callback passed its `+0x10` field as the serializer's `r3` command object and the sampled
+global-device shader slots remained unchanged while the packet was serialized. This proves the
+callback is an ordered serializer edge for the selected module, not a device-slot mutation. It still
+does not identify a module-bearing field of the outer callback object or establish a semantic binding.
+The next probe must snapshot only fields statically consumed by that outer callback object and
+correlate them with both a selected-module positive and a non-selected negative before any
+semantic-state change.
+
+That selected-module snapshot is now complete. The serializer command object's directly consumed
+fields `+0x4/+0x10/+0x1c/+0x28/+0x40` were unchanged around the copy; only `+0x28` was nonzero,
+with value one. The outer callback supplied that command object through `+0x10`, a local parameter
+block through `+0x20`, and its `+0x60/+0x64/+0x68` scalar arguments. This falsifies those directly
+consumed command fields as a concrete-module source for this selected recurrence. It does not rule
+out state owned above the callback or behind its parameter block, so neither snapshot may feed the
+semantic stream. The next discriminator belongs at the earlier producer that constructs this outer
+callback input, not at the serializer.

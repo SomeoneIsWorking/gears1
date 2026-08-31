@@ -1,5 +1,13 @@
 # Correctness tests for the instruction implementations added to our
 # XenonRecomp fork. These need only the generated ppc_context.h and simde.
+# Test sources use `assert` as their fail-fast contract. Release product builds
+# define NDEBUG, so explicitly retain those checks for every test target.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|AppleClang")
+    add_compile_options(-UNDEBUG)
+elseif(MSVC)
+    add_compile_options(/UNDEBUG)
+endif()
+
 add_executable(test_vmx_instructions test_vmx_instructions.cpp)
 target_include_directories(test_vmx_instructions PRIVATE
     "${GEARS_PPC_DIR}"
@@ -746,6 +754,7 @@ add_test(NAME rhi_resolve COMMAND test_rhi_resolve)
 add_executable(test_gpu_swap_packet
     test_gpu_swap_packet.cpp
     ../runtime/gpu_swap_packet.cpp
+    ../runtime/rhi_pm4_shader_evidence.cpp
     ../runtime/rhi_renderer_input.cpp
     ../runtime/rhi_renderer_report_diagnostics.cpp
     ../runtime/rhi_semantic_state.cpp
