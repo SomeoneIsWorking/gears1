@@ -94,6 +94,8 @@ class ShaderFlushRangeCapture
 // active on the same guest thread.
 void ObserveShaderFlushCommandBufferTransition(std::uint32_t device, std::uint32_t oldCommandEnd,
                                                std::uint32_t newCommandBefore);
+void ObserveShaderCommandBufferSubmission(std::uint32_t device, std::uint32_t guestAddress,
+                                          std::uint32_t dwordCount);
 [[nodiscard]] bool ShaderFlushCaptureActive();
 
 } // namespace gears::titles::gears1

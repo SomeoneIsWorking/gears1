@@ -189,6 +189,11 @@ struct Reg_822218C0
 } // namespace
 PPC_FUNC(sub_822218C0)
 {
+    const std::uint32_t submissionDevice = ctx.r3.u32;
+    const std::uint32_t submissionAddress = ctx.r5.u32;
+    const std::uint32_t submissionDwords = ctx.r6.u32;
+    gears::titles::gears1::ObserveShaderCommandBufferSubmission(submissionDevice, submissionAddress,
+                                                                submissionDwords);
     const bool shaderPacketWatch = gears::ShaderLoadPacketWatchEnabled();
     const std::uint64_t targetWritesBefore =
         shaderPacketWatch

@@ -6,8 +6,9 @@ namespace gears
 {
 
 // A title-neutral identity for one concrete Xenos microcode payload emitted by
-// a retained title flush. The semantic comparer requires exactly one module
-// per active stage; multiple entries preserve ambiguity instead of guessing.
+// a retained title command-buffer or shader-state flush. The semantic comparer
+// requires exactly one module per active stage; multiple entries preserve
+// ambiguity instead of guessing.
 struct RhiShaderModuleEvidence
 {
     std::uint32_t guestAddress = 0;
