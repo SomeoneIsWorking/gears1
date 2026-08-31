@@ -135,3 +135,10 @@ vtable pointer to the block start, copies a 96-byte stack payload into `object+0
 the ring reservation. The callback is consequently rebuilt for each queued command, not a persistent
 owner of shader state. Its construction payload is the next evidence boundary; no copied field may
 become a semantic module binding until that stack payload's owner is identified.
+
+Reconstructing the producer at `0x82327CA4` identifies that payload's shape. It copies one companion
+word plus a 64-byte indexed record from its `r31` owner into the 96-byte local payload, invokes two
+methods on that owner, then either calls the serializer inline or creates the 112-byte ring callback.
+This is an ordered record-transport boundary, not proof that the record carries concrete shader
+modules. The next target is the `r31` record owner's identity and record semantics; the semantic
+stream remains intentionally unchanged.
