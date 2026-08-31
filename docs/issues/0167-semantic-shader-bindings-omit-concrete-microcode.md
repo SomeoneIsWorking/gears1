@@ -154,3 +154,7 @@ the first descriptor at `0x82131800` resolves to title entry `0x825A69A8`; the s
 `0x401107B0` resolves to `0x00100004`, outside title code. Only the first is currently a valid title
 RE target. The second requires ABI/descriptor evidence before it can be called a method or followed
 as title code.
+
+The first entry is a getter only: `0x825A69A8` returns its owner's `+0x88` word and performs no
+state mutation. It does not establish a shader binding or module source. The unresolved second
+descriptor remains the only owner-side operation that can still explain the record's preparation.
