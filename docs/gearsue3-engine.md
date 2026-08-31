@@ -176,7 +176,8 @@ does not yet orchestrate extraction, analysis, recompilation, or a playable
 module. The complete provisioner must perform this operation in a fresh,
 content-addressed directory:
 
-1. resolve explicit CLI, `.env`, or a narrowly named ignored drop-in image;
+1. resolve explicit CLI, `.env`, or a narrowly named ignored drop-in image/archive, materializing
+   exactly one bounded disc-image member when the input is a supported 7z archive;
 2. safely extract and fingerprint the executable and required content;
 3. select exactly one supported revision or refuse;
 4. analyze helpers and switch tables without stale output;

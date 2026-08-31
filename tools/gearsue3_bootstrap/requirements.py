@@ -26,26 +26,35 @@ def _linux_distribution(os_release: Path = Path("/etc/os-release")) -> str:
     return f"{values.get('ID', '')} {values.get('ID_LIKE', '')}".lower()
 
 
-def package_command(system: str | None = None, distribution: str | None = None) -> str:
+def package_command(
+    system: str | None = None,
+    distribution: str | None = None,
+    include_archive_tools: bool = False,
+) -> str:
     host = platform.system() if system is None else system
     distro = _linux_distribution() if distribution is None else distribution.lower()
     if host == "Darwin":
-        return "brew install cmake ninja pkg-config sdl3 molten-vk"
+        packages = "cmake ninja pkg-config sdl3 molten-vk"
+        return f"brew install {packages}{' sevenzip' if include_archive_tools else ''}"
     if host == "Windows":
-        return (
+        command = (
             "winget install Kitware.CMake Ninja-build.Ninja; then install the "
             "Desktop development with C++ workload, SDL3, and the Vulkan SDK"
         )
+        return f"{command}; also install 7-Zip (7zip.7zip)" if include_archive_tools else command
     if "fedora" in distro or "rhel" in distro or "centos" in distro:
-        return (
+        packages = (
             "sudo dnf install cmake ninja-build make pkgconf-pkg-config gcc gcc-c++ SDL3-devel "
             "vulkan-loader-devel vulkan-headers"
         )
+        return f"{packages} 7zip" if include_archive_tools else packages
     if "ubuntu" in distro or "debian" in distro:
-        return "sudo apt install cmake ninja-build make pkg-config gcc g++ libsdl3-dev libvulkan-dev"
+        packages = "sudo apt install cmake ninja-build make pkg-config gcc g++ libsdl3-dev libvulkan-dev"
+        return f"{packages} 7zip" if include_archive_tools else packages
+    archive_hint = ", and 7-Zip" if include_archive_tools else ""
     return (
         "install CMake, Ninja, a C++20 compiler, SDL3 development files, and "
-        "Vulkan headers/loader using your platform package manager"
+        f"Vulkan headers/loader{archive_hint} using your platform package manager"
     )
 
 
@@ -71,6 +80,18 @@ def require_commands(
         raise RequirementError(
             f"missing required host tool(s): {names}\nInstall them with:\n  {package_command()}"
         )
+
+
+def require_archive_command(
+    image: Path,
+    which: Callable[[str], str | None] = shutil.which,
+) -> None:
+    if image.suffix.lower() != ".7z" or which("7z") is not None:
+        return
+    raise RequirementError(
+        "missing required host tool(s): 7z\n"
+        f"Install it with:\n  {package_command(include_archive_tools=True)}"
+    )
 
 
 def product_dependency_hint() -> str:

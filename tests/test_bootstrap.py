@@ -104,6 +104,19 @@ class BootstrapTests(unittest.TestCase):
         self.assertIn("brew install", requirements.package_command("Darwin", ""))
         self.assertIn("winget install", requirements.package_command("Windows", ""))
 
+    def test_archive_tool_is_required_only_for_7z_inputs(self) -> None:
+        with self.assertRaisesRegex(requirements.RequirementError, "7z"):
+            requirements.require_archive_command(
+                self.root / "disc.7z", lambda name: None
+            )
+        requirements.require_archive_command(
+            self.root / "disc.iso", lambda name: None
+        )
+        self.assertIn(
+            "7zip",
+            requirements.package_command("Linux", "fedora", include_archive_tools=True),
+        )
+
     def test_dotenv_is_data_not_shell_and_process_values_win(self) -> None:
         env_file = self.root / ".env"
         env_file.write_text(

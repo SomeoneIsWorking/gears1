@@ -11,7 +11,7 @@ Resolution order is deliberate and strict:
 
 1. positional image path;
 2. ``GEARS_ISO`` from the process environment, then the repository ``.env``;
-3. exactly one supported image in the ignored ``roms/`` drop-in directory.
+3. exactly one supported image or 7z archive in the ignored ``roms/`` drop-in directory.
 
 A selected but missing higher-priority path is an error. It never falls back to
 a different image, because silently recompiling another title or revision would
@@ -33,7 +33,7 @@ from pathlib import Path
 
 ENV_IMAGE = "GEARS_ISO"
 DROP_IN_DIRECTORY = "roms"
-SUPPORTED_DROP_IN_SUFFIXES = frozenset({".img", ".iso", ".xgd", ".xiso"})
+SUPPORTED_DROP_IN_SUFFIXES = frozenset({".7z", ".img", ".iso", ".xgd", ".xiso"})
 HASH_CHUNK_SIZE = 1024 * 1024
 IDENTITY_SCHEMA = 1
 XEX_INSPECT_SCHEMA = 1
