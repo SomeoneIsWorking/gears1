@@ -108,3 +108,10 @@ consumed command fields as a concrete-module source for this selected recurrence
 out state owned above the callback or behind its parameter block, so neither snapshot may feed the
 semantic stream. The next discriminator belongs at the earlier producer that constructs this outer
 callback input, not at the serializer.
+
+The live return address resolves that earlier relationship: the immediate caller loads a callback
+object's vtable slot `+0x4` into CTR and dispatches indirectly to `0x82327E00`; it then calls the
+same object's vtable slot `+0x0` to advance the iterator. The serializer callback is consequently a
+dynamically selected method, not a direct static call site. The next grounded probe must attribute
+construction or vtable installation for that callback object, rather than keep walking the caller's
+linear control flow.
