@@ -229,24 +229,26 @@ PPC_FUNC(sub_8221CBA8)
     const uint32_t reservationRecord = ctx.r3.u32;
     const uint32_t reservationCaller = uint32_t(ctx.lr);
     const uint32_t reservationRecordOwner = ctx.r31.u32;
-    uint32_t recordVtable = 0;
-    uint32_t recordMethod0 = 0;
-    uint32_t recordMethod4 = 0;
-    uint32_t recordMethod0Entry = 0;
-    uint32_t recordMethod4Entry = 0;
+    uint32_t recordDispatchTable = 0;
+    uint32_t recordPrimaryDescriptor = 0;
+    uint32_t recordPrimaryTarget = 0;
+    uint32_t recordSecondaryTarget = 0;
     uint32_t recordBase = 0;
     uint32_t recordIndex = 0;
     uint32_t companionWord = 0;
     if (reservationCaller == kShaderCallbackReservationReturn && reservationRecordOwner != 0)
     {
-        recordVtable = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 4));
-        recordMethod0 = ByteSwap(*gears::Memory().Translate<uint32_t>(recordVtable));
-        recordMethod4 =
-            ByteSwap(*gears::Memory().Translate<uint32_t>(recordVtable + sizeof(uint32_t)));
-        if (recordMethod0 != 0)
-            recordMethod0Entry = ByteSwap(*gears::Memory().Translate<uint32_t>(recordMethod0));
-        if (recordMethod4 != 0)
-            recordMethod4Entry = ByteSwap(*gears::Memory().Translate<uint32_t>(recordMethod4));
+        recordDispatchTable =
+            ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 4));
+        recordPrimaryDescriptor =
+            ByteSwap(*gears::Memory().Translate<uint32_t>(recordDispatchTable));
+        if (recordPrimaryDescriptor != 0)
+        {
+            recordPrimaryTarget =
+                ByteSwap(*gears::Memory().Translate<uint32_t>(recordPrimaryDescriptor));
+            recordSecondaryTarget = ByteSwap(
+                *gears::Memory().Translate<uint32_t>(recordPrimaryDescriptor + sizeof(uint32_t)));
+        }
         recordBase = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0xC));
         recordIndex = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0x10));
         companionWord =
@@ -259,18 +261,18 @@ PPC_FUNC(sub_8221CBA8)
             ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecord + 4));
         const uint32_t bytes =
             ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecord + 8));
-        gears::titles::gears1::NoteRenderRingReservation({.start = start,
-                                                          .bytes = bytes,
-                                                          .caller = reservationCaller,
-                                                          .recordOwner = reservationRecordOwner,
-                                                          .recordVtable = recordVtable,
-                                                          .recordMethod0 = recordMethod0,
-                                                          .recordMethod4 = recordMethod4,
-                                                          .recordMethod0Entry = recordMethod0Entry,
-                                                          .recordMethod4Entry = recordMethod4Entry,
-                                                          .recordBase = recordBase,
-                                                          .recordIndex = recordIndex,
-                                                          .companionWord = companionWord});
+        gears::titles::gears1::NoteRenderRingReservation(
+            {.start = start,
+             .bytes = bytes,
+             .caller = reservationCaller,
+             .recordOwner = reservationRecordOwner,
+             .recordDispatchTable = recordDispatchTable,
+             .recordPrimaryDescriptor = recordPrimaryDescriptor,
+             .recordPrimaryTarget = recordPrimaryTarget,
+             .recordSecondaryTarget = recordSecondaryTarget,
+             .recordBase = recordBase,
+             .recordIndex = recordIndex,
+             .companionWord = companionWord});
     }
 }
 
@@ -746,15 +748,16 @@ void ReportRenderRingReservationForObject(uint32_t object)
         const RenderRingReservationProvenance &details = reservation->second;
         if (object >= start && uint64_t(object) - start < details.bytes)
         {
-            lucent::info("ring",
-                         "selected shader callback object {:#x} is +{:#x} in a {}-byte"
-                         " render-ring reservation from caller {:#x}; record owner r31={:#x},"
-                         " vtable={:#x} (+0={:#x}->{:#x}, +4={:#x}->{:#x}),"
-                         " record {:#x}[{}], companion={:#x}",
-                         object, object - start, details.bytes, details.caller, details.recordOwner,
-                         details.recordVtable, details.recordMethod0, details.recordMethod0Entry,
-                         details.recordMethod4, details.recordMethod4Entry, details.recordBase,
-                         details.recordIndex, details.companionWord);
+            lucent::info(
+                "ring",
+                "selected shader callback object {:#x} is +{:#x} in a {}-byte"
+                " render-ring reservation from caller {:#x}; record owner r31={:#x},"
+                " dispatch table={:#x}, primary descriptor={:#x}, targets +0={:#x} +4={:#x},"
+                " record {:#x}[{}], companion={:#x}",
+                object, object - start, details.bytes, details.caller, details.recordOwner,
+                details.recordDispatchTable, details.recordPrimaryDescriptor,
+                details.recordPrimaryTarget, details.recordSecondaryTarget, details.recordBase,
+                details.recordIndex, details.companionWord);
             return;
         }
     }

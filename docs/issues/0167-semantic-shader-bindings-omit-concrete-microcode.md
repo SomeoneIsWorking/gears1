@@ -149,12 +149,10 @@ is `0x4AEFE600` at index three (source record `0x4AEFE680`), and its companion w
 These are source locations for the copied payload, not shader-module identities. The two methods
 invoked through that table are the next ground-truth target.
 
-The table stores function descriptors rather than direct code addresses. In the later selected run,
-the first descriptor at `0x82131800` resolves to title entry `0x825A69A8`; the second descriptor at
-`0x401107B0` resolves to `0x00100004`, outside title code. Only the first is currently a valid title
-RE target. The second requires ABI/descriptor evidence before it can be called a method or followed
-as title code.
-
-The first entry is a getter only: `0x825A69A8` returns its owner's `+0x88` word and performs no
-state mutation. It does not establish a shader binding or module source. The unresolved second
-descriptor remains the only owner-side operation that can still explain the record's preparation.
+The initial provenance report misread the second operation: it read the next word of the owner's
+dispatch-table pointer, while the producer dereferences the first pointer and then reads its `+4`
+word. The revised selected capture resolves those actual targets to `0x825A69A8` and `0x825A69B0`.
+Both are read-only getters: they return the owner's `+0x88` and `+0x8C` words, respectively. Thus
+neither operation prepares the record or materializes shader modules. The next evidence boundary is
+the values returned by those getters and their positions in the copied payload; the semantic stream
+remains unchanged.
