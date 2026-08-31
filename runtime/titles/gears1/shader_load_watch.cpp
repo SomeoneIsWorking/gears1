@@ -39,9 +39,17 @@ PPC_FUNC(sub_8254F2B0)
 
 PPC_FUNC(sub_8254CFA0)
 {
-    if (!gears::ShaderLoadPacketWatchEnabled()) [[likely]]
+    const bool shaderPacketWatch = gears::ShaderLoadPacketWatchEnabled();
+    const bool pixelObjectWatch = gears::titles::gears1::RhiPixelShaderObjectWatchEnabled();
+    if (!(shaderPacketWatch || pixelObjectWatch)) [[likely]]
     {
         __imp__sub_8254CFA0(ctx, base);
+        return;
+    }
+    if (!shaderPacketWatch)
+    {
+        __imp__sub_8254CFA0(ctx, base);
+        gears::titles::gears1::ReportRhiPixelShaderObjectWriteWatch();
         return;
     }
     const std::uint64_t copySequence = gears::ShaderLoadPacketCopySequence();
