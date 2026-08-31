@@ -222,3 +222,11 @@ the required ordering barriers. This is a command-stream transport boundary, not
 payload word names a shader object or microcode. The next ground-truth target is the command record
 that selected this `0x82000000` operation and its upstream producer; the semantic stream remains
 unchanged.
+
+The command-list writer path is now statically tied to that transport. `0x82220B40` stores a record
+as `[translated-record-address, 0x82000000 | size-dwords, buffer-address, 0xC0000000]`, and
+`0x822218C0` either appends that record or calls the ring writer directly. The interpreter at
+`0x8223B200` consumes the `0x82000000` form, passing its low 24-bit size and following address to
+`0x822212D8`. For the selected load, the observed parent therefore represents a 189-dword submission
+to indirect buffer `0x7F740`; this closes the ring-packet construction question without identifying
+shader state. The remaining target is the title-side producer that supplies that command record.
