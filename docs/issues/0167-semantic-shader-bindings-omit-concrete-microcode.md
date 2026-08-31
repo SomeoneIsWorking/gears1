@@ -201,3 +201,9 @@ then no selected flush or complete generic-copy packet between the marker and co
 execution. Since static references limit that flush to the four normal draw wrappers, the selected
 replacement module is outside that normal draw-flush family. The next attribution target is a separate
 queued producer; do not retry these two ruled-out seams or infer semantic shader state from PM4.
+
+The selected-load watch now retains PM4 parent provenance through indirect execution. The same bounded
+capture located the inline module in indirect buffer `0x7F740` at dword 189, submitted by the depth-zero
+ring packet at dword 3472. This identifies the queued transport boundary that must be correlated with
+the title's ring producer; it still does not identify the producer's shader state or authorize a
+semantic update.

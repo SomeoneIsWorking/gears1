@@ -155,7 +155,9 @@ bool ShaderLoadPacketTransitionWatchEnabled()
 }
 
 void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packetGuestAddress,
-                                  bool immediate, std::uint32_t completedSwapSequence)
+                                  bool immediate, std::uint32_t completedSwapSequence,
+                                  std::uint32_t sourceBase, std::uint32_t sourceIndex,
+                                  std::uint32_t submissionBase, std::uint32_t submissionIndex)
 {
     const std::optional<std::uint64_t> &configured = ConfiguredShaderLoadWatchHash();
     const std::optional<std::uint32_t> &afterSwap = ConfiguredShaderLoadWatchAfterSwap();
@@ -193,6 +195,10 @@ void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packet
             "shader-load packet watch selected {} shader {:#018x} at guest {:#x} after swap {}",
             immediate ? "inline" : "memory-backed", shaderHash, packetGuestAddress,
             completedSwapSequence);
+        lucent::info("hle",
+                     "shader-load selected packet source {:#x}+{} dword(s), submitted by "
+                     "{:#x}+{} dword(s)",
+                     sourceBase, sourceIndex, submissionBase, submissionIndex);
     }
     if (ReportGuestWriteWatch(GuestWriteWatchOwner::kShaderLoadPacket, false))
         g_state.writeReported.store(true, std::memory_order_release);
