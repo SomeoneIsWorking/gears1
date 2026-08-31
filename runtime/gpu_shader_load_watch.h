@@ -23,6 +23,8 @@ void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
 [[nodiscard]] std::uint64_t ShaderLoadPacketCopySequence();
 void ReportShaderLoadPacketProducerReturn(std::uint32_t caller, std::uint32_t stackPointer);
 void ReportShaderLoadPacketProducerParent(std::uint64_t copySequence, std::uint32_t caller,
-                                          std::array<std::uint32_t, 6> arguments);
+                                          std::array<std::uint32_t, 6> arguments,
+                                          std::array<std::uint32_t, 2> shaderObjectsBefore,
+                                          std::array<std::uint32_t, 2> shaderObjectsAfter);
 
 } // namespace gears

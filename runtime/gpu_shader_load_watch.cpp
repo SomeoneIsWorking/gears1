@@ -130,15 +130,19 @@ void ReportShaderLoadPacketProducerReturn(std::uint32_t caller, std::uint32_t st
 }
 
 void ReportShaderLoadPacketProducerParent(std::uint64_t copySequence, std::uint32_t caller,
-                                          std::array<std::uint32_t, 6> arguments)
+                                          std::array<std::uint32_t, 6> arguments,
+                                          std::array<std::uint32_t, 2> shaderObjectsBefore,
+                                          std::array<std::uint32_t, 2> shaderObjectsAfter)
 {
     if (copySequence == g_copySequence)
         return;
     lucent::info("hle",
                  "shader-load packet reached enclosing retained routine from caller {:#x}; "
-                 "integer arguments {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}",
+                 "integer arguments {:#x} {:#x} {:#x} {:#x} {:#x} {:#x}; "
+                 "device shaders pixel {:#x}->{:#x}, vertex {:#x}->{:#x}",
                  caller, arguments[0], arguments[1], arguments[2], arguments[3], arguments[4],
-                 arguments[5]);
+                 arguments[5], shaderObjectsBefore[0], shaderObjectsAfter[0],
+                 shaderObjectsBefore[1], shaderObjectsAfter[1]);
 }
 
 } // namespace gears
