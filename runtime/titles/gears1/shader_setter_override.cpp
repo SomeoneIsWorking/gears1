@@ -4,6 +4,7 @@
 #include "rhi_semantic_stream.h"
 #include "rhi_texture_descriptor_watch.h"
 #include "shader_binding_capture.h"
+#include "rhi_shader_object_watch.h"
 #include "shader_setter_state.h"
 
 #include <algorithm>
@@ -263,10 +264,13 @@ PPC_FUNC(sub_82222808)
     const std::uint32_t device = ctx.r3.u32;
     const std::uint32_t shader = ctx.r4.u32;
     gears::titles::gears1::PauseRhiTextureDescriptorWriteWatch();
+    gears::titles::gears1::PauseRhiPixelShaderObjectWriteWatch();
     ExecuteShaderSetter(ctx, base, ShaderStage::Pixel, __imp__sub_82222808);
     if (gears::RhiSemanticObservationEnabled())
         ObserveShaderBinding(ShaderStage::Pixel, device, shader);
     gears::titles::gears1::ResumeRhiTextureDescriptorWriteWatch();
+    gears::titles::gears1::ResumeRhiPixelShaderObjectWriteWatch();
+    gears::titles::gears1::MaybeArmRhiPixelShaderObjectWriteWatch(device, shader);
 }
 
 extern "C" PPC_FUNC(__imp__sub_82222B98);

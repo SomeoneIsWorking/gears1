@@ -2,6 +2,7 @@
 #include "guest_state_memory.h"
 #include "import_stub.h"
 #include "shader_setter_state.h"
+#include "rhi_shader_object_watch.h"
 
 #include <array>
 #include <cstdint>
@@ -12,7 +13,8 @@ extern "C" PPC_FUNC(__imp__sub_8254F2B0);
 
 PPC_FUNC(sub_828D2930)
 {
-    if (!gears::ShaderLoadPacketWatchEnabled()) [[likely]]
+    if (!(gears::ShaderLoadPacketWatchEnabled() ||
+          gears::titles::gears1::RhiPixelShaderObjectWatchEnabled())) [[likely]]
     {
         __imp__sub_828D2930(ctx, base);
         return;
@@ -23,7 +25,8 @@ PPC_FUNC(sub_828D2930)
 
 PPC_FUNC(sub_8254F2B0)
 {
-    if (!gears::ShaderLoadPacketWatchEnabled()) [[likely]]
+    if (!(gears::ShaderLoadPacketWatchEnabled() ||
+          gears::titles::gears1::RhiPixelShaderObjectWatchEnabled())) [[likely]]
     {
         __imp__sub_8254F2B0(ctx, base);
         return;
@@ -62,4 +65,5 @@ PPC_FUNC(sub_8254CFA0)
     };
     gears::ReportShaderLoadPacketProducerParent(copySequence, caller, arguments,
                                                 shaderObjectsBefore, shaderObjectsAfter);
+    gears::titles::gears1::ReportRhiPixelShaderObjectWriteWatch();
 }

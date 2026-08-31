@@ -13,6 +13,7 @@ enum class GuestWriteWatchOwner : uint8_t
     kShaderLoadPacket,
     kRhiTargetDescriptor,
     kRhiTextureDescriptor,
+    kRhiPixelShaderObject,
     kRhiVertexStreamReset,
 };
 
@@ -53,8 +54,9 @@ constexpr uintptr_t GuestWriteWatchImageAddress(uintptr_t instruction, uintptr_t
 bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
                         uint64_t targetSampleLimit);
 
-// Temporarily opens the watched pages for an owner-known write, preserving all
-// samples already captured. Resume refuses after the sample limit was reached.
+// Ignores exact-target writes made by the calling thread while keeping every
+// watched page protected. This prevents a known setter on one guest thread
+// from creating an unprotected interval for unrelated guest threads.
 bool PauseGuestWriteWatch(GuestWriteWatchOwner owner);
 bool ResumeGuestWriteWatch(GuestWriteWatchOwner owner);
 
