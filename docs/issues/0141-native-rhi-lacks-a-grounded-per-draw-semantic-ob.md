@@ -423,11 +423,11 @@ the remaining failure is an ordered semantic-publication gap. The next discrimin
 the retained title command path that issues the PM4 replacement after the zero-object setter marker;
 do not copy PM4 evidence back into semantic state, because that would hide the missing title boundary.
 
-### Note (2026-08-31) — grounded viewport/scissor setter
+### Note (2026-08-31) — viewport candidate requires a clean database
 
-The existing Ghidra database identifies `0x8222ABF8` as the retained viewport setter. It consumes
-six words (x, y, width, height, near, far), clamps the rectangle to the active render dimensions,
-stores the resulting viewport state in the title render-state object, and calls `0x8222AB30`.
-That helper writes the packed scissor bounds and emits the associated register update. This is a
-grounded candidate for the next semantic input owner; no wrapper or native execution arm is enabled
-until its live call frequency and post-call state are captured.
+A first lookup decompiled `0x8222ABF8` as a six-word viewport update calling `0x8222AB30`, whose
+body writes packed scissor bounds. That result is not sufficient evidence for an implementation:
+the existing Ghidra database intentionally replaces the save/restore-helper range containing
+`0x828D2810` with `blr`, so the state-object return path is unavailable. The viewport setter remains
+an unimplemented candidate until a clean or raw-disassembly-backed analysis establishes its object
+provenance and live call frequency.
