@@ -115,3 +115,9 @@ same object's vtable slot `+0x0` to advance the iterator. The serializer callbac
 dynamically selected method, not a direct static call site. The next grounded probe must attribute
 construction or vtable installation for that callback object, rather than keep walking the caller's
 linear control flow.
+
+The selected recurrence identifies that callback vtable as `0x820E40B8`. The static Ghidra image has
+zero words at that address and no code references to it, so it cannot identify the table's owner or
+constructor. This is a static-analysis limit, not evidence that the table is absent at runtime. The
+next discriminator must attribute the runtime construction or installation of that table/object;
+further static caller walking cannot establish the missing ownership.

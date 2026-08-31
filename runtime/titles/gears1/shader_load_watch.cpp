@@ -81,10 +81,14 @@ PPC_FUNC(sub_82327E00)
     const gears::titles::gears1::GuestStateMemory memory(base);
     // The retained callback reads these fields to construct the serializer's
     // register arguments. They remain diagnostic evidence, not semantic state.
+    const std::uint32_t callbackVtable = memory.Read32(ctx.r3.u32);
     const auto fieldsBefore = ReadShaderLoadFields(memory, ctx.r3.u32, kOuterCallbackFieldOffsets);
     __imp__sub_82327E00(ctx, base);
     if (copySequence != gears::ShaderLoadPacketCopySequence())
+    {
+        lucent::info("hle", "shader-load outer callback vtable {:#x}", callbackVtable);
         ReportShaderLoadFields("outer callback +10/+20/+60/+64/+68", fieldsBefore, fieldsBefore);
+    }
 }
 
 PPC_FUNC(sub_8254CFA0)
