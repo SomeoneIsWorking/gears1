@@ -168,3 +168,10 @@ sixteen words is a guest object, title-code, or physical-memory pointer. This cl
 `0x82327CA4` callback-producer path as a source of concrete shader microcode identity. The next
 boundary is the separate semantic setter path that first observes the missing pixel object at the
 scene transition.
+
+A current semantic/PM4 transition run falsifies the packet-address callback as that boundary. The
+watch selected the inline packet's reusable guest address at startup, but the later callback copy
+occurred only after the scene transition had already accumulated 130 missing semantic pixel draws.
+That copy proves command-buffer reuse, not the initial replacement-module producer. Future packet
+attribution must select a PM4 load by its executing frame/occurrence, rather than retain one watched
+guest packet address across frame boundaries.
