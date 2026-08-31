@@ -164,6 +164,8 @@ void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packet
     if (ShaderLoadPacketTransitionWatchEnabled() &&
         g_state.transitionMarkerArmed.exchange(false, std::memory_order_acq_rel))
     {
+        if (!afterSwap)
+            return;
         bool expected = false;
         if (g_state.transitionReported.compare_exchange_strong(expected, true,
                                                                std::memory_order_acq_rel))
@@ -171,7 +173,7 @@ void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packet
             lucent::error(
                 "hle",
                 "shader-load zero-marker transition after guest swap {} reached its selected PM4"
-                " load without a matching complete generic-copy packet",
+                " load without a matching complete generic-copy packet or retained shader flush",
                 *afterSwap);
         }
     }
@@ -224,8 +226,10 @@ void ArmShaderLoadPacketTransitionFromZeroMarker()
         return;
     }
 
-    const std::uint32_t afterSwap = *ConfiguredShaderLoadWatchAfterSwap();
-    if (g_state.guestSwapSequence.load(std::memory_order_acquire) != afterSwap)
+    const std::optional<std::uint32_t> &afterSwap = ConfiguredShaderLoadWatchAfterSwap();
+    if (!afterSwap)
+        return;
+    if (g_state.guestSwapSequence.load(std::memory_order_acquire) != *afterSwap)
         return;
 
     bool expected = false;
@@ -233,7 +237,27 @@ void ArmShaderLoadPacketTransitionFromZeroMarker()
                                                               std::memory_order_acq_rel))
     {
         lucent::info("hle", "shader-load zero-marker transition armed after guest swap {}",
-                     afterSwap);
+                     *afterSwap);
+    }
+}
+
+void ObserveShaderLoadPacketTransitionFlush(std::uint64_t shaderHash)
+{
+    const std::optional<std::uint64_t> &configured = ConfiguredShaderLoadWatchHash();
+    if (!configured || *configured != shaderHash || !ShaderLoadPacketTransitionWatchEnabled() ||
+        !g_state.transitionMarkerArmed.exchange(false, std::memory_order_acq_rel))
+    {
+        return;
+    }
+
+    bool expected = false;
+    if (g_state.transitionReported.compare_exchange_strong(expected, true,
+                                                           std::memory_order_acq_rel))
+    {
+        lucent::info("hle",
+                     "shader-load zero-marker transition emitted selected shader {:#018x}"
+                     " through the retained shader flush",
+                     shaderHash);
     }
 }
 
@@ -252,7 +276,10 @@ void ObserveShaderLoadPacketTransitionCopy(std::uint8_t *guestMemory, std::uint3
     if (!evidence.complete)
         return;
 
-    const std::uint64_t shaderHash = *ConfiguredShaderLoadWatchHash();
+    const std::optional<std::uint64_t> &configured = ConfiguredShaderLoadWatchHash();
+    if (!configured)
+        return;
+    const std::uint64_t shaderHash = *configured;
     for (const RhiShaderLoadPacketEvidence &load : evidence.loads)
     {
         if (!IsSelectedTransitionLoad(load, guestMemory, shaderHash))

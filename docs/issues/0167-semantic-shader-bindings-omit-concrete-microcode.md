@@ -188,3 +188,9 @@ load without any complete matching packet in post-marker copies through retained
 `0x828D2930`. The helper is therefore not the replacement module's post-marker writer. This is a
 negative about that generic-copy boundary only: the writer is direct, uses another copy path, or
 precedes the zero marker; it does not authorize retaining a prior module or changing semantic state.
+
+The same marker window also ran through the retained shader-flush capture, which is the only
+statically referenced flush callee of the four normal draw wrappers. It did not emit the selected
+module before the command processor reached it. The replacement is therefore not a post-marker
+emission through either grounded production seam. The next probe must distinguish an earlier queued
+write from a different producer; adding the PM4 result to semantic state remains prohibited.

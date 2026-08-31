@@ -29,6 +29,7 @@ void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
 // selected module, which can occur after the next guest VdSwap.
 void NoteShaderLoadWatchGuestSwap(std::uint32_t guestSwapSequence);
 void ArmShaderLoadPacketTransitionFromZeroMarker();
+void ObserveShaderLoadPacketTransitionFlush(std::uint64_t shaderHash);
 void ObserveShaderLoadPacketTransitionCopy(std::uint8_t *guestMemory, std::uint32_t destination,
                                            std::uint32_t bytes, std::uint32_t caller);
 [[nodiscard]] std::uint64_t ShaderLoadPacketCopySequence();
