@@ -3,6 +3,8 @@
 #include "guest_write_watch.h"
 #include "shader_setter_state.h"
 
+#include <atomic>
+
 #include <lucent/config.h>
 #include <lucent/log.h>
 
@@ -12,6 +14,7 @@ namespace
 {
 
 thread_local std::uint32_t g_knownSetterDepth = 0;
+std::atomic<bool> g_reportedEmptySelectedPacket{false};
 
 [[nodiscard]] bool Enabled()
 {
@@ -55,11 +58,18 @@ void MaybeArmRhiPixelShaderObjectWriteWatch(std::uint32_t device, std::uint32_t 
     if (!Enabled() || !RhiPixelShaderObjectWatchMayArm(g_knownSetterDepth, shaderObject) ||
         device == 0)
         return;
-    // A prior unknown write has already disarmed the one-shot watch. The next
-    // semantic clear is the earliest ordering boundary that can publish that
-    // result without depending on an unrelated packet serializer to run again.
-    (void)ReportGuestWriteWatch(GuestWriteWatchOwner::kRhiPixelShaderObject, false);
+    const GuestWriteWatchStats stats =
+        CurrentGuestWriteWatchStats(GuestWriteWatchOwner::kRhiPixelShaderObject);
+    if (stats.aliasPages != 0)
+    {
+        // A prior unknown write has already disarmed the one-shot watch. The next
+        // semantic clear is the earliest ordering boundary that can publish that
+        // result without depending on an unrelated packet serializer to run again.
+        (void)ReportGuestWriteWatch(GuestWriteWatchOwner::kRhiPixelShaderObject, false);
+        return;
+    }
     const std::uint32_t offset = ShaderSetterSpecFor(ShaderStage::Pixel).deviceShaderOffset;
+    g_reportedEmptySelectedPacket.store(false, std::memory_order_release);
     (void)ArmGuestWriteWatch(GuestWriteWatchOwner::kRhiPixelShaderObject, device + offset, 1);
 }
 
@@ -71,8 +81,9 @@ void ReportRhiPixelShaderObjectWriteWatch()
         CurrentGuestWriteWatchStats(GuestWriteWatchOwner::kRhiPixelShaderObject);
     if (stats.armed && stats.targetWrites == 0)
     {
-        lucent::info("hle",
-                     "RHI pixel-shader object watch saw no unknown write before selected packet");
+        if (!g_reportedEmptySelectedPacket.exchange(true, std::memory_order_acq_rel))
+            lucent::info("hle", "RHI pixel-shader object watch saw no unknown write before its "
+                                "first selected packet");
         return;
     }
     (void)ReportGuestWriteWatch(GuestWriteWatchOwner::kRhiPixelShaderObject, false);

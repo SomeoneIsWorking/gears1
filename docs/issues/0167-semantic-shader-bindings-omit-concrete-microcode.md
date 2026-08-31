@@ -73,6 +73,10 @@ An opt-in pixel-object write watch now arms on `device+0x3080` immediately after
 zero-object pixel setter, while ignoring that known setter only on its calling thread. The first
 implementation globally unprotected the watched page during known setters and faulted on unrelated
 vblank state sharing guest page `0x4015e000`; the corrected thread-local scope kept the page
-protected and completed a bounded 45-second headless run through 1,051 frames after arming.
-That run captured no target write, so it neither identifies an earlier unmodeled writer nor proves
-frame ordering is the cause. It is solely a safe discriminator for the next route that reaches one.
+protected. Its selected packet reporter originally remained gated behind the independent packet
+watch, so an object-watch-only run could not demonstrate that this serializer had run. It now runs
+for either watch and emits a single explicit negative per arm. A bounded 25-second launcher run
+reached frame 692, armed once at `0x4015e100`, reached the selected packet, emitted exactly one
+no-unknown-writer result, and captured no target write. This falsifies a slot change before that
+serializer edge only; it neither identifies an earlier unmodeled writer nor proves frame ordering
+is the cause.
