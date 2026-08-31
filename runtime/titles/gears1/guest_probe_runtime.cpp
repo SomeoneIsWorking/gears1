@@ -252,9 +252,9 @@ PPC_FUNC(sub_8221CBA8)
                 *gears::Memory().Translate<uint32_t>(recordPrimaryDescriptor + sizeof(uint32_t)));
         }
         recordPrimaryValue =
-            ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0x88));
+            ByteSwap(*gears::Memory().Translate<uint32_t>(recordDispatchTable + 0x88));
         recordSecondaryValue =
-            ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0x8C));
+            ByteSwap(*gears::Memory().Translate<uint32_t>(recordDispatchTable + 0x8C));
         recordBase = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0xC));
         recordIndex = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0x10));
         companionWord =

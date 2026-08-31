@@ -152,12 +152,13 @@ invoked through that table are the next ground-truth target.
 The initial provenance report misread the second operation: it read the next word of the owner's
 dispatch-table pointer, while the producer dereferences the first pointer and then reads its `+4`
 word. The revised selected capture resolves those actual targets to `0x825A69A8` and `0x825A69B0`.
-Both are read-only getters: they return the owner's `+0x88` and `+0x8C` words, respectively. Thus
+Both are read-only getters: they return their receiver's `+0x88` and `+0x8C` words, respectively. Thus
 neither operation prepares the record or materializes shader modules. The next evidence boundary is
 the values returned by those getters and their positions in the copied payload; the semantic stream
 remains unchanged.
 
-The selected capture records `0x8218C5EC` from the first getter and zero from the second. The
-nonzero value is an aligned title-code entry whose body immediately returns; it performs no state
-change and is not shader materialization. These getter fields therefore close as inert payload values.
-The remaining candidate for concrete shader state is the copied 64-byte indexed record itself.
+The producer passes the pointer loaded from `r31+4` as the getter receiver, rather than `r31` itself.
+Its two getter values are therefore receiver `+0x88/+0x8C`, copied into callback `+0x60/+0x64`.
+The selected callback already records those fields as `0x500` and `0x2D0`: scalar values, not guest
+object or code pointers. The getters are consequently not a shader-module source. The copied 64-byte
+indexed record remains the relevant evidence boundary.
