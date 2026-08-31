@@ -223,9 +223,12 @@ Strict title identity, bounded GDF extraction, ignored content-addressed title s
 distribution gates now compose through the shipping `./run.sh` path. It accepts one user-owned image,
 refuses missing/unknown input before build work, generates the local title module under
 `scratch/titles/<disc-sha256>/`, and builds the product under `build/titles/`; its focused synthetic
-tests cover the complete provisioning order and a Clang combined gate passed 101/101 checks.
+tests cover the complete provisioning order and a Clang combined gate passed 101/101 checks. A real
+user-owned Gears 1 XGD ISO then completed `./run.sh --headless --prepare`, verifying 1,810 extracted
+files, the generated module, and the Clang product build; a subsequent bounded headless launch
+selected the exact generated profile and produced retained-runtime frames without opening a window.
 
-Gap: This workspace has no user-owned disc available for an end-to-end cold headless launch, and only
-the exact Gears 1 profile is implemented. The shipping path and its fail-closed boundaries are
-synthetically verified, but real-disc and additional-title conformance remain outstanding. See
-`docs/re-frontier.md` (`rom-only-provisioning`).
+Gap: Only the exact Gears 1 profile is implemented. Gears 2 and Gears 3 are present as compressed
+user-owned archives but have no supported profile or provisioned module yet; Judgment is not present.
+Additional-title conformance remains outstanding. See `docs/re-frontier.md`
+(`rom-only-provisioning`).
