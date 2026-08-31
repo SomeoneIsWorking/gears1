@@ -1,5 +1,12 @@
 # Project state
 
+## Comparison baseline
+
+The baseline is the unmodified Xbox 360 release of *Gears of War* running on original hardware or
+through Xenia, with its Xenos command stream, console services, and title-controlled 30 Hz rendering.
+GearsUE3 intends a shared native PC engine for the series, with native semantic subsystems, exact
+retained/native comparison, uncapped presentation, and user-owned-disc provisioning.
+
 This ledger records independently observable capability coverage. Goals define why GearsUE3
 exists, issues record atomic work, and the codemap records ownership; neither substitutes for this
 done/partial/missing inventory.
