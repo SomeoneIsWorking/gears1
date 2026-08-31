@@ -58,3 +58,8 @@ The retained routine's selected-call ABI capture now confirms that the packet re
 a shader object or device state, so the observation establishes the callback handoff only. The next
 discriminator must prove an argument's object identity before reading or publishing any of its fields
 as semantic shader state.
+
+Cross-reference against the independently verified device-reset adapter identifies the fourth captured
+argument as the Gears 1 D3D-device global. The next diagnostic may therefore read that device's
+post-call shader-object fields, but must still demonstrate a concrete module relationship before it
+publishes a semantic binding.
