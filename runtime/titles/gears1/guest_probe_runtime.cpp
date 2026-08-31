@@ -233,6 +233,8 @@ PPC_FUNC(sub_8221CBA8)
     uint32_t recordPrimaryDescriptor = 0;
     uint32_t recordPrimaryTarget = 0;
     uint32_t recordSecondaryTarget = 0;
+    uint32_t recordPrimaryValue = 0;
+    uint32_t recordSecondaryValue = 0;
     uint32_t recordBase = 0;
     uint32_t recordIndex = 0;
     uint32_t companionWord = 0;
@@ -249,6 +251,10 @@ PPC_FUNC(sub_8221CBA8)
             recordSecondaryTarget = ByteSwap(
                 *gears::Memory().Translate<uint32_t>(recordPrimaryDescriptor + sizeof(uint32_t)));
         }
+        recordPrimaryValue =
+            ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0x88));
+        recordSecondaryValue =
+            ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0x8C));
         recordBase = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0xC));
         recordIndex = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0x10));
         companionWord =
@@ -270,6 +276,8 @@ PPC_FUNC(sub_8221CBA8)
              .recordPrimaryDescriptor = recordPrimaryDescriptor,
              .recordPrimaryTarget = recordPrimaryTarget,
              .recordSecondaryTarget = recordSecondaryTarget,
+             .recordPrimaryValue = recordPrimaryValue,
+             .recordSecondaryValue = recordSecondaryValue,
              .recordBase = recordBase,
              .recordIndex = recordIndex,
              .companionWord = companionWord});
@@ -753,10 +761,12 @@ void ReportRenderRingReservationForObject(uint32_t object)
                 "selected shader callback object {:#x} is +{:#x} in a {}-byte"
                 " render-ring reservation from caller {:#x}; record owner r31={:#x},"
                 " dispatch table={:#x}, primary descriptor={:#x}, targets +0={:#x} +4={:#x},"
+                " values +0={:#x} +4={:#x},"
                 " record {:#x}[{}], companion={:#x}",
                 object, object - start, details.bytes, details.caller, details.recordOwner,
                 details.recordDispatchTable, details.recordPrimaryDescriptor,
-                details.recordPrimaryTarget, details.recordSecondaryTarget, details.recordBase,
+                details.recordPrimaryTarget, details.recordSecondaryTarget,
+                details.recordPrimaryValue, details.recordSecondaryValue, details.recordBase,
                 details.recordIndex, details.companionWord);
             return;
         }

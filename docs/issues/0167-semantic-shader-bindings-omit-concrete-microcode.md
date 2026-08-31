@@ -156,3 +156,8 @@ Both are read-only getters: they return the owner's `+0x88` and `+0x8C` words, r
 neither operation prepares the record or materializes shader modules. The next evidence boundary is
 the values returned by those getters and their positions in the copied payload; the semantic stream
 remains unchanged.
+
+The selected capture records `0x8218C5EC` from the first getter and zero from the second. The
+nonzero value is an aligned title-code entry whose body immediately returns; it performs no state
+change and is not shader materialization. These getter fields therefore close as inert payload values.
+The remaining candidate for concrete shader state is the copied 64-byte indexed record itself.
