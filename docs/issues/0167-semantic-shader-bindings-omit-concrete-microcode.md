@@ -227,9 +227,9 @@ The command-list writer path is now statically tied to that transport. `0x82220B
 as `[translated-record-address, 0x82000000 | size-dwords, buffer-address, 0xC0000000]`, and
 `0x822218C0` either appends that record or calls the ring writer directly. The interpreter at
 `0x8223B200` consumes the `0x82000000` form, passing its low 24-bit size and following address to
-`0x822212D8`. For the selected load, the observed parent therefore represents a 189-dword submission
-to indirect buffer `0x7F740`; this closes the ring-packet construction question without identifying
-shader state. The remaining target is the title-side producer that supplies that command record.
+`0x822212D8`. The selected load is dword 189 within an observed 3327-dword submission to indirect
+buffer `0x7F740`; this closes the ring-packet construction question without identifying shader state.
+The remaining target is the title-side producer that supplies that command record.
 
 The existing HLE census, enabled only for one bounded headless run, reports the normal submission
 helper's callers as `0x82221858` and `0x822219F8` (about 1,049 each in the final frame), with replay
@@ -239,3 +239,11 @@ and dword count to `0x822218C0`; `0x82221640` only seeds the fixed command-buffe
 returns the next cursor. These are producer boundaries, not shader-state evidence. The next probe
 must correlate the specific `0x82221720` flush whose command end is `0x7F740` rather than attributing
 the selected module to every normal submission.
+
+The optional ring-index watch then correlated the selected write itself: exactly one target write
+occurred inside `0x822212D8`, whose payload was 3327 dwords at guest address `0x7F740`, with return
+address `0x82221970`. That return address is the direct-call site inside `0x822218C0`, so the selected
+packet used its direct submission arm rather than the replay interpreter callsite `0x8223B304`. The
+general `0x82220B40` command-record path remains valid for other submissions but was not the selected
+writer here. The higher-level flush to correlate next is `0x82221720`, not another shader-flush or
+interpreter attribution.
