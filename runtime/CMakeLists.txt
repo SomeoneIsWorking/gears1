@@ -239,6 +239,8 @@ add_executable(gears1
     titles/gears1/rhi_texture_descriptor_watch.cpp
     titles/gears1/rhi_vertex_buffer.cpp
     titles/gears1/rhi_vertex_stream_watch.cpp
+    titles/gears1/shader_binding_capture.cpp
+    titles/gears1/shader_flush_capture.cpp
     titles/gears1/shader_setter_override.cpp
     guest_write_watch.cpp
     gpu_register_watch.cpp

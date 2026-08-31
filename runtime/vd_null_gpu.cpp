@@ -50,6 +50,7 @@
 #include "guest_thread.h"
 #include "wait_probe.h"
 #include "fault_report.h"
+#include "fnv1a.h"
 #include "guest_memory.h"
 
 PPC_EXTERN_FUNC(__imp__XGetVideoMode);
@@ -314,24 +315,13 @@ struct ShaderCaptureState
     uint64_t activePixelHash = 0;  // last pixel ucode bound
 } g_shaderCapture;
 
-uint64_t Fnv1a64(const uint8_t *p, size_t n)
-{
-    uint64_t h = 0xCBF29CE484222325ull;
-    for (size_t i = 0; i < n; ++i)
-    {
-        h ^= p[i];
-        h *= 0x100000001B3ull;
-    }
-    return h;
-}
-
 // `ucode` holds the microcode as big-endian bytes, exactly as the GPU reads it,
 // which is also what tools/xenos_translate consumes (std::endian::big).
 void RecordBoundShader(uint32_t type, uint32_t address, bool immediate,
                        const std::vector<uint8_t> &ucode)
 {
     auto &cap = g_shaderCapture;
-    const uint64_t hash = Fnv1a64(ucode.data(), ucode.size());
+    const uint64_t hash = gears::Fnv1a64(ucode);
     (type == 0 ? cap.activeVertexHash : cap.activePixelHash) = hash;
     auto it = cap.shaders.find(hash);
     if (it != cap.shaders.end())

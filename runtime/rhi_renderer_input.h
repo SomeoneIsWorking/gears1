@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <vector>
 
@@ -33,6 +34,8 @@ struct RhiRendererDrawInput
     bool indexIs32 = false;
     std::uint32_t indexEndian = 0;
     std::uint32_t indexGuestBase = 0;
+    std::uint64_t vertexShaderHash = 0;
+    std::uint64_t pixelShaderHash = 0;
     bool textureFetchStatePresent = false;
     draw::NativeTextureFetchFile textureFetches{};
     // These flags mean the terminal renderer supplied comparable normalized
@@ -64,11 +67,23 @@ enum class RhiRendererDrawEvidenceReason : std::uint8_t
 {
     None,
     RendererRefused,
+    RendererSourceOrdinal,
+    DuplicateSemanticPacket,
     DrawShape,
     IndexBufferViewMissing,
     IndexWidth,
     IndexAddress,
     IndexEndian,
+    SemanticVertexShaderMissing,
+    SemanticPixelShaderMissing,
+    RendererVertexShaderMissing,
+    RendererPixelShaderMissing,
+    SemanticVertexShaderModulesMissing,
+    SemanticPixelShaderModulesMissing,
+    SemanticVertexShaderModulesAmbiguous,
+    SemanticPixelShaderModulesAmbiguous,
+    VertexShaderModule,
+    PixelShaderModule,
     DuplicateTextureSlot,
     UnsupportedTextureSlot,
     RendererTextureStateMissing,
@@ -97,6 +112,14 @@ struct RhiRendererDrawEvidence
     std::uint32_t textureDword = 0;
     std::uint32_t semanticTextureValue = 0;
     std::uint32_t rendererTextureValue = 0;
+    bool vertexShaderModuleMatched = false;
+    bool pixelShaderModuleMatched = false;
+    bool shaderMismatchPresent = false;
+    bool vertexShaderMismatch = false;
+    std::uint32_t semanticShaderObject = 0;
+    std::uint64_t rendererShaderHash = 0;
+    std::array<std::uint64_t, 2> semanticShaderModuleHashes{};
+    std::uint32_t semanticShaderModuleCount = 0;
 };
 
 struct RhiRendererFrameComparison
@@ -111,6 +134,8 @@ struct RhiRendererFrameComparison
     std::uint64_t matched = 0;
     std::uint64_t missing = 0;
     std::uint64_t mismatched = 0;
+    std::uint64_t vertexShaderModuleMatches = 0;
+    std::uint64_t pixelShaderModuleMatches = 0;
     std::uint64_t unmatchedRendererPackets = 0;
     std::uint64_t unmatchedRendererMaterializedPackets = 0;
     std::uint64_t unmatchedRendererRefusedPackets = 0;
@@ -127,6 +152,12 @@ struct RhiRendererFrameComparison
     std::uint32_t firstTextureMismatchDword = 0;
     std::uint32_t firstSemanticTextureValue = 0;
     std::uint32_t firstRendererTextureValue = 0;
+    bool firstShaderMismatchPresent = false;
+    bool firstVertexShaderMismatch = false;
+    std::uint32_t firstSemanticShaderObject = 0;
+    std::uint64_t firstRendererShaderHash = 0;
+    std::array<std::uint64_t, 2> firstSemanticShaderModuleHashes{};
+    std::uint32_t firstSemanticShaderModuleCount = 0;
     std::uint32_t firstUnmatchedRendererPacket = 0;
     std::uint32_t firstUnmatchedRendererBuffer = 0;
     bool firstUnmatchedRendererFromIndirectBuffer = false;

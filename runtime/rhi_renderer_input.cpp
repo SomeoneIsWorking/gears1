@@ -52,6 +52,8 @@ struct RendererReportTotals
     std::uint64_t matched = 0;
     std::uint64_t missing = 0;
     std::uint64_t mismatched = 0;
+    std::uint64_t vertexShaderModuleMatches = 0;
+    std::uint64_t pixelShaderModuleMatches = 0;
     std::uint64_t unmatchedRendererPackets = 0;
     std::uint64_t unmatchedRendererMaterializedPackets = 0;
     std::uint64_t unmatchedRendererRefusedPackets = 0;
@@ -61,6 +63,22 @@ struct RendererReportTotals
     std::uint64_t unmatchedRendererInconsistentSourcePackets = 0;
     std::uint64_t unkeyedRendererDraws = 0;
     std::uint64_t duplicateFrames = 0;
+    bool firstMissingPresent = false;
+    std::uint32_t firstMissingSemanticPacket = 0;
+    bool firstMismatchPresent = false;
+    std::uint32_t firstMismatchedSemanticPacket = 0;
+    RhiRendererDrawEvidenceReason firstMismatchReason = RhiRendererDrawEvidenceReason::None;
+    bool firstTextureMismatchPresent = false;
+    std::uint32_t firstTextureMismatchSlot = 0;
+    std::uint32_t firstTextureMismatchDword = 0;
+    std::uint32_t firstSemanticTextureValue = 0;
+    std::uint32_t firstRendererTextureValue = 0;
+    bool firstShaderMismatchPresent = false;
+    bool firstVertexShaderMismatch = false;
+    std::uint32_t firstSemanticShaderObject = 0;
+    std::uint64_t firstRendererShaderHash = 0;
+    std::array<std::uint64_t, 2> firstSemanticShaderModuleHashes{};
+    std::uint32_t firstSemanticShaderModuleCount = 0;
     bool reportedFailure = false;
 };
 
@@ -114,6 +132,10 @@ constexpr std::size_t kRendererJoinHistory = 64;
         return "none";
     case RhiRendererDrawEvidenceReason::RendererRefused:
         return "renderer-refused";
+    case RhiRendererDrawEvidenceReason::RendererSourceOrdinal:
+        return "renderer-source-ordinal";
+    case RhiRendererDrawEvidenceReason::DuplicateSemanticPacket:
+        return "duplicate-semantic-packet";
     case RhiRendererDrawEvidenceReason::DrawShape:
         return "draw-shape";
     case RhiRendererDrawEvidenceReason::IndexBufferViewMissing:
@@ -124,6 +146,26 @@ constexpr std::size_t kRendererJoinHistory = 64;
         return "index-address";
     case RhiRendererDrawEvidenceReason::IndexEndian:
         return "index-endian";
+    case RhiRendererDrawEvidenceReason::SemanticVertexShaderMissing:
+        return "semantic-vertex-shader-missing";
+    case RhiRendererDrawEvidenceReason::SemanticPixelShaderMissing:
+        return "semantic-pixel-shader-missing";
+    case RhiRendererDrawEvidenceReason::RendererVertexShaderMissing:
+        return "renderer-vertex-shader-missing";
+    case RhiRendererDrawEvidenceReason::RendererPixelShaderMissing:
+        return "renderer-pixel-shader-missing";
+    case RhiRendererDrawEvidenceReason::SemanticVertexShaderModulesMissing:
+        return "semantic-vertex-shader-modules-missing";
+    case RhiRendererDrawEvidenceReason::SemanticPixelShaderModulesMissing:
+        return "semantic-pixel-shader-modules-missing";
+    case RhiRendererDrawEvidenceReason::SemanticVertexShaderModulesAmbiguous:
+        return "semantic-vertex-shader-modules-ambiguous";
+    case RhiRendererDrawEvidenceReason::SemanticPixelShaderModulesAmbiguous:
+        return "semantic-pixel-shader-modules-ambiguous";
+    case RhiRendererDrawEvidenceReason::VertexShaderModule:
+        return "vertex-shader-module";
+    case RhiRendererDrawEvidenceReason::PixelShaderModule:
+        return "pixel-shader-module";
     case RhiRendererDrawEvidenceReason::DuplicateTextureSlot:
         return "duplicate-texture-slot";
     case RhiRendererDrawEvidenceReason::UnsupportedTextureSlot:
@@ -167,6 +209,26 @@ constexpr std::size_t kRendererJoinHistory = 64;
     return guestAddress & kGuestPhysicalAddressMask & ~std::uint32_t{3};
 }
 
+[[nodiscard]] RhiRendererDrawEvidence
+ShaderMismatchEvidence(bool vertex, const RhiSemanticBinding &binding, std::uint64_t rendererHash)
+{
+    RhiRendererDrawEvidence evidence{
+        .result = RhiRendererDrawEvidenceResult::Mismatch,
+        .reason = vertex ? RhiRendererDrawEvidenceReason::VertexShaderModule
+                         : RhiRendererDrawEvidenceReason::PixelShaderModule,
+        .shaderMismatchPresent = true,
+        .vertexShaderMismatch = vertex,
+        .semanticShaderObject = binding.object,
+        .rendererShaderHash = rendererHash,
+        .semanticShaderModuleCount = static_cast<std::uint32_t>(binding.shaderModules.size()),
+    };
+    const std::size_t count =
+        std::min(evidence.semanticShaderModuleHashes.size(), binding.shaderModules.size());
+    for (std::size_t index = 0; index < count; ++index)
+        evidence.semanticShaderModuleHashes[index] = binding.shaderModules[index].hash;
+    return evidence;
+}
+
 [[nodiscard]] std::string
 DescribeFirstUnmatchedRendererPacket(const RhiRendererFrameComparison &comparison)
 {
@@ -198,6 +260,8 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
     g_reportTotals.matched += comparison.matched;
     g_reportTotals.missing += comparison.missing;
     g_reportTotals.mismatched += comparison.mismatched;
+    g_reportTotals.vertexShaderModuleMatches += comparison.vertexShaderModuleMatches;
+    g_reportTotals.pixelShaderModuleMatches += comparison.pixelShaderModuleMatches;
     g_reportTotals.unmatchedRendererPackets += comparison.unmatchedRendererPackets;
     g_reportTotals.unmatchedRendererMaterializedPackets +=
         comparison.unmatchedRendererMaterializedPackets;
@@ -211,6 +275,28 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
     g_reportTotals.unkeyedRendererDraws += comparison.unkeyedRendererDraws;
     if (comparison.duplicate)
         ++g_reportTotals.duplicateFrames;
+    if (!g_reportTotals.firstMissingPresent && comparison.missing != 0)
+    {
+        g_reportTotals.firstMissingPresent = true;
+        g_reportTotals.firstMissingSemanticPacket = comparison.firstMissingSemanticPacket;
+    }
+    if (!g_reportTotals.firstMismatchPresent && comparison.mismatched != 0)
+    {
+        g_reportTotals.firstMismatchPresent = true;
+        g_reportTotals.firstMismatchedSemanticPacket = comparison.firstMismatchedSemanticPacket;
+        g_reportTotals.firstMismatchReason = comparison.firstMismatchReason;
+        g_reportTotals.firstTextureMismatchPresent = comparison.firstTextureMismatchPresent;
+        g_reportTotals.firstTextureMismatchSlot = comparison.firstTextureMismatchSlot;
+        g_reportTotals.firstTextureMismatchDword = comparison.firstTextureMismatchDword;
+        g_reportTotals.firstSemanticTextureValue = comparison.firstSemanticTextureValue;
+        g_reportTotals.firstRendererTextureValue = comparison.firstRendererTextureValue;
+        g_reportTotals.firstShaderMismatchPresent = comparison.firstShaderMismatchPresent;
+        g_reportTotals.firstVertexShaderMismatch = comparison.firstVertexShaderMismatch;
+        g_reportTotals.firstSemanticShaderObject = comparison.firstSemanticShaderObject;
+        g_reportTotals.firstRendererShaderHash = comparison.firstRendererShaderHash;
+        g_reportTotals.firstSemanticShaderModuleHashes = comparison.firstSemanticShaderModuleHashes;
+        g_reportTotals.firstSemanticShaderModuleCount = comparison.firstSemanticShaderModuleCount;
+    }
 
     const bool failed = comparison.missing != 0 || comparison.mismatched != 0 ||
                         comparison.unmatchedRendererPackets != 0 ||
@@ -225,19 +311,23 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
             "rhi",
             "native RHI renderer materialization through frame {}: {} frame(s), {} unavailable,"
             " {} dropped; {} source draw(s), {} materialized, {} refused, {} resolve; {}"
-            " semantic match(es), {} missing, {} mismatch(es), {} unmatched renderer"
+            " semantic match(es), {} missing, {} mismatch(es); exact shader module matches"
+            " vertex {}, pixel {}; {} unmatched renderer"
             " packet(s) ({} materialized, {} refused, {} mixed outcome; {} indirect, {} ring,"
             " {} source conflict), {} unkeyed"
             " renderer draw(s), {} duplicate frame(s); current frame"
             " {}{}; first missing semantic packet {:#x}, first mismatched semantic packet"
             " {:#x} ({}; texture detail {} slot {} dword {} semantic {:#x} renderer {:#x}),"
+            " shader detail {} {} object {:#x} renderer {:#018x} modules {}"
+            " [{:#018x}, {:#018x}],"
             " first"
             " unmatched renderer packet {}",
             frameSequence, g_reportTotals.frames, g_reportTotals.unavailableFrames,
             g_reportTotals.droppedFrames, g_reportTotals.sourceDraws,
             g_reportTotals.materializedDraws, g_reportTotals.refusedDraws,
             g_reportTotals.resolveDraws, g_reportTotals.matched, g_reportTotals.missing,
-            g_reportTotals.mismatched, g_reportTotals.unmatchedRendererPackets,
+            g_reportTotals.mismatched, g_reportTotals.vertexShaderModuleMatches,
+            g_reportTotals.pixelShaderModuleMatches, g_reportTotals.unmatchedRendererPackets,
             g_reportTotals.unmatchedRendererMaterializedPackets,
             g_reportTotals.unmatchedRendererRefusedPackets,
             g_reportTotals.unmatchedRendererMixedOutcomePackets,
@@ -246,11 +336,17 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
             g_reportTotals.unmatchedRendererInconsistentSourcePackets,
             g_reportTotals.unkeyedRendererDraws, g_reportTotals.duplicateFrames,
             FrameStatusName(comparison.status), comparison.duplicate ? ", duplicate" : "",
-            comparison.firstMissingSemanticPacket, comparison.firstMismatchedSemanticPacket,
-            EvidenceReasonName(comparison.firstMismatchReason),
-            comparison.firstTextureMismatchPresent ? "present" : "absent",
-            comparison.firstTextureMismatchSlot, comparison.firstTextureMismatchDword,
-            comparison.firstSemanticTextureValue, comparison.firstRendererTextureValue,
+            g_reportTotals.firstMissingSemanticPacket, g_reportTotals.firstMismatchedSemanticPacket,
+            EvidenceReasonName(g_reportTotals.firstMismatchReason),
+            g_reportTotals.firstTextureMismatchPresent ? "present" : "absent",
+            g_reportTotals.firstTextureMismatchSlot, g_reportTotals.firstTextureMismatchDword,
+            g_reportTotals.firstSemanticTextureValue, g_reportTotals.firstRendererTextureValue,
+            g_reportTotals.firstShaderMismatchPresent ? "present" : "absent",
+            g_reportTotals.firstVertexShaderMismatch ? "vertex" : "pixel",
+            g_reportTotals.firstSemanticShaderObject, g_reportTotals.firstRendererShaderHash,
+            g_reportTotals.firstSemanticShaderModuleCount,
+            g_reportTotals.firstSemanticShaderModuleHashes[0],
+            g_reportTotals.firstSemanticShaderModuleHashes[1],
             DescribeFirstUnmatchedRendererPacket(comparison));
     }
 }
@@ -404,6 +500,45 @@ RhiRendererDrawEvidence InspectRhiRendererDrawInput(const RhiSemanticDrawState &
         }
     }
 
+    RhiRendererDrawEvidence evidence{.result = RhiRendererDrawEvidenceResult::Match};
+    if (renderer.vertexShaderHash != 0 && !state.vertexShader.has_value())
+        return {RhiRendererDrawEvidenceResult::Missing,
+                RhiRendererDrawEvidenceReason::SemanticVertexShaderMissing};
+    if (state.vertexShader.has_value())
+    {
+        if (renderer.vertexShaderHash == 0)
+            return {RhiRendererDrawEvidenceResult::Missing,
+                    RhiRendererDrawEvidenceReason::RendererVertexShaderMissing};
+        if (state.vertexShader->shaderModules.empty())
+            return {RhiRendererDrawEvidenceResult::Missing,
+                    RhiRendererDrawEvidenceReason::SemanticVertexShaderModulesMissing};
+        if (state.vertexShader->shaderModules.size() != 1)
+            return {RhiRendererDrawEvidenceResult::Missing,
+                    RhiRendererDrawEvidenceReason::SemanticVertexShaderModulesAmbiguous};
+        if (state.vertexShader->shaderModules.front().hash != renderer.vertexShaderHash)
+            return ShaderMismatchEvidence(true, *state.vertexShader, renderer.vertexShaderHash);
+        evidence.vertexShaderModuleMatched = true;
+    }
+
+    if (renderer.pixelShaderHash != 0 && !state.pixelShader.has_value())
+        return {RhiRendererDrawEvidenceResult::Missing,
+                RhiRendererDrawEvidenceReason::SemanticPixelShaderMissing};
+    if (state.pixelShader.has_value())
+    {
+        if (renderer.pixelShaderHash == 0)
+            return {RhiRendererDrawEvidenceResult::Missing,
+                    RhiRendererDrawEvidenceReason::RendererPixelShaderMissing};
+        if (state.pixelShader->shaderModules.empty())
+            return {RhiRendererDrawEvidenceResult::Missing,
+                    RhiRendererDrawEvidenceReason::SemanticPixelShaderModulesMissing};
+        if (state.pixelShader->shaderModules.size() != 1)
+            return {RhiRendererDrawEvidenceResult::Missing,
+                    RhiRendererDrawEvidenceReason::SemanticPixelShaderModulesAmbiguous};
+        if (state.pixelShader->shaderModules.front().hash != renderer.pixelShaderHash)
+            return ShaderMismatchEvidence(false, *state.pixelShader, renderer.pixelShaderHash);
+        evidence.pixelShaderModuleMatched = true;
+    }
+
     std::array<bool, draw::kNativeTextureFetchSlots> textureSlots{};
     for (const RhiSemanticBinding &texture : state.textures)
     {
@@ -466,7 +601,7 @@ RhiRendererDrawEvidence InspectRhiRendererDrawInput(const RhiSemanticDrawState &
         }
     }
     if (!targetParityExpected)
-        return {RhiRendererDrawEvidenceResult::Match, RhiRendererDrawEvidenceReason::None};
+        return evidence;
     if (!renderer.targetStatePresent)
         return {RhiRendererDrawEvidenceResult::Missing,
                 RhiRendererDrawEvidenceReason::RendererTargetStateMissing};
@@ -494,7 +629,7 @@ RhiRendererDrawEvidence InspectRhiRendererDrawInput(const RhiSemanticDrawState &
     if (depthTarget != nullptr && depthTarget->normalizedState != renderer.depthTarget)
         return {RhiRendererDrawEvidenceResult::Mismatch,
                 RhiRendererDrawEvidenceReason::DepthTargetState};
-    return {RhiRendererDrawEvidenceResult::Match, RhiRendererDrawEvidenceReason::None};
+    return evidence;
 }
 
 RhiRendererDrawEvidenceResult CompareRhiRendererDrawInput(const RhiSemanticDrawState &state,
@@ -514,6 +649,12 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
         if (input.sourceOrdinal != index)
         {
             ++result.mismatched;
+            if (result.firstMismatchReason == RhiRendererDrawEvidenceReason::None)
+            {
+                result.firstMismatchedSemanticPacket =
+                    CanonicalPacketAddress(input.packetGuestAddress);
+                result.firstMismatchReason = RhiRendererDrawEvidenceReason::RendererSourceOrdinal;
+            }
             continue;
         }
         switch (input.outcome)
@@ -577,6 +718,11 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
         if (!matchedPackets.insert(packetGuestAddress).second)
         {
             ++result.mismatched;
+            if (result.firstMismatchReason == RhiRendererDrawEvidenceReason::None)
+            {
+                result.firstMismatchedSemanticPacket = packetGuestAddress;
+                result.firstMismatchReason = RhiRendererDrawEvidenceReason::DuplicateSemanticPacket;
+            }
             continue;
         }
 
@@ -590,6 +736,10 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
             switch (evidence.result)
             {
             case RhiRendererDrawEvidenceResult::Match:
+                if (evidence.vertexShaderModuleMatched)
+                    ++result.vertexShaderModuleMatches;
+                if (evidence.pixelShaderModuleMatched)
+                    ++result.pixelShaderModuleMatches;
                 break;
             case RhiRendererDrawEvidenceResult::Missing:
                 missing = true;
@@ -604,7 +754,7 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
         if (mismatch)
         {
             ++result.mismatched;
-            if (result.firstMismatchedSemanticPacket == 0)
+            if (result.firstMismatchReason == RhiRendererDrawEvidenceReason::None)
             {
                 result.firstMismatchedSemanticPacket = packetGuestAddress;
                 result.firstMismatchReason = firstMismatchEvidence.reason;
@@ -615,6 +765,17 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
                     result.firstTextureMismatchDword = firstMismatchEvidence.textureDword;
                     result.firstSemanticTextureValue = firstMismatchEvidence.semanticTextureValue;
                     result.firstRendererTextureValue = firstMismatchEvidence.rendererTextureValue;
+                }
+                if (firstMismatchEvidence.shaderMismatchPresent)
+                {
+                    result.firstShaderMismatchPresent = true;
+                    result.firstVertexShaderMismatch = firstMismatchEvidence.vertexShaderMismatch;
+                    result.firstSemanticShaderObject = firstMismatchEvidence.semanticShaderObject;
+                    result.firstRendererShaderHash = firstMismatchEvidence.rendererShaderHash;
+                    result.firstSemanticShaderModuleHashes =
+                        firstMismatchEvidence.semanticShaderModuleHashes;
+                    result.firstSemanticShaderModuleCount =
+                        firstMismatchEvidence.semanticShaderModuleCount;
                 }
             }
         }
@@ -770,6 +931,8 @@ void ObserveRhiRendererMaterialization(std::uint64_t frameSequence,
              .indexIs32 = draw.input.indexIs32,
              .indexEndian = draw.input.indexEndian,
              .indexGuestBase = draw.input.indexGuestBase,
+             .vertexShaderHash = draw.input.vertexShaderHash,
+             .pixelShaderHash = draw.input.pixelShaderHash,
              .textureFetchStatePresent =
                  draw.outcome == draw::NativeDrawMaterializationOutcome::Materialized,
              .textureFetches = draw.input.textureFetches,
