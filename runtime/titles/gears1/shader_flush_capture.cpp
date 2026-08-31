@@ -3,6 +3,7 @@
 #include "fnv1a.h"
 #include "guest_memory.h"
 #include "guest_state_memory.h"
+#include "gpu_shader_load_watch.h"
 #include "import_stub.h"
 #include "rhi_packet_evidence.h"
 #include "rhi_semantic_stream.h"
@@ -114,6 +115,8 @@ PPC_FUNC(sub_822346A8)
                 load.immediate ? std::span<const std::uint8_t>(load.immediateMicrocode)
                                : std::span<const std::uint8_t>(
                                      gears::Memory().Base() + load.guestAddress, load.sizeBytes);
+            const std::uint64_t hash = gears::Fnv1a64(bytes);
+            gears::ObserveShaderLoadPacketTransitionFlush(hash);
             // Shader loads execute in packet order and no semantic draw can
             // occur inside this retained call. The final unpredicated load is
             // therefore the concrete module active after the flush.
@@ -121,7 +124,7 @@ PPC_FUNC(sub_822346A8)
             modules[load.stage].push_back({
                 .guestAddress = load.guestAddress,
                 .sizeBytes = load.sizeBytes,
-                .hash = gears::Fnv1a64(bytes),
+                .hash = hash,
             });
         }
     }
