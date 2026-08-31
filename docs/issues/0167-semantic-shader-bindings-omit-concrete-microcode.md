@@ -21,8 +21,17 @@ Retained function `0x822346A8` is the exact shader-state flush owner. It emits o
 
 Capture the exact command spans produced by retained `0x822346A8`, including spans split by `0x82221980`; parse bounded `IM_LOAD` packets; hash the emitted physical microcode through the same title-neutral FNV-1a implementation as the renderer; and publish the final unpredicated load for each stage. Malformed or predicated evidence must clear prior identity rather than guess. Keep all device offsets and guest addresses in the Gears 1 adapter.
 
-This implementation now compiles in the shipping executable and has focused positive, zero-load, malformed-packet, command-buffer-transition, exact-hash, mismatch, and ambiguity controls. The old setter-template decoder was removed. Live validation remains open because the required user-supplied title extraction is not currently available.
+This implementation compiles in the shipping executable and has focused positive, zero-load,
+malformed-packet, command-buffer-transition, exact-hash, mismatch, ambiguity, and inline-immediate
+controls. The old setter-template decoder was removed. An exact-disc live observation now proves that
+this one retained flush is incomplete for the current missing population: the global PM4 sequencer
+selection carries the same concrete module hashes that the compatibility renderer receives, while the
+semantic state remains absent after the zero-object setter marker.
 
 ## Current falsifier
 
-A live headless observation must show that flush-captured vertex and pixel hashes equal terminal renderer values for every compared draw, including startup hash `e8759fecd0f8e39c`. A deliberately changed hash must produce the stage-specific mismatch reason, and an injected malformed or predicated load must produce explicit missing evidence rather than preserve a prior module.
+A same-run headless observation must correlate global PM4 shader selections with every normal semantic
+draw and show that the title adapter publishes the same concrete module before each draw. The current
+falsifier is a nonzero PM4 pixel hash alongside an absent semantic pixel state; a deliberately changed
+hash must remain a stage-specific mismatch, and malformed or predicated evidence must stay explicitly
+missing rather than preserving a prior module.

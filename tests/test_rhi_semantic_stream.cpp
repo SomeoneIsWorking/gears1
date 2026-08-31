@@ -1,5 +1,6 @@
 #include "rhi_renderer_input.h"
 #include "rhi_renderer_input_origin_test.h"
+#include "rhi_pm4_shader_evidence_test.h"
 #include "rhi_semantic_stream.h"
 #include "gpu_draw.h"
 
@@ -686,6 +687,8 @@ int main()
 
     assert(setenv("GEARS_NATIVE_RHI_OBSERVE", "1", 1) == 0);
     lucent::config::set_prefix("GEARS_");
+    RunRhiPm4ShaderEvidenceTests();
+
     const RhiSemanticBinding activeColorTarget{
         .kind = RhiSemanticBindingKind::ColorRenderTarget,
         .slot = 0,

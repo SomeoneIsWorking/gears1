@@ -1,5 +1,6 @@
 #include "rhi_semantic_stream.h"
 
+#include "rhi_pm4_shader_evidence.h"
 #include "rhi_renderer_input.h"
 #include "rhi_semantic_state.h"
 
@@ -595,6 +596,7 @@ RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
         }
     }
     (void)ObserveRhiSemanticFrameSealed(frame);
+    (void)ObserveRhiSemanticFrameForPm4ShaderEvidence(frame);
     return frame;
 }
 

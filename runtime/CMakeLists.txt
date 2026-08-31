@@ -207,6 +207,7 @@ add_executable(gears1
     graphics_probe_render.cpp
     input.cpp
     hle_d3d.cpp
+    rhi_pm4_shader_evidence.cpp
     rhi_renderer_input.cpp
     rhi_renderer_report_diagnostics.cpp
     rhi_semantic_state.cpp

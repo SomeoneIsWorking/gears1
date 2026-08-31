@@ -91,6 +91,11 @@ struct FrameDrawItem
     bool packetFromIndirectBuffer = false;
 };
 
+// Observes command-processor shader selections before this frame reaches a
+// renderer. The native-RHI evidence owner implements this seam.
+void ObserveRhiPm4FrameShaderEvidence(uint64_t frameSequence,
+                                      const std::vector<FrameDrawItem> &draws);
+
 struct FrameDrawInputs
 {
     const uint8_t *guestBase = nullptr;    // gears::Memory().Base()

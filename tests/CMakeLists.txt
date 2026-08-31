@@ -694,6 +694,8 @@ add_test(NAME frame_production_timing COMMAND test_frame_production_timing)
 add_executable(test_rhi_semantic_stream
     test_rhi_semantic_stream.cpp
     rhi_renderer_input_origin_test.cpp
+    rhi_pm4_shader_evidence_test.cpp
+    ../runtime/rhi_pm4_shader_evidence.cpp
     ../runtime/rhi_renderer_input.cpp
     ../runtime/rhi_renderer_report_diagnostics.cpp
     ../runtime/rhi_semantic_state.cpp
