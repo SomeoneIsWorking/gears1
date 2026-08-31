@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 
 namespace gears::titles::gears1
@@ -19,6 +20,8 @@ struct RenderRingReservationProvenance
     std::uint32_t recordSecondaryValue = 0;
     std::uint32_t recordBase = 0;
     std::uint32_t recordIndex = 0;
+    std::uint32_t recordSource = 0;
+    std::array<std::uint32_t, 16> recordWords{};
     std::uint32_t companionWord = 0;
 };
 

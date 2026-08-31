@@ -1,6 +1,7 @@
 #include "guest_probe_state.h"
 #include "import_stub.h"
 
+#include <array>
 #include <atomic>
 #include <iterator>
 #include <map>
@@ -237,6 +238,8 @@ PPC_FUNC(sub_8221CBA8)
     uint32_t recordSecondaryValue = 0;
     uint32_t recordBase = 0;
     uint32_t recordIndex = 0;
+    uint32_t recordSource = 0;
+    std::array<uint32_t, 16> recordWords{};
     uint32_t companionWord = 0;
     if (reservationCaller == kShaderCallbackReservationReturn && reservationRecordOwner != 0)
     {
@@ -257,6 +260,23 @@ PPC_FUNC(sub_8221CBA8)
             ByteSwap(*gears::Memory().Translate<uint32_t>(recordDispatchTable + 0x8C));
         recordBase = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0xC));
         recordIndex = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0x10));
+        const uint64_t sourceAfterIndex = uint64_t(recordBase) + uint64_t(recordIndex) * 64;
+        if (sourceAfterIndex >= 64 && sourceAfterIndex <= PPC_MEMORY_SIZE)
+        {
+            recordSource = uint32_t(sourceAfterIndex - 64);
+            if (uint64_t(recordSource) + recordWords.size() * sizeof(uint32_t) <= PPC_MEMORY_SIZE)
+            {
+                for (size_t word = 0; word < recordWords.size(); ++word)
+                {
+                    recordWords[word] = ByteSwap(*gears::Memory().Translate<uint32_t>(
+                        recordSource + uint32_t(word * sizeof(uint32_t))));
+                }
+            }
+            else
+            {
+                recordSource = 0;
+            }
+        }
         companionWord =
             ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0x1C));
     }
@@ -280,6 +300,8 @@ PPC_FUNC(sub_8221CBA8)
              .recordSecondaryValue = recordSecondaryValue,
              .recordBase = recordBase,
              .recordIndex = recordIndex,
+             .recordSource = recordSource,
+             .recordWords = recordWords,
              .companionWord = companionWord});
     }
 }
@@ -762,12 +784,20 @@ void ReportRenderRingReservationForObject(uint32_t object)
                 " render-ring reservation from caller {:#x}; record owner r31={:#x},"
                 " dispatch table={:#x}, primary descriptor={:#x}, targets +0={:#x} +4={:#x},"
                 " values +0={:#x} +4={:#x},"
-                " record {:#x}[{}], companion={:#x}",
+                " record {:#x}[{}] at {:#x}, words"
+                " {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}"
+                " {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x} {:08x}, companion={:#x}",
                 object, object - start, details.bytes, details.caller, details.recordOwner,
                 details.recordDispatchTable, details.recordPrimaryDescriptor,
                 details.recordPrimaryTarget, details.recordSecondaryTarget,
                 details.recordPrimaryValue, details.recordSecondaryValue, details.recordBase,
-                details.recordIndex, details.companionWord);
+                details.recordIndex, details.recordSource, details.recordWords[0],
+                details.recordWords[1], details.recordWords[2], details.recordWords[3],
+                details.recordWords[4], details.recordWords[5], details.recordWords[6],
+                details.recordWords[7], details.recordWords[8], details.recordWords[9],
+                details.recordWords[10], details.recordWords[11], details.recordWords[12],
+                details.recordWords[13], details.recordWords[14], details.recordWords[15],
+                details.companionWord);
             return;
         }
     }

@@ -162,3 +162,9 @@ Its two getter values are therefore receiver `+0x88/+0x8C`, copied into callback
 The selected callback already records those fields as `0x500` and `0x2D0`: scalar values, not guest
 object or code pointers. The getters are consequently not a shader-module source. The copied 64-byte
 indexed record remains the relevant evidence boundary.
+
+The selected 64-byte record contains scalar floating-point-like values and zeros only; none of its
+sixteen words is a guest object, title-code, or physical-memory pointer. This closes the complete
+`0x82327CA4` callback-producer path as a source of concrete shader microcode identity. The next
+boundary is the separate semantic setter path that first observes the missing pixel object at the
+scene transition.
