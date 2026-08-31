@@ -106,6 +106,16 @@ int main()
                 .elementStrideBytes = 12,
             },
     });
+    tracker.ApplyViewport({.x = 4,
+                           .y = 8,
+                           .w = 640,
+                           .h = 360,
+                           .zMin = 0.25f,
+                           .zMax = 0.75f,
+                           .scissorX = 2,
+                           .scissorY = 3,
+                           .scissorW = 636,
+                           .scissorH = 354});
 
     const gears::RhiSemanticDraw draw{
         .kind = gears::RhiSemanticDrawKind::BoundIndices,
@@ -134,6 +144,9 @@ int main()
     assert(state.renderTargets[0].normalizedState.format == 3);
     assert(state.surfaceStatePresent);
     assert(state.surfaceState.pitch == 1280);
+    assert(state.viewportStatePresent);
+    assert(state.viewportState.x == 4);
+    assert(state.viewportState.scissorH == 354);
     assert(state.textures.size() == 1);
     assert(state.textures[0].slot == 3);
     assert(state.textures[0].descriptorDwords == 6);
@@ -259,6 +272,7 @@ int main()
     tracker.Reset();
     assert(tracker.SnapshotDraw(draw).vertexStreams.empty());
     assert(!tracker.SnapshotDraw(draw).lastPixelShaderBinding.has_value());
+    assert(!tracker.SnapshotDraw(draw).viewportStatePresent);
     assert(tracker.ApplyColorWriteState(gammaWrite) ==
            gears::RhiColorWriteStateEvidenceResult::Missing);
     assert(tracker.ApplyColorWriteState({.requested = 1}) ==

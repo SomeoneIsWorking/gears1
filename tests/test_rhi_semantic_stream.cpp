@@ -436,6 +436,7 @@ int main()
     assert(missingRendererTextureComparison.missingEvidenceReasons[static_cast<std::size_t>(
                gears::RhiRendererDrawEvidenceReason::RendererTextureStateMissing)] == 1);
     TestRhiRendererPixelBindingOriginCensus();
+    TestRhiRendererViewportParity();
     auto missingSemanticTexture = textureDrawState;
     missingSemanticTexture.textures[0].descriptorDwords = 0;
     assert(gears::InspectRhiRendererDrawInput(missingSemanticTexture, matchingRendererTexture)

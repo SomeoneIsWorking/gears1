@@ -10,6 +10,7 @@
 #include "rhi_vertex_buffer.h"
 #include "rhi_vertex_stream_watch.h"
 
+#include <bit>
 #include <cstdint>
 #include <vector>
 
@@ -29,6 +30,11 @@ CaptureBoundRenderTargets(std::uint32_t device);
 [[nodiscard]] std::uint8_t ReadGuestU8(std::uint32_t address)
 {
     return *gears::Memory().Translate<std::uint8_t>(address);
+}
+
+[[nodiscard]] float ReadGuestFloat(std::uint32_t address)
+{
+    return std::bit_cast<float>(ReadGuestBe32(address));
 }
 
 [[nodiscard]] bool HasTransientData(gears::RhiSemanticDrawKind kind)
@@ -297,7 +303,53 @@ void ObserveAfterSuper(const gears::RhiSemanticDraw &draw, std::uint32_t device,
     gears::gears1::ReportRhiVertexStreamResetWriteWatch();
 }
 
+[[nodiscard]] gears::RhiViewportState CaptureViewport(std::uint32_t state)
+{
+    // Raw image disassembly of sub_8222ABF8 stores these viewport fields after
+    // calling sub_8222AB30, which packs the scissor endpoints.
+    constexpr std::uint32_t kViewportXOffset = 0x3058;
+    constexpr std::uint32_t kViewportYOffset = 0x305C;
+    constexpr std::uint32_t kViewportWidthOffset = 0x3060;
+    constexpr std::uint32_t kViewportHeightOffset = 0x3064;
+    constexpr std::uint32_t kViewportMinDepthOffset = 0x3068;
+    constexpr std::uint32_t kViewportMaxDepthOffset = 0x306C;
+    constexpr std::uint32_t kScissorTopLeftOffset = 0x2844;
+    constexpr std::uint32_t kScissorBottomRightOffset = 0x2848;
+    const std::uint32_t topLeft = ReadGuestBe32(state + kScissorTopLeftOffset);
+    const std::uint32_t bottomRight = ReadGuestBe32(state + kScissorBottomRightOffset);
+    const std::uint32_t scissorX = topLeft & 0x7FFF;
+    const std::uint32_t scissorY = (topLeft >> 16) & 0x7FFF;
+    const std::uint32_t scissorRight = bottomRight & 0x7FFF;
+    const std::uint32_t scissorBottom = (bottomRight >> 16) & 0x7FFF;
+    return {
+        .x = ReadGuestBe32(state + kViewportXOffset),
+        .y = ReadGuestBe32(state + kViewportYOffset),
+        .w = ReadGuestBe32(state + kViewportWidthOffset),
+        .h = ReadGuestBe32(state + kViewportHeightOffset),
+        .zMin = ReadGuestFloat(state + kViewportMinDepthOffset),
+        .zMax = ReadGuestFloat(state + kViewportMaxDepthOffset),
+        .scissorX = scissorX,
+        .scissorY = scissorY,
+        .scissorW = scissorRight >= scissorX ? scissorRight - scissorX : 0,
+        .scissorH = scissorBottom >= scissorY ? scissorBottom - scissorY : 0,
+    };
+}
+
 } // namespace
+
+extern "C" PPC_FUNC(__imp__sub_8222ABF8);
+PPC_FUNC(sub_8222ABF8)
+{
+    if (!gears::RhiSemanticObservationEnabled())
+    {
+        __imp__sub_8222ABF8(ctx, base);
+        return;
+    }
+    const std::uint32_t state = ctx.r3.u32;
+    __imp__sub_8222ABF8(ctx, base);
+    if (state != 0)
+        gears::ObserveRhiSemanticViewport(CaptureViewport(state));
+}
 
 extern "C" PPC_FUNC(__imp__sub_82220858);
 PPC_FUNC(sub_82220858)

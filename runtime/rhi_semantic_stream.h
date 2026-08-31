@@ -205,6 +205,8 @@ struct RhiSemanticDrawState
     std::optional<RhiSemanticBinding> indexBuffer;
     bool surfaceStatePresent = false;
     RhiSurfaceState surfaceState;
+    bool viewportStatePresent = false;
+    RhiViewportState viewportState;
 };
 
 struct RhiShaderPacketModuleEvidence
@@ -420,10 +422,16 @@ struct RhiObservedColorWriteState
     RhiColorWriteStateEvidenceResult evidence = RhiColorWriteStateEvidenceResult::Missing;
 };
 
+struct RhiObservedViewport
+{
+    RhiViewportState state;
+};
+
 using RhiSemanticEventPayload =
     std::variant<RhiObservedDraw, RhiObservedBinding, RhiObservedResourceLifetime,
                  RhiObservedResourceConstruction, RhiObservedVertexStreamReset,
-                 RhiObservedColorWriteState, RhiObservedResolve, RhiObservedPresent>;
+                 RhiObservedColorWriteState, RhiObservedViewport, RhiObservedResolve,
+                 RhiObservedPresent>;
 
 struct RhiSemanticEvent
 {
@@ -503,6 +511,7 @@ void ObserveRhiSemanticResourceConstruction(const RhiSemanticResourceConstructio
 void ObserveRhiSemanticVertexStreamReset(const RhiSemanticVertexStreamReset &reset,
                                          const RhiVertexStreamResetEvidence &state);
 void ObserveRhiSemanticColorWriteState(const RhiSemanticColorWriteState &state);
+void ObserveRhiSemanticViewport(const RhiViewportState &state);
 void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,
                                const RhiResolvePacketEvidence &packet);
 [[nodiscard]] RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence);

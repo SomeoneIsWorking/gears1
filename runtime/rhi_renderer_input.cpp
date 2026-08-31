@@ -463,6 +463,16 @@ RhiRendererDrawEvidence InspectRhiRendererDrawInput(const RhiSemanticDrawState &
         }
     }
 
+    if (state.viewportStatePresent && !renderer.viewportStatePresent)
+        return {RhiRendererDrawEvidenceResult::Missing,
+                RhiRendererDrawEvidenceReason::RendererViewportStateMissing};
+    if (!state.viewportStatePresent && renderer.viewportStatePresent)
+        return {RhiRendererDrawEvidenceResult::Missing,
+                RhiRendererDrawEvidenceReason::SemanticViewportStateMissing};
+    if (state.viewportStatePresent && state.viewportState != renderer.viewportState)
+        return {RhiRendererDrawEvidenceResult::Mismatch,
+                RhiRendererDrawEvidenceReason::ViewportState};
+
     bool targetParityExpected = state.surfaceStatePresent;
     const RhiSemanticRenderTarget *colorTarget = nullptr;
     const RhiSemanticRenderTarget *depthTarget = nullptr;
@@ -871,7 +881,10 @@ void ObserveRhiRendererMaterialization(std::uint64_t frameSequence,
                              .colorExponentBias = draw.input.colorExpBias},
              .depthTarget = {.base = draw.input.depthBase,
                              .format = draw.input.depthIsFloat24 ? 1u : 0u},
-             .surfaceState = DecodeRhiSurfaceState(draw.input.surfaceInfo)});
+             .surfaceState = DecodeRhiSurfaceState(draw.input.surfaceInfo),
+             .viewportStatePresent =
+                 draw.outcome == draw::NativeDrawMaterializationOutcome::Materialized,
+             .viewportState = draw.input.guestViewport});
     }
     (void)PublishRhiRendererFrameInput(frameSequence, std::move(frame));
 }

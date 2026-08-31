@@ -156,6 +156,11 @@ RhiSemanticStateTracker::ApplyColorWriteState(const RhiSemanticColorWriteState &
     return RhiColorWriteStateEvidenceResult::Match;
 }
 
+void RhiSemanticStateTracker::ApplyViewport(const RhiViewportState &state)
+{
+    viewportState_ = state;
+}
+
 void RhiSemanticStateTracker::ApplyVertexStreamReset(const RhiSemanticVertexStreamReset &reset)
 {
     const std::uint64_t end = std::uint64_t{reset.firstSlot} + reset.slotCount;
@@ -200,6 +205,11 @@ RhiSemanticDrawState RhiSemanticStateTracker::SnapshotDraw(const RhiSemanticDraw
         state.surfaceStatePresent = true;
         state.surfaceState = *surfaceState_;
     }
+    if (viewportState_.has_value())
+    {
+        state.viewportStatePresent = true;
+        state.viewportState = *viewportState_;
+    }
     return state;
 }
 
@@ -214,6 +224,7 @@ void RhiSemanticStateTracker::Reset()
     colorTargets_.clear();
     depthStencilTarget_.reset();
     surfaceState_.reset();
+    viewportState_.reset();
 }
 
 } // namespace gears

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "gpu_draw_texture_decode.h"
+#include "rhi_target_state.h"
 
 // Bridge between the Xenos translator (which drags in Xenia's bundled
 // Vulkan-Headers) and the guest-draw renderer (which uses the system Vulkan
@@ -302,12 +303,7 @@ void DeriveSystemConstants(const uint32_t *registerFile, bool applyTextureSigns,
 // the guest's PA_CL_VPORT_*/PA_SC_* registers by Xenia's draw_util
 // (GetHostViewportInfo / GetScissor) -- the same call DeriveSystemConstants
 // already makes for the NDC scale/offset, so the two cannot disagree.
-struct GuestViewport
-{
-    uint32_t x = 0, y = 0, w = 0, h = 0;
-    float zMin = 0.0f, zMax = 1.0f;
-    uint32_t scissorX = 0, scissorY = 0, scissorW = 0, scissorH = 0;
-};
+using GuestViewport = RhiViewportState;
 bool DeriveViewport(const uint32_t *registerFile, GuestViewport &out);
 
 // Sampler state for one shader sampler binding, resolved against the texture

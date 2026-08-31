@@ -216,6 +216,8 @@ BuildResult BuildFrame(const RhiSemanticFrame &observed)
             ++result.frame.colorWriteStates;
             continue;
         }
+        if (std::holds_alternative<RhiObservedViewport>(event.payload))
+            continue;
         if (const auto *resolve = std::get_if<RhiObservedResolve>(&event.payload))
         {
             const BuildStatus status = EvidenceStatus(resolve->evidence);
