@@ -142,3 +142,9 @@ methods on that owner, then either calls the serializer inline or creates the 11
 This is an ordered record-transport boundary, not proof that the record carries concrete shader
 modules. The next target is the `r31` record owner's identity and record semantics; the semantic
 stream remains intentionally unchanged.
+
+The selected reservation now records that owner before the allocator can overwrite its context. In
+the measured recurrence, `r31=0x40102250`, its method table is `0x41649804`, its indexed-record base
+is `0x4AEFE600` at index three (source record `0x4AEFE680`), and its companion word is `0x41D1C350`.
+These are source locations for the copied payload, not shader-module identities. The two methods
+invoked through that table are the next ground-truth target.
