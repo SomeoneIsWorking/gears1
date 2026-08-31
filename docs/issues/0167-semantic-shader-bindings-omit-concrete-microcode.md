@@ -207,3 +207,9 @@ capture located the inline module in indirect buffer `0x7F740` at dword 189, sub
 ring packet at dword 3472. This identifies the queued transport boundary that must be correlated with
 the title's ring producer; it still does not identify the producer's shader state or authorize a
 semantic update.
+
+A follow-up bounded capture watched that parent ring dword from guest swap 571. It recorded exactly one
+target write before the selected PM4 load; the write resolved to recompiled guest function
+`__imp__sub_822212D8`. The queued parent packet is therefore produced after the selected swap, not a
+stale pre-marker ring entry. The next ground-truth target is `0x822212D8`'s producer inputs and write
+semantics; the semantic stream remains unchanged.

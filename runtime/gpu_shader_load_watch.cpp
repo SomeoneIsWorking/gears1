@@ -31,6 +31,7 @@ struct ShaderLoadWatchState
     std::atomic<std::uint32_t> guestSwapSequence{0};
     std::atomic<std::uint32_t> lastSelectedFlushSwap{0};
     std::atomic<bool> selectedFlushObserved{false};
+    std::atomic<bool> ringWatchRequested{false};
     std::atomic<bool> transitionMarkerArmed{false};
     std::atomic<bool> transitionReported{false};
 };
@@ -78,6 +79,24 @@ const std::optional<std::uint32_t> &ConfiguredShaderLoadWatchAfterSwap()
 {
     static const bool enabled = lucent::config::flag("WATCH_SHADER_LOAD_ZERO_MARKER");
     return enabled;
+}
+
+const std::optional<std::uint32_t> &ConfiguredShaderLoadRingIndex()
+{
+    static const std::optional<std::uint32_t> index = []
+    {
+        const std::string &configured = lucent::config::text("WATCH_SHADER_LOAD_RING_INDEX");
+        if (configured.empty())
+            return std::optional<std::uint32_t>{};
+        const std::optional<std::uint32_t> parsed = ParseShaderLoadWatchAfterSwap(configured);
+        if (!parsed)
+            lucent::error("hle",
+                          "WATCH_SHADER_LOAD_RING_INDEX must be one unsigned decimal ring dword"
+                          " index, got {}",
+                          configured);
+        return parsed;
+    }();
+    return index;
 }
 
 [[nodiscard]] std::uint32_t ReadGuestBe32(std::uint8_t *memory, std::uint32_t address)
@@ -199,6 +218,20 @@ void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packet
                      "shader-load selected packet source {:#x}+{} dword(s), submitted by "
                      "{:#x}+{} dword(s)",
                      sourceBase, sourceIndex, submissionBase, submissionIndex);
+        if (g_state.ringWatchRequested.exchange(false, std::memory_order_acq_rel))
+        {
+            const GuestWriteWatchStats stats =
+                CurrentGuestWriteWatchStats(GuestWriteWatchOwner::kShaderLoadPacket);
+            if (stats.targetWrites == 0)
+            {
+                lucent::info("hle", "shader-load ring submission watch saw no write before selected"
+                                    " PM4 load");
+            }
+            (void)ReportGuestWriteWatch(GuestWriteWatchOwner::kShaderLoadPacket, false);
+            (void)DisarmGuestWriteWatch(GuestWriteWatchOwner::kShaderLoadPacket);
+            g_state.writeReported.store(true, std::memory_order_release);
+            return;
+        }
     }
     if (ReportGuestWriteWatch(GuestWriteWatchOwner::kShaderLoadPacket, false))
         g_state.writeReported.store(true, std::memory_order_release);
@@ -221,9 +254,26 @@ void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
     }
 }
 
-void NoteShaderLoadWatchGuestSwap(std::uint32_t guestSwapSequence)
+void NoteShaderLoadWatchGuestSwap(std::uint32_t guestSwapSequence, std::uint32_t ringBase)
 {
     g_state.guestSwapSequence.store(guestSwapSequence, std::memory_order_release);
+    const std::optional<std::uint32_t> &afterSwap = ConfiguredShaderLoadWatchAfterSwap();
+    const std::optional<std::uint32_t> &ringIndex = ConfiguredShaderLoadRingIndex();
+    if (!ShaderLoadPacketTransitionWatchEnabled() || !afterSwap || !ringIndex ||
+        guestSwapSequence != *afterSwap)
+    {
+        return;
+    }
+    const std::uint64_t address = std::uint64_t(ringBase) + std::uint64_t(*ringIndex) * 4;
+    if (address == 0 || address > UINT32_MAX)
+    {
+        lucent::error("hle", "shader-load ring watch address overflow for base {:#x}, index {}",
+                      ringBase, *ringIndex);
+        return;
+    }
+    const bool armed = ArmGuestWriteWatch(GuestWriteWatchOwner::kShaderLoadPacket,
+                                          static_cast<std::uint32_t>(address), 1);
+    g_state.ringWatchRequested.store(armed, std::memory_order_release);
 }
 
 void ArmShaderLoadPacketTransitionFromZeroMarker()

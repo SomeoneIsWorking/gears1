@@ -29,7 +29,7 @@ void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
 // The title records a zero-object marker during the configured guest interval.
 // Inspect complete copied PM4 packets until the command processor reaches the
 // selected module, which can occur after the next guest VdSwap.
-void NoteShaderLoadWatchGuestSwap(std::uint32_t guestSwapSequence);
+void NoteShaderLoadWatchGuestSwap(std::uint32_t guestSwapSequence, std::uint32_t ringBase);
 void ArmShaderLoadPacketTransitionFromZeroMarker();
 void ObserveShaderLoadPacketTransitionFlush(std::uint64_t shaderHash);
 void ObserveShaderLoadPacketTransitionCopy(std::uint8_t *guestMemory, std::uint32_t destination,

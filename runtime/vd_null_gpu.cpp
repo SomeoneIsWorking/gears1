@@ -3160,7 +3160,7 @@ void __imp__VdSetGraphicsInterruptCallback(PPCContext &__restrict ctx, uint8_t *
 void __imp__VdSwap(PPCContext &__restrict ctx, uint8_t *)
 {
     const uint64_t frame = g_frameCount.fetch_add(1) + 1;
-    gears::NoteShaderLoadWatchGuestSwap(static_cast<uint32_t>(frame));
+    gears::NoteShaderLoadWatchGuestSwap(static_cast<uint32_t>(frame), g_ringBuffer.base);
     // The guest's clock advances HERE only when the trigger is `present`.
     // EXACTLY ONE trigger drives it -- two would double the step and make the
     // guest's second read of the same frame's time disagree with its first.
