@@ -1,12 +1,15 @@
 #include "guest_write_watch.h"
 
+#include "guest_backtrace.h"
 #include "fault_report.h"
 #include "guest_memory.h"
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <charconv>
 #include <csignal>
+#include <dlfcn.h>
 #include <link.h>
 #include <string>
 #include <system_error>
@@ -42,6 +45,7 @@ struct GuestWriteWatch
     uint64_t targetSampleLimit = 0;
     std::atomic<uint64_t> hits{0};
     std::atomic<uint64_t> otherFaults{0};
+    std::atomic<bool> directCopyReported{false};
     WatchSlot slots[kWatchSlots]{};
     uintptr_t loadBias = 0;
     struct sigaction oldTrap{};
@@ -220,6 +224,7 @@ void ClearSamples()
     }
     g_watch.hits.store(0, std::memory_order_relaxed);
     g_watch.otherFaults.store(0, std::memory_order_relaxed);
+    g_watch.directCopyReported.store(false, std::memory_order_relaxed);
 }
 
 struct LoadBiasQuery
@@ -283,6 +288,7 @@ bool ArmGuestWriteWatch(GuestWriteWatchOwner owner, uint32_t guestAddress,
     g_watch.pageSize = pageSize;
     g_watch.guestTarget = guestAddress;
     g_watch.targetSampleLimit = targetSampleLimit;
+    g_watch.directCopyReported.store(false, std::memory_order_relaxed);
     bool isPhysicalAlias = false;
     for (size_t i = 0; i < GuestMemory::kAliasCount; ++i)
     {
@@ -369,8 +375,13 @@ bool ReportGuestWriteWatch(GuestWriteWatchOwner owner, bool rearm)
         const uintptr_t instruction = slot.instruction.load(std::memory_order_relaxed);
         if (instruction == 0)
             break;
-        line.add("  rip {:#x} (ELF address {:#x}) x{}", instruction,
-                 GuestWriteWatchImageAddress(instruction, g_watch.loadBias),
+        const uintptr_t imageAddress = GuestWriteWatchImageAddress(instruction, g_watch.loadBias);
+        Dl_info symbolInfo{};
+        const char *symbol = dladdr(std::bit_cast<void *>(instruction), &symbolInfo) != 0 &&
+                                     symbolInfo.dli_sname != nullptr
+                                 ? symbolInfo.dli_sname
+                                 : "<unknown>";
+        line.add("  rip {:#x} (ELF address {:#x}, {}) x{}", instruction, imageAddress, symbol,
                  slot.count.load(std::memory_order_relaxed));
     }
     line.flush(rearm ? lucent::Level::Debug : lucent::Level::Info, "hle");
@@ -407,6 +418,35 @@ GuestWriteWatchStats CurrentGuestWriteWatchStats(GuestWriteWatchOwner owner)
             .aliasPages = g_watch.aliasCount,
             .targetWrites = g_watch.hits.load(std::memory_order_relaxed),
             .otherPageWrites = g_watch.otherFaults.load(std::memory_order_relaxed)};
+}
+
+bool DrawPacketWriteWatchRequested()
+{
+    static const bool enabled = lucent::config::flag("WATCH_DRAW_PACKET");
+    return enabled;
+}
+
+void ObserveDrawPacketCopy(std::uint32_t destination, std::uint32_t bytes, std::uint32_t caller,
+                           std::uint32_t stackPointer)
+{
+    if (!DrawPacketWriteWatchRequested() || g_watch.aliasCount == 0 ||
+        g_watch.owner != GuestWriteWatchOwner::kDrawPacket ||
+        !g_watch.armed.load(std::memory_order_acquire) ||
+        !GuestWriteWatchCopyCoversTarget(destination, bytes, g_watch.guestTarget))
+    {
+        return;
+    }
+
+    bool expected = false;
+    if (!g_watch.directCopyReported.compare_exchange_strong(expected, true,
+                                                            std::memory_order_acq_rel))
+    {
+        return;
+    }
+    lucent::info("hle",
+                 "draw-packet direct copy covers guest {:#x} for {} bytes from caller {:#x};"
+                 " guest route {}",
+                 g_watch.guestTarget, bytes, caller, FormatGuestBacktrace(stackPointer, caller));
 }
 
 void MaybeArmImageLoadWriteWatch()
@@ -462,8 +502,7 @@ void MaybeArmDrawPacketWriteWatch(uint32_t sourceBase, uint32_t sourceIndex, int
                                   uint32_t swapSequence)
 {
     static DrawPacketWatchSelector selector;
-    static const bool enabled = lucent::config::flag("WATCH_DRAW_PACKET");
-    if (!enabled)
+    if (!DrawPacketWriteWatchRequested())
         return;
     const uint32_t afterSwap = uint32_t(lucent::config::number("WATCH_DRAW_PACKET_AFTER_SWAP", 0));
     const uint32_t ordinal = uint32_t(lucent::config::number("WATCH_DRAW_PACKET_ORDINAL", 0));

@@ -22,6 +22,9 @@ int main()
     assert(!GuestWriteWatchContains(0x1000, 4, 0x0FFF));
     assert(!GuestWriteWatchContains(0x1000, 4, 0x1004));
     assert(!GuestWriteWatchContains(0x1000, 0, 0x1000));
+    assert(gears::GuestWriteWatchCopyCoversTarget(0xA0001000, 16, 0xC000100C));
+    assert(!gears::GuestWriteWatchCopyCoversTarget(0x001000, 16, 0x001010));
+    assert(!gears::GuestWriteWatchCopyCoversTarget(0x001000, 0, 0x001000));
     assert(gears::GuestWriteWatchImageAddress(0xE962F1, 0) == 0xE962F1);
     assert(gears::GuestWriteWatchImageAddress(0x7F00E962F1, 0x7F00000000) == 0xE962F1);
     assert(gears::GuestWriteWatchImageAddress(0x1000, 0x2000) == 0x1000);

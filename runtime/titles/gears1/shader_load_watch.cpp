@@ -4,6 +4,7 @@
 #include "import_stub.h"
 #include "shader_setter_state.h"
 #include "rhi_shader_object_watch.h"
+#include "guest_write_watch.h"
 
 #include <array>
 #include <cstdint>
@@ -48,7 +49,8 @@ void ReportShaderLoadFields(std::string_view label, const ShaderLoadFields &befo
 PPC_FUNC(sub_828D2930)
 {
     if (!(gears::ShaderLoadPacketWatchEnabled() ||
-          gears::titles::gears1::RhiPixelShaderObjectWatchEnabled())) [[likely]]
+          gears::titles::gears1::RhiPixelShaderObjectWatchEnabled() ||
+          gears::DrawPacketWriteWatchRequested())) [[likely]]
     {
         __imp__sub_828D2930(ctx, base);
         return;
@@ -56,6 +58,8 @@ PPC_FUNC(sub_828D2930)
     const std::uint32_t destination = ctx.r3.u32;
     const std::uint32_t bytes = ctx.r5.u32;
     const std::uint32_t caller = std::uint32_t(ctx.lr);
+    if (gears::DrawPacketWriteWatchRequested())
+        gears::ObserveDrawPacketCopy(destination, bytes, caller, ctx.r1.u32);
     gears::ObserveShaderLoadPacketCopy(destination, bytes, caller);
     __imp__sub_828D2930(ctx, base);
     gears::ObserveShaderLoadPacketTransitionCopy(base, destination, bytes, caller);
