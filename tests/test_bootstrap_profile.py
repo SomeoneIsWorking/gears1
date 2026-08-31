@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+"""Tests for the tracked title profile and its two schedule renderers."""
+
+from __future__ import annotations
+
+import os
+import sys
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT / "tools"))
+
+from gearsue3_bootstrap import profile  # noqa: E402
+
+
+class BootstrapProfileTests(unittest.TestCase):
+    def test_repository_profile_is_strict_and_path_portable(self) -> None:
+        selected = profile.load_profile(REPO_ROOT)
+        self.assertEqual(selected.key, "gears1")
+        self.assertEqual(selected.identity.title_id, "415607d5")
+        self.assertFalse(selected.recompiler_template.is_absolute())
+        self.assertNotIn("..", selected.switch_tables_extra.parts)
+
+    def test_frame_table_renders_both_shipping_notations(self) -> None:
+        navigation = profile.load_profile(REPO_ROOT).navigation
+        native = profile.native_schedule(navigation, "90:START~120 600:A 700:LY+ 800:LY0")
+        oracle = profile.oracle_schedule(navigation, "90:START~120 600:A 700:LY+ 800:LY0")
+        self.assertIn("f90:START", native)
+        self.assertIn("f210:", native)
+        self.assertIn("START@90", oracle)
+        self.assertIn("START@202", oracle)
+        self.assertIn("A@600", oracle)
+        self.assertIn("LY+@700", oracle)
+        self.assertEqual(profile.last_frame(navigation, "90:START~120 600:A"), 600)
+
+    def test_invalid_table_is_refused_instead_of_silently_skipped(self) -> None:
+        with self.assertRaisesRegex(profile.ProfileError, "invalid frame-walk action"):
+            profile.parse_frame_walk("90:START 100:TYPO")
+        with self.assertRaisesRegex(profile.ProfileError, "unique and ordered"):
+            profile.parse_frame_walk("100:A 90:B")
+
+    def test_profile_contains_no_machine_path(self) -> None:
+        contents = (REPO_ROOT / "config/titles/gears1.toml").read_text()
+        self.assertNotIn(str(Path.home()), contents)
+        self.assertNotIn(os.environ.get("USER", "__unset__"), contents)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -6,11 +6,32 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 enable_testing()
 
+option(GEARS_REQUIRE_PRODUCT_DEPS
+    "Refuse a reduced build that cannot run the current GearsUE3 product" OFF)
+
 # Python tools run in one locked uv project. Never select an ambient Python:
 # that made CTest and interactive diagnostics exercise different dependencies.
 find_program(GEARS_UV_EXECUTABLE NAMES uv REQUIRED)
+set(Python3_EXECUTABLE "" CACHE FILEPATH
+    "Exact locked Python interpreter supplied by the GearsUE3 initializer")
+if(NOT Python3_EXECUTABLE)
+    execute_process(
+        COMMAND "${GEARS_UV_EXECUTABLE}" run --locked
+                --project "${CMAKE_SOURCE_DIR}" python -c
+                "import sys; print(sys.executable)"
+        RESULT_VARIABLE GEARS_PYTHON_DISCOVERY_RESULT
+        OUTPUT_VARIABLE Python3_EXECUTABLE
+        OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(NOT GEARS_PYTHON_DISCOVERY_RESULT EQUAL 0 OR NOT Python3_EXECUTABLE)
+        message(FATAL_ERROR
+            "Cannot resolve the locked Python interpreter through uv")
+    endif()
+    set(Python3_EXECUTABLE "${Python3_EXECUTABLE}" CACHE FILEPATH
+        "Exact locked Python interpreter supplied by the GearsUE3 initializer" FORCE)
+endif()
 set(GEARS_UV_RUN
-    "${GEARS_UV_EXECUTABLE}" run --locked --project "${CMAKE_SOURCE_DIR}")
+    "${GEARS_UV_EXECUTABLE}" run --locked --project "${CMAKE_SOURCE_DIR}"
+    --python "${Python3_EXECUTABLE}")
 
 # The project accepts the compiler supported by the host and its dependencies.
 # Maintainer verification selects Clang explicitly, but that policy must not
@@ -46,10 +67,22 @@ add_subdirectory(extern/XenonRecomp/XenonUtils XenonUtils EXCLUDE_FROM_ALL)
 # everything downstream of it drops out of the build.
 add_subdirectory(xenia_gpu)
 
+if(GEARS_REQUIRE_PRODUCT_DEPS AND NOT GEARS_HAVE_XENOS_TRANSLATOR)
+    message(FATAL_ERROR
+        "GearsUE3 product build requires the extern/xenia Xenos translator; "
+        "initialize the pinned submodules")
+endif()
+
 # The XMA audio decoder (extern/ffmpeg-xmaframes). Optional in the same way the
 # Xenos translator is: without the submodule, the build simply has no decoder.
 set(GEARS_HAVE_XMA_DECODER OFF)
 include(cmake/ffmpeg_xma.cmake)
+
+if(GEARS_REQUIRE_PRODUCT_DEPS AND NOT GEARS_HAVE_XMA_DECODER)
+    message(FATAL_ERROR
+        "GearsUE3 product build requires the pinned XMA decoder; initialize "
+        "extern/ffmpeg-xmaframes and its dependencies")
+endif()
 
 add_subdirectory(runtime)
 

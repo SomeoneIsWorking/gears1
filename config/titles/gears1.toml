@@ -1,0 +1,38 @@
+schema = 1
+key = "gears1"
+display_name = "Gears of War"
+save_namespace = "gears1"
+
+# Factual interoperability metadata for the one supported retail revision.
+# Provisioning computes these hashes from the user's disc and refuses every
+# other title or revision before generating code.
+[identity]
+title_id = "415607d5"
+savegame_id = "415607d5"
+platform = 2
+disc_number = 1
+disc_count = 1
+xex_sha256 = "df1041da72d2b947e3bb2f701a19fde9e84488dc848fea2decd6d43434efe2d1"
+image_sha256 = "f61cc78e4057bc68a2c65386a0341f6d26a7add3dfd9918007a455750ec6ed5c"
+
+[recompiler]
+template = "config/gears.toml"
+switch_tables_extra = "config/gears_switch_tables.extra.toml"
+
+[navigation]
+# Timed shipping/demo route. Times are guest-input milliseconds; the title only
+# advances this clock while polling the controller.
+menu_walk = "25000:START,25300:,30000:A,30300:,35000:B,35300:,42000:A,42300:,50000:A,50300:,60000:A,60300:,75000:A,75300:,90000:A,90300:,105000:A,105300:,120000:A,120300:"
+menu_walk_min_seconds = 180
+start_walk = "25000:START,25300:"
+checkpoint_walk = "25000:START,25300:,30000:A,30300:,35000:B,35300:,42000:A,42300:,50000:A,50300:,60000:A,60300:"
+repro_rate_walk = "25000:START,25300:,32000:A,32300:,39000:A,39300:,46000:A,46300:,53000:A,53300:,60000:A,60300:,67000:A,67300:,74000:A,74300:"
+camera_pair_frame_walk = "90:START~120 600:A"
+oracle_compare_input = "START@25+8,A@30+2"
+oracle_compare_repeat_start_ms = 30000
+oracle_compare_repeat_period_ms = 2000
+oracle_compare_repeat_hold_ms = 150
+
+# One semantic frame-keyed route rendered into the native and oracle syntaxes.
+frame_walk = "750:START 900:A 1050:B 1260:A 1500:A 1800:A 2250:A 2700:A 3150:A 3600:A 4500:LY+ 5100:LY0 5250:RX+ 5400:RX0 5550:LY+ 6150:LY0"
+button_hold_frames = 8

@@ -63,23 +63,35 @@ approximate, `docs/codemap.md` says where each subsystem lives, and
 ## You must supply the game
 
 **No game or UE3 source is included, fetched, or accepted as a dependency.** To
-build a playable title module you supply your own legally obtained Gears disc
-image. Extraction and recompilation output stay under gitignored `scratch/`.
-Python 3.12 tool dependencies are locked by `uv.lock`; install `uv` and run the
-commands below from the repository root.
+build a playable title module, supply your own legally obtained Gears of War
+disc image. Install `uv`, CMake, Ninja, a C/C++ compiler, SDL3 development
+files, and Vulkan development files, then run from the repository root:
 
 ```sh
 export GEARS_ISO="/path/to/your/Gears of War.iso"
-uv run --locked python tools/gdf_extract.py "$GEARS_ISO" --extract-all scratch/game
+./run.sh
 ```
 
-Everything derived from the disc lands in `scratch/`, which is gitignored.
+You can put `GEARS_ISO="..."` in a gitignored `.env` instead, pass
+`./run.sh --iso <path>`, or place exactly one image in gitignored `roms/`.
+`./run.sh --prepare` runs the same provisioning and build path without launching.
+The initializer names missing packages and prints the exact Homebrew, APT, DNF,
+or Windows installation command; it never installs privileged packages itself.
+
+Provisioning verifies the disc and exact retail revision, initializes pinned
+submodules, extracts a complete content-addressed title tree, analyzes switch
+tables, emits the local recomp module, and builds the current product. All
+disc-derived output remains under `scratch/titles/<disc-sha256>/`; compiler and
+dependency outputs remain under top-level `build/`. Ghidra and private source
+are not prerequisites.
 
 ## Layout
 
 | Path | |
 |---|---|
-| `run.sh` | Build and play (`--headless`, `--menu-walk`, `--no-build`, `--log`); `./run.sh --help` |
+| `run.sh` | Locked fresh-clone initializer and launcher; `./run.sh --help` |
+| `bootstrap.py`, `tools/gearsue3_bootstrap/` | Shipping CLI, prerequisites, exact title provisioning, build, logging, and process lifetime |
+| `config/titles/gears1.toml` | Exact revision identity and title-owned navigation schedules |
 | `config/gears.toml` | XenonRecomp configuration — section addresses, register save/restore helpers |
 | `tools/gdf_extract.py` | Confined, bounds-checked GDF/XDVDFS extractor for the Xbox 360 disc image |
 | `tools/title_identity.py` | Content-addressed disc/XEX identity through XenonRecomp's checked `xex-inspect` loader |
@@ -87,77 +99,36 @@ Everything derived from the disc lands in `scratch/`, which is gitignored.
 | `docs/codemap.md` | Orientation map — what's where, and how far each subsystem really got |
 | `docs/issues/` | Findings registry keyed by symptom (`tools/catalog.py search "..."`) |
 | `debug_journal/` | Dated findings, including the dead ends |
-| `scratch/` | All derived output (gitignored) |
+| `scratch/` | Disc-derived title data and disposable diagnostics (gitignored; never builds) |
+| `build/` | Compiler, build-system, dependency, and locally generated product builds (gitignored) |
 
-## Build and run the recompiler
+## Launch and diagnostics
 
 ```sh
 git clone --recursive https://github.com/SomeoneIsWorking/gears1
-cmake -S extern/XenonRecomp -B scratch/build-xenonrecomp -G Ninja \
-      -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ \
-      -DCMAKE_C_COMPILER=clang
-cmake --build scratch/build-xenonrecomp
-
-# Seal the disc, container, normalized-image, execution, section, import, and
-# helper identities. XEX_INSPECT or --xex-inspect may select another build.
-uv run --locked python tools/title_identity.py --xex scratch/game/default.xex
-
-# Recover jump tables, merge the tracked correction, and generate into a fresh
-# ignored directory. Generated code is never patched after emission.
-mkdir -p scratch/config
-./scratch/build-xenonrecomp/XenonAnalyse/XenonAnalyse \
-    scratch/game/default.xex scratch/config/gears_switch_tables.auto.toml
-uv run --locked python tools/merge_switch_tables.py \
-    scratch/config/gears_switch_tables.auto.toml \
-    config/gears_switch_tables.extra.toml \
-    scratch/config/gears_switch_tables.toml
-tools/cleanup_scratch_path.sh scratch/ppc
-./scratch/build-xenonrecomp/XenonRecomp/XenonRecomp \
-    config/gears.toml extern/XenonRecomp/XenonUtils/ppc_context.h
-```
-
-XenonRecomp needs CMake 3.20+ and Clang 18+. It creates its ignored output
-directory, exits non-zero if any instruction lacks an implementation, and
-seals the effective XEX SHA-256, normalized-image SHA-256, image layout, and
-entry point into the generated `ppc_config.h`. The runtime recomputes that
-identity through the checked loader and refuses a different revision before
-save state, guest memory, generated function mappings, or guest entry.
-
-Then build and run the runtime against the locally generated code:
-
-```sh
+export GEARS_ISO="/path/to/your/Gears of War.iso"
 ./run.sh                 # configure if needed, build, and play
 ./run.sh --menu-walk     # ...driving itself from the title screen into Act 1
 ./run.sh --headless      # no window, for measurement
+./run.sh --prepare       # provision/build only
 ```
+
+The project accepts GCC, Clang, and AppleClang. Maintainer verification uses
+Clang, `clang-format`, and `clang-tidy`; that policy is not imposed on players.
+XenonRecomp exits non-zero if any instruction lacks an implementation and seals
+the exact XEX/image identity into the generated profile. Runtime startup checks
+that identity before save state, guest memory, generated mappings, or guest
+entry activates.
 
 The default run also starts the loopback interactive debug API at
 `http://127.0.0.1:32123`. It can drive the same controller state the guest reads
 and request an authoritative renderer screenshot plus live counters after the
 process has started. See [docs/interactive-debug.md](docs/interactive-debug.md).
 
-`run.sh` is a thin wrapper over the three steps it saves you typing:
-
-```sh
-cmake -S . -B scratch/build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
-      -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang
-cmake --build scratch/build
-./scratch/build/runtime/gears1 scratch/game/default.xex scratch/game
-```
-
-`Debug` is the build type on purpose — a breakpoint in translated guest code has
-to land somewhere meaningful — but it does **not** mean an unoptimised build. The
-191 generated translation units are compiled at `GEARS_PPC_OPT` (default `-O2`)
-and the host runtime at `GEARS_HOST_OPT` (default `-O2`), both with `-g`. Set
-either to `-O0` to bisect a miscompile on that side. The host one was missing
-until it was measured: the renderer's own frame cost fell from 45 ms to 29 ms the
-moment it was compiled the way it had always claimed to be.
-
-The second argument is the directory holding the title's data files, extracted
-from the disc; `GEARS_GAME_DIR` sets the same thing. **It is not optional in
-practice** — without it the runtime warns once and then every file open fails,
-and the title runs just far enough to call `XamLoaderLaunchTitle` and quit,
-which looks like a crash rather than a missing argument.
+`--no-build` is the explicit maintainer path for an already prepared
+`GEARS_GAME_DIR` and `GEARS_BUILD_DIR`; it refuses missing or stale product
+inputs instead of silently configuring a reduced target. `run.sh` never runs
+tests. The standalone verifier and CTest commands are the testing interfaces.
 
 Set `GEARS_LUCENT_DEBUG=heap,loader,kernel,thread,mem` for per-subsystem
 tracing (`all` for everything).

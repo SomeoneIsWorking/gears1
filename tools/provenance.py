@@ -17,7 +17,7 @@ timestamps gave it away. Nothing in either side's filenames recorded the run.
     tools/provenance.py --selftest
 
 THE PAIR ID IS THE JOIN. Two directories belong together iff they carry the same
-`pair`. `layer_capture.sh` drives both sides in one invocation and stamps one id
+`pair`. `layer_capture.py` drives both sides in one invocation and stamps one id
 on both; the split path -- an oracle run producing a camera file, then a separate
 camera-gated capture of ours -- must carry the oracle run's id forward, which is
 what `--pair` is for.

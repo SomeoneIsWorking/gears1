@@ -110,7 +110,7 @@ bool ParseInputScript(const std::string& text, std::vector<ScriptedPress>& out,
     // schedule fire at frame 150000 instead of frame 150 -- i.e. never. That
     // is not a hypothetical: measured, a 1200-frame run with
     // "START@150+270,A@300+120" reported ZERO button presses while capturing
-    // all 3 of its frames, so tools/oracle_lockstep.sh has been comparing our
+    // all 3 of its frames, so tools/oracle_lockstep.py has been comparing our
     // walked runtime against an oracle sitting on the title screen.
     press.at = std::chrono::milliseconds(int64_t(at_seconds));
     press.repeat = std::chrono::milliseconds(int64_t(repeat_seconds));

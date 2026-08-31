@@ -13,7 +13,30 @@ tracked in config/ and merged in here, so regenerating can no longer lose them.
 
     tools/merge_switch_tables.py <generated> <extra> <output>
 """
+import os
+from pathlib import Path
 import sys
+
+
+def merge_switch_tables(generated: Path, extra: Path, output: Path) -> None:
+    """Atomically merge generated discovery with the tracked authored table."""
+
+    body = generated.read_text(encoding="utf-8")
+    authored = extra.read_text(encoding="utf-8")
+    if not body.endswith("\n"):
+        body += "\n"
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    merged = (
+        body
+        + "\n# ---- merged from "
+        + extra.as_posix()
+        + " by tools/merge_switch_tables.py ----\n"
+        + authored
+    )
+    temporary = output.with_name(f".{output.name}.{os.getpid()}.tmp")
+    temporary.write_text(merged, encoding="utf-8")
+    os.replace(temporary, output)
 
 
 def main():
@@ -21,22 +44,8 @@ def main():
         print(__doc__)
         return 2
 
-    generated, extra, output = sys.argv[1:4]
-
-    with open(generated) as handle:
-        body = handle.read()
-    with open(extra) as handle:
-        authored = handle.read()
-
-    if not body.endswith("\n"):
-        body += "\n"
-
-    with open(output, "w") as handle:
-        handle.write(body)
-        handle.write("\n# ---- merged from ")
-        handle.write(extra)
-        handle.write(" by tools/merge_switch_tables.py ----\n")
-        handle.write(authored)
+    generated, extra, output = (Path(value) for value in sys.argv[1:4])
+    merge_switch_tables(generated, extra, output)
 
     print("merged %s + %s -> %s" % (generated, extra, output))
     return 0

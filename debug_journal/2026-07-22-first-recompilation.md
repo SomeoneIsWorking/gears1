@@ -22,7 +22,7 @@ All of these were re-checked against real data, not taken on trust:
 ## Commands
 
 ```
-./scratch/build-xenonrecomp/XenonRecomp/XenonRecomp \
+./build/deps/xenonrecomp/XenonRecomp/XenonRecomp \
     config/gears.toml extern/XenonRecomp/XenonUtils/ppc_context.h
 ```
 

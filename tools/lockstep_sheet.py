@@ -4,7 +4,7 @@
     tools/lockstep_sheet.py [--dir scratch/oracle/lockstep] [--out sheet.png]
                             [--gamma 0.3] [--from N] [--to N]
 
-Reads the filmstrips `tools/oracle_lockstep.sh` leaves under `<dir>/ours` and
+Reads the filmstrips `tools/oracle_lockstep.py` leaves under `<dir>/ours` and
 `<dir>/theirs` and writes one contact sheet with the two sides as adjacent
 columns, one row per guest frame index they share.
 
@@ -87,7 +87,7 @@ def main(argv):
         # identical to one built from a healthy pair.
         print(f"REFUSING: {manifest} does not exist, so this filmstrip has no"
               f" provenance -- no walk, no ours/ours2 control, no record of a"
-              f" side that died. Run tools/oracle_lockstep.sh. Nothing was"
+              f" side that died. Run tools/oracle_lockstep.py. Nothing was"
               f" compared.")
         return 1
 
