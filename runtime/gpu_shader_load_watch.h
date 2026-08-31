@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string_view>
@@ -19,6 +20,9 @@ void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packet
                                   bool immediate);
 void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
                                  std::uint32_t caller);
+[[nodiscard]] std::uint64_t ShaderLoadPacketCopySequence();
 void ReportShaderLoadPacketProducerReturn(std::uint32_t caller, std::uint32_t stackPointer);
+void ReportShaderLoadPacketProducerParent(std::uint64_t copySequence, std::uint32_t caller,
+                                          std::array<std::uint32_t, 6> arguments);
 
 } // namespace gears

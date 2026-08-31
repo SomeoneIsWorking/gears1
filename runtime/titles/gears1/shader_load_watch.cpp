@@ -1,9 +1,11 @@
 #include "gpu_shader_load_watch.h"
 #include "import_stub.h"
 
+#include <array>
 #include <cstdint>
 
 extern "C" PPC_FUNC(__imp__sub_828D2930);
+extern "C" PPC_FUNC(__imp__sub_8254CFA0);
 extern "C" PPC_FUNC(__imp__sub_8254F2B0);
 
 PPC_FUNC(sub_828D2930)
@@ -28,4 +30,20 @@ PPC_FUNC(sub_8254F2B0)
     const std::uint32_t stackPointer = ctx.r1.u32;
     __imp__sub_8254F2B0(ctx, base);
     gears::ReportShaderLoadPacketProducerReturn(caller, stackPointer);
+}
+
+PPC_FUNC(sub_8254CFA0)
+{
+    if (!gears::ShaderLoadPacketWatchEnabled()) [[likely]]
+    {
+        __imp__sub_8254CFA0(ctx, base);
+        return;
+    }
+    const std::uint64_t copySequence = gears::ShaderLoadPacketCopySequence();
+    const std::uint32_t caller = std::uint32_t(ctx.lr);
+    const std::array<std::uint32_t, 6> arguments = {
+        ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32,
+    };
+    __imp__sub_8254CFA0(ctx, base);
+    gears::ReportShaderLoadPacketProducerParent(copySequence, caller, arguments);
 }
