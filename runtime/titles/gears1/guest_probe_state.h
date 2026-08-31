@@ -15,6 +15,8 @@ void CountRingProducerEntry();
 void CountRingProducerOverlap();
 std::uint64_t RingProducerEntries();
 std::uint64_t RingProducerOverlaps();
+void NoteRenderRingReservation(std::uint32_t start, std::uint32_t bytes, std::uint32_t caller);
+void ReportRenderRingReservationForObject(std::uint32_t object);
 
 void ReportLinkerState(std::uint32_t holder);
 void ReportMapChangeSeams();

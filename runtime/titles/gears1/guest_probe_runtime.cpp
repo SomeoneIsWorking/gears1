@@ -2,6 +2,7 @@
 #include "import_stub.h"
 
 #include <atomic>
+#include <iterator>
 #include <map>
 #include <mutex>
 #include <set>
@@ -20,6 +21,7 @@
 #include "guest_backtrace.h"
 #include "guest_memory.h"
 #include "guest_thread.h"
+#include "gpu_shader_load_watch.h"
 
 // ---------------------------------------------------------------------------
 // The render-command ring buffer (catalog #44).
@@ -54,6 +56,14 @@ std::set<long> g_drainThreadIds;
 std::set<long> g_producerThreadIds;
 std::string g_firstDrainThreadName;
 std::string g_firstProducerThreadName;
+
+struct RenderRingReservation
+{
+    uint32_t bytes = 0;
+    uint32_t caller = 0;
+};
+
+std::map<uint32_t, RenderRingReservation> g_ringReservations;
 
 void NoteRingThread(const char *which, std::set<long> &knownThreadIds, std::string &firstThreadName,
                     std::atomic<uint32_t> &count)
@@ -219,7 +229,17 @@ PPC_FUNC(sub_8221CBA8)
         }
     }
 
+    const uint32_t reservationRecord = ctx.r3.u32;
+    const uint32_t reservationCaller = uint32_t(ctx.lr);
     __imp__sub_8221CBA8(ctx, base);
+    if (gears::ShaderLoadPacketWatchEnabled())
+    {
+        const uint32_t start =
+            ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecord + 4));
+        const uint32_t bytes =
+            ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecord + 8));
+        gears::titles::gears1::NoteRenderRingReservation(start, bytes, reservationCaller);
+    }
 }
 
 PPC_FUNC(sub_82444EF0)
@@ -673,6 +693,39 @@ uint64_t RingProducerEntries()
 uint64_t RingProducerOverlaps()
 {
     return g_ringProducerOverlaps.load();
+}
+
+void NoteRenderRingReservation(uint32_t start, uint32_t bytes, uint32_t caller)
+{
+    if (start == 0 || bytes == 0)
+        return;
+    std::lock_guard<std::mutex> guard(g_ringMutex);
+    g_ringReservations.insert_or_assign(start,
+                                        RenderRingReservation{.bytes = bytes, .caller = caller});
+}
+
+void ReportRenderRingReservationForObject(uint32_t object)
+{
+    std::lock_guard<std::mutex> guard(g_ringMutex);
+    auto next = g_ringReservations.upper_bound(object);
+    if (next != g_ringReservations.begin())
+    {
+        const auto reservation = std::prev(next);
+        const uint32_t start = reservation->first;
+        const RenderRingReservation &details = reservation->second;
+        if (object >= start && uint64_t(object) - start < details.bytes)
+        {
+            lucent::info("ring",
+                         "selected shader callback object {:#x} is +{:#x} in a {}-byte"
+                         " render-ring reservation from caller {:#x}",
+                         object, object - start, details.bytes, details.caller);
+            return;
+        }
+    }
+    lucent::error("ring",
+                  "selected shader callback object {:#x} matched no current render-ring"
+                  " reservation ({} reservations recorded); allocator provenance is unavailable",
+                  object, g_ringReservations.size());
 }
 } // namespace gears::titles::gears1
 

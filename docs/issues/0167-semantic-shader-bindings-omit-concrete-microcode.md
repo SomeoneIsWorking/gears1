@@ -128,3 +128,10 @@ exercises an eight-byte store spanning the target. A bounded headless run then c
 write at `0x820E40B8` while mapping the title image. The vtable is loaded title content, not a
 runtime-constructed table. The next discriminator is the dynamic outer callback object that points to
 it, rather than the static table itself.
+
+Render-ring provenance now grounds that object: the selected callback object was exactly the start of
+a 112-byte reservation returned to code at `0x82327D4C`. Raw PPC at that return writes the loaded
+vtable pointer to the block start, copies a 96-byte stack payload into `object+0x10`, and then commits
+the ring reservation. The callback is consequently rebuilt for each queued command, not a persistent
+owner of shader state. Its construction payload is the next evidence boundary; no copied field may
+become a semantic module binding until that stack payload's owner is identified.
