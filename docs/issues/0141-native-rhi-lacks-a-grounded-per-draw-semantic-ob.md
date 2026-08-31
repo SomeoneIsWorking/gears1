@@ -437,3 +437,20 @@ terminal renderer join compares it with explicit missing and mismatch reasons. F
 exact parity, changed scissor state, and both one-sided omissions. A short exact-disc headless launch
 reached frame 1 without the prior variant-dispatch crash but had zero draw samples, so live draw
 parity remains to be covered by a gameplay route.
+
+### Note (2026-08-31) — gameplay falsifies viewport/scissor parity
+
+The bounded scripted gameplay route reached the normal materialized draw path and falsified the
+previous implied parity claim. At frame 572 the first viewport mismatch was explicit: the title
+adapter snapshot was `0:0 1280x720`, scissor `0:0 1280x720`, while the terminal renderer input was
+`0:0 1280x720`, scissor `0:0 1280x512`. By frame 866 the same run had 32,409 semantic matches,
+zero missing joins, and 1,486 viewport mismatches. The comparison now reports both complete states
+in its first-mismatch detail, so this cannot be mistaken for an unexplained counter.
+
+The GPU register watch identifies the immediate source of the renderer value: the guest command
+stream writes `PA_SC_WINDOW_SCISSOR_BR` (`0x2082`) as `0x02000500` (`1280x512`) through
+`SET_CONSTANT type 4 index 128`, while the title-side `0x8222ABF8`/`0x8222AB30` capture reads the
+device shadow as `1280x720`. This is a semantic-owner/representation gap, not evidence for a
+renderer clamp or permission to hardcode 512. The next RE step is to identify which title state
+producer owns that command-stream transition and capture its complete contract; until then the
+viewport state remains partial and no native bypass is authorized.
