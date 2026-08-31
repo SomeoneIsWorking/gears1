@@ -31,10 +31,12 @@ semantic state remains absent after the zero-object setter marker.
 ## Current falsifier
 
 A same-run headless observation must correlate global PM4 shader selections with every normal semantic
-draw and show that the title adapter publishes the same concrete module before each draw. The current
-falsifier is a nonzero PM4 pixel hash alongside an absent semantic pixel state; a deliberately changed
-hash must remain a stage-specific mismatch, and malformed or predicated evidence must stay explicitly
-missing rather than preserving a prior module.
+draw for each supported title and revision and show that the shared engine publishes the same concrete
+module before each draw. The tested Gears 1 interval now has no missing or mismatched shader result;
+the remaining falsifier is a nonzero PM4 shader hash alongside an absent or wrong semantic module in
+another scene, revision, or title. A deliberately changed hash must remain a stage-specific mismatch,
+and malformed or predicated evidence must stay explicitly missing rather than preserving a prior
+module.
 
 ## Packet-producer trace (2026-08-31)
 
@@ -263,3 +265,12 @@ object is zero, while an ordinary zero-object setter still clears the active bin
 frame 1386 with zero renderer-input mismatches and 84,044 exact vertex and 84,044 exact pixel module
 matches at the report point, but 9,308 draws remained missing. This advances the producer/materialization
 boundary only; full live shader parity is still open.
+
+The missing per-draw association was at the wrong boundary: the normal submission span carries shader
+loads, while the renderer executes the copied guest draw stream. The command processor now publishes
+the active modules, already derived from those guest `IM_LOAD` packets, against each executed draw
+packet address. A bounded headless run reached the selected `0x7F740` submission and, at frame 600,
+matched 111 semantic draws to 111 PM4 executions with zero missing or mismatched shader results.
+The renderer comparison at the same report point matched 3,803 semantic draws with zero missing or
+mismatched results and 3,948 exact vertex/pixel module matches. This closes the tested Gears 1
+association gap; issue #167 remains open for broader revision coverage and native execution parity.

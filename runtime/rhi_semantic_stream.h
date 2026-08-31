@@ -207,6 +207,13 @@ struct RhiSemanticDrawState
     RhiSurfaceState surfaceState;
 };
 
+struct RhiShaderPacketModuleEvidence
+{
+    std::uint32_t packetGuestAddress = 0;
+    std::vector<RhiShaderModuleEvidence> vertexModules;
+    std::vector<RhiShaderModuleEvidence> pixelModules;
+};
+
 struct RhiSemanticColorWriteState
 {
     std::uint64_t requested = 0;
@@ -483,6 +490,10 @@ CompareRhiResolvePacket(const RhiSemanticResolve &resolve, const RhiResolvePacke
 void ObserveRhiSemanticDraw(const RhiSemanticDraw &draw, const RhiDrawPacketEvidence &packet);
 void ObserveRhiSemanticBinding(const RhiSemanticBinding &binding,
                                const RhiBindingStateEvidence &state);
+void ObserveRhiShaderPacketModuleEvidence(
+    const std::vector<RhiShaderPacketModuleEvidence> &evidence);
+void ApplyRhiShaderPacketModuleEvidence(RhiSemanticDrawState &state,
+                                        std::uint32_t packetGuestAddress);
 void ObserveRhiSemanticPresent(const RhiSemanticPresent &present,
                                const RhiPresentPacketEvidence &packet);
 void ObserveRhiSemanticResourceLifetime(const RhiSemanticResourceLifetime &lifetime,

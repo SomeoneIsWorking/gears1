@@ -4,7 +4,6 @@
 // separate host owners in gpu_draw.cpp and gpu_present.cpp.
 #include "import_stub.h"
 #include "guest_clock.h"
-
 #include <algorithm>
 #include <array>
 #include <memory>
@@ -25,13 +24,13 @@
 #include <vector>
 #include <lucent/config.h>
 #include <lucent/log.h>
-
 #include "guest_heap.h"
 #include "guest_write_watch.h"
 #include "gpu_present.h"
 #include "gpu_packet_memory.h"
 #include "gpu_register_watch.h"
 #include "gpu_shader_load_watch.h"
+#include "gpu_shader_module_observation.h"
 #include "gpu_swap_packet.h"
 #include "input.h"
 #include "debug_http.h"
@@ -281,26 +280,13 @@ constexpr uint32_t kConstBaseRegisters = 0x2000;
 // Sequencer loads define the active shader pair independently of D3D API paths.
 // GEARS_SHADER_CAPTURE writes their otherwise in-memory payloads to disk.
 // ---------------------------------------------------------------------------
-struct BoundShader
-{
-    uint32_t type = 0; // xenos::ShaderType: 0 vertex, 1 pixel
-    uint32_t dwords = 0;
-    uint32_t address = 0; // physical address (IM_LOAD) or 0 (immediate)
-    uint64_t loads = 0;
-    bool immediate = false;
-    // The microcode as big-endian bytes (as the GPU reads it, and as the Xenos
-    // translator consumes it). Kept so the guest-draw backend can translate the
-    // bound pair at draw time without re-reading it from a capture file.
-    std::vector<uint8_t> ucode;
-};
-
 struct ShaderCaptureState
 {
     bool enabled = false;    // keep the microcode in memory (always: the renderer needs it)
     bool writeFiles = false; // also write it to cap.dir (GEARS_SHADER_CAPTURE)
     bool ready = false;
     std::string dir = "scratch/shaders/bound";
-    std::map<uint64_t, BoundShader> shaders; // ucode hash -> record
+    std::map<uint64_t, gears::GpuCapturedShader> shaders; // ucode hash -> record
     uint64_t imLoads = 0;
     uint64_t imLoadsImmediate = 0;
     uint64_t truncated = 0;        // packet claimed more ucode than the buffer held
@@ -308,7 +294,6 @@ struct ShaderCaptureState
     uint64_t activeVertexHash = 0; // last vertex ucode bound (for the const dump)
     uint64_t activePixelHash = 0;  // last pixel ucode bound
 } g_shaderCapture;
-
 // `ucode` holds the microcode as big-endian bytes, exactly as the GPU reads it,
 // which is also what tools/xenos_translate consumes (std::endian::big).
 void RecordBoundShader(uint32_t type, uint32_t address, uint32_t packetGuestAddress, bool immediate,
@@ -327,7 +312,7 @@ void RecordBoundShader(uint32_t type, uint32_t address, uint32_t packetGuestAddr
         ++it->second.loads;
         return;
     }
-    BoundShader s;
+    gears::GpuCapturedShader s;
     s.type = type;
     s.dwords = uint32_t(ucode.size() / 4);
     s.address = address;
@@ -2717,6 +2702,11 @@ struct CommandProcessor
         if (opcode == 0x22 || opcode == 0x36) // DRAW_INDX / DRAW_INDX_2
         {
             gears::MaybeArmDrawPacketWriteWatch(sourceBase, sourceIndex, depth, lastSwapSequence);
+            const uint32_t packetGuestAddress =
+                (sourceBase != 0 ? sourceBase : g_ringBuffer.base) + sourceIndex * sizeof(uint32_t);
+            gears::ObserveGpuShaderModulesForDraw(
+                packetGuestAddress, g_shaderCapture.activeVertexHash,
+                g_shaderCapture.activePixelHash, g_shaderCapture.shaders);
 
             // Mirror VGT_DRAW_INITIATOR from the packet into the register file so
             // prim_type / index_size are live for the system-constants

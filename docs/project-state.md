@@ -113,11 +113,14 @@ packet spans emitted by retained shader flush `0x822346A8`, follows any `0x82221
 rollover, and publishes the final bounded, unpredicated `IM_LOAD` payload per stage through the
 title-neutral semantic contract. Setter-time object templates are no longer accepted as concrete
 microcode. Focused controls cover positive, zero-load, malformed, rollover, mismatch, and ambiguous
-evidence. Normal command-buffer submissions now use the same parser at the grounded `0x822218C0`
-boundary, including the selected 3327-dword submission at `0x7F740`; a short headless run parsed
-that span completely with 11 vertex loads and 1 pixel load and reached 84,044 exact vertex/pixel
-module matches at the report point with zero mismatches. The run still had 9,308 missing draws, so
-live renderer parity is partial rather than verified; issue #167 owns the remaining falsifier.
+evidence. Normal command-buffer submissions use the same parser at the grounded `0x822218C0`
+boundary, including the selected 3327-dword submission at `0x7F740`; the command processor now
+publishes the active modules at each executed guest draw packet, which is the stream the renderer
+actually consumes. A bounded headless run reached that submission and, at frame 600, compared 111
+semantic draws with 111 PM4 executions and zero missing/mismatched shader results; renderer
+materialization compared 3,803 semantic draws with zero missing or mismatched results and 3,948
+exact vertex/pixel module matches. Broader title/revision coverage and the native execution
+milestone remain open under issue #167.
 
 The compatibility renderer now consumes a single title-neutral `NativeDrawInput` produced by
 `gpu_draw_native_input.*` instead of decoding the same register fields in its orchestration body.

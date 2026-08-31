@@ -635,12 +635,13 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
 
         bool missing = false;
         bool mismatch = false;
+        RhiSemanticDrawState state = observed->state;
+        ApplyRhiShaderPacketModuleEvidence(state, packetGuestAddress);
         RhiRendererDrawEvidence firstMissingEvidence;
         RhiRendererDrawEvidence firstMismatchEvidence;
         for (const RhiRendererDrawInput *input : executions->second)
         {
-            const RhiRendererDrawEvidence evidence =
-                InspectRhiRendererDrawInput(observed->state, *input);
+            const RhiRendererDrawEvidence evidence = InspectRhiRendererDrawInput(state, *input);
             switch (evidence.result)
             {
             case RhiRendererDrawEvidenceResult::Match:

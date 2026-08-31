@@ -200,6 +200,7 @@ add_executable(gears1
     vd_null_gpu.cpp
     gpu_diagnostics_profile.cpp
     gpu_shader_load_watch.cpp
+    gpu_shader_module_observation.cpp
     gpu_present.cpp
     gpu_present_source.cpp
     gpu_present_stage.cpp

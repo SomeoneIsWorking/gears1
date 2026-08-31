@@ -10,6 +10,16 @@ void RunRhiPm4ShaderEvidenceTests()
 {
     constexpr std::uint64_t vertexHash = 0x1122334455667788ull;
     constexpr std::uint64_t pixelHash = 0x123456789ABCDEF0ull;
+    gears::ObserveRhiShaderPacketModuleEvidence({
+        {.packetGuestAddress = 0xA0011000,
+         .vertexModules = {{.guestAddress = 0x10000, .sizeBytes = 48, .hash = vertexHash}},
+         .pixelModules = {{.guestAddress = 0x10200, .sizeBytes = 72, .hash = pixelHash}}},
+    });
+    gears::RhiSemanticDrawState packetState;
+    gears::ApplyRhiShaderPacketModuleEvidence(packetState, 0xA0011000);
+    assert(packetState.vertexShader->shaderModules.front().hash == vertexHash);
+    assert(packetState.pixelShader->shaderModules.front().hash == pixelHash);
+
     const gears::RhiSemanticBinding pixelShader{
         .kind = gears::RhiSemanticBindingKind::PixelShader,
         .object = 0x40107800,
