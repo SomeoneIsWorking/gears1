@@ -406,3 +406,19 @@ zero mismatches through frame 1037. Thus inline packet parsing is necessary obse
 not the unobserved replacement module in this population. The next discriminator must observe the
 global PM4 sequencer-load execution path that feeds renderer shader hashes, then correlate its
 ordered pixel selections with title semantic frames; the single Gears flush wrapper is not enough.
+
+### Note (2026-08-31) — global PM4 shader selections are the renderer source
+
+`rhi_pm4_shader_evidence.*` now owns a bounded asynchronous join between immutable semantic frames
+sealed at guest `VdSwap` and the command processor's `FrameDrawItem` shader selections captured when
+that same swap packet executes. The payload is only canonical packet identity, provenance, and the
+already-executed vertex/pixel FNV hashes; it cannot amend title state or depend on renderer
+materialization. Focused controls cover semantic-first and PM4-first arrival, exact match, changed
+pixel module, absent PM4 packet, and stale late evidence.
+
+The exact-disc Clang headless route reached frame 1020. Its PM4 join reported 103 matches, 13 missing,
+and zero mismatches for the frame, with no unkeyed packets; terminal renderer materialization reported
+the same missing shape. Therefore the compatibility renderer is not inventing replacement hashes and
+the remaining failure is an ordered semantic-publication gap. The next discriminator is to identify
+the retained title command path that issues the PM4 replacement after the zero-object setter marker;
+do not copy PM4 evidence back into semantic state, because that would hide the missing title boundary.

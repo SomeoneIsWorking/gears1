@@ -1838,16 +1838,16 @@ struct CommandProcessor
         // which is mapped at the 0x0 alias; the texture decoder reads it
         // directly (bounds-checked) rather than through the SSBO mirror.
         in.guestWindowBytes = gears::kGuestPhysicalMirrorBytes;
-        in.draws = std::move(frameDraws);
         in.probe = probeRequested;
         // A capture run reports on its last frame. A live run reports never,
         // unless GEARS_DRAW_FRAME_REPORT_EVERY=N asks for a periodic census and
         // screenshot -- it costs ~40 ms, so it is a visible hitch by design.
         const long reportEvery = lucent::config::number("DRAW_FRAME_REPORT_EVERY", 0);
         // Use THIS packet's sequence: the global VdSwap count can already be newer
-        // when the CP catches up, assigning two packets one identity. This is also
-        // the ID used to reject stale packets and drive presentation.
+        // when the CP catches up, assigning two packets one identity and stale rejection.
         const uint64_t guestPresents = lastSwapSequence;
+        gears::ObserveRhiPm4FrameShaderEvidence(guestPresents, frameDraws);
+        in.draws = std::move(frameDraws);
         const bool reportCadenceElapsed =
             reportEvery > 0 && guestPresents / uint64_t(reportEvery) > reportedAtPresent;
         in.report = !diagnosticProbe &&
