@@ -148,3 +148,9 @@ the measured recurrence, `r31=0x40102250`, its method table is `0x41649804`, its
 is `0x4AEFE600` at index three (source record `0x4AEFE680`), and its companion word is `0x41D1C350`.
 These are source locations for the copied payload, not shader-module identities. The two methods
 invoked through that table are the next ground-truth target.
+
+The table stores function descriptors rather than direct code addresses. In the later selected run,
+the first descriptor at `0x82131800` resolves to title entry `0x825A69A8`; the second descriptor at
+`0x401107B0` resolves to `0x00100004`, outside title code. Only the first is currently a valid title
+RE target. The second requires ABI/descriptor evidence before it can be called a method or followed
+as title code.

@@ -5,6 +5,22 @@
 namespace gears::titles::gears1
 {
 
+struct RenderRingReservationProvenance
+{
+    std::uint32_t start = 0;
+    std::uint32_t bytes = 0;
+    std::uint32_t caller = 0;
+    std::uint32_t recordOwner = 0;
+    std::uint32_t recordVtable = 0;
+    std::uint32_t recordMethod0 = 0;
+    std::uint32_t recordMethod4 = 0;
+    std::uint32_t recordMethod0Entry = 0;
+    std::uint32_t recordMethod4Entry = 0;
+    std::uint32_t recordBase = 0;
+    std::uint32_t recordIndex = 0;
+    std::uint32_t companionWord = 0;
+};
+
 void NotePoolEvent(std::uint32_t address, bool freed);
 bool LastPoolEventWasFree(std::uint32_t address, std::uint64_t &ordinal, bool &known);
 void ReportLastFree(std::uint32_t address);
@@ -15,10 +31,7 @@ void CountRingProducerEntry();
 void CountRingProducerOverlap();
 std::uint64_t RingProducerEntries();
 std::uint64_t RingProducerOverlaps();
-void NoteRenderRingReservation(std::uint32_t start, std::uint32_t bytes, std::uint32_t caller,
-                               std::uint32_t recordOwner, std::uint32_t recordVtable,
-                               std::uint32_t recordBase, std::uint32_t recordIndex,
-                               std::uint32_t companionWord);
+void NoteRenderRingReservation(RenderRingReservationProvenance reservation);
 void ReportRenderRingReservationForObject(std::uint32_t object);
 
 void ReportLinkerState(std::uint32_t holder);
