@@ -213,3 +213,12 @@ target write before the selected PM4 load; the write resolved to recompiled gues
 `__imp__sub_822212D8`. The queued parent packet is therefore produced after the selected swap, not a
 stale pre-marker ring entry. The next ground-truth target is `0x822212D8`'s producer inputs and write
 semantics; the semantic stream remains unchanged.
+
+The writer's caller is the command-list interpreter at `0x8223B2AC`. Its `0x82000000` command path
+assembles a two-word payload from the current command record and invokes `0x822212D8`; the writer
+normalizes the second word into the device-address space for its optional consumers, emits the fixed
+three-dword ring packet (`0xC0013F00` plus the two payload words), and advances the producer index with
+the required ordering barriers. This is a command-stream transport boundary, not evidence that either
+payload word names a shader object or microcode. The next ground-truth target is the command record
+that selected this `0x82000000` operation and its upstream producer; the semantic stream remains
+unchanged.
