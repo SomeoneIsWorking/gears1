@@ -497,7 +497,15 @@ void ObserveRhiSemanticColorWriteState(const RhiSemanticColorWriteState &state)
         {.sequence = g_stream.nextSequence++,
          .payload = RhiObservedColorWriteState{.state = state, .evidence = evidence}});
 }
-
+void ObserveRhiSemanticViewport(const RhiViewportState &state)
+{
+    if (!RhiSemanticObservationEnabled())
+        return;
+    std::lock_guard guard(g_stream.mutex);
+    g_stream.pendingEvents.push_back(
+        {.sequence = g_stream.nextSequence++, .payload = RhiObservedViewport{.state = state}});
+    g_stream.semanticState.ApplyViewport(state);
+}
 void ObserveRhiSemanticResolve(const RhiSemanticResolve &resolve,
                                const RhiResolvePacketEvidence &packet)
 {
@@ -617,6 +625,8 @@ RhiSemanticFrame SealRhiSemanticFrame(std::uint64_t frameSequence)
             }
             continue;
         }
+        if (std::holds_alternative<RhiObservedViewport>(event.payload))
+            continue;
         if (const auto *observed = std::get_if<RhiObservedResolve>(&event.payload))
         {
             ++frame.resolves;
@@ -947,7 +957,8 @@ RhiSemanticFrame ReportRhiSemanticFrame(std::uint64_t frameSequence)
             }
             continue;
         }
-
+        if (std::holds_alternative<RhiObservedViewport>(event.payload))
+            continue;
         if (const auto *observed = std::get_if<RhiObservedResolve>(&event.payload))
         {
             if (observed->evidence != RhiResolveEvidenceResult::Match)

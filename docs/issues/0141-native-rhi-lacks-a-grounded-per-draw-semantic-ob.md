@@ -423,11 +423,17 @@ the remaining failure is an ordered semantic-publication gap. The next discrimin
 the retained title command path that issues the PM4 replacement after the zero-object setter marker;
 do not copy PM4 evidence back into semantic state, because that would hide the missing title boundary.
 
-### Note (2026-08-31) — viewport candidate requires a clean database
+### Note (2026-08-31) — viewport setter grounded by raw image disassembly
 
-A first lookup decompiled `0x8222ABF8` as a six-word viewport update calling `0x8222AB30`, whose
-body writes packed scissor bounds. That result is not sufficient evidence for an implementation:
-the existing Ghidra database intentionally replaces the save/restore-helper range containing
-`0x828D2810` with `blr`, so the state-object return path is unavailable. The viewport setter remains
-an unimplemented candidate until a clean or raw-disassembly-backed analysis establishes its object
-provenance and live call frequency.
+The existing Ghidra database still intentionally replaces the save/restore-helper range containing
+`0x828D2810` with `blr`, so its apparent function boundary is not evidence. A raw disassembly of
+the extracted current image instead establishes the exact contract: `0x8222ABF8` receives the state
+object in `r3`, writes viewport x/y/width/height and min/max depth at `+0x3058..+0x306C`, then
+calls `0x8222AB30`; that helper reads the same viewport fields and writes packed scissor top-left
+and bottom-right endpoints at `+0x2844` and `+0x2848`. The Gears 1 adapter now retains the generated
+body as its super-call, captures those fields after the call, and publishes one title-neutral
+viewport/scissor observation. The semantic tracker carries it into each draw snapshot, and the
+terminal renderer join compares it with explicit missing and mismatch reasons. Focused tests cover
+exact parity, changed scissor state, and both one-sided omissions. A short exact-disc headless launch
+reached frame 1 without the prior variant-dispatch crash but had zero draw samples, so live draw
+parity remains to be covered by a gameplay route.

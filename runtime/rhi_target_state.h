@@ -25,6 +25,24 @@ struct RhiSurfaceState
     bool operator==(const RhiSurfaceState &) const = default;
 };
 
+// Host-independent viewport and scissor state. The title adapter and the
+// compatibility renderer compare this state before any host-API conversion.
+struct RhiViewportState
+{
+    std::uint32_t x = 0;
+    std::uint32_t y = 0;
+    std::uint32_t w = 0;
+    std::uint32_t h = 0;
+    float zMin = 0.0f;
+    float zMax = 1.0f;
+    std::uint32_t scissorX = 0;
+    std::uint32_t scissorY = 0;
+    std::uint32_t scissorW = 0;
+    std::uint32_t scissorH = 0;
+
+    bool operator==(const RhiViewportState &) const = default;
+};
+
 [[nodiscard]] constexpr std::int32_t DecodeRhiSignedColorExponent(std::uint32_t descriptor)
 {
     std::int32_t exponent = static_cast<std::int32_t>((descriptor >> 20) & 0x3F);

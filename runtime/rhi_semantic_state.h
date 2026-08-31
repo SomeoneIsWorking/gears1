@@ -17,6 +17,7 @@ class RhiSemanticStateTracker
     void ApplyVertexStreamReset(const RhiSemanticVertexStreamReset &reset);
     [[nodiscard]] RhiColorWriteStateEvidenceResult
     ApplyColorWriteState(const RhiSemanticColorWriteState &state);
+    void ApplyViewport(const RhiViewportState &state);
     [[nodiscard]] RhiSemanticDrawState SnapshotDraw(const RhiSemanticDraw &draw) const;
     void Reset();
 
@@ -30,6 +31,7 @@ class RhiSemanticStateTracker
     std::map<std::uint32_t, RhiSemanticRenderTarget> colorTargets_;
     std::optional<RhiSemanticRenderTarget> depthStencilTarget_;
     std::optional<RhiSurfaceState> surfaceState_;
+    std::optional<RhiViewportState> viewportState_;
 };
 
 } // namespace gears

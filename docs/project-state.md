@@ -101,7 +101,9 @@ correlated semantic draws with zero missing or value-mismatched renderer inputs.
 fetch-descriptor parity, not texture content, backing-resource realization, or sampled pixels.
 
 Complete shader modules/constants, texture content/resource realization, remaining output state,
-and pixels are not yet compared. Claims C102/C103/C104/C105 and instruments I067/I068 record this
+and pixels are not yet compared. The title viewport/scissor setter is now grounded and its state is
+compared at the terminal draw boundary; live startup reached frame 1 without variant-dispatch
+failure but produced no semantic draw samples. Claims C102/C103/C104/C105 and instruments I067/I068 record this
 materialization evidence. The resolve observer's false negative on
 a retained command-buffer allocation transition is fixed with a bounded lower-pointer retry, and a headless walk
 crossed the prior refusal region through frame 2280. The new `native_rhi.*` plan boundary accepts the

@@ -48,6 +48,8 @@ struct RhiRendererDrawInput
     RhiRenderTargetDescriptorState colorTarget;
     RhiRenderTargetDescriptorState depthTarget;
     RhiSurfaceState surfaceState;
+    bool viewportStatePresent = false;
+    RhiViewportState viewportState;
 };
 
 struct RhiRendererFrameInput
@@ -102,6 +104,9 @@ enum class RhiRendererDrawEvidenceReason : std::uint8_t
     SurfaceState,
     ColorTargetState,
     DepthTargetState,
+    RendererViewportStateMissing,
+    SemanticViewportStateMissing,
+    ViewportState,
     Count,
 };
 

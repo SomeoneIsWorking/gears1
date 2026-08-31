@@ -89,6 +89,12 @@ const char *RhiRendererEvidenceReasonName(RhiRendererDrawEvidenceReason reason)
         return "color-target-state";
     case RhiRendererDrawEvidenceReason::DepthTargetState:
         return "depth-target-state";
+    case RhiRendererDrawEvidenceReason::RendererViewportStateMissing:
+        return "renderer-viewport-state-missing";
+    case RhiRendererDrawEvidenceReason::SemanticViewportStateMissing:
+        return "semantic-viewport-state-missing";
+    case RhiRendererDrawEvidenceReason::ViewportState:
+        return "viewport-state";
     case RhiRendererDrawEvidenceReason::Count:
         return "count";
     }
