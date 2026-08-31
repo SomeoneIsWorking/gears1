@@ -73,6 +73,9 @@ struct RendererReportTotals
     std::uint32_t firstTextureMismatchDword = 0;
     std::uint32_t firstSemanticTextureValue = 0;
     std::uint32_t firstRendererTextureValue = 0;
+    bool firstViewportMismatchPresent = false;
+    RhiViewportState firstSemanticViewport;
+    RhiViewportState firstRendererViewport;
     bool firstShaderMismatchPresent = false;
     bool firstVertexShaderMismatch = false;
     std::uint32_t firstSemanticShaderObject = 0;
@@ -180,6 +183,9 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
         g_reportTotals.firstTextureMismatchDword = comparison.firstTextureMismatchDword;
         g_reportTotals.firstSemanticTextureValue = comparison.firstSemanticTextureValue;
         g_reportTotals.firstRendererTextureValue = comparison.firstRendererTextureValue;
+        g_reportTotals.firstViewportMismatchPresent = comparison.firstViewportMismatchPresent;
+        g_reportTotals.firstSemanticViewport = comparison.firstSemanticViewport;
+        g_reportTotals.firstRendererViewport = comparison.firstRendererViewport;
         g_reportTotals.firstShaderMismatchPresent = comparison.firstShaderMismatchPresent;
         g_reportTotals.firstVertexShaderMismatch = comparison.firstVertexShaderMismatch;
         g_reportTotals.firstSemanticShaderObject = comparison.firstSemanticShaderObject;
@@ -207,7 +213,9 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
             " {} source conflict), {} unkeyed"
             " renderer draw(s), {} duplicate frame(s); current frame"
             " {}{}; first missing semantic packet {:#x}, first mismatched semantic packet"
-            " {:#x} ({}; texture detail {} slot {} dword {} semantic {:#x} renderer {:#x}),"
+            " {:#x} ({}; texture detail {} slot {} dword {} semantic {:#x} renderer {:#x};"
+            " viewport detail {} semantic {}:{} {}x{} {:.9g}..{:.9g} scissor {}:{} {}x{};"
+            " renderer {}:{} {}x{} {:.9g}..{:.9g} scissor {}:{} {}x{}),"
             " shader detail {} {} object {:#x} renderer {:#018x} modules {}"
             " [{:#018x}, {:#018x}],"
             " first"
@@ -231,6 +239,21 @@ void ReportComparison(std::uint64_t frameSequence, const RhiRendererFrameCompari
             g_reportTotals.firstTextureMismatchPresent ? "present" : "absent",
             g_reportTotals.firstTextureMismatchSlot, g_reportTotals.firstTextureMismatchDword,
             g_reportTotals.firstSemanticTextureValue, g_reportTotals.firstRendererTextureValue,
+            g_reportTotals.firstViewportMismatchPresent ? "present" : "absent",
+            g_reportTotals.firstSemanticViewport.x, g_reportTotals.firstSemanticViewport.y,
+            g_reportTotals.firstSemanticViewport.w, g_reportTotals.firstSemanticViewport.h,
+            g_reportTotals.firstSemanticViewport.zMin, g_reportTotals.firstSemanticViewport.zMax,
+            g_reportTotals.firstSemanticViewport.scissorX,
+            g_reportTotals.firstSemanticViewport.scissorY,
+            g_reportTotals.firstSemanticViewport.scissorW,
+            g_reportTotals.firstSemanticViewport.scissorH, g_reportTotals.firstRendererViewport.x,
+            g_reportTotals.firstRendererViewport.y, g_reportTotals.firstRendererViewport.w,
+            g_reportTotals.firstRendererViewport.h, g_reportTotals.firstRendererViewport.zMin,
+            g_reportTotals.firstRendererViewport.zMax,
+            g_reportTotals.firstRendererViewport.scissorX,
+            g_reportTotals.firstRendererViewport.scissorY,
+            g_reportTotals.firstRendererViewport.scissorW,
+            g_reportTotals.firstRendererViewport.scissorH,
             g_reportTotals.firstShaderMismatchPresent ? "present" : "absent",
             g_reportTotals.firstVertexShaderMismatch ? "vertex" : "pixel",
             g_reportTotals.firstSemanticShaderObject, g_reportTotals.firstRendererShaderHash,
@@ -470,8 +493,11 @@ RhiRendererDrawEvidence InspectRhiRendererDrawInput(const RhiSemanticDrawState &
         return {RhiRendererDrawEvidenceResult::Missing,
                 RhiRendererDrawEvidenceReason::SemanticViewportStateMissing};
     if (state.viewportStatePresent && state.viewportState != renderer.viewportState)
-        return {RhiRendererDrawEvidenceResult::Mismatch,
-                RhiRendererDrawEvidenceReason::ViewportState};
+        return {.result = RhiRendererDrawEvidenceResult::Mismatch,
+                .reason = RhiRendererDrawEvidenceReason::ViewportState,
+                .viewportMismatchPresent = true,
+                .semanticViewport = state.viewportState,
+                .rendererViewport = renderer.viewportState};
 
     bool targetParityExpected = state.surfaceStatePresent;
     const RhiSemanticRenderTarget *colorTarget = nullptr;
@@ -686,6 +712,12 @@ RhiRendererFrameComparison CompareRhiRendererDraws(const RhiSemanticFrame &frame
                     result.firstTextureMismatchDword = firstMismatchEvidence.textureDword;
                     result.firstSemanticTextureValue = firstMismatchEvidence.semanticTextureValue;
                     result.firstRendererTextureValue = firstMismatchEvidence.rendererTextureValue;
+                }
+                if (firstMismatchEvidence.viewportMismatchPresent)
+                {
+                    result.firstViewportMismatchPresent = true;
+                    result.firstSemanticViewport = firstMismatchEvidence.semanticViewport;
+                    result.firstRendererViewport = firstMismatchEvidence.rendererViewport;
                 }
                 if (firstMismatchEvidence.shaderMismatchPresent)
                 {

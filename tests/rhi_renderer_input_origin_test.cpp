@@ -72,6 +72,9 @@ void TestRhiRendererViewportParity()
         gears::InspectRhiRendererDrawInput(semantic, renderer);
     assert(mismatch.result == gears::RhiRendererDrawEvidenceResult::Mismatch);
     assert(mismatch.reason == gears::RhiRendererDrawEvidenceReason::ViewportState);
+    assert(mismatch.viewportMismatchPresent);
+    assert(mismatch.semanticViewport == viewport);
+    assert(mismatch.rendererViewport.scissorH == viewport.scissorH + 1);
 
     renderer.viewportState = viewport;
     renderer.viewportStatePresent = false;

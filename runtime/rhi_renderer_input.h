@@ -119,6 +119,9 @@ struct RhiRendererDrawEvidence
     std::uint32_t textureDword = 0;
     std::uint32_t semanticTextureValue = 0;
     std::uint32_t rendererTextureValue = 0;
+    bool viewportMismatchPresent = false;
+    RhiViewportState semanticViewport;
+    RhiViewportState rendererViewport;
     bool vertexShaderModuleMatched = false;
     bool pixelShaderModuleMatched = false;
     bool shaderMismatchPresent = false;
@@ -168,6 +171,9 @@ struct RhiRendererFrameComparison
     std::uint32_t firstTextureMismatchDword = 0;
     std::uint32_t firstSemanticTextureValue = 0;
     std::uint32_t firstRendererTextureValue = 0;
+    bool firstViewportMismatchPresent = false;
+    RhiViewportState firstSemanticViewport;
+    RhiViewportState firstRendererViewport;
     bool firstShaderMismatchPresent = false;
     bool firstVertexShaderMismatch = false;
     std::uint32_t firstSemanticShaderObject = 0;
