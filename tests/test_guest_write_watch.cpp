@@ -34,6 +34,10 @@ int main()
     assert(gears::ParseShaderLoadWatchHash("0X63c971f5e9d59913") == 0x63C971F5E9D59913ULL);
     assert(!gears::ParseShaderLoadWatchHash("not-a-hash"));
     assert(!gears::ParseShaderLoadWatchHash("0x"));
+    assert(gears::ParseShaderLoadWatchAfterSwap("0") == 0);
+    assert(gears::ParseShaderLoadWatchAfterSwap("571") == 571);
+    assert(!gears::ParseShaderLoadWatchAfterSwap("-1"));
+    assert(!gears::ParseShaderLoadWatchAfterSwap("571.0"));
     assert(gears::ShaderLoadWatchCopyCoversTarget(0xA0001000, 16, 0xC000100C));
     assert(!gears::ShaderLoadWatchCopyCoversTarget(0x001000, 16, 0x001010));
     assert(!gears::ShaderLoadWatchCopyCoversTarget(0x001000, 0, 0x001000));

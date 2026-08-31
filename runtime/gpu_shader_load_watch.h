@@ -10,6 +10,9 @@ namespace gears
 
 // Parses the hexadecimal shader hash selected by GEARS_WATCH_SHADER_LOAD_HASH.
 [[nodiscard]] std::optional<std::uint64_t> ParseShaderLoadWatchHash(std::string_view text);
+// Parses the completed PM4 swap interval selected by
+// GEARS_WATCH_SHADER_LOAD_AFTER_SWAP. Zero selects startup before the first swap.
+[[nodiscard]] std::optional<std::uint32_t> ParseShaderLoadWatchAfterSwap(std::string_view text);
 [[nodiscard]] bool ShaderLoadWatchCopyCoversTarget(std::uint32_t destination, std::uint32_t bytes,
                                                    std::uint32_t target);
 [[nodiscard]] bool ShaderLoadPacketWatchEnabled();
@@ -17,7 +20,7 @@ namespace gears
 // Observes the exact PM4 packet that selected a shader. The optional watch is
 // diagnostic only: it never changes the command processor's shader state.
 void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packetGuestAddress,
-                                  bool immediate);
+                                  bool immediate, std::uint32_t completedSwapSequence);
 void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
                                  std::uint32_t caller);
 [[nodiscard]] std::uint64_t ShaderLoadPacketCopySequence();

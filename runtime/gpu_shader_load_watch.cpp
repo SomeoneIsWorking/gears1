@@ -47,6 +47,24 @@ const std::optional<std::uint64_t> &ConfiguredShaderLoadWatchHash()
     return hash;
 }
 
+const std::optional<std::uint32_t> &ConfiguredShaderLoadWatchAfterSwap()
+{
+    static const std::optional<std::uint32_t> sequence = []
+    {
+        const std::string &configured = lucent::config::text("WATCH_SHADER_LOAD_AFTER_SWAP");
+        if (configured.empty())
+            return std::optional<std::uint32_t>{};
+        const std::optional<std::uint32_t> parsed = ParseShaderLoadWatchAfterSwap(configured);
+        if (!parsed)
+            lucent::error(
+                "hle",
+                "WATCH_SHADER_LOAD_AFTER_SWAP must be one unsigned decimal swap sequence, got {}",
+                configured);
+        return parsed;
+    }();
+    return sequence;
+}
+
 } // namespace
 
 std::optional<std::uint64_t> ParseShaderLoadWatchHash(std::string_view text)
@@ -61,6 +79,18 @@ std::optional<std::uint64_t> ParseShaderLoadWatchHash(std::string_view text)
     if (error != std::errc{} || end != text.data() + text.size())
         return std::nullopt;
     return hash;
+}
+
+std::optional<std::uint32_t> ParseShaderLoadWatchAfterSwap(std::string_view text)
+{
+    if (text.empty())
+        return std::nullopt;
+
+    std::uint32_t sequence = 0;
+    const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), sequence);
+    if (error != std::errc{} || end != text.data() + text.size())
+        return std::nullopt;
+    return sequence;
 }
 
 bool ShaderLoadWatchCopyCoversTarget(std::uint32_t destination, std::uint32_t bytes,
@@ -80,10 +110,12 @@ bool ShaderLoadPacketWatchEnabled()
 }
 
 void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packetGuestAddress,
-                                  bool immediate)
+                                  bool immediate, std::uint32_t completedSwapSequence)
 {
     const std::optional<std::uint64_t> &configured = ConfiguredShaderLoadWatchHash();
+    const std::optional<std::uint32_t> &afterSwap = ConfiguredShaderLoadWatchAfterSwap();
     if (!configured || *configured != shaderHash ||
+        (afterSwap && *afterSwap != completedSwapSequence) ||
         g_state.writeReported.load(std::memory_order_acquire))
         return;
     bool expected = false;
@@ -92,8 +124,11 @@ void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packet
         if (!ArmGuestWriteWatch(GuestWriteWatchOwner::kShaderLoadPacket, packetGuestAddress, 1))
             return;
         g_state.packetGuestAddress.store(packetGuestAddress, std::memory_order_release);
-        lucent::info("hle", "shader-load packet watch selected {} shader {:#018x} at guest {:#x}",
-                     immediate ? "inline" : "memory-backed", shaderHash, packetGuestAddress);
+        lucent::info(
+            "hle",
+            "shader-load packet watch selected {} shader {:#018x} at guest {:#x} after swap {}",
+            immediate ? "inline" : "memory-backed", shaderHash, packetGuestAddress,
+            completedSwapSequence);
     }
     if (ReportGuestWriteWatch(GuestWriteWatchOwner::kShaderLoadPacket, false))
         g_state.writeReported.store(true, std::memory_order_release);
