@@ -29,6 +29,8 @@ struct ShaderLoadWatchState
     std::atomic<bool> copyReported{false};
     std::atomic<bool> writeReported{false};
     std::atomic<std::uint32_t> guestSwapSequence{0};
+    std::atomic<std::uint32_t> lastSelectedFlushSwap{0};
+    std::atomic<bool> selectedFlushObserved{false};
     std::atomic<bool> transitionMarkerArmed{false};
     std::atomic<bool> transitionReported{false};
 };
@@ -236,6 +238,31 @@ void ArmShaderLoadPacketTransitionFromZeroMarker()
     if (g_state.transitionMarkerArmed.compare_exchange_strong(expected, true,
                                                               std::memory_order_acq_rel))
     {
+        const std::uint32_t lastSelectedFlushSwap =
+            g_state.lastSelectedFlushSwap.load(std::memory_order_acquire);
+        if (!g_state.selectedFlushObserved.load(std::memory_order_acquire))
+        {
+            lucent::info("hle",
+                         "shader-load zero-marker transition saw no selected retained shader flush"
+                         " before guest swap {}",
+                         *afterSwap);
+        }
+        else if (*afterSwap != 0 && lastSelectedFlushSwap == *afterSwap - 1)
+        {
+            lucent::info(
+                "hle",
+                "shader-load zero-marker transition follows a selected retained shader flush"
+                " in guest interval {}",
+                lastSelectedFlushSwap);
+        }
+        else
+        {
+            lucent::info(
+                "hle",
+                "shader-load zero-marker transition's latest selected retained shader flush"
+                " was in guest interval {}, not the preceding interval",
+                lastSelectedFlushSwap);
+        }
         lucent::info("hle", "shader-load zero-marker transition armed after guest swap {}",
                      *afterSwap);
     }
@@ -244,7 +271,15 @@ void ArmShaderLoadPacketTransitionFromZeroMarker()
 void ObserveShaderLoadPacketTransitionFlush(std::uint64_t shaderHash)
 {
     const std::optional<std::uint64_t> &configured = ConfiguredShaderLoadWatchHash();
-    if (!configured || *configured != shaderHash || !ShaderLoadPacketTransitionWatchEnabled() ||
+    if (!configured || *configured != shaderHash)
+    {
+        return;
+    }
+
+    g_state.lastSelectedFlushSwap.store(g_state.guestSwapSequence.load(std::memory_order_acquire),
+                                        std::memory_order_release);
+    g_state.selectedFlushObserved.store(true, std::memory_order_release);
+    if (!ShaderLoadPacketTransitionWatchEnabled() ||
         !g_state.transitionMarkerArmed.exchange(false, std::memory_order_acq_rel))
     {
         return;

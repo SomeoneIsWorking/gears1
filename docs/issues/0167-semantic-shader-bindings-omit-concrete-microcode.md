@@ -194,3 +194,10 @@ statically referenced flush callee of the four normal draw wrappers. It did not 
 module before the command processor reached it. The replacement is therefore not a post-marker
 emission through either grounded production seam. The next probe must distinguish an earlier queued
 write from a different producer; adding the PM4 result to semantic state remains prohibited.
+
+The flush seam then recorded the configured hash before arming, rather than treating a missing log as
+evidence. The same bounded capture reported no selected retained shader flush before guest swap 571,
+then no selected flush or complete generic-copy packet between the marker and command-processor
+execution. Since static references limit that flush to the four normal draw wrappers, the selected
+replacement module is outside that normal draw-flush family. The next attribution target is a separate
+queued producer; do not retry these two ruled-out seams or infer semantic shader state from PM4.
