@@ -24,6 +24,11 @@ done/partial/missing inventory.
 
 ## Current focus
 
+**Active title/revision:** Gears 1, the exact locally provisioned revision. Its remaining gates are
+the complete native RHI frontend and retained/native parity, sustained 120 FPS native rendering,
+and the semantic 60 Hz title-production enhancement. Gears 2 identity evidence is retained as a
+shared-boundary fact, not as an active title workstream.
+
 S004 is the current focus: move measured, parity-checked RHI operations from retained bodies to
 native owners while keeping runtime retained/A/B controls. The Vulkan resource owner now provides
 explicit host buffer/colour-image allocation and fence-retainable leases, but it is not live-wired
