@@ -15,6 +15,8 @@ struct RenderRingReservationProvenance
     std::uint32_t recordPrimaryDescriptor = 0;
     std::uint32_t recordPrimaryTarget = 0;
     std::uint32_t recordSecondaryTarget = 0;
+    std::uint32_t recordPrimaryValue = 0;
+    std::uint32_t recordSecondaryValue = 0;
     std::uint32_t recordBase = 0;
     std::uint32_t recordIndex = 0;
     std::uint32_t companionWord = 0;
