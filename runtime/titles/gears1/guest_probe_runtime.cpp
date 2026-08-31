@@ -44,6 +44,9 @@ extern "C" PPC_FUNC(__imp__sub_8221CBA8);
 namespace
 {
 constexpr uint32_t kRenderRing = 0x82C0CB24;
+// The return address after sub_8221CBA8 in the measured 0x82327CA4 callback
+// producer. Its r31 owns the 64-byte record copied into the callback payload.
+constexpr uint32_t kShaderCallbackReservationReturn = 0x82327D4C;
 
 std::atomic<uint32_t> g_drainThreads{0};
 std::atomic<uint32_t> g_producerThreads{0};
@@ -61,6 +64,11 @@ struct RenderRingReservation
 {
     uint32_t bytes = 0;
     uint32_t caller = 0;
+    uint32_t recordOwner = 0;
+    uint32_t recordVtable = 0;
+    uint32_t recordBase = 0;
+    uint32_t recordIndex = 0;
+    uint32_t companionWord = 0;
 };
 
 std::map<uint32_t, RenderRingReservation> g_ringReservations;
@@ -231,6 +239,19 @@ PPC_FUNC(sub_8221CBA8)
 
     const uint32_t reservationRecord = ctx.r3.u32;
     const uint32_t reservationCaller = uint32_t(ctx.lr);
+    const uint32_t reservationRecordOwner = ctx.r31.u32;
+    uint32_t recordVtable = 0;
+    uint32_t recordBase = 0;
+    uint32_t recordIndex = 0;
+    uint32_t companionWord = 0;
+    if (reservationCaller == kShaderCallbackReservationReturn && reservationRecordOwner != 0)
+    {
+        recordVtable = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 4));
+        recordBase = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0xC));
+        recordIndex = ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0x10));
+        companionWord =
+            ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecordOwner + 0x1C));
+    }
     __imp__sub_8221CBA8(ctx, base);
     if (gears::ShaderLoadPacketWatchEnabled())
     {
@@ -238,7 +259,9 @@ PPC_FUNC(sub_8221CBA8)
             ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecord + 4));
         const uint32_t bytes =
             ByteSwap(*gears::Memory().Translate<uint32_t>(reservationRecord + 8));
-        gears::titles::gears1::NoteRenderRingReservation(start, bytes, reservationCaller);
+        gears::titles::gears1::NoteRenderRingReservation(start, bytes, reservationCaller,
+                                                         reservationRecordOwner, recordVtable,
+                                                         recordBase, recordIndex, companionWord);
     }
 }
 
@@ -695,13 +718,21 @@ uint64_t RingProducerOverlaps()
     return g_ringProducerOverlaps.load();
 }
 
-void NoteRenderRingReservation(uint32_t start, uint32_t bytes, uint32_t caller)
+void NoteRenderRingReservation(uint32_t start, uint32_t bytes, uint32_t caller,
+                               uint32_t recordOwner, uint32_t recordVtable, uint32_t recordBase,
+                               uint32_t recordIndex, uint32_t companionWord)
 {
     if (start == 0 || bytes == 0)
         return;
     std::lock_guard<std::mutex> guard(g_ringMutex);
     g_ringReservations.insert_or_assign(start,
-                                        RenderRingReservation{.bytes = bytes, .caller = caller});
+                                        RenderRingReservation{.bytes = bytes,
+                                                              .caller = caller,
+                                                              .recordOwner = recordOwner,
+                                                              .recordVtable = recordVtable,
+                                                              .recordBase = recordBase,
+                                                              .recordIndex = recordIndex,
+                                                              .companionWord = companionWord});
 }
 
 void ReportRenderRingReservationForObject(uint32_t object)
@@ -717,8 +748,11 @@ void ReportRenderRingReservationForObject(uint32_t object)
         {
             lucent::info("ring",
                          "selected shader callback object {:#x} is +{:#x} in a {}-byte"
-                         " render-ring reservation from caller {:#x}",
-                         object, object - start, details.bytes, details.caller);
+                         " render-ring reservation from caller {:#x}; record owner r31={:#x},"
+                         " vtable={:#x}, record {:#x}[{}], companion={:#x}",
+                         object, object - start, details.bytes, details.caller, details.recordOwner,
+                         details.recordVtable, details.recordBase, details.recordIndex,
+                         details.companionWord);
             return;
         }
     }
