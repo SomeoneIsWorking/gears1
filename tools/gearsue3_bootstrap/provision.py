@@ -321,6 +321,7 @@ def _generate_title_module(
         print("bootstrap: generated title module is current", file=sys.stderr)
         return
     config_dir = title_root / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
     generated_switches = config_dir / "gears_switch_tables.generated.toml"
     merged_switches = config_dir / "gears_switch_tables.toml"
     runner.run(

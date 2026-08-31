@@ -194,6 +194,14 @@ the zero-construction result in the frame-1440 walk remains unresolved.
 
 ## Next falsifier
 
+2026-08-31 fresh exact-disc GCC headless menu observation reached frame 1,018
+with 45,115 semantic matches, 5,519 missing joins, and zero value mismatches,
+unkeyed renderer draws, or duplicate frames. Vertex and pixel microcode modules
+matched exactly for all 47,357 observed shader pairs. This falsifies treating
+the earlier zero-missing join reports as current-build parity: the missing
+join population must be classified at the packet/materialization boundary
+before it can support a native-bypass decision.
+
 Exercise the separate bound-vertex entry dynamically if the title reaches it.
 Then add resource creation and live release-to-zero retirement effects and
 compare shader modules/constants, texture content and backing-resource realization, remaining output

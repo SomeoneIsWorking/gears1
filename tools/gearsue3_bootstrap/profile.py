@@ -81,6 +81,13 @@ def _positive_integer(table: dict[str, object], key: str, description: str) -> i
     return value
 
 
+def _unsigned_byte(table: dict[str, object], key: str, description: str) -> int:
+    value = table.get(key)
+    if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 0xFF:
+        raise ProfileError(f"{description}.{key} must be an unsigned byte")
+    return value
+
+
 def _portable_relative_path(value: str, description: str) -> Path:
     path = Path(value)
     if path.is_absolute() or ".." in path.parts:
@@ -164,7 +171,7 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
         identity=TitleIdentity(
             title_id=title_id,
             savegame_id=savegame_id,
-            platform=_positive_integer(identity_table, "platform", "identity"),
+            platform=_unsigned_byte(identity_table, "platform", "identity"),
             disc_number=_positive_integer(identity_table, "disc_number", "identity"),
             disc_count=_positive_integer(identity_table, "disc_count", "identity"),
             xex_sha256=_sha256(identity_table, "xex_sha256"),

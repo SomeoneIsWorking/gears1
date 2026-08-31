@@ -209,6 +209,42 @@ class BootstrapProvisionTests(unittest.TestCase):
         self.assertIn('switch_table_file_path = "switches.toml"', rendered)
         self.assertIn("restgprlr_14_address = 0x828D2830", rendered)
 
+    def test_analyser_output_parent_exists_before_the_analyser_runs(self) -> None:
+        title_root = self.root / "scratch/titles/key"
+        executable = title_root / "game/default.xex"
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"synthetic xex")
+        ppc_dir = title_root / "ppc"
+        identity = identified_document(self.selected)
+        calls: list[tuple[object, ...]] = []
+
+        class Runner:
+            def run(self, command: list[object], *, cwd: Path) -> None:
+                calls.append(tuple(command))
+                if len(calls) == 1:
+                    output = Path(command[2])
+                    self_test.assertTrue(output.parent.is_dir())
+                    output.write_text("# generated\n", encoding="utf-8")
+                else:
+                    (ppc_dir / "ppc_config.h").write_text("#pragma once\n")
+                    (ppc_dir / "ppc_recomp.0.cpp").write_text("// generated\n")
+
+            def capture(self, command: list[str], *, cwd: Path) -> str:
+                return "revision"
+
+        self_test = self
+        provision._generate_title_module(
+            REPO_ROOT,
+            title_root,
+            executable,
+            ppc_dir,
+            identity,
+            self.selected,
+            self.root / "build/deps/xenonrecomp",
+            Runner(),  # type: ignore[arg-type]
+        )
+        self.assertEqual(len(calls), 2)
+
 
 if __name__ == "__main__":
     unittest.main()
