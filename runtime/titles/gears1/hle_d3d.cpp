@@ -19,6 +19,7 @@
 #include "guest_memory.h"
 #include "guest_write_watch.h"
 #include "hle_d3d.h"
+#include "gpu_shader_load_watch.h"
 #include "shader_flush_capture.h"
 
 // ---------------------------------------------------------------------------
@@ -482,6 +483,13 @@ struct RegKick
 extern "C" PPC_FUNC(__imp__sub_822212D8);
 PPC_FUNC(sub_822212D8)
 {
+    const bool shaderPacketWatch = gears::ShaderLoadPacketWatchEnabled();
+    const std::uint32_t payload = ctx.r4.u32;
+    const std::uint64_t targetWritesBefore =
+        shaderPacketWatch
+            ? gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kShaderLoadPacket)
+                  .targetWrites
+            : 0;
     if (HleCensusEnabled())
     {
         ++g_kicks;
@@ -489,6 +497,20 @@ PPC_FUNC(sub_822212D8)
         Note(g_probe_kick, uint32_t(ctx.lr));
     }
     __imp__sub_822212D8(ctx, base);
+    if (shaderPacketWatch)
+    {
+        const std::uint64_t targetWritesAfter =
+            gears::CurrentGuestWriteWatchStats(gears::GuestWriteWatchOwner::kShaderLoadPacket)
+                .targetWrites;
+        if (targetWritesAfter > targetWritesBefore)
+        {
+            lucent::info("hle",
+                         "shader-load selected ring submission payload: {} dword(s) at guest "
+                         "{:#x}, writer callsite {:#x}",
+                         ReadGuestBE32(payload), ReadGuestBE32(payload + 4),
+                         static_cast<std::uint32_t>(ctx.lr));
+        }
+    }
 }
 
 // The GPU interrupt callback the command stream nominates in SCRATCH_REG4:
