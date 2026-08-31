@@ -18,7 +18,9 @@ class BootstrapProfileTests(unittest.TestCase):
     def test_repository_profile_is_strict_and_path_portable(self) -> None:
         selected = profile.load_profile(REPO_ROOT)
         self.assertEqual(selected.key, "gears1")
-        self.assertEqual(selected.identity.title_id, "415607d5")
+        self.assertEqual(selected.identity.title_id, "4d5307d5")
+        self.assertEqual(selected.identity.savegame_id, "00000000")
+        self.assertEqual(selected.identity.platform, 0)
         self.assertFalse(selected.recompiler_template.is_absolute())
         self.assertNotIn("..", selected.switch_tables_extra.parts)
 
@@ -44,6 +46,13 @@ class BootstrapProfileTests(unittest.TestCase):
         contents = (REPO_ROOT / "config/titles/gears1.toml").read_text()
         self.assertNotIn(str(Path.home()), contents)
         self.assertNotIn(os.environ.get("USER", "__unset__"), contents)
+
+    def test_platform_accepts_the_xex_unsigned_byte_domain(self) -> None:
+        self.assertEqual(profile._unsigned_byte({"platform": 0}, "platform", "identity"), 0)
+        for invalid in (-1, 256, True, "0"):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(profile.ProfileError, "unsigned byte"):
+                    profile._unsigned_byte({"platform": invalid}, "platform", "identity")
 
 
 if __name__ == "__main__":
