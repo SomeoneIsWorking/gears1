@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
 
 namespace gears
 {
@@ -14,6 +15,96 @@ struct RhiBasicDrawPacketEvidence
     std::uint32_t elementCount = 0;
     std::uint32_t headerAddress = 0;
 };
+
+struct RhiShaderLoadPacketEvidence
+{
+    std::uint32_t stage = 0;
+    std::uint32_t guestAddress = 0;
+    std::uint32_t sizeBytes = 0;
+    std::uint32_t headerAddress = 0;
+    bool predicated = false;
+};
+
+struct RhiShaderLoadRangeEvidence
+{
+    bool complete = true;
+    std::uint32_t packetCount = 0;
+    std::uint32_t dwordCount = 0;
+    std::vector<RhiShaderLoadPacketEvidence> loads;
+};
+
+// Parses the exact packet span appended after a retained command-buffer
+// cursor. The cursor points at the previous final dword, while commandEnd is
+// the new final dword. Refuse malformed or truncated spans so arbitrary data
+// cannot masquerade as shader evidence.
+template <typename ReadWord>
+[[nodiscard]] RhiShaderLoadRangeEvidence InspectRhiShaderLoadRange(std::uint32_t commandBefore,
+                                                                   std::uint32_t commandEnd,
+                                                                   ReadWord &&readWord)
+{
+    constexpr std::uint32_t kType3 = 3;
+    constexpr std::uint32_t kImLoad = 0x27;
+
+    RhiShaderLoadRangeEvidence result;
+    if ((commandBefore & 3) != 0 || (commandEnd & 3) != 0 || commandEnd < commandBefore)
+    {
+        result.complete = false;
+        return result;
+    }
+
+    std::uint64_t cursor = std::uint64_t{commandBefore} + sizeof(std::uint32_t);
+    const std::uint64_t end = commandEnd;
+    while (cursor <= end)
+    {
+        const std::uint32_t headerAddress = static_cast<std::uint32_t>(cursor);
+        const std::uint32_t header = readWord(headerAddress);
+        const std::uint32_t type = header >> 30;
+        std::uint32_t payloadDwords = 0;
+        if (type == 0 || type == kType3)
+            payloadDwords = ((header >> 16) & 0x3FFF) + 1;
+        else if (type == 1)
+            payloadDwords = 2;
+
+        const std::uint64_t packetDwords = std::uint64_t{payloadDwords} + 1;
+        const std::uint64_t next = cursor + packetDwords * sizeof(std::uint32_t);
+        if (next == 0 || next - sizeof(std::uint32_t) > end)
+        {
+            result.complete = false;
+            return result;
+        }
+
+        ++result.packetCount;
+        result.dwordCount += static_cast<std::uint32_t>(packetDwords);
+        if (type == kType3 && ((header >> 8) & 0x7F) == kImLoad)
+        {
+            if (payloadDwords != 2)
+            {
+                result.complete = false;
+                return result;
+            }
+            const std::uint32_t addressAndStage = readWord(headerAddress + 4);
+            const std::uint32_t startAndSize = readWord(headerAddress + 8);
+            const std::uint32_t stage = addressAndStage & 3;
+            const std::uint32_t start = startAndSize >> 16;
+            const std::uint32_t sizeDwords = startAndSize & 0xFFFF;
+            if (stage > 1 || start != 0 || sizeDwords == 0 || sizeDwords % 3 != 0 ||
+                sizeDwords > 0x4000)
+            {
+                result.complete = false;
+                return result;
+            }
+            result.loads.push_back({
+                .stage = stage,
+                .guestAddress = addressAndStage & ~std::uint32_t{3},
+                .sizeBytes = sizeDwords * std::uint32_t{sizeof(std::uint32_t)},
+                .headerAddress = headerAddress,
+                .predicated = (header & 1) != 0,
+            });
+        }
+        cursor = next;
+    }
+    return result;
+}
 
 template <typename ReadWord>
 [[nodiscard]] RhiBasicDrawPacketEvidence

@@ -19,6 +19,7 @@
 #include "guest_memory.h"
 #include "guest_write_watch.h"
 #include "hle_d3d.h"
+#include "shader_flush_capture.h"
 
 // ---------------------------------------------------------------------------
 // Registration helper. GEARS_HLE_TRACE(addr) defines a strong sub_<addr> that
@@ -177,7 +178,30 @@ GEARS_HLE_TRACE(8221D3A8) // movie-phase draw path
 
 // The submission chain, bottom to top.
 GEARS_HLE_TRACE(822218C0) // submit: direct kick, or record into the CPU list
-GEARS_HLE_TRACE(82221980) // flush / end-of-segment
+extern "C" PPC_FUNC(__imp__sub_82221980);
+namespace
+{
+Probe g_probe_82221980{"82221980", 0x82221980};
+struct Reg_82221980
+{
+    Reg_82221980() { Register(&g_probe_82221980); }
+} g_reg_82221980;
+} // namespace
+PPC_FUNC(sub_82221980)
+{
+    if (HleCensusEnabled())
+        Note(g_probe_82221980, uint32_t(ctx.lr));
+    if (!gears::titles::gears1::ShaderFlushCaptureActive())
+    {
+        __imp__sub_82221980(ctx, base);
+        return;
+    }
+    const std::uint32_t device = ctx.r3.u32;
+    const std::uint32_t oldCommandEnd = ReadGuestBE32(device + 0x28);
+    __imp__sub_82221980(ctx, base);
+    gears::titles::gears1::ObserveShaderFlushCommandBufferTransition(device, oldCommandEnd,
+                                                                     ReadGuestBE32(device + 0x28));
+}
 GEARS_HLE_TRACE(8223BA18) // frame-boundary block seen bracketing submissions
 GEARS_HLE_TRACE(82221A68) // ticket fence wait
 GEARS_HLE_TRACE(8223B200) // CPU command-list interpreter

@@ -2,6 +2,7 @@
 // over -- as the upload list and as the reach census.
 
 #include "gpu_draw_vertexfetch.h"
+#include "fnv1a.h"
 
 #include <bit>
 #include <algorithm>
@@ -23,17 +24,6 @@ namespace gears::draw
 
 namespace
 {
-
-uint64_t Fnv1a64(const uint8_t *bytes, size_t size)
-{
-    uint64_t h = 0xCBF29CE484222325ull;
-    for (size_t i = 0; i < size; ++i)
-    {
-        h ^= bytes[i];
-        h *= 0x100000001B3ull;
-    }
-    return h;
-}
 
 // The two knobs that name draws by their diag index -- GEARS_DRAW_VDUMP and
 // GEARS_DRAW_VS_CONSTS -- share this, and it exists for the negative rather
@@ -251,8 +241,7 @@ void DumpVertices(const uint32_t *R, const FrameDrawInputs &in, const FrameDrawI
             lucent::info("draw",
                          "  draw {} geometry system bytes {} hash"
                          " {:016x}",
-                         issued, systemConstants->size(),
-                         Fnv1a64(systemConstants->data(), systemConstants->size()));
+                         issued, systemConstants->size(), gears::Fnv1a64(*systemConstants));
         }
         else
             lucent::warn("draw",
@@ -285,8 +274,7 @@ void DumpVertices(const uint32_t *R, const FrameDrawInputs &in, const FrameDrawI
             lucent::info("draw",
                          "  draw {} packed vertex constants bytes {}"
                          " hash {:016x}",
-                         issued, vertexConstants->size(),
-                         Fnv1a64(vertexConstants->data(), vertexConstants->size()));
+                         issued, vertexConstants->size(), gears::Fnv1a64(*vertexConstants));
             const size_t vecCount = vertexConstants->size() / 16;
             for (size_t first = 0; first < vecCount; first += 16)
             {
@@ -317,8 +305,8 @@ void DumpVertices(const uint32_t *R, const FrameDrawInputs &in, const FrameDrawI
         lucent::info("draw",
                      "  draw {} translated VS bytes {} hash {:016x};"
                      " PS bytes {} hash {:016x}",
-                     issued, vsX.spirv.size(), Fnv1a64(vsX.spirv.data(), vsX.spirv.size()),
-                     psX.spirv.size(), Fnv1a64(psX.spirv.data(), psX.spirv.size()));
+                     issued, vsX.spirv.size(), gears::Fnv1a64(vsX.spirv), psX.spirv.size(),
+                     gears::Fnv1a64(psX.spirv));
         // Stored depth depends on both the sampled texture inputs and the bound
         // pixel constants. Equal raster counts can therefore still produce a
         // sparse depth map. Keep both input sets beside the geometry evidence.
@@ -343,12 +331,14 @@ void DumpVertices(const uint32_t *R, const FrameDrawInputs &in, const FrameDrawI
                 gt.skipReason == nullptr && gt.baseGuestExtentBytes)
                 tl.add(" base {:08x} bytes {} rawhash {:016x}", gt.baseAddress,
                        gt.baseGuestExtentBytes,
-                       Fnv1a64(in.guestBase + gt.baseAddress, gt.baseGuestExtentBytes))
+                       gears::Fnv1a64(
+                           std::span(in.guestBase + gt.baseAddress, gt.baseGuestExtentBytes)))
                     .add(" mips {:08x} bytes {} rawhash {:016x}", gt.mipAddress,
                          gt.mipGuestExtentBytes,
-                         Fnv1a64(in.guestBase + gt.mipAddress, gt.mipGuestExtentBytes))
+                         gears::Fnv1a64(
+                             std::span(in.guestBase + gt.mipAddress, gt.mipGuestExtentBytes)))
                     .add(" uploadbytes {} uploadhash {:016x}", gt.data.size(),
-                         Fnv1a64(gt.data.data(), gt.data.size()));
+                         gears::Fnv1a64(gt.data));
             else
                 tl.add(" NO raw texture hash (fetch absent, unsupported, or"
                        " outside the guest window)");
@@ -360,7 +350,8 @@ void DumpVertices(const uint32_t *R, const FrameDrawInputs &in, const FrameDrawI
                              "  draw {} pixel fetch fc {} level {}"
                              " uploadbytes {} uploadhash {:016x}",
                              issued, fc, level, decoded.dataSize,
-                             Fnv1a64(gt.data.data() + decoded.dataOffset, decoded.dataSize));
+                             gears::Fnv1a64(
+                                 std::span(gt.data).subspan(decoded.dataOffset, decoded.dataSize)));
             }
         }
         for (const ShaderSamplerBinding &sb : psX.samplers)
@@ -391,7 +382,8 @@ void DumpVertices(const uint32_t *R, const FrameDrawInputs &in, const FrameDrawI
                              " {} format {} endian {} hash {:016x}",
                              issued, draw.indexGuestBase, indexBytes,
                              draw.indexIs32 ? "u32" : "u16", draw.indexEndian,
-                             Fnv1a64(in.guestBase + draw.indexGuestBase, size_t(indexBytes)));
+                             gears::Fnv1a64(std::span(in.guestBase + draw.indexGuestBase,
+                                                      size_t(indexBytes))));
             else
                 lucent::warn("draw",
                              "  draw {} geometry index range {:#x}+{}"
@@ -446,7 +438,7 @@ void DumpVertices(const uint32_t *R, const FrameDrawInputs &in, const FrameDrawI
                              "  draw {} geometry fetch fc {} base"
                              " {:#x} bytes {} stride {} hash {:016x}",
                              issued, fc, vbase, bufBytes, stride,
-                             Fnv1a64(in.guestBase + vbase, size_t(bufBytes)));
+                             gears::Fnv1a64(std::span(in.guestBase + vbase, size_t(bufBytes))));
             else
                 lucent::warn("draw",
                              "  draw {} geometry fetch fc {} range"

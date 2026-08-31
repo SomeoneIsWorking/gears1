@@ -101,6 +101,14 @@ crossed the prior refusal region through frame 2280. The new `native_rhi.*` plan
 complete ordered semantic stream on the same live path, but remains capture-only. See issues #141,
 #148, #149, and #150.
 
+Shader-module comparison now has a compiled exact-evidence path: the Gears 1 adapter observes the
+packet spans emitted by retained shader flush `0x822346A8`, follows any `0x82221980` command-buffer
+rollover, and publishes the final bounded, unpredicated `IM_LOAD` payload per stage through the
+title-neutral semantic contract. Setter-time object templates are no longer accepted as concrete
+microcode. Focused controls cover positive, zero-load, malformed, rollover, mismatch, and ambiguous
+evidence. Live renderer parity is still unverified, so shader modules remain an S003 gap rather than
+a completed capability; issue #167 owns that falsifier.
+
 The compatibility renderer now consumes a single title-neutral `NativeDrawInput` produced by
 `gpu_draw_native_input.*` instead of decoding the same register fields in its orchestration body.
 `test_gpu_draw_native_input` covers refusal, target identity, 2X sample layout, output-merger state,

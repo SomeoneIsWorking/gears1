@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rhi_resource_reference.h"
+#include "rhi_shader_module.h"
 #include "rhi_target_state.h"
 #include "rhi_texture_state.h"
 
@@ -129,6 +130,10 @@ struct RhiSemanticBinding
     std::uint32_t descriptorDwords = 0;
     bool bufferViewPresent = false;
     RhiSemanticBufferView bufferView;
+    // Concrete microcode payloads independently observed at the retained
+    // title's flush boundary. Exactly one is required for per-draw parity;
+    // multiple entries preserve an ambiguous flush rather than guessing.
+    std::vector<RhiShaderModuleEvidence> shaderModules;
 };
 
 struct RhiResourceIdentityEvidence
@@ -158,6 +163,10 @@ struct RhiBindingStateEvidence
     // instead of preserving stale bind-time descriptors.
     bool textureFetchStatePresent = false;
     RhiTextureFetchState textureFetchState;
+    // Distinguishes a setter observation with no concrete flush evidence from
+    // an observed malformed/ambiguous flush that must clear prior evidence.
+    bool shaderModulesPresent = false;
+    std::vector<RhiShaderModuleEvidence> shaderModules;
     RhiResourceIdentityEvidence identity;
 };
 

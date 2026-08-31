@@ -43,6 +43,20 @@ int main()
     using gears::RhiVertexStreamResetEvidence;
     using gears::RhiVertexStreamResetEvidenceResult;
 
+    constexpr std::uint64_t kVertexShaderHash = 0x1122334455667788ull;
+    constexpr std::uint64_t kAlternateVertexShaderHash = 0x8877665544332211ull;
+    constexpr std::uint64_t kPixelShaderHash = 0x123456789ABCDEF0ull;
+    const RhiSemanticBinding semanticVertexShader{
+        .kind = RhiSemanticBindingKind::VertexShader,
+        .object = 0x40107000,
+        .shaderModules = {{.guestAddress = 0x10000, .sizeBytes = 48, .hash = kVertexShaderHash}},
+    };
+    const RhiSemanticBinding semanticPixelShader{
+        .kind = RhiSemanticBindingKind::PixelShader,
+        .object = 0x40107800,
+        .shaderModules = {{.guestAddress = 0x10200, .sizeBytes = 72, .hash = kPixelShaderHash}},
+    };
+
     const RhiSemanticDraw autoIndexed{
         .kind = RhiSemanticDrawKind::BoundVertices,
         .primitiveType = 4,
@@ -214,6 +228,8 @@ int main()
         .vertexStreams = {{.slot = 3,
                            .object = vertexStreamBinding.object,
                            .view = vertexStreamBinding.bufferView}},
+        .pixelShader = semanticPixelShader,
+        .vertexShader = semanticVertexShader,
     };
     RhiDrawPacketEvidence matchingVertexState = matchingIndexed;
     matchingVertexState.vertexStreams = boundDrawState.vertexStreams;
@@ -271,6 +287,8 @@ int main()
               .object = 0x40104800,
               .normalizedStatePresent = true,
               .normalizedState = {.base = 0x5A0, .format = 1}}},
+        .pixelShader = semanticPixelShader,
+        .vertexShader = semanticVertexShader,
         .surfaceStatePresent = true,
         .surfaceState = {.pitch = 1280, .msaaSamples = 1},
     };
@@ -278,6 +296,8 @@ int main()
         .outcome = gears::draw::NativeDrawMaterializationOutcome::Materialized,
         .primitiveType = 4,
         .elementCount = 300,
+        .vertexShaderHash = kVertexShaderHash,
+        .pixelShaderHash = kPixelShaderHash,
         .targetStatePresent = true,
         .colorTargetStatePresent = true,
         .depthTargetStatePresent = true,
@@ -369,11 +389,15 @@ int main()
                       .object = 0x40106000,
                       .descriptor = {2, 0x10, 0x20, 0x30, 0x40, 0x50},
                       .descriptorDwords = 6}},
+        .pixelShader = semanticPixelShader,
+        .vertexShader = semanticVertexShader,
     };
     RhiRendererDrawInput matchingRendererTexture{
         .outcome = gears::draw::NativeDrawMaterializationOutcome::Materialized,
         .primitiveType = 4,
         .elementCount = 300,
+        .vertexShaderHash = kVertexShaderHash,
+        .pixelShaderHash = kPixelShaderHash,
         .textureFetchStatePresent = true,
     };
     matchingRendererTexture.textureFetches[3] = {2, 0x10, 0x20, 0x30, 0x40, 0x50};
@@ -494,12 +518,18 @@ int main()
     assert(gears::CompareRhiResolvePacket(resolve, alteredResolve) ==
            RhiResolveEvidenceResult::Missing);
 
-    const gears::RhiSemanticDrawState rendererAutoState{.draw = autoIndexed};
+    const gears::RhiSemanticDrawState rendererAutoState{
+        .draw = autoIndexed,
+        .pixelShader = semanticPixelShader,
+        .vertexShader = semanticVertexShader,
+    };
     const RhiRendererDrawInput rendererAuto{
         .outcome = gears::draw::NativeDrawMaterializationOutcome::Materialized,
         .primitiveType = 4,
         .elementCount = 300,
         .indexed = false,
+        .vertexShaderHash = kVertexShaderHash,
+        .pixelShaderHash = kPixelShaderHash,
     };
     assert(gears::CompareRhiRendererDrawInput(rendererAutoState, rendererAuto) ==
            RhiRendererDrawEvidenceResult::Match);
@@ -508,6 +538,29 @@ int main()
     assert(gears::CompareRhiRendererDrawInput(rendererAutoState, alteredRenderer) ==
            RhiRendererDrawEvidenceResult::Mismatch);
 
+    RhiRendererDrawInput alternateVertexRenderer = rendererAuto;
+    alternateVertexRenderer.vertexShaderHash = kAlternateVertexShaderHash;
+    const gears::RhiRendererDrawEvidence wrongVertexShader =
+        gears::InspectRhiRendererDrawInput(rendererAutoState, alternateVertexRenderer);
+    assert(wrongVertexShader.result == RhiRendererDrawEvidenceResult::Mismatch);
+    assert(wrongVertexShader.reason == gears::RhiRendererDrawEvidenceReason::VertexShaderModule);
+
+    gears::RhiSemanticDrawState ambiguousVertexState = rendererAutoState;
+    ambiguousVertexState.vertexShader->shaderModules.push_back(
+        {.guestAddress = 0x10100, .sizeBytes = 60, .hash = kAlternateVertexShaderHash});
+    const gears::RhiRendererDrawEvidence ambiguousVertex =
+        gears::InspectRhiRendererDrawInput(ambiguousVertexState, alternateVertexRenderer);
+    assert(ambiguousVertex.result == RhiRendererDrawEvidenceResult::Missing);
+    assert(ambiguousVertex.reason ==
+           gears::RhiRendererDrawEvidenceReason::SemanticVertexShaderModulesAmbiguous);
+
+    RhiRendererDrawInput wrongPixelRenderer = rendererAuto;
+    wrongPixelRenderer.pixelShaderHash ^= 1;
+    const gears::RhiRendererDrawEvidence wrongPixelShader =
+        gears::InspectRhiRendererDrawInput(rendererAutoState, wrongPixelRenderer);
+    assert(wrongPixelShader.result == RhiRendererDrawEvidenceResult::Mismatch);
+    assert(wrongPixelShader.reason == gears::RhiRendererDrawEvidenceReason::PixelShaderModule);
+
     RhiRendererDrawInput rendererIndexed{
         .outcome = gears::draw::NativeDrawMaterializationOutcome::Materialized,
         .primitiveType = 3,
@@ -515,6 +568,8 @@ int main()
         .indexed = true,
         .indexEndian = 1,
         .indexGuestBase = 0x2010,
+        .vertexShaderHash = kVertexShaderHash,
+        .pixelShaderHash = kPixelShaderHash,
     };
     assert(gears::CompareRhiRendererDrawInput(boundDrawState, rendererIndexed) ==
            RhiRendererDrawEvidenceResult::Match);

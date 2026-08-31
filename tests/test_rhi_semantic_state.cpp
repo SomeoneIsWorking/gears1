@@ -60,6 +60,10 @@ int main()
         .present = true,
         .observedObject = 0x40106000,
         .textureFetchStatePresent = true,
+        .shaderModulesPresent = true,
+        .shaderModules = {{.guestAddress = 0x00110000,
+                           .sizeBytes = 48,
+                           .hash = 0x123456789ABCDEF0ull}},
     };
     patchedTextureState.textureFetchState[3] = {6, 5, 4, 3, 2, 1};
     tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::PixelShader, .object = 0x40106000},
@@ -76,6 +80,9 @@ int main()
     tracker.ApplyBinding({
         .kind = gears::RhiSemanticBindingKind::VertexShader,
         .object = 0x40107000,
+        .shaderModules = {{.guestAddress = 0x00120000,
+                           .sizeBytes = 60,
+                           .hash = 0x1122334455667788ull}},
     });
     tracker.ApplyBinding({
         .kind = gears::RhiSemanticBindingKind::IndexBuffer,
@@ -135,8 +142,29 @@ int main()
     assert(state.textures[0].descriptor[5] == 1);
     assert(state.pixelShader.has_value());
     assert(state.pixelShader->object == 0x40106000);
+    assert(state.pixelShader->shaderModules.size() == 1);
+    assert(state.pixelShader->shaderModules[0].hash == 0x123456789ABCDEF0ull);
     assert(state.vertexShader.has_value());
     assert(state.vertexShader->object == 0x40107000);
+    assert(state.vertexShader->shaderModules.size() == 1);
+
+    tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::PixelShader, .object = 0x40106000},
+                         {.present = true, .observedObject = 0x40106000});
+    state = tracker.SnapshotDraw(draw);
+    assert(state.pixelShader.has_value());
+    assert(state.pixelShader->shaderModules.size() == 1);
+    tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::PixelShader, .object = 0x40106100},
+                         {.present = true, .observedObject = 0x40106100});
+    state = tracker.SnapshotDraw(draw);
+    assert(state.pixelShader.has_value());
+    assert(state.pixelShader->shaderModules.empty());
+    tracker.ApplyBinding(
+        {.kind = gears::RhiSemanticBindingKind::PixelShader, .object = 0x40106100},
+        {.present = true,
+         .observedObject = 0x40106100,
+         .shaderModulesPresent = true,
+         .shaderModules = {
+             {.guestAddress = 0x00111000, .sizeBytes = 48, .hash = 0x123456789ABCDEF0ull}}});
     assert(state.indexBuffer.has_value());
     assert(state.indexBuffer->bufferView.elementStrideBytes == 2);
 

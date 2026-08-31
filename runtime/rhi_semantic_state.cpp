@@ -19,6 +19,14 @@ void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding,
         effective.descriptorDwords = state.descriptorDwords;
         effective.bufferViewPresent = state.bufferViewPresent;
         effective.bufferView = state.bufferView;
+        if (state.shaderModulesPresent)
+            effective.shaderModules = state.shaderModules;
+        else if (effective.kind == RhiSemanticBindingKind::PixelShader && pixelShader_ &&
+                 pixelShader_->object == effective.object)
+            effective.shaderModules = pixelShader_->shaderModules;
+        else if (effective.kind == RhiSemanticBindingKind::VertexShader && vertexShader_ &&
+                 vertexShader_->object == effective.object)
+            effective.shaderModules = vertexShader_->shaderModules;
     }
     if (state.textureFetchStatePresent)
     {

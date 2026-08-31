@@ -1,9 +1,9 @@
 #include "guest_memory.h"
 #include "guest_state_memory.h"
 #include "import_stub.h"
-#include "rhi_resource_identity.h"
 #include "rhi_semantic_stream.h"
 #include "rhi_texture_descriptor_watch.h"
+#include "shader_binding_capture.h"
 #include "shader_setter_state.h"
 
 #include <algorithm>
@@ -81,35 +81,6 @@ std::atomic<std::uint64_t> g_reportOrdinal{0};
     static const auto calls = static_cast<std::uint64_t>(
         std::max<long>(0, lucent::config::number("SHADER_SETTER_TIMING_WARMUP_CALLS", 128)));
     return calls;
-}
-
-[[nodiscard]] std::uint32_t ReadGuestBe32(std::uint32_t address)
-{
-    return GuestStateMemory{gears::Memory().Base()}.Read32(address);
-}
-
-[[nodiscard]] gears::RhiBindingStateEvidence CaptureShaderBinding(std::uint32_t device,
-                                                                  std::uint32_t fieldOffset)
-{
-    if (device == 0)
-        return {};
-    gears::RhiBindingStateEvidence state{
-        .present = true,
-        .observedObject = ReadGuestBe32(device + fieldOffset),
-        .textureFetchStatePresent = true,
-    };
-    constexpr std::uint32_t kDeviceRegisterShadowOffset = 0x400;
-    for (std::size_t slot = 0; slot < gears::kRhiTextureSlotCount; ++slot)
-    {
-        for (std::size_t dword = 0; dword < gears::kRhiTextureDescriptorDwords; ++dword)
-        {
-            state.textureFetchState[slot][dword] = ReadGuestBe32(
-                device + kDeviceRegisterShadowOffset +
-                (slot * gears::kRhiTextureDescriptorDwords + dword) * sizeof(std::uint32_t));
-        }
-    }
-    state.identity = gears::titles::gears1::CaptureRhiResourceIdentity(state.observedObject);
-    return state;
 }
 
 using RecompiledSetter = void (*)(PPCContext &, std::uint8_t *);
@@ -236,9 +207,8 @@ void ObserveShaderBinding(ShaderStage stage, std::uint32_t device, std::uint32_t
 {
     const auto kind = stage == ShaderStage::Pixel ? gears::RhiSemanticBindingKind::PixelShader
                                                   : gears::RhiSemanticBindingKind::VertexShader;
-    const auto spec = ShaderSetterSpecFor(stage);
     gears::ObserveRhiSemanticBinding({.kind = kind, .object = shader},
-                                     CaptureShaderBinding(device, spec.deviceShaderOffset));
+                                     gears::titles::gears1::CaptureShaderBinding(stage, device));
 }
 
 struct TimingSummary
