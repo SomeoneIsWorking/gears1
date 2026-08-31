@@ -87,7 +87,13 @@ void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding,
     if (effective.kind == RhiSemanticBindingKind::PixelShader)
     {
         lastPixelShaderBinding_ = effective;
-        if (effective.object == 0)
+        // A command list can carry a concrete inline shader after the title's
+        // API object has been cleared. Flush evidence is the binding in that
+        // case; an ordinary zero-object setter remains an unbind.
+        const bool concreteFlushBinding = binding.origin == RhiSemanticBindingOrigin::Flush &&
+                                          state.shaderModulesPresent &&
+                                          !state.shaderModules.empty();
+        if (effective.object == 0 && !concreteFlushBinding)
             pixelShader_.reset();
         else
             pixelShader_ = effective;
@@ -95,7 +101,11 @@ void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding,
     }
     if (effective.kind == RhiSemanticBindingKind::VertexShader)
     {
-        if (effective.object == 0)
+        // The same rule applies when a command-list load has no API object.
+        const bool concreteFlushBinding = binding.origin == RhiSemanticBindingOrigin::Flush &&
+                                          state.shaderModulesPresent &&
+                                          !state.shaderModules.empty();
+        if (effective.object == 0 && !concreteFlushBinding)
             vertexShader_.reset();
         else
             vertexShader_ = effective;

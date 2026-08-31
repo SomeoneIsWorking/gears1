@@ -254,3 +254,12 @@ write occurred during `0x822218C0` with caller `0x82221858`. That is the callsit
 flush path, not the replay submissions at `0x8223BC00`/`0x8223BC48`. Producer attribution is now
 complete for this boundary. The remaining shader gap is the content at buffer `0x7F740`, especially
 the concrete module loaded at dword 189; the semantic stream remains unchanged.
+
+The submission boundary is now wired to the same bounded packet parser. A short Clang headless
+observation reached the `0x7F740` submission and parsed its 3327-dword span completely, finding 11
+vertex loads and 1 pixel load. Complete unpredicated modules are published as flush-origin evidence;
+the semantic tracker permits that evidence to re-establish a concrete shader even when the API
+object is zero, while an ordinary zero-object setter still clears the active binding. The run reached
+frame 1386 with zero renderer-input mismatches and 84,044 exact vertex and 84,044 exact pixel module
+matches at the report point, but 9,308 draws remained missing. This advances the producer/materialization
+boundary only; full live shader parity is still open.

@@ -239,6 +239,23 @@ int main()
     assert(!state.vertexShader.has_value());
     assert(!state.indexBuffer.has_value());
 
+    tracker.ApplyBinding(
+        {.kind = gears::RhiSemanticBindingKind::PixelShader,
+         .origin = gears::RhiSemanticBindingOrigin::Flush},
+        {.present = true,
+         .observedObject = 0,
+         .shaderModulesPresent = true,
+         .shaderModules = {{.guestAddress = 0, .sizeBytes = 48, .hash = 0xCAFEBABE12345678ull}}});
+    state = tracker.SnapshotDraw(draw);
+    assert(state.pixelShader.has_value());
+    assert(state.pixelShader->object == 0);
+    assert(state.pixelShader->shaderModules.size() == 1);
+    assert(state.pixelShader->shaderModules.front().hash == 0xCAFEBABE12345678ull);
+
+    tracker.ApplyBinding({.kind = gears::RhiSemanticBindingKind::PixelShader,
+                          .origin = gears::RhiSemanticBindingOrigin::Setter});
+    assert(!tracker.SnapshotDraw(draw).pixelShader.has_value());
+
     tracker.Reset();
     assert(tracker.SnapshotDraw(draw).vertexStreams.empty());
     assert(!tracker.SnapshotDraw(draw).lastPixelShaderBinding.has_value());

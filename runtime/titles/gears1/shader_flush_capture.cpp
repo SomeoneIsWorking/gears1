@@ -13,6 +13,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <vector>
 
@@ -54,6 +55,70 @@ void ObserveShaderFlushCommandBufferTransition(std::uint32_t device, std::uint32
                                                std::uint32_t newCommandBefore)
 {
     g_activeCapture.ObserveCommandBufferTransition(device, oldCommandEnd, newCommandBefore);
+}
+
+void ObserveShaderCommandBufferSubmission(std::uint32_t device, std::uint32_t guestAddress,
+                                          std::uint32_t dwordCount)
+{
+    if (!gears::RhiSemanticObservationEnabled())
+        return;
+    const std::uint64_t byteCount = std::uint64_t{dwordCount} * sizeof(std::uint32_t);
+    if (guestAddress < sizeof(std::uint32_t) || dwordCount == 0 ||
+        byteCount > std::numeric_limits<std::uint32_t>::max() ||
+        !IsPhysicalRange(guestAddress, static_cast<std::uint32_t>(byteCount)))
+    {
+        lucent::error("rhi", "shader command-buffer submission refused address {:#x}, {} dword(s)",
+                      guestAddress, dwordCount);
+        return;
+    }
+
+    const std::uint32_t commandEnd =
+        guestAddress + static_cast<std::uint32_t>(byteCount) - sizeof(std::uint32_t);
+    const auto evidence = gears::InspectRhiShaderLoadRange(guestAddress - sizeof(std::uint32_t),
+                                                           commandEnd, [](std::uint32_t address)
+                                                           { return ReadGuestBe32(address); });
+    std::array<std::vector<RhiShaderModuleEvidence>, 2> modules;
+    bool complete = evidence.complete;
+    std::array<std::uint32_t, 2> loadCounts{};
+    for (const RhiShaderLoadPacketEvidence &load : evidence.loads)
+    {
+        ++loadCounts[load.stage];
+        if (load.predicated ||
+            (!load.immediate && !IsPhysicalRange(load.guestAddress, load.sizeBytes)) ||
+            (load.immediate && load.immediateMicrocode.size() != load.sizeBytes))
+        {
+            complete = false;
+            continue;
+        }
+        const auto bytes = load.immediate
+                               ? std::span<const std::uint8_t>(load.immediateMicrocode)
+                               : std::span<const std::uint8_t>(
+                                     gears::Memory().Base() + load.guestAddress, load.sizeBytes);
+        modules[load.stage].clear();
+        modules[load.stage].push_back({
+            .guestAddress = load.guestAddress,
+            .sizeBytes = load.sizeBytes,
+            .hash = gears::Fnv1a64(bytes),
+        });
+    }
+
+    if (!complete)
+    {
+        PublishShaderModules(ShaderStage::Vertex, device, {});
+        PublishShaderModules(ShaderStage::Pixel, device, {});
+    }
+    else
+    {
+        if (!modules[0].empty())
+            PublishShaderModules(ShaderStage::Vertex, device, modules[0]);
+        if (!modules[1].empty())
+            PublishShaderModules(ShaderStage::Pixel, device, modules[1]);
+    }
+    lucent::debug("rhi",
+                  "shader command-buffer submission at {:#x}, {} dword(s), {} packet(s), {}"
+                  " vertex and {} pixel load(s), complete={}",
+                  guestAddress, dwordCount, evidence.packetCount, loadCounts[0], loadCounts[1],
+                  complete);
 }
 
 bool ShaderFlushCaptureActive()
