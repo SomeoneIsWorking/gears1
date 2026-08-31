@@ -422,3 +422,12 @@ the same missing shape. Therefore the compatibility renderer is not inventing re
 the remaining failure is an ordered semantic-publication gap. The next discriminator is to identify
 the retained title command path that issues the PM4 replacement after the zero-object setter marker;
 do not copy PM4 evidence back into semantic state, because that would hide the missing title boundary.
+
+### Note (2026-08-31) — grounded viewport/scissor setter
+
+The existing Ghidra database identifies `0x8222ABF8` as the retained viewport setter. It consumes
+six words (x, y, width, height, near, far), clamps the rectangle to the active render dimensions,
+stores the resulting viewport state in the title render-state object, and calls `0x8222AB30`.
+That helper writes the packed scissor bounds and emits the associated register update. This is a
+grounded candidate for the next semantic input owner; no wrapper or native execution arm is enabled
+until its live call frequency and post-call state are captured.
