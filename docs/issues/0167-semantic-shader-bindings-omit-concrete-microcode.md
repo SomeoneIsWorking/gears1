@@ -245,5 +245,12 @@ occurred inside `0x822212D8`, whose payload was 3327 dwords at guest address `0x
 address `0x82221970`. That return address is the direct-call site inside `0x822218C0`, so the selected
 packet used its direct submission arm rather than the replay interpreter callsite `0x8223B304`. The
 general `0x82220B40` command-record path remains valid for other submissions but was not the selected
-writer here. The higher-level flush to correlate next is `0x82221720`, not another shader-flush or
+writer here. The remaining question is the selected buffer's contents, not another shader-flush or
 interpreter attribution.
+
+The outer submission-helper watch closes that correlation. In the same bounded capture, the selected
+write occurred during `0x822218C0` with caller `0x82221858`. That is the callsite in the grounded
+`0x82221720` normal command-buffer flush, so the selected 3327-dword buffer is produced by the normal
+flush path, not the replay submissions at `0x8223BC00`/`0x8223BC48`. Producer attribution is now
+complete for this boundary. The remaining shader gap is the content at buffer `0x7F740`, especially
+the concrete module loaded at dword 189; the semantic stream remains unchanged.
