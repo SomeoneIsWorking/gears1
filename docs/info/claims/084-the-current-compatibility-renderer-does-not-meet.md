@@ -9,7 +9,7 @@ depends: runtime/gpu_frame_timing.cpp, runtime/gpu_draw.cpp#Renderer::RenderFram
 
 ## Claim
 
-The current compatibility renderer does not meet a 5 ms/200 fps frame budget on the measured RX 6700 XT workloads: live title frames execute in 7-8 ms and the captured 1,742-draw chapter-45 frame in 13.537 ms.
+The current compatibility renderer has not established a sustained 8.33 ms/120 fps frame budget on the measured RX 6700 XT workloads: ordinary live title frames execute in 7-8 ms, while the captured 1,742-draw chapter-45 frame takes 13.537 ms.
 
 ## Evidence
 
@@ -17,4 +17,4 @@ scratch/logs/gpu_timing_live_release_noreadback_20260827.log and scratch/logs/gp
 
 ## What would falsify it
 
-A representative post-change gameplay measurement with the same timestamp boundaries completes below 5 ms, or the timestamp control ceases to distinguish full and one-draw workloads.
+A representative post-change gameplay measurement with the same timestamp boundaries keeps all designated workloads at or below 8.33 ms, or the timestamp control ceases to distinguish full and one-draw workloads.
