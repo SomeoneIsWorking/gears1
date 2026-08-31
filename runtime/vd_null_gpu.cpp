@@ -312,12 +312,15 @@ struct ShaderCaptureState
 // `ucode` holds the microcode as big-endian bytes, exactly as the GPU reads it,
 // which is also what tools/xenos_translate consumes (std::endian::big).
 void RecordBoundShader(uint32_t type, uint32_t address, uint32_t packetGuestAddress, bool immediate,
-                       uint32_t completedSwapSequence, const std::vector<uint8_t> &ucode)
+                       uint32_t completedSwapSequence, uint32_t sourceBase, uint32_t sourceIndex,
+                       uint32_t submissionBase, uint32_t submissionIndex,
+                       const std::vector<uint8_t> &ucode)
 {
     auto &cap = g_shaderCapture;
     const uint64_t hash = gears::Fnv1a64(ucode);
     (type == 0 ? cap.activeVertexHash : cap.activePixelHash) = hash;
-    gears::ObserveShaderLoadPacketWrite(hash, packetGuestAddress, immediate, completedSwapSequence);
+    gears::ObserveShaderLoadPacketWrite(hash, packetGuestAddress, immediate, completedSwapSequence,
+                                        sourceBase, sourceIndex, submissionBase, submissionIndex);
     auto it = cap.shaders.find(hash);
     if (it != cap.shaders.end())
     {
@@ -621,6 +624,9 @@ struct CommandProcessor
     // ring, and the word index of its header) -- provenance for diagnostics.
     uint32_t sourceBase = 0;
     uint32_t sourceIndex = 0;
+    // The depth-zero ring packet that submitted the current indirect buffer.
+    uint32_t submissionBase = 0;
+    uint32_t submissionIndex = 0;
 
     // Highest VdSwap sequence executed; stale re-submitted copies are behind it.
     uint32_t lastSwapSequence = 0;
@@ -925,7 +931,8 @@ struct CommandProcessor
         }
         const uint32_t packetBase = sourceBase != 0 ? sourceBase : g_ringBuffer.base;
         RecordBoundShader(type, address, packetBase + sourceIndex * sizeof(uint32_t), immediate,
-                          lastSwapSequence, ucode);
+                          lastSwapSequence, packetBase, sourceIndex, submissionBase,
+                          submissionIndex, ucode);
     }
 
     // Resolve a SET_CONSTANT/LOAD_ALU_CONSTANT (index,type) pair to the base
@@ -2205,6 +2212,8 @@ struct CommandProcessor
                     if (depth == 0)
                     {
                         ++ibCounts[address];
+                        submissionBase = sourceBase;
+                        submissionIndex = sourceIndex;
                         lucent::debug("gpu", "IB {:#x} ({} words) from ring dword {:#x}", address,
                                       words, sourceIndex);
                     }

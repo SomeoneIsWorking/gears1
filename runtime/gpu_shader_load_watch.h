@@ -21,7 +21,9 @@ namespace gears
 // Observes the exact PM4 packet that selected a shader. The optional watch is
 // diagnostic only: it never changes the command processor's shader state.
 void ObserveShaderLoadPacketWrite(std::uint64_t shaderHash, std::uint32_t packetGuestAddress,
-                                  bool immediate, std::uint32_t completedSwapSequence);
+                                  bool immediate, std::uint32_t completedSwapSequence,
+                                  std::uint32_t sourceBase, std::uint32_t sourceIndex,
+                                  std::uint32_t submissionBase, std::uint32_t submissionIndex);
 void ObserveShaderLoadPacketCopy(std::uint32_t destination, std::uint32_t bytes,
                                  std::uint32_t caller);
 // The title records a zero-object marker during the configured guest interval.
