@@ -75,6 +75,27 @@ void TestNegativeAndZeroEvidence()
     assert(zero.loads.empty());
 }
 
+void TestImmediateShaderLoad()
+{
+    constexpr std::uint32_t kBase = 0x3000;
+    constexpr std::array<std::uint32_t, 6> words{
+        Type3Header(0x2B, 5), 1, 3, 0x11223344, 0x55667788, 0x99AABBCC,
+    };
+    const auto read = [&](std::uint32_t address)
+    { return words[(address - kBase) / sizeof(std::uint32_t)]; };
+    const auto evidence = gears::InspectRhiShaderLoadRange(kBase - 4, kBase + 20, read);
+    assert(evidence.complete);
+    assert(evidence.loads.size() == 1);
+    const auto &load = evidence.loads.front();
+    assert(load.stage == 1);
+    assert(load.guestAddress == 0);
+    assert(load.sizeBytes == 12);
+    assert(load.immediate);
+    assert(
+        (load.immediateMicrocode == std::vector<std::uint8_t>{0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+                                                              0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC}));
+}
+
 void TestCommandBufferTransitions()
 {
     using gears::titles::gears1::ShaderFlushRangeCapture;
@@ -110,6 +131,7 @@ int main()
 {
     TestExactShaderLoads();
     TestNegativeAndZeroEvidence();
+    TestImmediateShaderLoad();
     TestCommandBufferTransitions();
     return 0;
 }

@@ -86,6 +86,7 @@ void RhiSemanticStateTracker::ApplyBinding(const RhiSemanticBinding &binding,
     }
     if (effective.kind == RhiSemanticBindingKind::PixelShader)
     {
+        lastPixelShaderBinding_ = effective;
         if (effective.object == 0)
             pixelShader_.reset();
         else
@@ -181,6 +182,7 @@ RhiSemanticDrawState RhiSemanticStateTracker::SnapshotDraw(const RhiSemanticDraw
         state.textures.push_back(texture);
     }
     state.pixelShader = pixelShader_;
+    state.lastPixelShaderBinding = lastPixelShaderBinding_;
     state.vertexShader = vertexShader_;
     state.indexBuffer = indexBuffer_;
     if (surfaceState_.has_value())
@@ -196,6 +198,7 @@ void RhiSemanticStateTracker::Reset()
     vertexStreams_.clear();
     textures_.clear();
     pixelShader_.reset();
+    lastPixelShaderBinding_.reset();
     vertexShader_.reset();
     indexBuffer_.reset();
     colorTargets_.clear();

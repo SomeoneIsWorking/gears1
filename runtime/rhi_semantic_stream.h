@@ -121,9 +121,23 @@ enum class RhiSemanticBindingKind : std::uint8_t
 inline constexpr std::size_t kRhiSemanticBindingKindCount =
     static_cast<std::size_t>(RhiSemanticBindingKind::DepthStencilTarget) + 1;
 
+// A title adapter can publish the same semantic binding from distinct retained
+// execution boundaries. Keep that provenance with the event so a consumer can
+// diagnose ordering without encoding title addresses into the shared stream.
+enum class RhiSemanticBindingOrigin : std::uint8_t
+{
+    Unknown,
+    Setter,
+    Flush,
+};
+
+inline constexpr std::size_t kRhiSemanticBindingOriginCount =
+    static_cast<std::size_t>(RhiSemanticBindingOrigin::Flush) + 1;
+
 struct RhiSemanticBinding
 {
     RhiSemanticBindingKind kind = RhiSemanticBindingKind::Texture;
+    RhiSemanticBindingOrigin origin = RhiSemanticBindingOrigin::Unknown;
     std::uint32_t slot = 0;
     std::uint32_t object = 0;
     std::array<std::uint32_t, 6> descriptor{};
@@ -184,6 +198,9 @@ struct RhiSemanticDrawState
     std::vector<RhiSemanticRenderTarget> renderTargets;
     std::vector<RhiSemanticBinding> textures;
     std::optional<RhiSemanticBinding> pixelShader;
+    // Keep the last effective pixel update even when it unbound the shader.
+    // This preserves the cause of an absent pixel shader for per-draw diagnostics.
+    std::optional<RhiSemanticBinding> lastPixelShaderBinding;
     std::optional<RhiSemanticBinding> vertexShader;
     std::optional<RhiSemanticBinding> indexBuffer;
     bool surfaceStatePresent = false;

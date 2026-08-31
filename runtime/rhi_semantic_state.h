@@ -24,6 +24,7 @@ class RhiSemanticStateTracker
     std::map<std::uint32_t, RhiSemanticVertexStream> vertexStreams_;
     std::map<std::uint32_t, RhiSemanticBinding> textures_;
     std::optional<RhiSemanticBinding> pixelShader_;
+    std::optional<RhiSemanticBinding> lastPixelShaderBinding_;
     std::optional<RhiSemanticBinding> vertexShader_;
     std::optional<RhiSemanticBinding> indexBuffer_;
     std::map<std::uint32_t, RhiSemanticRenderTarget> colorTargets_;
