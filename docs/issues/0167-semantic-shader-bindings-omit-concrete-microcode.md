@@ -63,3 +63,8 @@ Cross-reference against the independently verified device-reset adapter identifi
 argument as the Gears 1 D3D-device global. The next diagnostic may therefore read that device's
 post-call shader-object fields, but must still demonstrate a concrete module relationship before it
 publishes a semantic binding.
+
+The selected-call before/after capture falsifies this routine as the missing transition: its active
+pixel and vertex shader objects are both unchanged while it emits the inline pixel module. It
+serializes already-active device state, so it must not become a semantic publisher. The remaining
+target is the earlier owner that established the active pixel object before this serialization.

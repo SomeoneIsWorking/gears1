@@ -1,5 +1,7 @@
 #include "gpu_shader_load_watch.h"
+#include "guest_state_memory.h"
 #include "import_stub.h"
+#include "shader_setter_state.h"
 
 #include <array>
 #include <cstdint>
@@ -44,6 +46,20 @@ PPC_FUNC(sub_8254CFA0)
     const std::array<std::uint32_t, 6> arguments = {
         ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32,
     };
+    const gears::titles::gears1::GuestStateMemory memory(base);
+    const auto pixel =
+        gears::titles::gears1::ShaderSetterSpecFor(gears::titles::gears1::ShaderStage::Pixel);
+    const auto vertex =
+        gears::titles::gears1::ShaderSetterSpecFor(gears::titles::gears1::ShaderStage::Vertex);
+    const std::array<std::uint32_t, 2> shaderObjectsBefore = {
+        memory.Read32(arguments[1] + pixel.deviceShaderOffset),
+        memory.Read32(arguments[1] + vertex.deviceShaderOffset),
+    };
     __imp__sub_8254CFA0(ctx, base);
-    gears::ReportShaderLoadPacketProducerParent(copySequence, caller, arguments);
+    const std::array<std::uint32_t, 2> shaderObjectsAfter = {
+        memory.Read32(arguments[1] + pixel.deviceShaderOffset),
+        memory.Read32(arguments[1] + vertex.deviceShaderOffset),
+    };
+    gears::ReportShaderLoadPacketProducerParent(copySequence, caller, arguments,
+                                                shaderObjectsBefore, shaderObjectsAfter);
 }
