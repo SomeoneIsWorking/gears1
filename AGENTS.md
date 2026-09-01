@@ -5,20 +5,29 @@ The repository-wide rules in `../../AGENTS.md` apply here. Consult
 
 ## Product target
 
-USER 2026-08-22: "I mean we can continue optimizing the recomp path but make it like an engine port so like GearsUE3 engine with recomp + overrides but it is supposed to handle all Gears of War UE3 games not just the first one"
+USER 2026-09-01: "there are two runtimes there, one native (WIP), one emulator, the game itself is still guest game so the wording 'recomp' just means the emulated runtime"
 
-The product is GearsUE3: a shared engine port built from static recompilation,
-host Xbox 360 services, and measured native overrides. Gears 1 is the first
-conformance target, not the ownership boundary. Each supported title/revision
-gets its own locally generated recomp module and factual binding profile while
-the host runtime, renderer, audio, input, storage, override infrastructure, and
-semantic native implementations remain shared.
+The product is GearsUE3: an engine port that targets every Gears of War UE3
+title, not just the first. It has **two runtimes for the guest
+title** — a growing set of measured **native overrides** (WIP), and an
+**emulated runtime** that executes every guest function not yet overridden. The
+emulated runtime is a JIT over Xenia's Xenon CPU backend; it is not statically
+recompiled to C. Gears 1 is the first conformance target, not the ownership
+boundary. Each supported title/revision gets its own factual binding profile
+while the host runtime, renderer, audio, input, storage, override
+infrastructure, and native implementations remain shared.
 
-Keep every recompiled body compiled and callable. Native overrides are runtime
-A/B seams with an explicit super-call, not edits to generated output or
-compile-time deletions. Guest addresses, image identity, shader hashes, menu
-walks, and diagnostics belong to a title/revision adapter; shared engine code
-must not acquire Gears 1 address tables merely because it is the first target.
+Native overrides are runtime A/B seams with an explicit super-call ("super" runs
+the guest function through the JIT). Guest addresses, image identity, shader
+hashes, menu walks, and diagnostics belong to a title/revision adapter; shared
+engine code must not acquire Gears 1 address tables merely because it is the
+first target.
+
+The title-neutral Xbox 360 layer — Xenon CPU execution, the Xenos PM4 frontend
+and shader translation, kernel/XAM HLE, XMA audio, and the guest-image contract
+currently in `shared/xenon-host` — is being extracted into an `xenonport`
+platform framework, with Gears becoming a title over it. Architecture and
+migration plan: `shared/jit-common/docs/migration.md`.
 
 ## Clean distribution boundary
 
