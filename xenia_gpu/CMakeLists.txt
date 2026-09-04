@@ -168,6 +168,6 @@ option(GEARS_XENIA_ASSERTS "Keep Xenia's internal asserts enabled" OFF)
 if(NOT GEARS_XENIA_ASSERTS)
     target_compile_definitions(xenia_gpu PRIVATE NDEBUG)
 endif()
-target_link_libraries(xenia_gpu PUBLIC gears_glslang_spirv gears_fmt gears_snappy)
+target_link_libraries(xenia_gpu PUBLIC gears_glslang_spirv gears_fmt gears_snappy lucent::lucent)
 
 set(GEARS_HAVE_XENOS_TRANSLATOR ON PARENT_SCOPE)

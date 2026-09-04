@@ -4,7 +4,7 @@ kind: claim
 status: holds
 created: 2026-08-24
 tags: xex,provisioning
-depends: extern/XenonRecomp/XenonUtils/xex.cpp, extern/XenonRecomp/XenonUtils/image.cpp, extern/XenonRecomp/XexInspect/inspect.cpp, tools/title_identity.py
+depends: tools/title_identity.py, config/titles/gears1.toml, ../../shared/x360port/include/x360port/module_contract.hpp, ../../shared/x360port/include/x360port/validation.hpp
 reconfirmed: 2026-08-24
 verified_at: 2026-08-24 20:58:29
 ---
@@ -15,7 +15,11 @@ The checked XEX authority maps the retail Gears executable to a 13,500,416-byte 
 
 ## Evidence
 
-ASan/UBSan xex-inspect real-input run matched scratch/raw/gears_image.bin byte-for-byte; aggregate XenonRecomp CTest passed 9/9 including malformed-stage XexInspectTests and consolidated Clang quality.
+Historical ASan/UBSan checked-inspector evidence matched the real normalized
+image byte-for-byte and passed malformed-stage controls. The parser executable
+is retired; the resulting authenticated-module and typed-import invariants now
+live in `x360port_validation`, while the exact identity remains in the Gears
+profile.
 
 ## What would falsify it
 
@@ -23,7 +27,10 @@ A fresh run on the same exact default.xex changes the normalized digest/size/cou
 
 ## Re-confirmed 2026-08-24
 
-Re-verified after XenonRecomp commit a841864: sanitizer CTest 9/9 passed and the exact retail run remained byte-identical at SHA-256 f61cc78e4057bc68a2c65386a0341f6d26a7add3dfd9918007a455750ec6ed5c with 17 sections and 236 imports.
+Historical re-verification at predecessor commit `a841864` passed sanitizer
+CTest 9/9; the exact retail run remained byte-identical at SHA-256
+`f61cc78e4057bc68a2c65386a0341f6d26a7add3dfd9918007a455750ec6ed5c`
+with 17 sections and 236 imports.
 
 ## Re-confirmed 2026-08-24
 

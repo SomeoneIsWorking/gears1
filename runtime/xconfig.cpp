@@ -10,14 +10,13 @@ namespace
 // Big-endian, because the guest reads these as its own words.
 ConfigSetting Dword(uint32_t value)
 {
-    return {{uint8_t(value >> 24), uint8_t(value >> 16), uint8_t(value >> 8),
-             uint8_t(value)}};
+    return {{uint8_t(value >> 24), uint8_t(value >> 16), uint8_t(value >> 8), uint8_t(value)}};
 }
 
 // A time-zone name or transition date: four raw bytes with no byte order of
-// their own -- the guest copies them one at a time (ppc_recomp.119.cpp:2732)
+// their own -- original guest routine 0x827A98D0 copies them one at a time
 // rather than loading a word, so byte-swapping them would corrupt them.
-ConfigSetting Raw(const std::array<uint8_t, 4>& bytes)
+ConfigSetting Raw(const std::array<uint8_t, 4> &bytes)
 {
     return {{bytes.begin(), bytes.end()}};
 }
@@ -26,7 +25,7 @@ ConfigSetting Raw(const std::array<uint8_t, 4>& bytes)
 // principle, but the title reads these settings once while loading and builds
 // its own TIME_ZONE_INFORMATION from them, so re-deriving per call would only
 // let the seven answers disagree with each other across a transition.
-const HostTimeZone& CachedHostTimeZone()
+const HostTimeZone &CachedHostTimeZone()
 {
     static const HostTimeZone zone = QueryHostTimeZone();
     return zone;

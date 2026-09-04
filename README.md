@@ -2,9 +2,10 @@
 
 GearsUE3 is an in-progress clean-code engine port for the Xbox 360 Gears of War
 games. Its target product combines native subsystem overrides with Xenia's
-existing x64/A64 Xenon dynarecs for every guest path that remains emulated. It
-does not ship an interpreter, generated guest C++, or an offline translation
-step.
+existing x64/A64 Xenon dynarecs for every guest path that remains emulated. A
+bounded Xenia interpreter fallback is allowed only after a reason-labelled
+dynarec failure; it is counted and cannot satisfy gameplay or performance
+evidence. The product has no generated guest C++ or offline translation step.
 
 Gears of War 1 is the active and only conformance target. Gears 2, Gears 3, and
 Judgment remain product scope, not compatibility claims. See
@@ -13,12 +14,10 @@ the architecture.
 
 ## Migration status
 
-The repository still contains the previous XenonRecomp-generated product. It is
-the first break-first deletion target, not a bridge or executable oracle.
-Preserve its independent Gears 1 behavior evidence and native renderer, audio,
-input, storage, and override contracts; delete the generator, generated corpus,
-static dispatcher, function maps, static-only configuration/tests, and stale
-methodology before dynarec implementation resumes.
+The previous generated-code product and its build, dispatch, configuration, and
+generation surfaces have been removed. The preserved runtime source is native
+subsystem work awaiting adaptation to x360port's canonical CPU/memory/service
+interfaces; it is not a buildable compatibility CPU path.
 
 The next executable milestone is intentionally bounded:
 
@@ -29,11 +28,12 @@ The next executable milestone is intentionally bounded:
 4. prove disabled, enabled, and scoped-`super` override paths through the Xenia
    dispatcher.
 
-That proves wiring, not game compatibility. It runs only after the old static
-path is absent. A fresh image-only build must still reach representative
-interactive gameplay with nonzero Xenia JIT execution, no gameplay interpreter,
+That proves wiring, not game compatibility. It runs only after the old CPU path
+is absent. A fresh image-only build must still reach representative interactive
+gameplay with Xenia's dynarec selected by default, bounded and counted fallback,
 working native/original calls, relevant invalidation coverage, and declared
-correctness and frame-time evidence.
+correctness and frame-time evidence. Fallback execution and explicit diagnostic
+interpreter mode do not qualify that gameplay result.
 
 ## Preserved evidence
 
@@ -57,20 +57,20 @@ revision, maps the authenticated XEX at runtime, and launches without emitting
 or compiling guest code. Explicit CLI input, `GEARS_ISO`/gitignored `.env`, and
 one unambiguous ignored `roms/` drop-in remain the intended discovery order.
 
-The current `./run.sh` still implements the retired XenonRecomp pipeline and is
-therefore not a supported product route during this migration. It must be
-rewired to x360port before the project again advertises a runnable default.
+The current `./run.sh` refuses explicitly because `shared/x360port` has not yet
+provided the Xenia executor boundary. It cannot generate, build, or select the
+removed product.
 
 ## Ownership
 
 | Area | Owner |
 |---|---|
-| Xenon CPU execution, typed imports, image mapping, overrides, original calls | `shared/x360port` (to be created around the pinned Xenia fork) |
+| Xenon CPU execution, typed imports, image mapping, overrides, original calls | `shared/x360port`; its validator slice exists, while the pinned-Xenia executor remains missing |
 | Reusable UE3-on-Xbox-360 ABI, RHI semantics, and engine lifetimes | `shared/x360ue3`, consuming only public `x360port` interfaces |
 | Cross-framework executable-memory helpers | `shared/jit-common`, only after two integrations prove the same missing contract |
 | Exact Gears identity, addresses, policies, navigation, and native bindings | title adapters in this repository |
 | Shared Gears-family engine behavior | `GearsUE3`: cohesive runtime/render/audio/input/storage modules in this repository |
-| Authenticated XEX/import facts currently prototyped in `shared/xenon-host` | migrate into `x360port`; do not retain its generated function-map contract |
+| Authenticated image/import validation | `shared/x360port/x360port_validation`; it must next be exercised against Xenia `RawModule` |
 | Independent comparison | Xenia oracle/hardware/binary evidence, never the old generated product |
 
 The local `shared/ue3` checkout is developer reference material, not one of

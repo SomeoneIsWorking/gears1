@@ -20,8 +20,8 @@ FORBIDDEN_PREFIXES = (
 
 FORBIDDEN_NAMES = {
     "1",
-    "ppc_func_mapping.cpp",
-    "ppc_recomp_shared.h",
+    "guest_function_map.cpp",
+    "generated_guest_dispatch.h",
     "tools/prepare_overrides.py",
     "tools/prepare_ue3_core.py",
     "runtime/shaders/movie_yuv.frag",
@@ -68,7 +68,9 @@ TEXT_SCAN_EXEMPT = {
     "tools/check_distribution_clean.py",
 }
 
-GENERATED_RECOMP = re.compile(r"(?:^|/)ppc_recomp\.\d+\.cpp$")
+GENERATED_GUEST_SOURCE = re.compile(
+    r"(?:^|/)(?:generated|codegen)/(?:guest|cpu)[^/]*\.(?:c|cc|cpp|h|hpp)$"
+)
 GENERATED_SPIRV = re.compile(r"(?:^|/)[^/]*_spv\.h$")
 SPIRV_PROVENANCE = re.compile(
     r"\A// GENERATED from ([^\r\n]+) by tools/gen_native_spv\.py -- do not edit\."
@@ -85,8 +87,8 @@ def classify_path(path: str) -> list[str]:
         reasons.append("game-derived or private-source directory")
     if path.lower().endswith(FORBIDDEN_SUFFIXES):
         reasons.append("game/cache artifact extension")
-    if GENERATED_RECOMP.search(path):
-        reasons.append("generated recompiled title body")
+    if GENERATED_GUEST_SOURCE.search(path):
+        reasons.append("generated guest CPU source")
     return reasons
 
 
@@ -196,10 +198,10 @@ def history_failures(root: Path) -> list[tuple[str, str]]:
 
 def selftest() -> int:
     assert not classify_path("runtime/input.cpp")
-    assert classify_path("scratch/ppc/ppc_recomp.1.cpp")
+    assert classify_path("scratch/guest/generated.cpp")
     assert classify_path("modules/title/executable_addr_flags.bin")
     assert classify_path("runtime/default.xex")
-    assert classify_path("generated/ppc_recomp.42.cpp")
+    assert classify_path("generated/guest_module_42.cpp")
     assert classify_text("CMakeLists.txt", "set(GEARS_UE3_SRC /private)")
     assert classify_text(
         "doc.md", "Development/Src/Engine is required to build this target"

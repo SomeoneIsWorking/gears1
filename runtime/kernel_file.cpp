@@ -14,7 +14,7 @@
 #include <string>
 #include <unordered_map>
 
-#include <byteswap.h>
+#include "byte_order.h"
 #include <lucent/log.h>
 
 #include "guest_filesystem.h"
@@ -40,7 +40,7 @@ constexpr uint32_t kFileAttributeNormal = 0x80;
 
 struct OpenFile
 {
-    FILE* handle;
+    FILE *handle;
     uint64_t size;
     std::string guestPath;
     bool writable = false;
@@ -67,33 +67,33 @@ uint32_t g_nextFileHandle = 0xF4000000;
 
 // X_OBJECT_ATTRIBUTES: root directory, a pointer to an X_ANSI_STRING name, and
 // attribute flags.
-std::string ReadObjectPath(uint8_t* base, uint32_t objectAttributes)
+std::string ReadObjectPath(uint8_t *base, uint32_t objectAttributes)
 {
     if (objectAttributes == 0)
         return {};
 
-    const uint32_t namePtr = ByteSwap(*reinterpret_cast<uint32_t*>(base + objectAttributes + 4));
+    const uint32_t namePtr = ByteSwap(*reinterpret_cast<uint32_t *>(base + objectAttributes + 4));
     if (namePtr == 0)
         return {};
 
-    const uint16_t length = ByteSwap(*reinterpret_cast<uint16_t*>(base + namePtr));
-    const uint32_t buffer = ByteSwap(*reinterpret_cast<uint32_t*>(base + namePtr + 4));
+    const uint16_t length = ByteSwap(*reinterpret_cast<uint16_t *>(base + namePtr));
+    const uint32_t buffer = ByteSwap(*reinterpret_cast<uint32_t *>(base + namePtr + 4));
     if (buffer == 0)
         return {};
 
-    return std::string(reinterpret_cast<const char*>(base + buffer), length);
+    return std::string(reinterpret_cast<const char *>(base + buffer), length);
 }
 
-void StoreU32(uint8_t* base, uint32_t address, uint32_t value)
+void StoreU32(uint8_t *base, uint32_t address, uint32_t value)
 {
     if (address != 0)
-        *reinterpret_cast<uint32_t*>(base + address) = ByteSwap(value);
+        *reinterpret_cast<uint32_t *>(base + address) = ByteSwap(value);
 }
 
-void StoreU64(uint8_t* base, uint32_t address, uint64_t value)
+void StoreU64(uint8_t *base, uint32_t address, uint64_t value)
 {
     if (address != 0)
-        *reinterpret_cast<uint64_t*>(base + address) = ByteSwap(value);
+        *reinterpret_cast<uint64_t *>(base + address) = ByteSwap(value);
 }
 
 std::shared_ptr<OpenFile> FindFile(uint32_t handle)
@@ -106,7 +106,7 @@ std::shared_ptr<OpenFile> FindFile(uint32_t handle)
 } // namespace
 
 // NTSTATUS NtQueryFullAttributesFile(POBJECT_ATTRIBUTES, PFILE_NETWORK_OPEN_INFORMATION)
-void __imp__NtQueryFullAttributesFile(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtQueryFullAttributesFile(PPCContext &__restrict ctx, uint8_t *base)
 {
     const std::string guestPath = ReadObjectPath(base, ctx.r3.u32);
     const std::filesystem::path host = gears::Files().Resolve(guestPath);
@@ -144,8 +144,7 @@ void __imp__NtQueryFullAttributesFile(PPCContext& __restrict ctx, uint8_t* base)
 // turned into a success carrying no data is the most expensive shape a host shim
 // can have -- the title believes its load worked, continues on empty state, and
 // the eventual crash is nowhere near the lie.
-static void OpenGuestFileWithDisposition(PPCContext& __restrict ctx,
-                                         uint8_t* base,
+static void OpenGuestFileWithDisposition(PPCContext &__restrict ctx, uint8_t *base,
                                          gears::FileDisposition disposition)
 {
     const uint32_t handlePtr = ctx.r3.u32;
@@ -169,8 +168,7 @@ static void OpenGuestFileWithDisposition(PPCContext& __restrict ctx,
         return;
     }
 
-    const gears::FileOpenAction action =
-        gears::DecideFileOpen(disposition, exists, writable);
+    const gears::FileOpenAction action = gears::DecideFileOpen(disposition, exists, writable);
     if (action == gears::FileOpenAction::NotFound)
     {
         lucent::debug("fs", "open '{}' (disposition {}) -> not found", guestPath,
@@ -181,8 +179,7 @@ static void OpenGuestFileWithDisposition(PPCContext& __restrict ctx,
     }
     if (action == gears::FileOpenAction::AlreadyExists)
     {
-        lucent::debug("fs", "open '{}' (FILE_CREATE) -> already exists",
-                      guestPath);
+        lucent::debug("fs", "open '{}' (FILE_CREATE) -> already exists", guestPath);
         StoreU32(base, ioStatusBlock, kStatusObjectNameCollision);
         ctx.r3.u64 = kStatusObjectNameCollision;
         return;
@@ -212,8 +209,7 @@ static void OpenGuestFileWithDisposition(PPCContext& __restrict ctx,
         StoreU32(base, handlePtr, directoryHandle);
         StoreU32(base, ioStatusBlock, gears::kStatusSuccess);
         StoreU32(base, ioStatusBlock + 4, 1); // FILE_OPENED
-        lucent::debug("fs", "open '{}' -> directory handle {:#x}", guestPath,
-                      directoryHandle);
+        lucent::debug("fs", "open '{}' -> directory handle {:#x}", guestPath, directoryHandle);
         ctx.r3.u64 = gears::kStatusSuccess;
         return;
     }
@@ -229,7 +225,7 @@ static void OpenGuestFileWithDisposition(PPCContext& __restrict ctx,
     // The mode follows the ACTION, not the mount: truncation is what
     // FILE_OVERWRITE* and FILE_SUPERSEDE asked for and must never happen on a
     // plain open, which would silently discard a save the title meant to read.
-    const char* mode = "rb";
+    const char *mode = "rb";
     switch (action)
     {
     case gears::FileOpenAction::OpenExisting:
@@ -240,10 +236,10 @@ static void OpenGuestFileWithDisposition(PPCContext& __restrict ctx,
         mode = "w+b";
         break;
     default:
-        break;      // the refusing actions returned above
+        break; // the refusing actions returned above
     }
 
-    FILE* f = fopen(host.c_str(), mode);
+    FILE *f = fopen(host.c_str(), mode);
     if (f == nullptr)
     {
         StoreU32(base, ioStatusBlock, kStatusObjectNameNotFound);
@@ -254,14 +250,13 @@ static void OpenGuestFileWithDisposition(PPCContext& __restrict ctx,
     auto file = std::make_shared<OpenFile>();
     file->handle = f;
     // A truncated file is empty whatever it held a moment ago.
-    file->size = (action == gears::FileOpenAction::OpenExisting)
-                     ? std::filesystem::file_size(host, ec)
-                     : 0;
+    file->size =
+        (action == gears::FileOpenAction::OpenExisting) ? std::filesystem::file_size(host, ec) : 0;
     file->guestPath = guestPath;
     file->writable = writable;
     if (writable)
-        lucent::info("fs", "{} '{}' for writing -> {}", exists ? "opened" : "created",
-                     guestPath, host.string());
+        lucent::info("fs", "{} '{}' for writing -> {}", exists ? "opened" : "created", guestPath,
+                     host.string());
 
     uint32_t handle;
     {
@@ -287,13 +282,12 @@ static void OpenGuestFileWithDisposition(PPCContext& __restrict ctx,
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
-void __imp__NtCreateFile(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtCreateFile(PPCContext &__restrict ctx, uint8_t *base)
 {
-    OpenGuestFileWithDisposition(ctx, base,
-                                 gears::FileDisposition(ctx.r10.u32));
+    OpenGuestFileWithDisposition(ctx, base, gears::FileDisposition(ctx.r10.u32));
 }
 
-void __imp__NtOpenFile(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtOpenFile(PPCContext &__restrict ctx, uint8_t *base)
 {
     // NtOpenFile has NO CreateDisposition: its parameters are (handle, access,
     // attributes, status, ShareAccess, OpenOptions), so r10 holds nothing to do
@@ -306,7 +300,7 @@ void __imp__NtOpenFile(PPCContext& __restrict ctx, uint8_t* base)
 // NTSTATUS NtReadFile(HANDLE, HANDLE Event, PIO_APC_ROUTINE, PVOID ApcContext,
 //                     PIO_STATUS_BLOCK, PVOID Buffer, ULONG Length,
 //                     PLARGE_INTEGER ByteOffset)
-void __imp__NtReadFile(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtReadFile(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handle = ctx.r3.u32;
     const uint32_t ioStatusBlock = ctx.r7.u32;
@@ -334,7 +328,7 @@ void __imp__NtReadFile(PPCContext& __restrict ctx, uint8_t* base)
 
     if (byteOffsetPtr != 0)
     {
-        const uint64_t offset = ByteSwap(*reinterpret_cast<uint64_t*>(base + byteOffsetPtr));
+        const uint64_t offset = ByteSwap(*reinterpret_cast<uint64_t *>(base + byteOffsetPtr));
         fseek(file->handle, long(offset), SEEK_SET);
     }
 
@@ -346,16 +340,15 @@ void __imp__NtReadFile(PPCContext& __restrict ctx, uint8_t* base)
     // nonsense. The first bytes are what a bad length or a bad offset shows up
     // in, so they are worth the line.
     lucent::Line line;
-    line.add("read {} bytes at {} from '{}' ->", length, position,
-             file->guestPath);
+    line.add("read {} bytes at {} from '{}' ->", length, position, file->guestPath);
     for (size_t i = 0; i < read && i < 8; ++i)
         line.add(" {:02x}", *(base + buffer + i));
     if (read != length)
         line.add(" (SHORT: {} of {})", read, length);
     line.flush_debug("fs");
 
-    StoreU32(base, ioStatusBlock, read == 0 && length != 0
-        ? kStatusEndOfFile : gears::kStatusSuccess);
+    StoreU32(base, ioStatusBlock,
+             read == 0 && length != 0 ? kStatusEndOfFile : gears::kStatusSuccess);
     StoreU32(base, ioStatusBlock + 4, uint32_t(read));
 
     ctx.r3.u64 = (read == 0 && length != 0) ? kStatusEndOfFile : gears::kStatusSuccess;
@@ -369,7 +362,7 @@ void __imp__NtReadFile(PPCContext& __restrict ctx, uint8_t* base)
 // no write path, every save it attempted had nowhere to land. Writes are
 // refused on a handle that is not from a writable mount, so nothing can scribble
 // on the player's game data through a path that resolves to the disc.
-void __imp__NtWriteFile(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtWriteFile(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handle = ctx.r3.u32;
     const uint32_t ioStatusBlock = ctx.r7.u32;
@@ -396,8 +389,10 @@ void __imp__NtWriteFile(PPCContext& __restrict ctx, uint8_t* base)
     }
     if (!file->writable)
     {
-        lucent::warn("fs", "refused a write to '{}', which is not on a writable"
-            " mount", file->guestPath);
+        lucent::warn("fs",
+                     "refused a write to '{}', which is not on a writable"
+                     " mount",
+                     file->guestPath);
         StoreU32(base, ioStatusBlock, kStatusAccessDenied);
         ctx.r3.u64 = kStatusAccessDenied;
         return;
@@ -405,7 +400,7 @@ void __imp__NtWriteFile(PPCContext& __restrict ctx, uint8_t* base)
 
     if (byteOffsetPtr != 0)
     {
-        const uint64_t offset = ByteSwap(*reinterpret_cast<uint64_t*>(base + byteOffsetPtr));
+        const uint64_t offset = ByteSwap(*reinterpret_cast<uint64_t *>(base + byteOffsetPtr));
         fseek(file->handle, long(offset), SEEK_SET);
     }
 
@@ -426,7 +421,7 @@ void __imp__NtWriteFile(PPCContext& __restrict ctx, uint8_t* base)
 
 // NTSTATUS NtQueryInformationFile(HANDLE, PIO_STATUS_BLOCK, PVOID Info,
 //                                 ULONG Length, FILE_INFORMATION_CLASS Class)
-void __imp__NtQueryInformationFile(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtQueryInformationFile(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handle = ctx.r3.u32;
     const uint32_t ioStatusBlock = ctx.r4.u32;
@@ -463,8 +458,8 @@ void __imp__NtQueryInformationFile(PPCContext& __restrict ctx, uint8_t* base)
         break;
 
     case 34: // FileNetworkOpenInformation
-        StoreU32(base, info + 0x30, file->isDirectory ? kFileAttributeDirectory
-                                                      : kFileAttributeNormal);
+        StoreU32(base, info + 0x30,
+                 file->isDirectory ? kFileAttributeDirectory : kFileAttributeNormal);
         // Same layout NtQueryFullAttributesFile fills, and timestamps are left
         // zero for the same reason: an obviously-unset value beats a plausible
         // invented one. Only the sizes are actually read here -- the title
@@ -485,7 +480,7 @@ void __imp__NtQueryInformationFile(PPCContext& __restrict ctx, uint8_t* base)
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
-void __imp__NtSetInformationFile(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtSetInformationFile(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handle = ctx.r3.u32;
     const uint32_t info = ctx.r5.u32;
@@ -508,7 +503,7 @@ void __imp__NtSetInformationFile(PPCContext& __restrict ctx, uint8_t* base)
 
     if (infoClass == 14) // FilePositionInformation
     {
-        const uint64_t position = ByteSwap(*reinterpret_cast<uint64_t*>(base + info));
+        const uint64_t position = ByteSwap(*reinterpret_cast<uint64_t *>(base + info));
         fseek(file->handle, long(position), SEEK_SET);
         StoreU32(base, ctx.r4.u32, gears::kStatusSuccess);
         ctx.r3.u64 = gears::kStatusSuccess;
@@ -547,7 +542,7 @@ bool CloseGuestFile(uint32_t handle)
 // Re-reading the directory on every call would let it change underneath a walk
 // -- and this runtime writes save files into exactly these directories, so that
 // is a real possibility rather than a theoretical one.
-void __imp__NtQueryDirectoryFile(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtQueryDirectoryFile(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handle = ctx.r3.u32;
     const uint32_t ioStatusBlock = ctx.r7.u32;
@@ -572,8 +567,7 @@ void __imp__NtQueryDirectoryFile(PPCContext& __restrict ctx, uint8_t* base)
     if (!file->listed)
     {
         std::error_code ec;
-        for (const auto& entry :
-             std::filesystem::directory_iterator(file->hostPath, ec))
+        for (const auto &entry : std::filesystem::directory_iterator(file->hostPath, ec))
         {
             gears::DirectoryEntry item;
             item.name = entry.path().filename().string();
@@ -585,12 +579,10 @@ void __imp__NtQueryDirectoryFile(PPCContext& __restrict ctx, uint8_t* base)
         // makes no ordering promise and a title that indexes what it walked
         // would see entries move between runs.
         std::sort(file->listing.begin(), file->listing.end(),
-                  [](const gears::DirectoryEntry& a, const gears::DirectoryEntry& b) {
-                      return a.name < b.name;
-                  });
+                  [](const gears::DirectoryEntry &a, const gears::DirectoryEntry &b)
+                  { return a.name < b.name; });
         file->listed = true;
-        lucent::debug("fs", "directory '{}' has {} entries", file->guestPath,
-                      file->listing.size());
+        lucent::debug("fs", "directory '{}' has {} entries", file->guestPath, file->listing.size());
     }
 
     if (file->directoryCursor >= file->listing.size())
@@ -600,9 +592,8 @@ void __imp__NtQueryDirectoryFile(PPCContext& __restrict ctx, uint8_t* base)
         return;
     }
 
-    const gears::DirectoryEntry& entry = file->listing[file->directoryCursor];
-    const uint32_t written = gears::WriteDirectoryEntry(base, buffer, length,
-                                                        entry, true);
+    const gears::DirectoryEntry &entry = file->listing[file->directoryCursor];
+    const uint32_t written = gears::WriteDirectoryEntry(base, buffer, length, entry, true);
     if (written == 0)
     {
         ctx.r3.u64 = kStatusInfoLengthMismatch;

@@ -1,14 +1,13 @@
 #include "guest_filesystem.h"
 
 #include <mutex>
+#include <utility>
 
 #include <algorithm>
 #include <cctype>
-#include <cstdlib>
-
 #include <lucent/config.h>
-
 #include <lucent/log.h>
+#include <lucent/platform.h>
 
 namespace gears
 {
@@ -74,28 +73,40 @@ const std::filesystem::path &FileSystem::SaveDirectory() const
         return saveDirectory_;
     }
 
-    if (const std::string &configured = lucent::config::text("SAVE_DIR"); !configured.empty())
+    const std::string &configured = lucent::config::text("SAVE_DIR");
+    std::filesystem::path selected;
+    if (!configured.empty())
     {
-        saveDirectory_ = configured;
-    }
-    else if (const char *xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg)
-    {
-        // Where a Linux game is expected to keep user data. A console port
-        // that scatters saves next to the executable is a port that has not
-        // finished arriving.
-        saveDirectory_ = std::filesystem::path(xdg) / saveNamespace_;
-    }
-    else if (const char *home = std::getenv("HOME"); home && *home)
-    {
-        saveDirectory_ = std::filesystem::path(home) / ".local/share" / saveNamespace_;
+        selected = configured;
+        std::error_code error;
+        std::filesystem::create_directories(selected, error);
+        if (error)
+        {
+            lucent::error("fs", "cannot create configured save directory {}: {}", selected.string(),
+                          error.message());
+            return saveDirectory_;
+        }
     }
     else
     {
-        saveDirectory_ = std::filesystem::path("saves") / saveNamespace_;
+        const auto platformDirectory = lucent::platform::user_data_directory(saveNamespace_);
+        if (!platformDirectory)
+        {
+            lucent::error("fs", "host platform has no user-data directory for '{}'",
+                          saveNamespace_);
+            return saveDirectory_;
+        }
+        selected = *platformDirectory;
+        std::string error;
+        if (!lucent::platform::ensure_user_data_directory(selected, error))
+        {
+            lucent::error("fs", "cannot prepare user-data directory {}: {}", selected.string(),
+                          error);
+            return saveDirectory_;
+        }
     }
 
-    std::error_code ec;
-    std::filesystem::create_directories(saveDirectory_, ec);
+    saveDirectory_ = std::move(selected);
     lucent::info("fs", "save directory: {}", saveDirectory_.string());
     return saveDirectory_;
 }
@@ -105,6 +116,12 @@ void FileSystem::Mount(const std::string &rootName, const std::filesystem::path 
     std::lock_guard<std::mutex> guard(mutex_);
     std::error_code ec;
     std::filesystem::create_directories(hostDirectory, ec);
+    if (ec)
+    {
+        lucent::error("fs", "cannot create writable mount {}: {}", hostDirectory.string(),
+                      ec.message());
+        return;
+    }
     std::string key = rootName;
     std::transform(key.begin(), key.end(), key.begin(),
                    [](unsigned char c) { return char(std::tolower(c)); });

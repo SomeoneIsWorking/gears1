@@ -19,18 +19,12 @@
 #include <string>
 #include <vector>
 
-#include <byteswap.h>
+#include "byte_order.h"
 #include <lucent/config.h>
 #include <lucent/log.h>
 
 #include "guest_memory.h"
-#include "ppc_config.h"
-#include "ppc_context.h"
 #include "xma_context.h"
-
-// The replay runs no guest code; GuestMemory only wants the symbol. Same
-// stub heap_replay uses.
-PPCFuncMapping PPCFuncMappings[] = { { 0, nullptr } };
 
 namespace
 {
@@ -41,10 +35,10 @@ constexpr uint32_t kContextAddress = 0x00100000;
 constexpr uint32_t kRingAddress = 0x00200000;
 constexpr uint32_t kInputAddress = 0x40000000;
 
-std::vector<uint8_t> ReadFile(const std::string& path)
+std::vector<uint8_t> ReadFile(const std::string &path)
 {
     std::vector<uint8_t> data;
-    std::FILE* f = std::fopen(path.c_str(), "rb");
+    std::FILE *f = std::fopen(path.c_str(), "rb");
     if (!f)
         return data;
     std::fseek(f, 0, SEEK_END);
@@ -56,8 +50,7 @@ std::vector<uint8_t> ReadFile(const std::string& path)
     return data;
 }
 
-void WriteWavHeader(std::FILE* f, uint32_t sampleRate, uint16_t channels,
-    uint32_t dataBytes)
+void WriteWavHeader(std::FILE *f, uint32_t sampleRate, uint16_t channels, uint32_t dataBytes)
 {
     const uint32_t byteRate = sampleRate * channels * 2;
     const uint16_t blockAlign = uint16_t(channels * 2);
@@ -81,14 +74,14 @@ void WriteWavHeader(std::FILE* f, uint32_t sampleRate, uint16_t channels,
 
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     // Same prefix as the runtime, so GEARS_LUCENT_DEBUG=xma works here too.
     lucent::config::set_prefix("GEARS_");
     if (argc < 4)
     {
         lucent::error("xma", "usage: xma_replay <ctx> <packets> <out.wav>"
-            " [max-seconds]");
+                             " [max-seconds]");
         return 2;
     }
     const std::string contextPath = argv[1];
@@ -105,8 +98,7 @@ int main(int argc, char** argv)
     }
     if (packets.empty() || packets.size() % gears::xmaconst::kBytesPerPacket != 0)
     {
-        lucent::error("xma", "{} is not a whole number of 2 KiB packets",
-            packetsPath);
+        lucent::error("xma", "{} is not a whole number of 2 KiB packets", packetsPath);
         return 2;
     }
 
@@ -116,20 +108,18 @@ int main(int argc, char** argv)
         lucent::error("xma", "could not reserve guest memory");
         return 2;
     }
-    if (!memory.Commit(kContextAddress, 0x1000) ||
-        !memory.Commit(kRingAddress, 0x10000) ||
+    if (!memory.Commit(kContextAddress, 0x1000) || !memory.Commit(kRingAddress, 0x10000) ||
         !memory.Commit(kInputAddress, uint32_t(packets.size())))
     {
         lucent::error("xma", "could not commit replay regions");
         return 2;
     }
 
-    std::memcpy(memory.Translate<uint8_t>(kContextAddress),
-        contextBytes.data(), contextBytes.size());
-    std::memcpy(memory.Translate<uint8_t>(kInputAddress), packets.data(),
-        packets.size());
+    std::memcpy(memory.Translate<uint8_t>(kContextAddress), contextBytes.data(),
+                contextBytes.size());
+    std::memcpy(memory.Translate<uint8_t>(kInputAddress), packets.data(), packets.size());
 
-    uint8_t* guestContext = memory.Translate<uint8_t>(kContextAddress);
+    uint8_t *guestContext = memory.Translate<uint8_t>(kContextAddress);
     gears::XmaContextData data(guestContext);
 
     // Repoint the buffers at where this address space holds them. The dumped
@@ -146,9 +136,10 @@ int main(int argc, char** argv)
     {
         // The dump captured only buffer 0. Pretending buffer 1 exists would
         // decode unrelated memory, so replay buffer 0 alone and say so.
-        lucent::warn("xma", "context dumped with a second buffer at {:#x} that"
-            " was not captured; replaying buffer 0 only",
-            data.inputBuffer1Ptr);
+        lucent::warn("xma",
+                     "context dumped with a second buffer at {:#x} that"
+                     " was not captured; replaying buffer 0 only",
+                     data.inputBuffer1Ptr);
         data.inputBuffer1Valid = 0;
         data.inputBuffer1Ptr = 0;
     }
@@ -162,17 +153,17 @@ int main(int argc, char** argv)
     const uint32_t sampleRate =
         gears::xmaconst::kIdToSampleRate[std::min(uint32_t(data.sampleRate), 3u)];
     const uint32_t blockCount = data.outputBufferBlockCount;
-    const uint64_t maxBytes = maxSeconds > 0.0
-        ? uint64_t(maxSeconds * sampleRate) * channels * 2 : ~0ULL;
+    const uint64_t maxBytes =
+        maxSeconds > 0.0 ? uint64_t(maxSeconds * sampleRate) * channels * 2 : ~0ULL;
 
-    lucent::info("xma", "replaying {}: {} packets, {} Hz {}, {}-block ring,"
-        " subframe count {}", contextPath,
-        packets.size() / gears::xmaconst::kBytesPerPacket, sampleRate,
-        channels == 2 ? "stereo" : "mono", blockCount,
-        uint32_t(data.subframeDecodeCount));
+    lucent::info("xma",
+                 "replaying {}: {} packets, {} Hz {}, {}-block ring,"
+                 " subframe count {}",
+                 contextPath, packets.size() / gears::xmaconst::kBytesPerPacket, sampleRate,
+                 channels == 2 ? "stereo" : "mono", blockCount, uint32_t(data.subframeDecodeCount));
 
     gears::XmaHwContext context(0);
-    const uint8_t* ring = memory.Translate<uint8_t>(kRingAddress);
+    const uint8_t *ring = memory.Translate<uint8_t>(kRingAddress);
 
     std::vector<uint8_t> pcm;
     uint64_t kicks = 0;
@@ -191,10 +182,9 @@ int main(int argc, char** argv)
         uint32_t readOffset = now.outputBufferReadOffset;
         while (readOffset != now.outputBufferWriteOffset)
         {
-            const uint8_t* block =
+            const uint8_t *block =
                 ring + size_t(readOffset) * gears::xmaconst::kOutputBytesPerBlock;
-            pcm.insert(pcm.end(), block,
-                block + gears::xmaconst::kOutputBytesPerBlock);
+            pcm.insert(pcm.end(), block, block + gears::xmaconst::kOutputBytesPerBlock);
             readOffset = (readOffset + 1) % blockCount;
             drained = true;
         }
@@ -213,8 +203,7 @@ int main(int argc, char** argv)
             break;
         }
 
-        if (!now.inputBuffer0Valid &&
-            (secondBufferAliasesFirst || !now.inputBuffer1Valid))
+        if (!now.inputBuffer0Valid && (secondBufferAliasesFirst || !now.inputBuffer1Valid))
         {
             // One full pass of the captured data. When buffer 1 aliased
             // buffer 0 (the title had queued the same data twice), stop at
@@ -231,7 +220,7 @@ int main(int argc, char** argv)
     for (size_t i = 0; i + 1 < pcm.size(); i += 2)
         std::swap(pcm[i], pcm[i + 1]);
 
-    std::FILE* out = std::fopen(outPath.c_str(), "wb");
+    std::FILE *out = std::fopen(outPath.c_str(), "wb");
     if (!out)
     {
         lucent::error("xma", "could not open {}", outPath);
@@ -241,12 +230,13 @@ int main(int argc, char** argv)
     std::fwrite(pcm.data(), 1, pcm.size(), out);
     std::fclose(out);
 
-    const double seconds =
-        double(pcm.size()) / (double(sampleRate) * channels * 2);
-    lucent::info("xma", "{}: {} bytes of PCM ({:.2f} s) in {} kicks, input {},"
-        " final read offset {} bits", outPath, pcm.size(), seconds, kicks,
-        inputExhausted ? "exhausted" : "NOT exhausted",
-        uint32_t(final.inputBufferReadOffset));
+    const double seconds = double(pcm.size()) / (double(sampleRate) * channels * 2);
+    lucent::info("xma",
+                 "{}: {} bytes of PCM ({:.2f} s) in {} kicks, input {},"
+                 " final read offset {} bits",
+                 outPath, pcm.size(), seconds, kicks,
+                 inputExhausted ? "exhausted" : "NOT exhausted",
+                 uint32_t(final.inputBufferReadOffset));
 
     if (!inputExhausted && maxSeconds <= 0.0)
     {

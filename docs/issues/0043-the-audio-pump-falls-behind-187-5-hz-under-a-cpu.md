@@ -111,7 +111,7 @@ behaviour change.
 
 NOT FIXED, and this stays open: 6.7 ms per frame still overruns the 5.33 ms slot,
 so the pump achieves roughly 150 Hz against the contract's 187.5. The remaining
-gap is the title's mixer being genuinely expensive under recompilation. What has
+gap is the title's mixer being genuinely expensive under guest execution. What has
 changed is that it is now a performance problem with a measured size, not a
 mystery.
 

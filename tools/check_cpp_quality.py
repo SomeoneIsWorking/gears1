@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Non-mutating clang-format and clang-tidy gate for first-party C++."""
 
+from __future__ import annotations
+
 import json
 import os
 import shutil
@@ -9,404 +11,101 @@ import sys
 from pathlib import Path
 
 
-FORMATTED = [
-    "runtime/bugcheck_policy.cpp",
-    "runtime/bugcheck_policy.h",
-    "runtime/generated_title_profile.cpp",
-    "runtime/generated_title_profile.h",
-    "runtime/guest_address.h",
-    "runtime/guest_filesystem.cpp",
-    "runtime/guest_filesystem.h",
-    "runtime/guest_dirty_pages.cpp",
-    "runtime/guest_dirty_pages.h",
-    "runtime/guest_texture_hash.cpp",
-    "runtime/guest_texture_hash.h",
-    "runtime/guest_write_watch.cpp",
-    "runtime/guest_write_watch.h",
-    "runtime/hle_d3d.cpp",
-    "runtime/hle_d3d.h",
-    "runtime/host_product_identity.h",
-    "runtime/guest_memory.h",
-    "runtime/kernel_misc.cpp",
-    "runtime/main.cpp",
-    "runtime/debug_http.cpp",
-    "runtime/debug_http.h",
-    "runtime/frame_probe_capture.h",
-    "runtime/frame_contract.cpp",
-    "runtime/frame_contract.h",
-    "runtime/frame_production_timing.h",
-    "runtime/frame_queue.cpp",
-    "runtime/frame_queue.h",
-    "runtime/gpu_device_features.h",
-    "runtime/gpu_diagnostics_profile.cpp",
-    "runtime/gpu_diagnostics_profile.h",
-    "runtime/gpu_draw.cpp",
-    "runtime/gpu_draw_formats.cpp",
-    "runtime/gpu_draw_ab.cpp",
-    "runtime/gpu_draw_ab.h",
-    "runtime/gpu_draw.h",
-    "runtime/gpu_draw_api.cpp",
-    "runtime/gpu_draw_arena.cpp",
-    "runtime/gpu_draw_arena.h",
-    "runtime/gpu_draw_indices.cpp",
-    "runtime/gpu_draw_indices.h",
-    "runtime/gpu_draw_native_input.cpp",
-    "runtime/gpu_draw_native_input.h",
-    "runtime/gpu_draw_options.cpp",
-    "runtime/gpu_draw_options.h",
-    "runtime/gpu_draw_pixels.cpp",
-    "runtime/gpu_draw_pixels.h",
-    "runtime/gpu_draw_pipelines.cpp",
-    "runtime/gpu_draw_pipelines.h",
-    "runtime/gpu_draw_point_geometry.cpp",
-    "runtime/gpu_draw_prepared.h",
-    "runtime/gpu_draw_probe.h",
-    "runtime/gpu_draw_reinterpret.cpp",
-    "runtime/gpu_draw_renderer.h",
-    "runtime/gpu_draw_resolve.cpp",
-    "runtime/gpu_draw_resolve_decode.cpp",
-    "runtime/gpu_draw_resolve_decode.h",
-    "runtime/gpu_draw_sample_layout.h",
-    "runtime/gpu_draw_shader_interface.cpp",
-    "runtime/gpu_draw_shaders.cpp",
-    "runtime/gpu_draw_targets.cpp",
-    "runtime/gpu_draw_targets.h",
-    "runtime/gpu_draw_textures.cpp",
-    "runtime/gpu_draw_textures.h",
-    "runtime/gpu_draw_uniforms.cpp",
-    "runtime/gpu_draw_uniforms.h",
-    "runtime/gpu_draw_vertexfetch.cpp",
-    "runtime/gpu_draw_xlate.cpp",
-    "runtime/gpu_draw_xlate.h",
-    "runtime/gpu_endian.h",
-    "runtime/gpu_surface_format_capacity.h",
-    "runtime/gpu_frame_capacity.h",
-    "runtime/gpu_frame_cleanup.cpp",
-    "runtime/gpu_frame_cleanup.h",
-    "runtime/gpu_frame_slots.cpp",
-    "runtime/gpu_frame_slots.h",
-    "runtime/gpu_frame_timing.cpp",
-    "runtime/fnv1a.h",
-    "runtime/gpu_frame_timing.h",
-    "runtime/gpu_present.cpp",
-    "runtime/gpu_present_source.cpp",
-    "runtime/gpu_present_source.h",
-    "runtime/gpu_present_stage.cpp",
-    "runtime/gpu_present_stage.h",
-    "runtime/gpu_queue_access.cpp",
-    "runtime/gpu_queue_access.h",
-    "runtime/gpu_register_watch.cpp",
-    "runtime/gpu_register_watch.h",
-    "runtime/gpu_retirement.cpp",
-    "runtime/gpu_retirement.h",
-    "runtime/gpu_renderer_capacity.cpp",
-    "runtime/gpu_packet_memory.cpp",
-    "runtime/gpu_packet_memory.h",
-    "runtime/gpu_ticket_wait.cpp",
-    "runtime/gpu_ticket_wait.h",
-    "runtime/gpu_scanout.cpp",
-    "runtime/gpu_scanout.h",
-    "runtime/gpu_scanout_gamma.cpp",
-    "runtime/gpu_scanout_gamma.h",
-    "runtime/gpu_shared_device.cpp",
-    "runtime/gpu_shared_device.h",
-    "runtime/gpu_swap_packet.cpp",
-    "runtime/gpu_swap_packet.h",
-    "runtime/gpu_renderer_lifetime.cpp",
-    "runtime/graphics_probe.cpp",
-    "runtime/graphics_probe.h",
-    "runtime/graphics_probe_render.cpp",
-    "runtime/graphics_probe_render.h",
-    "runtime/input.cpp",
-    "runtime/input.h",
-    "runtime/native_pass.cpp",
-    "runtime/native_pass.h",
-    "runtime/render_thread.cpp",
-    "runtime/render_thread.h",
-    "runtime/render_retirement.h",
-    "runtime/native_rhi_backend.cpp",
-    "runtime/native_rhi_backend.h",
-    "runtime/native_rhi_resources.cpp",
-    "runtime/native_rhi_resources.h",
-    "runtime/rhi_semantic_state.cpp",
-    "runtime/rhi_semantic_state.h",
-    "runtime/rhi_renderer_input.cpp",
-    "runtime/rhi_renderer_input.h",
-    "runtime/rhi_shader_module.h",
-    "runtime/rhi_semantic_stream.cpp",
-    "runtime/rhi_semantic_stream.h",
-    "runtime/rhi_target_state.h",
-    "runtime/native_rhi.cpp",
-    "runtime/native_rhi.h",
-    "runtime/native_rhi_present.cpp",
-    "runtime/native_rhi_vulkan_resolve.cpp",
-    "runtime/native_rhi_vulkan_resolve.h",
-    "runtime/native_rhi_vulkan_resources.cpp",
-    "runtime/native_rhi_vulkan_resources.h",
-    "runtime/frame_production_timing.cpp",
-    "runtime/rhi_resource_reference.cpp",
-    "runtime/rhi_resource_reference.h",
-    "runtime/rhi_packet_evidence.h",
-    "runtime/scanout_gamma.cpp",
-    "runtime/scanout_gamma.h",
-    "runtime/title_executable.cpp",
-    "runtime/title_executable.h",
-    "runtime/title_profile.cpp",
-    "runtime/title_profile.h",
-    "runtime/titles/gears1/color_write_gamma_override.cpp",
-    "runtime/titles/gears1/color_write_gamma_state.h",
-    "runtime/titles/gears1/guest_probe_core.cpp",
-    "runtime/titles/gears1/guest_probe_loader.cpp",
-    "runtime/titles/gears1/guest_probe_runtime.cpp",
-    "runtime/titles/gears1/guest_probe_state.h",
-    "runtime/titles/gears1/guest_state_memory.h",
-    "runtime/titles/gears1/bugcheck_policy.cpp",
-    "runtime/titles/gears1/gpu_diagnostics_profile.cpp",
-    "runtime/titles/gears1/hle_d3d.cpp",
-    "runtime/titles/gears1/rhi_bindings.cpp",
-    "runtime/titles/gears1/rhi_device_state_reset_binding.cpp",
-    "runtime/titles/gears1/rhi_index_buffer.cpp",
-    "runtime/titles/gears1/rhi_index_buffer.h",
-    "runtime/titles/gears1/rhi_resolve.cpp",
-    "runtime/titles/gears1/rhi_resolve.h",
-    "runtime/titles/gears1/rhi_resolve_binding.cpp",
-    "runtime/titles/gears1/rhi_resource_construction_binding.cpp",
-    "runtime/titles/gears1/rhi_resource_lifetime_binding.cpp",
-    "runtime/titles/gears1/rhi_shader_object_watch.cpp",
-    "runtime/titles/gears1/rhi_shader_object_watch.h",
-    "runtime/titles/gears1/rhi_target_descriptor_watch.cpp",
-    "runtime/titles/gears1/rhi_target_descriptor_watch.h",
-    "runtime/titles/gears1/rhi_vertex_buffer.cpp",
-    "runtime/titles/gears1/rhi_vertex_buffer.h",
-    "runtime/titles/gears1/rhi_vertex_stream_watch.cpp",
-    "runtime/titles/gears1/rhi_vertex_stream_watch.h",
-    "runtime/titles/gears1/gpu_ticket_wait_binding.cpp",
-    "runtime/titles/gears1/gpu_ticket_wait_state.cpp",
-    "runtime/titles/gears1/gpu_ticket_wait_state.h",
-    "runtime/titles/gears1/shader_binding_capture.cpp",
-    "runtime/titles/gears1/shader_binding_capture.h",
-    "runtime/titles/gears1/shader_flush_capture.cpp",
-    "runtime/titles/gears1/shader_flush_capture.h",
-    "runtime/titles/gears1/shader_setter_override.cpp",
-    "runtime/titles/gears1/frame_production_timing_binding.cpp",
-    "runtime/titles/gears1/shader_setter_state.h",
-    "runtime/vd_null_gpu.cpp",
-    "runtime/swapchain_format.h",
-    "tests/test_depth_alias_shader_format.cpp",
-    "tests/test_color_write_gamma_state.cpp",
-    "tests/test_frame_probe_capture.cpp",
-    "tests/test_frame_contract.cpp",
-    "tests/test_frame_queue.cpp",
-    "tests/test_graphics_probe.cpp",
-    "tests/test_guest_dirty_pages.cpp",
-    "tests/test_guest_texture_hash.cpp",
-    "tests/test_guest_write_watch.cpp",
-    "tests/test_bugcheck_policy.cpp",
-    "tests/test_host_product_identity.cpp",
-    "tests/test_gpu_diagnostics_profile.cpp",
-    "tests/test_hle_d3d.cpp",
-    "tests/test_gpu_draw_sample_layout.cpp",
-    "tests/test_gpu_draw_native_input.cpp",
-    "tests/test_gpu_draw_untile.cpp",
-    "tests/test_gpu_draw_options.cpp",
-    "tests/test_gpu_draw_indices.cpp",
-    "tests/test_gpu_retirement.cpp",
-    "tests/test_gpu_frame_timing.cpp",
-    "tests/test_gpu_queue_access.cpp",
-    "tests/test_gpu_draw_census.cpp",
-    "tests/test_shader_setter_state.cpp",
-    "tests/test_shader_flush_capture.cpp",
-    "tests/test_gpu_surface_format_capacity.cpp",
-    "tests/test_gpu_surface_target_lookup.cpp",
-    "tests/test_gpu_swap_packet.cpp",
-    "tests/test_gpu_ticket_wait.cpp",
-    "tests/test_gpu_ticket_wait_state.cpp",
-    "tests/test_remote_input.cpp",
-    "tests/test_rhi_index_buffer.cpp",
-    "tests/test_rhi_resource_reference.cpp",
-    "tests/test_rhi_semantic_state.cpp",
-    "tests/test_rhi_resolve.cpp",
-    "tests/test_rhi_vertex_buffer.cpp",
-    "tests/test_rhi_semantic_stream.cpp",
-    "tests/test_native_rhi.cpp",
-    "tests/test_native_rhi_vulkan_resolve.cpp",
-    "tests/test_render_retirement.cpp",
-    "tests/test_shared_frame_image.cpp",
-    "tests/test_scanout_gamma.cpp",
-    "tests/test_spirv_clamp.cpp",
-    "tests/test_swapchain_format.cpp",
-    "tests/test_generated_title_profile.cpp",
-    "tests/test_title_executable.cpp",
-    "tests/test_title_profile.cpp",
-    "tests/test_frame_production_timing.cpp",
-    "tests/test_runtime_logic.cpp",
-]
-
-TIDY_TRANSLATION_UNITS = [
-    "runtime/bugcheck_policy.cpp",
-    "runtime/generated_title_profile.cpp",
-    "runtime/guest_filesystem.cpp",
-    "runtime/guest_texture_hash.cpp",
-    "runtime/guest_write_watch.cpp",
-    "runtime/gpu_diagnostics_profile.cpp",
-    "runtime/hle_d3d.cpp",
-    "runtime/kernel_misc.cpp",
-    "runtime/main.cpp",
-    "runtime/titles/gears1/bugcheck_policy.cpp",
-    "runtime/titles/gears1/color_write_gamma_override.cpp",
-    "runtime/titles/gears1/guest_probe_core.cpp",
-    "runtime/titles/gears1/guest_probe_loader.cpp",
-    "runtime/titles/gears1/guest_probe_runtime.cpp",
-    "runtime/titles/gears1/gpu_diagnostics_profile.cpp",
-    "runtime/titles/gears1/hle_d3d.cpp",
-    "runtime/debug_http.cpp",
-    "runtime/graphics_probe.cpp",
-    "runtime/graphics_probe_render.cpp",
-    "runtime/frame_contract.cpp",
-    "runtime/frame_queue.cpp",
-    "runtime/gpu_draw.cpp",
-    "runtime/gpu_draw_formats.cpp",
-    "runtime/gpu_draw_ab.cpp",
-    "runtime/gpu_draw_api.cpp",
-    "runtime/gpu_draw_arena.cpp",
-    "runtime/gpu_draw_indices.cpp",
-    "runtime/gpu_draw_native_input.cpp",
-    "runtime/gpu_draw_options.cpp",
-    "runtime/gpu_draw_pixels.cpp",
-    "runtime/gpu_draw_pipelines.cpp",
-    "runtime/gpu_draw_point_geometry.cpp",
-    "runtime/gpu_register_watch.cpp",
-    "runtime/gpu_draw_reinterpret.cpp",
-    "runtime/gpu_draw_resolve.cpp",
-    "runtime/gpu_draw_resolve_decode.cpp",
-    "runtime/gpu_draw_shader_interface.cpp",
-    "runtime/gpu_draw_shaders.cpp",
-    "runtime/gpu_draw_targets.cpp",
-    "runtime/gpu_draw_textures.cpp",
-    "runtime/gpu_draw_uniforms.cpp",
-    "runtime/gpu_draw_vertexfetch.cpp",
-    "runtime/gpu_draw_xlate.cpp",
-    "runtime/gpu_frame_cleanup.cpp",
-    "runtime/gpu_frame_slots.cpp",
-    "runtime/gpu_frame_timing.cpp",
-    "runtime/gpu_present.cpp",
-    "runtime/gpu_present_source.cpp",
-    "runtime/gpu_present_stage.cpp",
-    "runtime/gpu_queue_access.cpp",
-    "runtime/gpu_retirement.cpp",
-    "runtime/gpu_renderer_capacity.cpp",
-    "runtime/gpu_packet_memory.cpp",
-    "runtime/gpu_ticket_wait.cpp",
-    "runtime/gpu_scanout.cpp",
-    "runtime/gpu_scanout_gamma.cpp",
-    "runtime/gpu_shared_device.cpp",
-    "runtime/gpu_swap_packet.cpp",
-    "runtime/gpu_renderer_lifetime.cpp",
-    "runtime/input.cpp",
-    "runtime/native_pass.cpp",
-    "runtime/render_thread.cpp",
-    "runtime/rhi_renderer_input.cpp",
-    "runtime/rhi_semantic_state.cpp",
-    "runtime/rhi_semantic_stream.cpp",
-    "runtime/native_rhi.cpp",
-    "runtime/native_rhi_backend.cpp",
-    "runtime/native_rhi_resources.cpp",
-    "runtime/native_rhi_present.cpp",
-    "runtime/native_rhi_vulkan_resolve.cpp",
-    "runtime/native_rhi_vulkan_resources.cpp",
-    "runtime/frame_production_timing.cpp",
-    "tests/test_native_rhi.cpp",
-    "tests/test_native_rhi_vulkan_resolve.cpp",
-    "runtime/rhi_resource_reference.cpp",
-    "runtime/scanout_gamma.cpp",
-    "runtime/title_executable.cpp",
-    "runtime/title_profile.cpp",
-    "runtime/titles/gears1/rhi_bindings.cpp",
-    "runtime/titles/gears1/rhi_device_state_reset_binding.cpp",
-    "runtime/titles/gears1/rhi_index_buffer.cpp",
-    "runtime/titles/gears1/rhi_resolve.cpp",
-    "runtime/titles/gears1/rhi_resolve_binding.cpp",
-    "runtime/titles/gears1/rhi_resource_construction_binding.cpp",
-    "runtime/titles/gears1/rhi_resource_lifetime_binding.cpp",
-    "runtime/titles/gears1/rhi_shader_object_watch.cpp",
-    "runtime/titles/gears1/rhi_target_descriptor_watch.cpp",
-    "runtime/titles/gears1/rhi_vertex_buffer.cpp",
-    "runtime/titles/gears1/rhi_vertex_stream_watch.cpp",
-    "runtime/titles/gears1/gpu_ticket_wait_binding.cpp",
-    "runtime/titles/gears1/gpu_ticket_wait_state.cpp",
-    "runtime/titles/gears1/shader_binding_capture.cpp",
-    "runtime/titles/gears1/shader_flush_capture.cpp",
-    "runtime/titles/gears1/shader_load_watch.cpp",
-    "runtime/titles/gears1/shader_setter_override.cpp",
-    "runtime/titles/gears1/frame_production_timing_binding.cpp",
-    "tests/test_depth_alias_shader_format.cpp",
-    "tests/test_color_write_gamma_state.cpp",
-    "tests/test_frame_probe_capture.cpp",
-    "tests/test_frame_contract.cpp",
-    "tests/test_frame_queue.cpp",
-    "tests/test_rhi_resource_reference.cpp",
-    "tests/test_graphics_probe.cpp",
-    "tests/test_guest_dirty_pages.cpp",
-    "tests/test_guest_texture_hash.cpp",
-    "tests/test_guest_write_watch.cpp",
-    "tests/test_bugcheck_policy.cpp",
-    "tests/test_host_product_identity.cpp",
-    "tests/test_gpu_diagnostics_profile.cpp",
-    "tests/test_hle_d3d.cpp",
-    "tests/test_gpu_draw_sample_layout.cpp",
-    "tests/test_gpu_draw_native_input.cpp",
-    "tests/test_gpu_draw_untile.cpp",
-    "tests/test_gpu_draw_options.cpp",
-    "tests/test_gpu_draw_indices.cpp",
-    "tests/test_gpu_retirement.cpp",
-    "tests/test_gpu_frame_timing.cpp",
-    "tests/test_gpu_queue_access.cpp",
-    "tests/test_gpu_draw_census.cpp",
-    "tests/test_shader_setter_state.cpp",
-    "tests/test_shader_flush_capture.cpp",
-    "tests/test_gpu_surface_format_capacity.cpp",
-    "tests/test_gpu_surface_target_lookup.cpp",
-    "tests/test_gpu_swap_packet.cpp",
-    "tests/test_gpu_ticket_wait.cpp",
-    "tests/test_gpu_ticket_wait_state.cpp",
-    "tests/test_remote_input.cpp",
-    "tests/test_rhi_index_buffer.cpp",
-    "tests/test_rhi_semantic_state.cpp",
-    "tests/test_rhi_resolve.cpp",
-    "tests/test_rhi_vertex_buffer.cpp",
-    "tests/test_rhi_semantic_stream.cpp",
-    "tests/test_render_retirement.cpp",
-    "tests/test_shared_frame_image.cpp",
-    "tests/test_scanout_gamma.cpp",
-    "tests/test_spirv_clamp.cpp",
-    "tests/test_swapchain_format.cpp",
-    "tests/test_generated_title_profile.cpp",
-    "tests/test_title_executable.cpp",
-    "tests/test_title_profile.cpp",
-    "tests/test_frame_production_timing.cpp",
-    "tests/test_runtime_logic.cpp",
-]
-
-FORMAT_RANGES = {}
-
-VD_TIDY_RANGES = [
-    [445, 456],
-    [815, 815],
-    [1005, 1053],
-    [1339, 1339],
-    [2621, 2696],
-    [3165, 3245],
-]
+CPP_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
+CPP_ROOTS = ("runtime", "tests", "tools", "xenia_gpu")
+EXCLUDED_PARTS = {"build", "extern", "scratch", ".git", ".venv", "__pycache__"}
+MAINTAINED_FILES = tuple(
+    Path(path)
+    for path in (
+        "runtime/byte_order.h",
+        "runtime/crt_printf.cpp",
+        "runtime/fault_report.cpp",
+        "runtime/fault_report.h",
+        "runtime/frame_capture.h",
+        "runtime/gpu_packet_memory.cpp",
+        "runtime/guest_backtrace.cpp",
+        "runtime/guest_backtrace.h",
+        "runtime/guest_clock.cpp",
+        "runtime/guest_dirty_pages.h",
+        "runtime/guest_memory.cpp",
+        "runtime/guest_memory.h",
+        "runtime/guest_texture_hash.cpp",
+        "runtime/guest_thread.cpp",
+        "runtime/host_time_zone.h",
+        "runtime/kernel_config.cpp",
+        "runtime/kernel_dispatcher.cpp",
+        "runtime/kernel_events.cpp",
+        "runtime/kernel_file.cpp",
+        "runtime/kernel_memory.cpp",
+        "runtime/kernel_misc.cpp",
+        "runtime/kernel_object_api.cpp",
+        "runtime/kernel_objects.cpp",
+        "runtime/kernel_rtl.cpp",
+        "runtime/kernel_spinlock.cpp",
+        "runtime/kernel_sync.cpp",
+        "runtime/kernel_thread.cpp",
+        "runtime/kernel_time.cpp",
+        "runtime/kernel_timer.cpp",
+        "runtime/kernel_video.cpp",
+        "runtime/missing_x360port_executor.h",
+        "runtime/pm4_trace.cpp",
+        "runtime/title_profile.cpp",
+        "runtime/title_profile.h",
+        "runtime/titles/gears1/audio_mix.cpp",
+        "runtime/vd_null_gpu.cpp",
+        "runtime/wait_probe.cpp",
+        "runtime/wait_probe.h",
+        "runtime/xam_loader.cpp",
+        "runtime/xam_notify.cpp",
+        "runtime/xam_overlapped.cpp",
+        "runtime/xam_user.cpp",
+        "runtime/xaudio_null.cpp",
+        "runtime/xconfig.cpp",
+        "runtime/xma.cpp",
+        "runtime/xma.h",
+        "runtime/xma_context.cpp",
+        "runtime/xnet_null.cpp",
+        "tests/test_title_profile.cpp",
+        "tools/heap_replay.cpp",
+        "tools/system_constants/main.cpp",
+        "tools/xenos_translate/main.cpp",
+        "tools/xma_replay.cpp",
+        "xenia_gpu/xenia_host_shim.cpp",
+    )
+)
 
 
-def find_tool(name, override=None, finder=shutil.which):
+def find_tool(name: str, override: str | None = None, finder=shutil.which) -> str:
     candidate = override or finder(name)
     if not candidate:
         raise RuntimeError(f"{name} is not installed")
     return candidate
 
 
-def compile_database_sources(build_dir):
+def is_generated_source(path: Path) -> bool:
+    try:
+        prefix = path.read_text(encoding="utf-8")[:512]
+    except (OSError, UnicodeDecodeError):
+        return False
+    return "GENERATED from " in prefix or "generated file -- do not edit" in prefix.lower()
+
+
+def first_party_cpp(root: Path) -> list[Path]:
+    files: list[Path] = []
+    for source_root in CPP_ROOTS:
+        directory = root / source_root
+        if not directory.is_dir():
+            continue
+        for path in directory.rglob("*"):
+            relative = path.relative_to(root)
+            if any(part in EXCLUDED_PARTS for part in relative.parts):
+                continue
+            if path.is_file() and path.suffix.lower() in CPP_SUFFIXES and not is_generated_source(path):
+                files.append(relative)
+    return sorted(files)
+
+
+def compile_database_sources(build_dir: Path) -> set[Path]:
     database = build_dir / "compile_commands.json"
     if not database.is_file():
         raise RuntimeError(
@@ -414,7 +113,7 @@ def compile_database_sources(build_dir):
         )
     try:
         entries = json.loads(database.read_text(encoding="utf-8"))
-        sources = set()
+        sources: set[Path] = set()
         for entry in entries:
             source = Path(entry["file"])
             if not source.is_absolute():
@@ -425,15 +124,23 @@ def compile_database_sources(build_dir):
         raise RuntimeError(f"{database} is invalid: {error}") from error
 
 
-def selected_tidy_units(root, database_sources):
-    return TIDY_TRANSLATION_UNITS
+def selected_tidy_units(root: Path, database_sources: set[Path]) -> list[Path]:
+    units = [
+        path
+        for path in MAINTAINED_FILES
+        if path.suffix.lower() in {".c", ".cc", ".cpp", ".cxx"}
+        and (root / path).resolve() in database_sources
+    ]
+    if not units:
+        raise RuntimeError("compile database contains no first-party translation units")
+    return units
 
 
-def run(command, root):
+def run(command: list[str], root: Path) -> None:
     subprocess.run(command, cwd=root, check=True)
 
 
-def selftest():
+def selftest() -> int:
     fake = lambda name: f"/tools/{name}" if name != "missing" else None
     assert find_tool("clang-format", finder=fake) == "/tools/clang-format"
     try:
@@ -442,88 +149,25 @@ def selftest():
         pass
     else:
         raise AssertionError("missing tools must be refused")
-    assert "runtime/gpu_draw_reinterpret.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_draw_formats.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/frame_production_timing.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/frame_production_timing.cpp" in FORMATTED
-    assert "runtime/frame_production_timing.h" in FORMATTED
-    assert "runtime/titles/gears1/frame_production_timing_binding.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_frame_production_timing.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/guest_probe_core.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/guest_probe_loader.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/guest_probe_runtime.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/guest_probe_state.h" in FORMATTED
-    assert "runtime/bugcheck_policy.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/bugcheck_policy.h" in FORMATTED
-    assert "runtime/host_product_identity.h" in FORMATTED
-    assert "runtime/kernel_misc.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/bugcheck_policy.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_bugcheck_policy.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_host_product_identity.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_runtime_logic.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_diagnostics_profile.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_diagnostics_profile.h" in FORMATTED
-    assert "runtime/titles/gears1/gpu_diagnostics_profile.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_gpu_diagnostics_profile.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/hle_d3d.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/hle_d3d.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_hle_d3d.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/rhi_resolve.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/rhi_resolve_binding.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/rhi_resource_construction_binding.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/rhi_resource_reference.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/rhi_renderer_input.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/rhi_renderer_input.cpp" in FORMATTED
-    assert "runtime/rhi_renderer_input.h" in FORMATTED
-    assert "runtime/rhi_target_state.h" in FORMATTED
-    assert "runtime/titles/gears1/rhi_device_state_reset_binding.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/rhi_resource_lifetime_binding.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/rhi_vertex_stream_watch.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_rhi_resource_reference.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_rhi_resource_reference.cpp" in FORMATTED
-    assert "tests/test_rhi_resolve.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_draw_targets.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_draw_api.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_draw_shader_interface.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_draw_arena.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_draw_native_input.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_draw_native_input.cpp" in FORMATTED
-    assert "runtime/gpu_frame_cleanup.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_frame_slots.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_present_source.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_shared_device.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_swap_packet.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_gpu_draw_sample_layout.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_gpu_draw_native_input.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_gpu_draw_untile.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_gpu_surface_format_capacity.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_gpu_swap_packet.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_frame_probe_capture.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/frame_queue.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_frame_queue.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_packet_memory.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_ticket_wait.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/gpu_ticket_wait_binding.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/titles/gears1/gpu_ticket_wait_state.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_gpu_ticket_wait.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_gpu_ticket_wait_state.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_queue_access.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/gpu_renderer_capacity.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_gpu_queue_access.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_render_retirement.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_shared_frame_image.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/title_executable.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/generated_title_profile.cpp" in TIDY_TRANSLATION_UNITS
-    assert "runtime/guest_texture_hash.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_guest_dirty_pages.cpp" in TIDY_TRANSLATION_UNITS
-    assert "tests/test_guest_texture_hash.cpp" in TIDY_TRANSLATION_UNITS
-    assert VD_TIDY_RANGES and all(first <= last for first, last in VD_TIDY_RANGES)
-    print("C++ quality checker selftest passed: positive tool lookup, missing-tool refusal, "
-          "and touched-source coverage")
+
+    root = Path(__file__).resolve().parents[1]
+    discovered = first_party_cpp(root)
+    assert Path("runtime/byte_order.h") in discovered
+    assert Path("runtime/wait_probe.cpp") in discovered
+    assert Path("tools/heap_replay.cpp") in discovered
+    assert all((root / path).is_file() for path in MAINTAINED_FILES)
+    assert not any(is_generated_source(root / path) for path in MAINTAINED_FILES)
+    selected = selected_tidy_units(root, {(root / "runtime/wait_probe.cpp").resolve()})
+    assert selected == [Path("runtime/wait_probe.cpp")]
+    print(
+        f"C++ quality checker selftest passed: discovered {len(discovered)} current "
+        f"first-party files and validated {len(MAINTAINED_FILES)} maintained files; "
+        "missing-tool and compiled-unit refusals exercised"
+    )
     return 0
 
 
-def main(argv):
+def main(argv: list[str]) -> int:
     if argv[1:] == ["--selftest"]:
         return selftest()
     if len(argv) > 2:
@@ -541,36 +185,42 @@ def main(argv):
         clang_format = find_tool("clang-format", os.environ.get("CLANG_FORMAT"))
         clang_tidy = find_tool("clang-tidy", os.environ.get("CLANG_TIDY"))
         clang_cxx = find_tool("clang++", os.environ.get("CLANG_CXX"))
+        formatted = list(MAINTAINED_FILES)
+        if not formatted:
+            raise RuntimeError("no first-party C++ files discovered")
+        missing = [path for path in formatted if not (root / path).is_file()]
+        if missing:
+            raise RuntimeError(
+                "maintained C++ manifest contains missing files: "
+                + ", ".join(map(str, missing))
+            )
         database_sources = compile_database_sources(build_dir)
+        tidy_units = selected_tidy_units(root, database_sources)
     except RuntimeError as error:
         print(f"REFUSING: {error}", file=sys.stderr)
         return 1
 
-    run([clang_format, "--dry-run", "--Werror", *FORMATTED], root)
-    for source, ranges in FORMAT_RANGES.items():
-        for first, last in ranges:
-            run([clang_format, "--dry-run", "--Werror", f"--lines={first}:{last}", source], root)
-
+    run([clang_format, "--dry-run", "--Werror", *map(str, formatted)], root)
     resource_dir = subprocess.run(
-        [clang_cxx, "-print-resource-dir"], check=True, text=True,
-        capture_output=True
+        [clang_cxx, "-print-resource-dir"], check=True, text=True, capture_output=True
     ).stdout.strip()
-    tidy_common = [
-        "-p", str(build_dir), f"--extra-arg=-resource-dir={resource_dir}", "--quiet"
-    ]
-    tidy_units = selected_tidy_units(root, database_sources)
-    run([clang_tidy, *tidy_common, *tidy_units], root)
-
-    line_filter = json.dumps([
-        {"name": "runtime/vd_null_gpu.cpp", "lines": VD_TIDY_RANGES}
-    ], separators=(",", ":"))
-    run([
-        clang_tidy, "-p", str(build_dir), "runtime/vd_null_gpu.cpp",
-        f"-line-filter={line_filter}", f"--extra-arg=-resource-dir={resource_dir}",
-        "--quiet",
-    ], root)
+    run(
+        [
+            clang_tidy,
+            "-p",
+            str(build_dir),
+            f"--extra-arg=-resource-dir={resource_dir}",
+            "--quiet",
+            *map(str, tidy_units),
+        ],
+        root,
+    )
+    print(
+        f"C++ quality gate passed: formatted {len(formatted)} first-party files; "
+        f"linted {len(tidy_units)} compiled first-party units"
+    )
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    raise SystemExit(main(sys.argv))

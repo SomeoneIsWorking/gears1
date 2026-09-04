@@ -25,7 +25,7 @@ from tools.gearsue3_bootstrap import (  # noqa: E402
     process,
     requirements,
 )
-from tools import clean_build, refresh_recompiler_header  # noqa: E402
+from tools import clean_build  # noqa: E402
 import replay_corpus  # noqa: E402
 
 
@@ -60,13 +60,13 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(options.http_port, "0")
         self.assertEqual(options.runtime_arguments, ["--runtime-option", "value"])
 
-    def test_shipping_arguments_refuse_missing_invalid_and_contradictory_values(self) -> None:
+    def test_shipping_arguments_refuse_missing_and_invalid_values(self) -> None:
         with self.assertRaisesRegex(launcher.CliError, "requires a value"):
             launcher.parse_arguments(["--log"], "walk")
         with self.assertRaisesRegex(launcher.CliError, "integer from 0"):
             launcher.parse_arguments(["--http-port", "70000"], "walk")
-        with self.assertRaisesRegex(launcher.CliError, "mutually exclusive"):
-            launcher.parse_arguments(["--prepare", "--no-build"], "walk")
+        with self.assertRaisesRegex(launcher.CliError, "unknown option"):
+            launcher.parse_arguments(["--no-build"], "walk")
         with self.assertRaisesRegex(launcher.CliError, "unknown option"):
             launcher.parse_arguments(["--typo"], "walk")
 
@@ -161,10 +161,11 @@ class BootstrapTests(unittest.TestCase):
             patch.object(
                 launcher,
                 "prepare_title",
-                return_value=SimpleNamespace(title_root=self.root),
+                side_effect=launcher.ProvisionError("missing x360port"),
             ) as prepare,
         ):
-            launcher.main(["--prepare"], self.root)
+            with self.assertRaisesRegex(launcher.ProvisionError, "x360port"):
+                launcher.main(["--prepare"], self.root)
         self.assertEqual(prepare.call_args.kwargs["env_file"], selected)
 
     def test_build_directory_refuses_scratch_and_external_roots(self) -> None:
@@ -197,23 +198,6 @@ class BootstrapTests(unittest.TestCase):
             with self.subTest(invalid=invalid):
                 with self.assertRaises(clean_build.CleanBuildError):
                     clean_build.build_target(invalid)
-
-    def test_recompiler_header_refresh_is_scoped_and_idempotent(self) -> None:
-        source = self.root / "extern/XenonRecomp/XenonUtils/ppc_context.h"
-        source.parent.mkdir(parents=True)
-        source.write_text("// current body\n", encoding="utf-8")
-        generated = self.root / "scratch/ppc"
-        generated.mkdir(parents=True)
-        (generated / "ppc_context.h").write_text("// stale\n", encoding="utf-8")
-
-        self.assertTrue(refresh_recompiler_header.refresh(generated, self.root))
-        self.assertEqual(
-            (generated / "ppc_context.h").read_text(encoding="utf-8"),
-            '#pragma once\n#include "ppc_config.h"\n\n// current body\n',
-        )
-        self.assertFalse(refresh_recompiler_header.refresh(generated, self.root))
-        with self.assertRaisesRegex(refresh_recompiler_header.RefreshError, "under"):
-            refresh_recompiler_header.refresh(self.root / "build/ppc", self.root)
 
     def test_logged_child_tees_output_and_preserves_nonzero_status(self) -> None:
         log = self.root / "run.log"

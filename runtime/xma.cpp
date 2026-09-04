@@ -11,7 +11,7 @@
 #include <set>
 #include <string>
 
-#include <byteswap.h>
+#include "byte_order.h"
 
 #include <lucent/config.h>
 #include <lucent/log.h>
@@ -45,7 +45,7 @@ constexpr uint32_t kContextSize = 64;
 constexpr uint32_t kPacketSize = 2048;
 
 uint32_t g_contextArray = 0;
-GuestMemory* g_memory = nullptr;
+GuestMemory *g_memory = nullptr;
 
 std::mutex g_contextMutex;
 std::bitset<kContextCount> g_contextInUse;
@@ -56,7 +56,7 @@ std::bitset<kContextCount> g_contextInUse;
 // sub_825E8FE0, which reads the context-array register exactly that way, and by
 // the writes the title makes: they read back correctly only when interpreted
 // little-endian.)
-uint32_t* Register(GuestMemory& memory, uint32_t index)
+uint32_t *Register(GuestMemory &memory, uint32_t index)
 {
     return memory.Translate<uint32_t>(kXmaRegisterBase + index * 4);
 }
@@ -91,9 +91,9 @@ struct ContextFields
     uint32_t inputBuffer;
 };
 
-ContextFields ReadContext(GuestMemory& memory, uint32_t pointer)
+ContextFields ReadContext(GuestMemory &memory, uint32_t pointer)
 {
-    const uint32_t* words = memory.Translate<uint32_t>(pointer);
+    const uint32_t *words = memory.Translate<uint32_t>(pointer);
     auto dword = [words](uint32_t i) { return ByteSwap(words[i]); };
 
     ContextFields out{};
@@ -105,9 +105,9 @@ ContextFields ReadContext(GuestMemory& memory, uint32_t pointer)
     return out;
 }
 
-void DumpContext(GuestMemory& memory, uint32_t index, uint32_t pointer)
+void DumpContext(GuestMemory &memory, uint32_t index, uint32_t pointer)
 {
-    const std::string& dir = lucent::config::text("XMA_DUMP");
+    const std::string &dir = lucent::config::text("XMA_DUMP");
     if (dir.empty())
         return;
 
@@ -132,19 +132,21 @@ void DumpContext(GuestMemory& memory, uint32_t index, uint32_t pointer)
     // reader needs to interpret the stream, and reconstructing them by hand
     // from a log line is how transcription errors get in.
     const std::string stem = dir + "/ctx" + std::to_string(index);
-    if (std::FILE* f = std::fopen((stem + ".ctx").c_str(), "wb"))
+    if (std::FILE *f = std::fopen((stem + ".ctx").c_str(), "wb"))
     {
         std::fwrite(memory.Translate<uint8_t>(pointer), 1, kContextSize, f);
         std::fclose(f);
     }
-    if (std::FILE* f = std::fopen((stem + ".packets").c_str(), "wb"))
+    if (std::FILE *f = std::fopen((stem + ".packets").c_str(), "wb"))
     {
         std::fwrite(memory.Translate<uint8_t>(fields.inputBuffer), 1, bytes, f);
         std::fclose(f);
     }
-    lucent::info("xma", "context {} dumped to {}.packets: {} packets ({} bytes),"
-        " {} at {} Hz, input buffer {:#x}", index, stem, fields.packetCount, bytes,
-        fields.isStereo ? "stereo" : "mono", fields.sampleRate, fields.inputBuffer);
+    lucent::info("xma",
+                 "context {} dumped to {}.packets: {} packets ({} bytes),"
+                 " {} at {} Hz, input buffer {:#x}",
+                 index, stem, fields.packetCount, bytes, fields.isStereo ? "stereo" : "mono",
+                 fields.sampleRate, fields.inputBuffer);
 }
 
 // The decoder side of every context slot, created on first kick. The protocol
@@ -175,7 +177,7 @@ std::shared_ptr<XmaHwContext> HwContext(uint32_t index)
     return g_hwContexts[index];
 }
 
-void ReportContextBits(const char* what, uint32_t group, uint32_t bits)
+void ReportContextBits(const char *what, uint32_t group, uint32_t bits)
 {
     static std::atomic<uint64_t> s_reported{0};
     while (bits)
@@ -192,7 +194,7 @@ void ReportContextBits(const char* what, uint32_t group, uint32_t bits)
 
 } // namespace
 
-bool SetupXmaRegisters(GuestMemory& memory)
+bool SetupXmaRegisters(GuestMemory &memory)
 {
     // The console's kernel allocates the array as uncached physical memory and
     // writes its physical address to the register. Virtual and physical are the
@@ -212,8 +214,7 @@ bool SetupXmaRegisters(GuestMemory& memory)
         // The title recovers an index by subtracting the base and shifting by
         // 6, so a misaligned base makes every index wrong by a fraction of a
         // slot. Better to fail loudly than to decode into the wrong context.
-        lucent::error("xma", "context array at {:#x} is not 64-byte aligned",
-            g_contextArray);
+        lucent::error("xma", "context array at {:#x} is not 64-byte aligned", g_contextArray);
         return false;
     }
 
@@ -221,9 +222,10 @@ bool SetupXmaRegisters(GuestMemory& memory)
     *Register(memory, kRegContextArrayAddress) = g_contextArray;
     *Register(memory, kRegNextContextIndex) = 1;
 
-    lucent::info("xma", "context array at {:#x} ({} x {} bytes), published in"
-        " register {:#x}", g_contextArray, kContextCount, kContextSize,
-        kRegContextArrayAddress);
+    lucent::info("xma",
+                 "context array at {:#x} ({} x {} bytes), published in"
+                 " register {:#x}",
+                 g_contextArray, kContextCount, kContextSize, kRegContextArrayAddress);
 
     return true;
 }
@@ -254,8 +256,7 @@ void ReleaseXmaContext(uint32_t guestPointer)
     const uint32_t offset = guestPointer - g_contextArray;
     if (offset % kContextSize != 0 || offset / kContextSize >= kContextCount)
     {
-        lucent::warn("xma", "release of {:#x}, which is not a context in the array",
-            guestPointer);
+        lucent::warn("xma", "release of {:#x}, which is not a context in the array", guestPointer);
         return;
     }
     const uint32_t index = offset / kContextSize;
@@ -281,7 +282,7 @@ bool OnXmaRegisterStore(uint32_t address, uint32_t value)
     // The value reaching the hook is what a big-endian store would put in
     // memory; the registers are little-endian, so the register's value is the
     // byte-reversed form. (The title writes these with stwbrx, which the
-    // recompiler turns into a byte-swapped argument to this same store -- so
+    // guest big-endian store becomes a byte-swapped argument to this same store -- so
     // reversing here recovers exactly what it meant.)
     const uint32_t index = (address & 0xFFFF) / 4;
     const uint32_t reg = __builtin_bswap32(value);
@@ -311,7 +312,8 @@ bool OnXmaRegisterStore(uint32_t address, uint32_t value)
             const auto began = std::chrono::steady_clock::now();
             HwContext(index)->Work(*g_memory, pointer);
             const auto took = std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::steady_clock::now() - began).count();
+                                  std::chrono::steady_clock::now() - began)
+                                  .count();
             g_decodeMicroseconds.fetch_add(uint64_t(took));
             for (uint64_t worst = g_worstDecodeMicroseconds.load();
                  uint64_t(took) > worst &&
@@ -324,10 +326,11 @@ bool OnXmaRegisterStore(uint32_t address, uint32_t value)
         if (kicks % 1000 == 0)
         {
             const uint64_t spent = g_decodeMicroseconds.load();
-            lucent::info("xma", "{} kicks ({} on the audio pump thread),"
-                " {} ms decoding in total ({} us mean, {} us worst)", kicks,
-                g_kicksFromPump.load(), spent / 1000, spent / kicks,
-                g_worstDecodeMicroseconds.load());
+            lucent::info("xma",
+                         "{} kicks ({} on the audio pump thread),"
+                         " {} ms decoding in total ({} us mean, {} us worst)",
+                         kicks, g_kicksFromPump.load(), spent / 1000, spent / kicks,
+                         g_worstDecodeMicroseconds.load());
         }
     }
     else if (index >= kRegContext0Lock && index < kRegContext0Lock + kContextGroupCount)
@@ -343,10 +346,9 @@ bool OnXmaRegisterStore(uint32_t address, uint32_t value)
         ReportContextBits("cleared", index - kRegContext0Clear, reg);
         for (uint32_t bits = reg; bits; bits &= bits - 1)
         {
-            const uint32_t index2 = (index - kRegContext0Clear) * 32 +
-                uint32_t(__builtin_ctz(bits));
-            HwContext(index2)->Clear(*g_memory,
-                g_contextArray + index2 * kContextSize);
+            const uint32_t index2 =
+                (index - kRegContext0Clear) * 32 + uint32_t(__builtin_ctz(bits));
+            HwContext(index2)->Clear(*g_memory, g_contextArray + index2 * kContextSize);
         }
     }
     else

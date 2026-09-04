@@ -20,7 +20,7 @@
 
 #include <lucent/log.h>
 
-#include <byteswap.h>
+#include "byte_order.h"
 
 #include "kernel_objects.h"
 
@@ -53,7 +53,8 @@ void Scheduler()
         }
 
         const auto next = std::min_element(g_armed.begin(), g_armed.end(),
-            [](const ArmedTimer& a, const ArmedTimer& b) { return a.due < b.due; });
+                                           [](const ArmedTimer &a, const ArmedTimer &b)
+                                           { return a.due < b.due; });
 
         const Clock::time_point due = next->due;
         if (Clock::now() < due)
@@ -89,7 +90,8 @@ void EnsureScheduler()
 void Disarm(uint32_t handle)
 {
     g_armed.erase(std::remove_if(g_armed.begin(), g_armed.end(),
-        [handle](const ArmedTimer& t) { return t.handle == handle; }), g_armed.end());
+                                 [handle](const ArmedTimer &t) { return t.handle == handle; }),
+                  g_armed.end());
 }
 } // namespace
 
@@ -97,20 +99,19 @@ void Disarm(uint32_t handle)
 //
 // Type 0 is a notification timer, 1 a synchronisation timer -- the same
 // distinction events draw, so the same two kinds serve.
-void __imp__NtCreateTimer(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtCreateTimer(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handlePtr = ctx.r3.u32;
     const uint32_t type = ctx.r5.u32;
 
-    const auto kind = type == 1
-        ? gears::KernelObject::Kind::SynchronizationEvent
-        : gears::KernelObject::Kind::NotificationEvent;
+    const auto kind = type == 1 ? gears::KernelObject::Kind::SynchronizationEvent
+                                : gears::KernelObject::Kind::NotificationEvent;
 
     auto object = std::make_shared<gears::KernelObject>(kind, false);
     const uint32_t handle = gears::Handles().Insert(object);
 
     if (handlePtr != 0)
-        *reinterpret_cast<uint32_t*>(base + handlePtr) = ByteSwap(handle);
+        *reinterpret_cast<uint32_t *>(base + handlePtr) = ByteSwap(handle);
 
     lucent::debug("timer", "NtCreateTimer(type {}) -> {:#x}", type, handle);
     ctx.r3.u64 = gears::kStatusSuccess;
@@ -119,7 +120,7 @@ void __imp__NtCreateTimer(PPCContext& __restrict ctx, uint8_t* base)
 // NTSTATUS NtSetTimerEx(HANDLE Timer, PLARGE_INTEGER DueTime, PTIMER_APC_ROUTINE Apc,
 //                       DWORD ApcMode, PVOID ApcContext, BOOLEAN Resume, LONG Period,
 //                       PBOOLEAN PreviousState)
-void __imp__NtSetTimerEx(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtSetTimerEx(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handle = ctx.r3.u32;
     const uint32_t dueTimePtr = ctx.r4.u32;
@@ -140,7 +141,7 @@ void __imp__NtSetTimerEx(PPCContext& __restrict ctx, uint8_t* base)
         // relying on the callback would otherwise simply never be called and
         // the reason would not appear anywhere.
         lucent::warn("timer", "NtSetTimerEx({:#x}) asked for APC {:#x}, which is not delivered",
-            handle, apcRoutine);
+                     handle, apcRoutine);
     }
 
     // A negative due time is relative in 100 ns units; a positive one is an
@@ -148,7 +149,7 @@ void __imp__NtSetTimerEx(PPCContext& __restrict ctx, uint8_t* base)
     // epoch for the absolute form would be worse than refusing it.
     int64_t dueTime = 0;
     if (dueTimePtr != 0)
-        dueTime = int64_t(ByteSwap(*reinterpret_cast<uint64_t*>(base + dueTimePtr)));
+        dueTime = int64_t(ByteSwap(*reinterpret_cast<uint64_t *>(base + dueTimePtr)));
 
     Clock::duration delay{};
     if (dueTime < 0)
@@ -158,28 +159,28 @@ void __imp__NtSetTimerEx(PPCContext& __restrict ctx, uint8_t* base)
     else if (dueTime > 0)
     {
         lucent::warn("timer", "NtSetTimerEx({:#x}) used an absolute due time, treated as immediate",
-            handle);
+                     handle);
     }
 
     {
         std::lock_guard<std::mutex> guard(g_mutex);
         EnsureScheduler();
         Disarm(handle); // re-arming replaces the previous schedule
-        g_armed.push_back({ handle, object, Clock::now() + delay, period });
+        g_armed.push_back({handle, object, Clock::now() + delay, period});
     }
     g_wakeup.notify_all();
 
     object->Clear();
     if (previousStatePtr != 0)
-        *reinterpret_cast<uint32_t*>(base + previousStatePtr) = 0;
+        *reinterpret_cast<uint32_t *>(base + previousStatePtr) = 0;
 
     lucent::debug("timer", "NtSetTimerEx({:#x}) in {} ms, period {} ms", handle,
-        std::chrono::duration_cast<std::chrono::milliseconds>(delay).count(), period);
+                  std::chrono::duration_cast<std::chrono::milliseconds>(delay).count(), period);
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
 // NTSTATUS NtCancelTimer(HANDLE Timer, PBOOLEAN CurrentState)
-void __imp__NtCancelTimer(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtCancelTimer(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handle = ctx.r3.u32;
     const uint32_t currentStatePtr = ctx.r4.u32;
@@ -194,7 +195,7 @@ void __imp__NtCancelTimer(PPCContext& __restrict ctx, uint8_t* base)
     g_wakeup.notify_all();
 
     if (currentStatePtr != 0)
-        *reinterpret_cast<uint32_t*>(base + currentStatePtr) = wasArmed ? 1 : 0;
+        *reinterpret_cast<uint32_t *>(base + currentStatePtr) = wasArmed ? 1 : 0;
 
     ctx.r3.u64 = gears::kStatusSuccess;
 }

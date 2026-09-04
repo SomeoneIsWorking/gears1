@@ -1,6 +1,6 @@
 #include "gpu_packet_memory.h"
 
-#include <byteswap.h>
+#include "byte_order.h"
 
 #include <lucent/log.h>
 

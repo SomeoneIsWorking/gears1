@@ -1,9 +1,7 @@
 // Guest thread creation.
 //
-// Every recompiled function takes its PPCContext by parameter, so a guest
-// thread is just a host thread with its own context and its own thread block.
-// The memory barriers the recompiler emits are what make this safe; they were
-// implemented before this file existed, deliberately.
+// Retained Xbox thread-service semantics. Guest entry execution belongs to
+// x360port/Xenia and currently refuses at that explicit missing boundary.
 #include "import_stub.h"
 
 #include "fatal_exit.h"
@@ -15,7 +13,7 @@
 #include <chrono>
 #include <thread>
 
-#include <byteswap.h>
+#include "byte_order.h"
 #include <lucent/log.h>
 
 #include "guest_heap.h"
@@ -24,6 +22,7 @@
 #include "guest_thread.h"
 #include "wait_probe.h"
 #include "kernel_objects.h"
+#include "missing_x360port_executor.h"
 
 namespace
 {
@@ -64,10 +63,10 @@ struct GuestThreadStart
 // that survives duplication. The shared_ptr in the record keeps it alive, so a
 // key is never reused by a later object at the same address.
 std::mutex g_threadsMutex;
-std::unordered_map<const gears::KernelObject*, std::shared_ptr<GuestThreadStart>>
+std::unordered_map<const gears::KernelObject *, std::shared_ptr<GuestThreadStart>>
     g_threadsByObject;
 
-std::shared_ptr<GuestThreadStart> ThreadForObject(const gears::KernelObject* object)
+std::shared_ptr<GuestThreadStart> ThreadForObject(const gears::KernelObject *object)
 {
     if (object == nullptr)
         return nullptr;
@@ -77,7 +76,7 @@ std::shared_ptr<GuestThreadStart> ThreadForObject(const gears::KernelObject* obj
 }
 
 // Thrown by ExTerminateThread to unwind the calling guest thread back to
-// GuestThreadMain. The recompiled functions are plain C++ with no cleanup of
+// GuestThreadMain. Guest execution can leave host-side objects with no cleanup of
 // their own, so the unwind is safe; only the runtime's own frames run
 // destructors on the way out.
 struct GuestThreadExit
@@ -85,12 +84,10 @@ struct GuestThreadExit
     uint32_t exitCode;
 };
 
-thread_local GuestThreadStart* t_currentThread = nullptr;
+thread_local GuestThreadStart *t_currentThread = nullptr;
 
 void GuestThreadMain(std::shared_ptr<GuestThreadStart> start)
 {
-    uint8_t* base = gears::Memory().Base();
-
     // A suspended thread must not run guest code until it is resumed.
     if (start->resumed)
         start->resumed->Wait(-1);
@@ -110,8 +107,8 @@ void GuestThreadMain(std::shared_ptr<GuestThreadStart> start)
     ctx.r1.u32 = start->block.stackBase - 0x100;
     ctx.fpscr.loadFromHost();
 
-    lucent::info("thread", "guest thread {} entering {:#x} (context {:#x})",
-        start->threadId, start->startAddress, start->startContext);
+    lucent::info("thread", "guest thread {} entering {:#x} (context {:#x})", start->threadId,
+                 start->startAddress, start->startContext);
 
     try
     {
@@ -121,18 +118,18 @@ void GuestThreadMain(std::shared_ptr<GuestThreadStart> start)
         {
             ctx.r3.u32 = start->startAddress;
             ctx.r4.u32 = start->startContext;
-            (PPC_LOOKUP_FUNC(base, start->startupRoutine))(ctx, base);
+            gears::RefuseMissingX360PortExecutor(start->startupRoutine);
         }
         else
         {
             ctx.r3.u32 = start->startContext;
-            (PPC_LOOKUP_FUNC(base, start->startAddress))(ctx, base);
+            gears::RefuseMissingX360PortExecutor(start->startAddress);
         }
     }
-    catch (const GuestThreadExit& exit)
+    catch (const GuestThreadExit &exit)
     {
-        lucent::debug("thread", "guest thread {} terminated with code {:#x}",
-            start->threadId, exit.exitCode);
+        lucent::debug("thread", "guest thread {} terminated with code {:#x}", start->threadId,
+                      exit.exitCode);
     }
 
     lucent::info("thread", "guest thread {} exited", start->threadId);
@@ -144,7 +141,7 @@ void GuestThreadMain(std::shared_ptr<GuestThreadStart> start)
 // VOID ExTerminateThread(DWORD ExitCode) -- ends the calling thread. Never
 // returns to guest code: the unwind lands in GuestThreadMain, which signals
 // the thread's exit object so joiners wake.
-void __imp__ExTerminateThread(PPCContext& __restrict ctx, uint8_t*)
+void __imp__ExTerminateThread(PPCContext &__restrict ctx, uint8_t *)
 {
     if (t_currentThread == nullptr)
     {
@@ -159,7 +156,7 @@ void __imp__ExTerminateThread(PPCContext& __restrict ctx, uint8_t*)
 // NTSTATUS ExCreateThread(PHANDLE Handle, ULONG StackSize, PULONG ThreadId,
 //                         PVOID XapiThreadStartup, PVOID StartAddress,
 //                         PVOID StartContext, ULONG CreationFlags)
-void __imp__ExCreateThread(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__ExCreateThread(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handlePtr = ctx.r3.u32;
     uint32_t stackSize = ctx.r4.u32;
@@ -192,13 +189,12 @@ void __imp__ExCreateThread(PPCContext& __restrict ctx, uint8_t* base)
     // A mask that names nothing has told us as little as an empty one, and the
     // conversion has already said so, so both fall back to the creator's
     // processor rather than to an invented number.
-    start->processor = requested >= gears::kHardwareThreadCount
-                           ? gears::CurrentGuestProcessor()
-                           : requested;
+    start->processor =
+        requested >= gears::kHardwareThreadCount ? gears::CurrentGuestProcessor() : requested;
     gears::SetGuestThreadProcessor(gears::Memory(), start->block.pcrAddress,
                                    start->block.threadAddress, start->processor);
-    start->exited = std::make_shared<gears::KernelObject>(
-        gears::KernelObject::Kind::NotificationEvent, false);
+    start->exited =
+        std::make_shared<gears::KernelObject>(gears::KernelObject::Kind::NotificationEvent, false);
 
     if ((creationFlags & kCreateSuspended) != 0)
     {
@@ -219,25 +215,27 @@ void __imp__ExCreateThread(PPCContext& __restrict ctx, uint8_t* base)
     gears::RegisterThreadResume(start->exited, start->resumed);
 
     if (handlePtr != 0)
-        *reinterpret_cast<uint32_t*>(base + handlePtr) = ByteSwap(handle);
+        *reinterpret_cast<uint32_t *>(base + handlePtr) = ByteSwap(handle);
     if (threadIdPtr != 0)
-        *reinterpret_cast<uint32_t*>(base + threadIdPtr) = ByteSwap(start->threadId);
+        *reinterpret_cast<uint32_t *>(base + threadIdPtr) = ByteSwap(start->threadId);
 
-    lucent::info("thread", "ExCreateThread -> handle {:#x} id {} entry {:#x} stack {:#x}"
-        " cpu {}{}", handle, start->threadId, startAddress, stackSize, start->processor,
-        start->resumed ? " (suspended)" : "");
+    lucent::info("thread",
+                 "ExCreateThread -> handle {:#x} id {} entry {:#x} stack {:#x}"
+                 " cpu {}{}",
+                 handle, start->threadId, startAddress, stackSize, start->processor,
+                 start->resumed ? " (suspended)" : "");
 
     std::thread(GuestThreadMain, start).detach();
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
-void __imp__NtResumeThread(PPCContext& __restrict ctx, uint8_t*)
+void __imp__NtResumeThread(PPCContext &__restrict ctx, uint8_t *)
 {
     gears::ResumeThread(ctx.r3.u32);
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
-void __imp__KeResumeThread(PPCContext& __restrict ctx, uint8_t*)
+void __imp__KeResumeThread(PPCContext &__restrict ctx, uint8_t *)
 {
     gears::ResumeThread(ctx.r3.u32);
     ctx.r3.u64 = gears::kStatusSuccess;
@@ -260,7 +258,7 @@ void __imp__KeResumeThread(PPCContext& __restrict ctx, uint8_t*)
 // from disassembling the real export (xboxkrnl_threading.cc:359). This used to
 // return the requested mask in r3 and echo it back through the pointer, which
 // told the caller nothing and hid the failures below.
-void __imp__KeSetAffinityThread(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__KeSetAffinityThread(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t threadObject = ctx.r3.u32;
     const uint32_t affinity = ctx.r4.u32;
@@ -271,8 +269,10 @@ void __imp__KeSetAffinityThread(PPCContext& __restrict ctx, uint8_t* base)
         // The console rejects an empty affinity outright; unlike a thread's
         // CREATION flags, where an empty mask means "inherit", there is no
         // creator here to inherit from.
-        lucent::warn("thread", "KeSetAffinityThread(object={:#x}): an empty affinity"
-            " names no processor", threadObject);
+        lucent::warn("thread",
+                     "KeSetAffinityThread(object={:#x}): an empty affinity"
+                     " names no processor",
+                     threadObject);
         ctx.r3.u64 = gears::kStatusInvalidParameter;
         return;
     }
@@ -287,9 +287,10 @@ void __imp__KeSetAffinityThread(PPCContext& __restrict ctx, uint8_t* base)
         // Reported rather than ignored: a thread whose processor the runtime
         // could not place keeps whatever number it was created with, and any
         // per-CPU table the title builds for it will disagree.
-        lucent::warn("thread", "KeSetAffinityThread(object={:#x}, mask={:#x}): that"
-            " object is not a thread the runtime created, processor left alone",
-            threadObject, affinity);
+        lucent::warn("thread",
+                     "KeSetAffinityThread(object={:#x}, mask={:#x}): that"
+                     " object is not a thread the runtime created, processor left alone",
+                     threadObject, affinity);
         ctx.r3.u64 = gears::kStatusInvalidHandle;
         return;
     }
@@ -314,7 +315,7 @@ void __imp__KeSetAffinityThread(PPCContext& __restrict ctx, uint8_t* base)
 
     if (previousPtr != 0)
     {
-        *reinterpret_cast<uint32_t*>(base + previousPtr) =
+        *reinterpret_cast<uint32_t *>(base + previousPtr) =
             ByteSwap(uint32_t(1) << target->processor);
     }
 
@@ -327,12 +328,14 @@ void __imp__KeSetAffinityThread(PPCContext& __restrict ctx, uint8_t* base)
     // it is its own target.
     if (t_currentThread == target.get())
         gears::SetCurrentGuestProcessor(cpu);
-    lucent::debug("thread", "KeSetAffinityThread(object={:#x}, mask={:#x})"
-        " -> guest thread {} on cpu {}", threadObject, affinity, target->threadId, cpu);
+    lucent::debug("thread",
+                  "KeSetAffinityThread(object={:#x}, mask={:#x})"
+                  " -> guest thread {} on cpu {}",
+                  threadObject, affinity, target->threadId, cpu);
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
-void __imp__KeSetBasePriorityThread(PPCContext& __restrict ctx, uint8_t*)
+void __imp__KeSetBasePriorityThread(PPCContext &__restrict ctx, uint8_t *)
 {
     // Host thread priorities need privileges we do not have and do not map
     // cleanly onto the console's scheme; the previous priority is reported so
@@ -341,7 +344,7 @@ void __imp__KeSetBasePriorityThread(PPCContext& __restrict ctx, uint8_t*)
     ctx.r3.u64 = 0;
 }
 
-void __imp__KeDelayExecutionThread(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__KeDelayExecutionThread(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t timeoutPtr = ctx.r5.u32;
     if (timeoutPtr == 0)
@@ -351,7 +354,7 @@ void __imp__KeDelayExecutionThread(PPCContext& __restrict ctx, uint8_t* base)
         return;
     }
 
-    const int64_t raw = int64_t(ByteSwap(*reinterpret_cast<uint64_t*>(base + timeoutPtr)));
+    const int64_t raw = int64_t(ByteSwap(*reinterpret_cast<uint64_t *>(base + timeoutPtr)));
     if (raw > 0)
     {
         lucent::warn("thread", "absolute delay {} not supported, yielding instead", raw);

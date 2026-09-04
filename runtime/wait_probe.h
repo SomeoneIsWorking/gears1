@@ -25,11 +25,11 @@ extern thread_local bool t_inAudioPumpCallback;
 
 // Adds `nanos` of blocked time at `site`. `site` must be a string literal;
 // slots are keyed by pointer.
-void WaitProbeRecord(const char* site, uint64_t nanos);
+void WaitProbeRecord(const char *site, uint64_t nanos);
 
 // Adds a raw count at `site` -- for quantities that are not times (poll
 // rounds, for one). Reported alongside the times, labelled as a count.
-void WaitProbeCount(const char* site, uint64_t n);
+void WaitProbeCount(const char *site, uint64_t n);
 
 // Logs one line with every site's count and total blocked time since the last
 // report, then clears the table. Called from the pump's periodic report, on
@@ -58,21 +58,23 @@ void StartStallDetector();
 // progress signal calls that healthy. `channel` must be a string literal.
 uint64_t GuestKernelCalls();
 
-void NoteGuestProgress(const char* channel);
+void NoteGuestProgress(const char *channel);
 
-// Times one potentially-blocking region. Free (one thread-local load and a
-// branch) when not on the pump thread inside the callback.
+// Times one potentially-blocking region on the audio pump. Other guest threads
+// publish only a site pointer and generation; the watchdog derives duration
+// from its one-second observations instead of reading the host clock in every
+// guest kernel call.
 class WaitProbe
 {
-public:
-    explicit WaitProbe(const char* site);
+  public:
+    explicit WaitProbe(const char *site);
     ~WaitProbe();
 
-    WaitProbe(const WaitProbe&) = delete;
-    WaitProbe& operator=(const WaitProbe&) = delete;
+    WaitProbe(const WaitProbe &) = delete;
+    WaitProbe &operator=(const WaitProbe &) = delete;
 
-private:
-    const char* site_;
+  private:
+    const char *site_;
     uint64_t began_;
     // Whether this scope published the calling thread's state, so the
     // destructor only clears what it set (probes nest: a wait inside a lock).

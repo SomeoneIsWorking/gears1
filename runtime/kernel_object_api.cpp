@@ -2,7 +2,7 @@
 // pointers the dispatcher APIs use.
 #include "import_stub.h"
 
-#include <byteswap.h>
+#include "byte_order.h"
 #include <lucent/log.h>
 
 #include <algorithm>
@@ -14,7 +14,7 @@
 
 // NTSTATUS ObReferenceObjectByHandle(HANDLE Handle, POBJECT_TYPE ObjectType,
 //                                    PVOID* ReturnedObject)
-void __imp__ObReferenceObjectByHandle(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__ObReferenceObjectByHandle(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handle = ctx.r3.u32;
     const uint32_t returnedObjectPtr = ctx.r5.u32;
@@ -28,13 +28,13 @@ void __imp__ObReferenceObjectByHandle(PPCContext& __restrict ctx, uint8_t* base)
     }
 
     if (returnedObjectPtr != 0)
-        *reinterpret_cast<uint32_t*>(base + returnedObjectPtr) = ByteSwap(guestObject);
+        *reinterpret_cast<uint32_t *>(base + returnedObjectPtr) = ByteSwap(guestObject);
 
     lucent::debug("kernel", "ObReferenceObjectByHandle({:#x}) -> {:#x}", handle, guestObject);
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
-void __imp__ObDereferenceObject(PPCContext& __restrict ctx, uint8_t*)
+void __imp__ObDereferenceObject(PPCContext &__restrict ctx, uint8_t *)
 {
     // Objects are owned by shared_ptr on the host and outlive the guest's
     // references, so there is no count to decrement. Guest lifetime bugs will
@@ -45,7 +45,7 @@ void __imp__ObDereferenceObject(PPCContext& __restrict ctx, uint8_t*)
 
 // NTSTATUS KeWaitForSingleObject(PVOID Object, WAIT_REASON, WAIT_MODE,
 //                                BOOLEAN Alertable, PLARGE_INTEGER Timeout)
-void __imp__KeWaitForSingleObject(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__KeWaitForSingleObject(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t objectAddress = ctx.r3.u32;
     const uint32_t timeoutPtr = ctx.r7.u32;
@@ -63,7 +63,7 @@ void __imp__KeWaitForSingleObject(PPCContext& __restrict ctx, uint8_t* base)
     int64_t timeout = -1;
     if (timeoutPtr != 0)
     {
-        const int64_t raw = int64_t(ByteSwap(*reinterpret_cast<uint64_t*>(base + timeoutPtr)));
+        const int64_t raw = int64_t(ByteSwap(*reinterpret_cast<uint64_t *>(base + timeoutPtr)));
         if (raw > 0)
             lucent::warn("kernel", "absolute wait timeout {} not supported, waiting forever", raw);
         else
@@ -74,12 +74,12 @@ void __imp__KeWaitForSingleObject(PPCContext& __restrict ctx, uint8_t* base)
     // pointer-based path titles use for dispatcher objects embedded in their
     // own structures (the D3D per-CPU interrupt events among them), so it needs
     // its own line or those waits are invisible.
-    lucent::debug("wait", "[{}] KeWait -> object {:#x} timeout {}",
-        gears::GuestThreadName(), objectAddress, timeout);
+    lucent::debug("wait", "[{}] KeWait -> object {:#x} timeout {}", gears::GuestThreadName(),
+                  objectAddress, timeout);
     gears::WaitProbe probe("KeWait");
     const bool signalled = object->Wait(timeout);
-    lucent::debug("wait", "[{}] KeWait <- object {:#x} {}", gears::GuestThreadName(),
-        objectAddress, signalled ? "signalled" : "timed out");
+    lucent::debug("wait", "[{}] KeWait <- object {:#x} {}", gears::GuestThreadName(), objectAddress,
+                  signalled ? "signalled" : "timed out");
     ctx.r3.u64 = signalled ? gears::kStatusSuccess : gears::kStatusTimeout;
 }
 
@@ -96,7 +96,7 @@ void __imp__KeWaitForSingleObject(PPCContext& __restrict ctx, uint8_t* base)
 // whoever takes it, so testing objects one at a time can swallow a signal from
 // an object the caller then abandons. The test and the consume have to be atomic
 // across all of them.
-void __imp__KeWaitForMultipleObjects(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__KeWaitForMultipleObjects(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t count = ctx.r3.u32;
     const uint32_t objectsPtr = ctx.r4.u32;
@@ -106,30 +106,33 @@ void __imp__KeWaitForMultipleObjects(PPCContext& __restrict ctx, uint8_t* base)
 
     if (count == 0 || count > 64 || objectsPtr == 0)
     {
-        lucent::warn("wait", "KeWaitForMultipleObjects: count {} objects {:#x}"
-            " is not a wait this can serve", count, objectsPtr);
+        lucent::warn("wait",
+                     "KeWaitForMultipleObjects: count {} objects {:#x}"
+                     " is not a wait this can serve",
+                     count, objectsPtr);
         ctx.r3.u64 = gears::kStatusInvalidParameter;
         return;
     }
 
     // The array holds POINTERS to dispatcher objects, in guest memory.
     std::vector<std::shared_ptr<gears::KernelObject>> owned;
-    std::vector<gears::KernelObject*> objects;
+    std::vector<gears::KernelObject *> objects;
     std::vector<uint32_t> addresses;
     owned.reserve(count);
     objects.reserve(count);
     addresses.reserve(count);
     for (uint32_t i = 0; i < count; ++i)
     {
-        const uint32_t address =
-            ByteSwap(*reinterpret_cast<uint32_t*>(base + objectsPtr + i * 4));
+        const uint32_t address = ByteSwap(*reinterpret_cast<uint32_t *>(base + objectsPtr + i * 4));
         auto object = gears::BindGuestDispatcherObject(address);
         if (!object)
         {
             // Reported rather than skipped: a wait on an object we cannot bind
             // would block forever or return early, and both are silent lies.
-            lucent::warn("wait", "KeWaitForMultipleObjects: object {} at {:#x}"
-                " unbindable", i, address);
+            lucent::warn("wait",
+                         "KeWaitForMultipleObjects: object {} at {:#x}"
+                         " unbindable",
+                         i, address);
             ctx.r3.u64 = gears::kStatusInvalidHandle;
             return;
         }
@@ -141,11 +144,12 @@ void __imp__KeWaitForMultipleObjects(PPCContext& __restrict ctx, uint8_t* base)
     int64_t timeout = -1;
     if (timeoutPtr != 0)
     {
-        const int64_t raw =
-            int64_t(ByteSwap(*reinterpret_cast<uint64_t*>(base + timeoutPtr)));
+        const int64_t raw = int64_t(ByteSwap(*reinterpret_cast<uint64_t *>(base + timeoutPtr)));
         if (raw > 0)
-            lucent::warn("kernel", "absolute wait timeout {} not supported,"
-                " waiting forever", raw);
+            lucent::warn("kernel",
+                         "absolute wait timeout {} not supported,"
+                         " waiting forever",
+                         raw);
         else
             timeout = -raw;
     }
@@ -201,7 +205,7 @@ void __imp__KeWaitForMultipleObjects(PPCContext& __restrict ctx, uint8_t* base)
 // A second handle onto the same object. The host side is a shared_ptr, so both
 // handles genuinely refer to one object and signalling through either is seen
 // by waiters on the other -- which is the whole point of duplicating one.
-void __imp__NtDuplicateObject(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__NtDuplicateObject(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handle = ctx.r3.u32;
     const uint32_t newHandlePtr = ctx.r4.u32;
@@ -216,7 +220,7 @@ void __imp__NtDuplicateObject(PPCContext& __restrict ctx, uint8_t* base)
 
     const uint32_t duplicate = gears::Handles().Insert(std::move(object));
     if (newHandlePtr != 0)
-        *reinterpret_cast<uint32_t*>(base + newHandlePtr) = ByteSwap(duplicate);
+        *reinterpret_cast<uint32_t *>(base + newHandlePtr) = ByteSwap(duplicate);
 
     lucent::debug("kernel", "NtDuplicateObject({:#x}) -> {:#x}", handle, duplicate);
     ctx.r3.u64 = gears::kStatusSuccess;

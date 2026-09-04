@@ -1,7 +1,7 @@
 // Display and locale queries.
 #include "import_stub.h"
 
-#include <byteswap.h>
+#include "byte_order.h"
 #include <lucent/log.h>
 
 namespace
@@ -24,20 +24,19 @@ struct GuestVideoMode
     uint32_t reserved[3];
 };
 
-template<typename T>
-void StoreBE(void* dst, T value)
+template <typename T> void StoreBE(void *dst, T value)
 {
-    *reinterpret_cast<T*>(dst) = ByteSwap(value);
+    *reinterpret_cast<T *>(dst) = ByteSwap(value);
 }
 
 } // namespace
 
-void __imp__XGetVideoMode(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XGetVideoMode(PPCContext &__restrict ctx, uint8_t *base)
 {
     if (ctx.r3.u32 == 0)
         return;
 
-    auto* mode = reinterpret_cast<GuestVideoMode*>(base + ctx.r3.u32);
+    auto *mode = reinterpret_cast<GuestVideoMode *>(base + ctx.r3.u32);
     *mode = {};
 
     // 720p: the console's standard HD mode and what Gears of War renders at.
@@ -56,20 +55,20 @@ void __imp__XGetVideoMode(PPCContext& __restrict ctx, uint8_t* base)
 }
 
 // 1 == XC_LANGUAGE_ENGLISH.
-void __imp__XGetLanguage(PPCContext& __restrict ctx, uint8_t*)
+void __imp__XGetLanguage(PPCContext &__restrict ctx, uint8_t *)
 {
     ctx.r3.u64 = 1;
 }
 
 // 0x010000 == HDTV via component. Chosen to match the 720p mode reported above;
 // an AV pack implying SD would contradict it.
-void __imp__XGetAVPack(PPCContext& __restrict ctx, uint8_t*)
+void __imp__XGetAVPack(PPCContext &__restrict ctx, uint8_t *)
 {
     ctx.r3.u64 = 0x010000;
 }
 
 // 0x00FF == XC_GAME_REGION_NA.
-void __imp__XGetGameRegion(PPCContext& __restrict ctx, uint8_t*)
+void __imp__XGetGameRegion(PPCContext &__restrict ctx, uint8_t *)
 {
     ctx.r3.u64 = 0x00FF;
 }

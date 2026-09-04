@@ -14,8 +14,8 @@ Resolution order is deliberate and strict:
 3. exactly one supported image or 7z archive in the ignored ``roms/`` drop-in directory.
 
 A selected but missing higher-priority path is an error. It never falls back to
-a different image, because silently recompiling another title or revision would
-associate generated code with the wrong executable.
+a different image, because silently accepting another title or revision would
+associate the runtime image and exact title profile with the wrong executable.
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ HASH_CHUNK_SIZE = 1024 * 1024
 IDENTITY_SCHEMA = 1
 XEX_INSPECT_SCHEMA = 1
 XEX_INSPECT_ENV = "XEX_INSPECT"
-XEX_INSPECT_DEFAULT = Path("build/deps/xenonrecomp/XexInspect/xex-inspect")
+XEX_INSPECT_DEFAULT = Path("build/deps/x360port/xex-inspect")
 
 XGD_SECTOR_SIZE = 2048
 XGD_VOLUME_DESCRIPTOR_SECTOR = 32
@@ -417,7 +417,7 @@ def parse_xex_metadata(
     environ: Mapping[str, str] | None = None,
     runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> dict[str, object]:
-    """Inspect ``default.xex`` through the single checked XenonUtils authority."""
+    """Inspect ``default.xex`` through the checked x360port parser contract."""
 
     _require_regular_file(path, "extracted default.xex")
     if path.name.lower() != "default.xex":
@@ -585,7 +585,7 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "xex-inspect executable (default: XEX_INSPECT or "
-            "build/deps/xenonrecomp/XexInspect/xex-inspect)"
+            "build/deps/x360port/xex-inspect)"
         ),
     )
     parser.add_argument(

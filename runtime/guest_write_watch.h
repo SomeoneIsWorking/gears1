@@ -88,9 +88,9 @@ GuestWriteWatchStats CurrentGuestWriteWatchStats(GuestWriteWatchOwner owner);
 
 // True when the title-specific packet-copy attribution hook should be active.
 [[nodiscard]] bool DrawPacketWriteWatchRequested();
-// Called by the title's existing generic copy override before the retained body.
-// This reports the guest caller/stack route for the selected packet; page faults
-// remain the independent write confirmation.
+// Called by a future x360port copy-operation observer. This reports the guest
+// caller/stack route for the selected packet; page faults remain the independent
+// write confirmation.
 void ObserveDrawPacketCopy(std::uint32_t destination, std::uint32_t bytes, std::uint32_t caller,
                            std::uint32_t stackPointer);
 
@@ -101,7 +101,7 @@ void ObserveDrawPacketCopy(std::uint32_t destination, std::uint32_t bytes, std::
 void MaybeArmImageLoadWriteWatch();
 void ReportImageLoadWriteWatch();
 
-// Command-processor integration kept here so the legacy protocol owner needs
+// Command-processor integration kept here so the packet protocol owner needs
 // only one observation call and does not acquire diagnostic policy/state.
 void MaybeArmDrawPacketWriteWatch(uint32_t sourceBase, uint32_t sourceIndex, int depth,
                                   uint32_t swapSequence);

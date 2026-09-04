@@ -21,8 +21,10 @@ class BootstrapProfileTests(unittest.TestCase):
         self.assertEqual(selected.identity.title_id, "4d5307d5")
         self.assertEqual(selected.identity.savegame_id, "00000000")
         self.assertEqual(selected.identity.platform, 0)
-        self.assertFalse(selected.recompiler_template.is_absolute())
-        self.assertNotIn("..", selected.switch_tables_extra.parts)
+        self.assertEqual(
+            selected.identity.image_sha256,
+            "f61cc78e4057bc68a2c65386a0341f6d26a7add3dfd9918007a455750ec6ed5c",
+        )
 
     def test_frame_table_renders_both_shipping_notations(self) -> None:
         navigation = profile.load_profile(REPO_ROOT).navigation

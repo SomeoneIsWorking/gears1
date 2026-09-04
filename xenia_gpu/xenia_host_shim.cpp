@@ -7,42 +7,47 @@
 // fatal-log handling, neither of which can occur in a batch translation run.
 //
 // Rather than dragging SDL2 in for that, we define them here. They are
-// deliberately loud and non-silent: if one is ever reached, the run says so on
-// stderr instead of pretending nothing happened.
+// deliberately loud and non-silent: if one is ever reached, the project logger
+// records it instead of pretending nothing happened.
 
-#include <cstdio>
 #include <string>
 #include <string_view>
 
+#include "lucent/log.h"
 #include "xenia/base/system.h"
 
-namespace xe {
-
-void ShowSimpleMessageBox(SimpleMessageBoxType type, std::string_view message) {
-  const char* kind = "message";
-  switch (type) {
+namespace xe
+{
+namespace
+{
+const char *MessageBoxKind(SimpleMessageBoxType type)
+{
+    switch (type)
+    {
     case SimpleMessageBoxType::Help:
-      kind = "help";
-      break;
+        return "help";
     case SimpleMessageBoxType::Warning:
-      kind = "warning";
-      break;
+        return "warning";
     case SimpleMessageBoxType::Error:
-      kind = "error";
-      break;
-  }
-  std::fprintf(stderr, "[xenia %s] %.*s\n", kind, int(message.size()),
-               message.data());
+        return "error";
+    }
+    return "unknown";
+}
+} // namespace
+
+void ShowSimpleMessageBox(SimpleMessageBoxType type, std::string_view message)
+{
+    lucent::error("xenia", "{}: {}", MessageBoxKind(type), message);
 }
 
-void LaunchWebBrowser(const std::string_view url) {
-  std::fprintf(stderr, "[xenia] refusing to open a browser for %.*s\n",
-               int(url.size()), url.data());
+void LaunchWebBrowser(const std::string_view url)
+{
+    lucent::error("xenia", "refusing to open a browser for {}", url);
 }
 
-void LaunchFileExplorer(const std::filesystem::path& url) {
-  std::fprintf(stderr, "[xenia] refusing to open a file explorer for %s\n",
-               url.string().c_str());
+void LaunchFileExplorer(const std::filesystem::path &url)
+{
+    lucent::error("xenia", "refusing to open a file explorer for {}", url.string());
 }
 
-}  // namespace xe
+} // namespace xe

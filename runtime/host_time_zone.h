@@ -2,7 +2,7 @@
 //
 // The seven XCONFIG_USER time-zone settings are exactly a Win32
 // TIME_ZONE_INFORMATION taken apart: the title's XapiGetTimeZoneInformation
-// (sub_827A98D0, scratch/ppc/ppc_recomp.119.cpp:2653) reads settings 0x01
+// Original guest routine 0x827A98D0 reads settings 0x01
 // through 0x07 into a 172-byte structure whose field offsets are Bias(0),
 // StandardName(4), StandardDate(68), StandardBias(84), DaylightName(88),
 // DaylightDate(152), DaylightBias(168) -- i.e. TIME_ZONE_INFORMATION.
@@ -43,7 +43,7 @@ struct HostTimeZone
     // A transition date, packed {month, week, dayOfWeek, hour}. The order is
     // the guest's: it stores byte 0 at SYSTEMTIME+2 (wMonth), byte 1 at +6
     // (wDay), byte 2 at +4 (wDayOfWeek) and byte 3 at +8 (wHour)
-    // (ppc_recomp.119.cpp:2810-2830). `week` is the 1-based occurrence of that
+    // (original guest routine 0x827A98D0). `week` is the 1-based occurrence of that
     // weekday in the month, with 5 meaning "the last one" -- the same encoding
     // as Win32's SYSTEMTIME-in-a-TIME_ZONE_INFORMATION. All zero means the
     // zone has no daylight saving.

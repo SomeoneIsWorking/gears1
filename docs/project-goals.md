@@ -19,9 +19,16 @@ be the runtime authority.
   user-owned image through one shared engine and exact title/revision adapters.
 - Every non-native guest path executes on demand through Xenia's existing x64
   or A64 Xenon dynarec.
-- The gameplay product neither links nor selects an interpreter and contains no
-  offline translator, generated guest source, precompiled title substrate, or
-  generated-function fallback.
+- Apple Silicon macOS and Android `arm64-v8a` select Xenia's A64 dynarec by
+  default and pass separate executable-memory, instruction-cache coherence,
+  host-ABI, exception, and runtime-packaging qualification.
+- A bounded interpreter fallback may run only after a compilation failure,
+  unsupported guest instruction, or unsafe generated host block. Every fallback
+  transition and executed block is reason-labelled and counted; explicit
+  interpreter mode is diagnostic-only, and fallback coverage cannot satisfy a
+  gameplay or performance gate.
+- The gameplay product contains no offline CPU translator, generated guest
+  source, prebuilt title substrate, or generated-function fallback.
 - Native overrides and scoped original calls compose through one image-aware
   runtime dispatcher; an original call re-enters Xenia at the guest address.
 
@@ -42,7 +49,7 @@ be the runtime authority.
 
 ### Non-goals
 
-- A Gears 1-only port, a gameplay rewrite, a static recompilation product, or a
+- A Gears 1-only port, a gameplay rewrite, a generated-code product, or a
   second Xenon CPU implementation.
 - Treating boot, a leaf-function test, or nonzero translated blocks as gameplay
   compatibility.
@@ -51,7 +58,7 @@ be the runtime authority.
 
 ### Why
 
-Replacing static generated execution with Xenia must preserve title behavior
+Replacing the generated-source CPU product with Xenia must preserve title behavior
 and the already grounded native seams. A successful build or early boot cannot
 certify this boundary.
 
@@ -66,18 +73,18 @@ certify this boundary.
   rendering, and frame identity are compared against an independent oracle at
   the boundary under test, with positive and controlled-negative invalidation
   cases where executable mappings can change.
-- Before dynarec implementation resumes, XenonRecomp, generated PPC modules,
-  function maps, generator-only seeds/tests/configuration, and static
-  methodology are deleted. The build may fail only at the explicit missing
+- Before dynarec implementation resumes, the retired translator, generated guest modules,
+  function maps, generator-only seeds/tests/configuration, and their methodology
+  are deleted. The build may fail only at the explicit missing
   `x360port` executor boundary until the replacement lands.
 
 ### Constraints
 
 - Independently useful binary/behavior evidence and native subsystem contracts
-  survive the break-first deletion; the static product does not survive as a
+  survive the break-first deletion; the old product does not survive as a
   runnable comparison arm.
-- Unknown revisions, missing typed imports, unsupported execution, and stale
-  override/cache state refuse with exact context rather than falling back.
+- Unknown revisions, missing typed imports, stale override/cache state, and
+  fallback reasons outside the bounded policy refuse with exact context.
 - Private UE3 source contributes no public code or mechanically translated
   expression.
 
@@ -134,7 +141,7 @@ copyrighted game material, private engine source, or derived guest code.
 
 ### Constraints
 
-- No ROM/disc image, extracted asset, generated guest body, decompiler output,
+- No ROM/disc image, extracted asset, derived guest source, decompiler output,
   private-source dependency, or game download link enters the repository.
 - Provisioning validates exact container and normalized-image identity before
   title policy activates.
