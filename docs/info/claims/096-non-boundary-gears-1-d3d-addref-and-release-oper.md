@@ -9,7 +9,7 @@ depends: runtime/rhi_resource_reference.cpp#TryApplyNativeRhiReferenceFastPath, 
 
 ## Claim
 
-In the historical static path, real Gears 1 leaf `0x8222E868` is the D3D resource AddRef entry and its observed non-boundary operations matched the shared native big-endian atomic implementation. This grounds the first dynarec discriminator's address and semantics; it does not prove xenonport execution.
+In the historical static path, real Gears 1 leaf `0x8222E868` is the D3D resource AddRef entry and its observed non-boundary operations matched the shared native big-endian atomic implementation. This grounds the first dynarec discriminator's address and semantics; it does not prove x360port execution.
 
 ## Evidence
 

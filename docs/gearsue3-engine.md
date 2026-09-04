@@ -19,10 +19,13 @@ user-owned disc/image
 local provisioner -> authenticated XEX/image + exact title/revision identity
         |
         v
-xenonport -> Xenia Memory / Processor / ThreadState / RawModule
+x360port -> Xenia Memory / Processor / ThreadState / RawModule
         |     typed imports / device callbacks / runtime overrides / original calls
         v
-shared GearsUE3 engine + factual title adapter
+x360ue3 -> versioned UE3 ABI / RHI semantics / engine lifetimes
+        |
+        v
+GearsUE3 engine + factual title adapter
   native owners | RHI/render | audio | input | files | diagnostics
 ```
 
@@ -32,8 +35,16 @@ state. The profile schema requires exact container and normalized-image identity
 plus image base, size, entry point, and import facts before title policy
 activates. Malformed, duplicate, unknown, or ambiguous profiles refuse. Useful
 checked-image and typed-import validation facts currently prototyped in
-`shared/xenon-host` move into `xenonport`; its generated function-map contract
+`shared/xenon-host` move into `x360port`; its generated function-map contract
 does not.
+
+`x360ue3` is a clean, independently authored consumer of public `x360port`
+interfaces. It owns reusable UE3-on-Xbox-360 ABI descriptions, RHI semantic
+operations, title-supplied binding schemas, and object/resource/thread/frame
+lifetime. It owns no Gears address, shader hash, pass roster, navigation, save
+policy, gameplay rule, or application composition. Those belong to
+`GearsUE3`. The local `shared/ue3` checkout is developer reference material
+only and is never compiled, linked, packaged, copied, or required by a product.
 
 Executable identity and save compatibility are separate policies. The current
 Gears 1 profile retains the stable `gears1` save namespace across compatible
@@ -44,10 +55,11 @@ format or title identity actually requires isolation.
 
 | Owner | Shared | Per exact title/revision |
 |---|---|---|
-| Xenon executor | Xenia x64/A64 dynarecs and code cache behind `xenonport`; typed imports, invalidation, bounded exits | exact image identity, guest address bindings, optional scope predicates |
-| Xbox host | memory/device callbacks, kernel/XAM contracts, files, input, XMA/audio | genuinely observed title policy such as save namespace |
-| Renderer | PM4/Xenos semantics, Vulkan resources, EDRAM/resolves, presentation | pass/hash bindings and title-only diagnostics |
-| Native overrides | semantic implementations and runtime original/native/`super` selection | verified address binding and optional scope predicate |
+| `x360port` executor | Xenia x64/A64 dynarecs and code cache; authenticated XEX mapping, typed imports, invalidation, bounded exits, runtime original/native/`super` selection | exact image identity, guest address bindings, and optional scope predicates are supplied as data by the consumer |
+| `x360port` services/devices | guest memory and device callbacks, kernel/XAM contracts, files, controller devices, XMA, and raw Xenos boundaries | genuinely observed title policy such as save namespace and input action meaning remains in the consumer |
+| `x360port` Xenos backend | PM4/Xenos semantics, Vulkan resources, EDRAM, resolves, and presentation primitives | no UE3 pass identity or Gears shader hash |
+| `x360ue3` | versioned UE3 ABI descriptions, UE3 RHI semantic operations, engine object/resource/thread/frame lifetimes, and binding schemas | exact bindings and title-specific semantic exceptions are supplied by `GearsUE3` |
+| `GearsUE3` | Gears-family native engine systems and reusable Gears behavior | exact title/revision addresses, pass/hash bindings, navigation, saves, enhancements, diagnostics, conformance, and application composition |
 | Tooling | disc/XEX readers, deterministic provisioner, independent comparer | exact compatibility receipt and runtime profile |
 
 Gears 1 currently supplies almost all runtime evidence. That does not make a
@@ -167,7 +179,7 @@ directory:
    exactly one bounded disc-image member when the input is a supported 7z archive;
 2. safely extract and fingerprint the executable and required content;
 3. select exactly one supported revision or refuse;
-4. load the authenticated executable through `xenonport`/Xenia without emitting
+4. load the authenticated executable through `x360port`/Xenia without emitting
    guest source or a precompiled title substrate;
 5. write a receipt containing input, manifest, and tool revisions; and
 6. launch through the normal headless-capable product route.
@@ -196,8 +208,8 @@ original/native A/B evidence, or hardware-derived evidence.
 
 | Title | Current evidence | Exact-profile/conformance gap | Oracle policy |
 |---|---|---|---|
-| Gears of War | Historical static-path headless boot, menu, gameplay, compatibility-renderer, native-seam, and narrow renderer-oracle evidence | No xenonport executor, leaf/import/override discriminator, dynarec gameplay evidence, or complete conformance report exists | Xenia may support only the Gears 1 behaviors for which this project has separately validated the instrument |
-| Gears of War 2 | Exact disc/XEX/image identity only | No runtime profile, xenonport execution, content, gameplay, render, native parity, or performance evidence | Xenia evidence is rejected |
+| Gears of War | Historical static-path headless boot, menu, gameplay, compatibility-renderer, native-seam, and narrow renderer-oracle evidence | No x360port executor, x360ue3 integration, leaf/import/override discriminator, dynarec gameplay evidence, or complete conformance report exists | Xenia may support only the Gears 1 behaviors for which this project has separately validated the instrument |
+| Gears of War 2 | Exact disc/XEX/image identity only | No runtime profile, x360port execution, x360ue3 integration, content, gameplay, render, native parity, or performance evidence | Xenia evidence is rejected |
 | Gears of War 3 | Archive input present locally only | No verified exact revision or later gate | Xenia evidence is rejected |
 | Gears of War: Judgment | None | No verified exact revision or later gate | Xenia evidence is rejected |
 

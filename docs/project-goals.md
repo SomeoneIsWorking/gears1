@@ -27,10 +27,14 @@ be the runtime authority.
 
 ### Constraints
 
-- `xenonport` wraps Xenia `Memory`, `Processor`, `ThreadState`, `RawModule`,
+- `x360port` wraps Xenia `Memory`, `Processor`, `ThreadState`, `RawModule`,
   typed imports, device callbacks, runtime overrides, and original calls. It
   does not replace Xenia's decoder, host backends, or code cache with
   `jit-common` machinery.
+- `x360ue3` depends only on `x360port` interfaces and owns reusable UE3 Xbox
+  ABI/RHI/lifetime contracts. `GearsUE3` owns all Gears-family behavior and
+  exact title/revision bindings. The local `shared/ue3` reference checkout is
+  not a build, runtime, packaging, or distribution dependency.
 - Shared engine/platform code contains no Gears 1 address, hash, or revision
   policy.
 - Gears 1 is completed before title-specific implementation begins for another
@@ -62,14 +66,16 @@ certify this boundary.
   rendering, and frame identity are compared against an independent oracle at
   the boundary under test, with positive and controlled-negative invalidation
   cases where executable mappings can change.
-- XenonRecomp, generated PPC modules, function maps, generator-only seeds,
-  tests, and methodology are deleted only after the representative-gameplay
-  gate passes, then are not retained as a compatibility mode or oracle.
+- Before dynarec implementation resumes, XenonRecomp, generated PPC modules,
+  function maps, generator-only seeds/tests/configuration, and static
+  methodology are deleted. The build may fail only at the explicit missing
+  `x360port` executor boundary until the replacement lands.
 
 ### Constraints
 
-- The old static path is preserved but not regenerated, built, or run while it
-  is awaiting deletion; already-recorded evidence is the migration baseline.
+- Independently useful binary/behavior evidence and native subsystem contracts
+  survive the break-first deletion; the static product does not survive as a
+  runnable comparison arm.
 - Unknown revisions, missing typed imports, unsupported execution, and stale
   override/cache state refuse with exact context rather than falling back.
 - Private UE3 source contributes no public code or mechanically translated
@@ -120,7 +126,7 @@ copyrighted game material, private engine source, or derived guest code.
 ### Success conditions
 
 - A fresh clone plus documented native dependencies, `uv`, and a user-owned
-  disc/image provisions and launches the xenonport/Xenia product through
+  disc/image provisions and launches the x360port/Xenia product through
   `./run.sh` with no offline translation step.
 - Disc-derived executable bytes, assets, and runtime caches stay ignored and
   disposable; compiler output stays under `build/`.

@@ -19,7 +19,7 @@ XenonRecomp commit 884206f CTest XenonRecompBindingTests passed; a fresh Gears g
 
 ## What would falsify it
 
-The recorded XenonRecomp revision or cited test result does not reproduce this behavior. The claim does not apply to xenonport; its disabled/enabled/scoped-super paths require new evidence through Xenia.
+The recorded XenonRecomp revision or cited test result does not reproduce this behavior. The claim does not apply to x360port; its disabled/enabled/scoped-super paths require new evidence through Xenia.
 
 ## Re-confirmed 2026-08-24
 

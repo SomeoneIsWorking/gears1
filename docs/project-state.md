@@ -6,7 +6,7 @@ The baseline is the unmodified Xbox 360 release of *Gears of War* running on ori
 through Xenia. GearsUE3 intends one shared native/dynarec engine for the series: selected subsystems
 run natively, every remaining guest path runs through Xenia's x64/A64 Xenon dynarecs, and the
 user-owned executable remains the runtime authority. The former XenonRecomp-generated product is a
-frozen migration baseline, not an alternative product.
+break-first deletion target; only its independent evidence and native contracts remain useful.
 
 This ledger records independently observable capability coverage. Goals define why GearsUE3
 exists, issues record atomic work, and the codemap records ownership; neither substitutes for this
@@ -22,23 +22,24 @@ done/partial/missing inventory.
 | S006 | Every Gears UE3 title passes an exact-revision compatibility gate | missing | S001, S002 | G001, G002 |
 | S007 | Native engine sustains the 8.33 ms / 120 fps renderer budget on representative gameplay | missing | S005 | G003 |
 | S008 | Public distribution provisions an authenticated runtime image without offline translation | partial | — | G004 |
-| S009 | `xenonport` embeds Xenia's x64/A64 dynarecs as the only gameplay executor | missing | — | G001, G002 |
+| S009 | `x360port` embeds Xenia's x64/A64 dynarecs as the only gameplay executor | missing | S012 | G001, G002 |
 | S010 | Gears 1 leaf/import/override discriminator executes through Xenia | missing | S009 | G001, G002 |
-| S011 | Gears 1 dynarec product reaches representative gameplay and migration conformance | missing | S002, S010 | G001, G002, G003 |
-| S012 | XenonRecomp product, generated corpus, and function-map machinery are removed | missing | S011 | G001, G002, G004 |
+| S011 | Gears 1 dynarec product reaches representative gameplay and migration conformance | missing | S002, S010, S013 | G001, G002, G003 |
+| S012 | XenonRecomp product, generated corpus, function maps, and static-only surfaces are absent | missing | — | G001, G002, G004 |
+| S013 | `x360ue3` owns reusable UE3-on-Xbox-360 contracts below `GearsUE3` | missing | S009 | G001, G002 |
 
 ## Current focus
 
 **Active title/revision:** Gears 1, the exact locally provisioned revision. Gears 2 identity evidence
 is retained as a shared-boundary fact, not as permission to start a second title workstream.
 
-S009 is the current focus: create `xenonport` around Xenia's existing x64/A64 Xenon dynarecs. The
-first Gears-owned proof is the leaf/import/override discriminator: execute real leaf `0x8222E868`,
-call typed import `DbgPrint`, and
-exercise disabled, enabled, and scoped-`super` override paths through Xenia. The old XenonRecomp
-path remains present but must not be regenerated, built, or run. That proof is only a wiring
-discriminator; representative interactive gameplay and conformance must pass before the old path
-is deleted.
+S012 is the current focus: preserve independent evidence and native subsystem
+contracts, then delete XenonRecomp, the generated corpus, function maps,
+generator-only configuration/tests/tools, and static methodology. The resulting
+product may fail only at one explicit missing `x360port` executor boundary.
+After that break-first milestone, the platform executor and the Gears-owned
+leaf/import/override discriminator resume. Representative interactive gameplay
+remains the completion gate, not a precondition for removing static execution.
 
 ## Capability details
 
@@ -143,7 +144,7 @@ native execution claim.
 ### S004 — Grounded native operation targets
 
 The evidence below was obtained on the frozen static path and identifies semantics and native
-implementations to preserve; it is not proof of xenonport dispatch. The shared big-endian atomic
+implementations to preserve; it is not proof of x360port dispatch. The shared big-endian atomic
 resource-reference owner now executes all observed non-boundary
 AddRef/Release transitions natively by default. The exact Gears 1 adapter retains runtime recomp and
 alternating A/B controls. Focused concurrent tests exercise the shipping atomic implementation; a
@@ -244,13 +245,13 @@ shared basic-compressed-XEX identity boundary (disc SHA-256
 `1e76f91fa3bd804381c0ce5458bdb8dd2329c783b1be03b67d111136ce337230`, XEX SHA-256
 `e98c25b4b9d173ac7ff69c84e7f1b4240c6be77c5fd7f672041a95221f68247c`, normalized image
 SHA-256 `340f71de1cfaac7d98ff0478fc8c2954967aeb449f9e9916860592f7ee0b070c`), but it has no
-supported runtime profile or xenonport integration. Gears 3 remains archive-only without a profile;
+supported runtime profile or x360port integration. Gears 3 remains archive-only without a profile;
 Judgment is not present. The current `./run.sh` still generates and builds the XenonRecomp product,
 so the required fresh-clone no-translation launch path is missing and must not be advertised or run.
 
-### S009 — Xenia-backed xenonport executor
+### S009 — Xenia-backed x360port executor
 
-Missing capability: No `xenonport` repository or Gears integration currently wraps Xenia `Memory`,
+Missing capability: No `x360port` repository or Gears integration currently wraps Xenia `Memory`,
 `Processor`, `ThreadState`, and `RawModule` as a narrow product executor. The target uses Xenia's
 existing x64/A64 dynarecs and code cache directly; it does not add a PPC interpreter or replace
 Xenia cache ownership with `jit-common`.
@@ -272,7 +273,7 @@ linked or selectable. This remains a wiring discriminator and does not establish
 
 ### S011 — Representative Gears 1 dynarec gameplay
 
-Missing capability: No xenonport/Xenia product has reached representative interactive gameplay.
+Missing capability: No x360port/Xenia product has reached representative interactive gameplay.
 
 Gap: A fresh user-image build must reach at least the historical gameplay frontier with the relevant
 native owners active, compare CPU/memory/import/timing/device/render/audio behavior against an
@@ -280,11 +281,22 @@ independent oracle at declared boundaries, exercise relevant invalidation with p
 controlled-negative cases, and meet the declared correctness and host-architecture frame-time
 budget. Logos, menus, attract loops, FMV, and S010 are checkpoints only.
 
-### S012 — Static-product retirement
+### S012 — Static-product removal
 
 Missing capability: XenonRecomp, generated PPC build inputs, precomputed function maps,
 generator-only configuration and tests, and static methodology remain in the repository.
 
-Gap: Preserve them untouched until S011 passes, then remove the old path atomically. Do not keep a
-compatibility selector, use it as a new oracle, or require a generated/persistent cache on a fresh
-installation.
+Gap: Preserve only independent binary/behavior evidence and native subsystem
+contracts, then remove the static product before S009 implementation resumes.
+Do not keep a compatibility selector, use it as a new oracle, or require a
+generated/persistent cache on a fresh installation.
+
+### S013 — x360ue3 integration
+
+Missing capability: No clean `shared/x360ue3` framework currently consumes
+`x360port`. It must own reusable versioned UE3 ABI descriptions, RHI semantic
+operations, title-supplied binding schemas, and object/resource/thread/frame
+lifetime. Exact Gears addresses, shader hashes, pass rosters, navigation, save
+policy, gameplay, native title systems, conformance, and application composition
+remain in `GearsUE3`. The local `shared/ue3` checkout is reference material only,
+never a product or distribution dependency.

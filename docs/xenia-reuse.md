@@ -3,12 +3,12 @@
 ## Xenon CPU product boundary
 
 The target product embeds Xenia's existing x64 and A64 Xenon dynarecs through a
-new title-neutral `xenonport` framework. Xenia continues to own PPC decoding,
+new title-neutral `x360port` framework. Xenia continues to own PPC decoding,
 lowering, host-code emission, executable memory, translated-block lookup, and
 cache invalidation. Do not write a PPC interpreter and do not put Xenia behind
 `jit-common` code-memory or block-cache abstractions.
 
-`xenonport` owns only the narrow embedding contract around Xenia `Memory`,
+`x360port` owns only the narrow embedding contract around Xenia `Memory`,
 `Processor`, `ThreadState`, and `RawModule`: authenticated runtime images, typed
 imports, device-memory callbacks, image-aware native overrides, scoped original
 calls, bounded executor exits, and explicit treatment of Xenia's process-global
@@ -19,8 +19,9 @@ PPC ABI do not.
 The first Gears discriminator executes real leaf `0x8222E868`, invokes
 `DbgPrint` through a typed import, and proves disabled, enabled, and scoped
 `super` override paths through Xenia. It is intentionally smaller than entry
-boot and does not authorize deleting the old path. Representative interactive
-gameplay under the full migration gate is required first.
+boot and does not establish gameplay compatibility. Static execution is
+already deleted before this milestone; representative interactive gameplay
+under the full migration gate is still required to complete the migration.
 
 ## Xenos translator evidence
 
