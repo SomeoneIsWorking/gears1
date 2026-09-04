@@ -1,62 +1,71 @@
 # GearsUE3 engine-port guidance
 
-The repository-wide rules in `../../AGENTS.md` apply here. Consult
-`docs/codemap.md` before changing a subsystem and update it in the same commit.
+The repository-wide rules in `../../AGENTS.md` apply here. Read
+`../../shared/jit-common/docs/migration.md`, `docs/project-state.md`, and
+`docs/codemap.md` before changing a subsystem. Update the nearest authority in
+the same change when its answer changes.
 
 ## Product target
 
 USER 2026-09-01: "there are two runtimes there, one native (WIP), one emulator, the game itself is still guest game so the wording 'recomp' just means the emulated runtime"
 
-The product is GearsUE3: an engine port that targets every Gears of War UE3
-title, not just the first. It has **two runtimes for the guest
-title** — a growing set of measured **native overrides** (WIP), and an
-**emulated runtime** that executes every guest function not yet overridden. The
-emulated runtime is a JIT over Xenia's Xenon CPU backend; it is not statically
-recompiled to C. Gears 1 is the first conformance target, not the ownership
-boundary. Each supported title/revision gets its own factual binding profile
-while the host runtime, renderer, audio, input, storage, override
-infrastructure, and native implementations remain shared.
+GearsUE3 is one native/dynarec engine port for the Xbox 360 Gears of War UE3
+titles. The two cooperating execution paths are measured native overrides and
+an emulated path that executes every other guest instruction through Xenia's
+existing x64 or A64 Xenon dynarec. The gameplay product contains no interpreter
+and has no interpreter or generated-code fallback.
 
-Native overrides are runtime A/B seams with an explicit super-call ("super" runs
-the guest function through the JIT). Guest addresses, image identity, shader
-hashes, menu walks, and diagnostics belong to a title/revision adapter; shared
-engine code must not acquire Gears 1 address tables merely because it is the
-first target.
+The platform layer is `xenonport`, a narrow framework around Xenia `Memory`,
+`Processor`, `ThreadState`, `RawModule`, typed imports, device-memory callbacks,
+runtime overrides, and scoped original calls. Do not put Xenia behind
+`jit-common` caches and do not write another PPC interpreter, decoder, or host
+code emitter. Xenia owns Xenon translation and its code cache. `xenonport` owns
+the embedding contract and must account explicitly for Xenia's process-global
+memory, MMIO, and clock assumptions.
 
-The title-neutral Xbox 360 layer — Xenon CPU execution, the Xenos PM4 frontend
-and shader translation, kernel/XAM HLE, XMA audio, and the guest-image contract
-currently in `shared/xenon-host` — is being extracted into an `xenonport`
-platform framework, with Gears becoming a title over it. Architecture and
-migration plan: `shared/jit-common/docs/migration.md`.
+Gears 1 is the first conformance target. Its first implementation discriminator
+is deliberately smaller than boot: execute the real leaf at `0x8222E868`, bind
+and call `DbgPrint` through a typed import, and prove disabled, enabled, and
+`super` override paths through Xenia. Disabled and `super` both execute the
+original guest body through the dynarec; `super` suppresses only the current
+override for one call. This discriminator does not authorize deletion of the
+old path. Preserve it without regenerating, building, or running it until the
+Xenia path reaches representative interactive gameplay and passes the migration
+gate in `../../shared/jit-common/docs/migration.md`; then delete XenonRecomp,
+generated PPC modules, function maps, generator-only configuration/tests, and
+their documentation together.
+
+Guest addresses, image identity, shader hashes, menu walks, and diagnostics
+belong to a title/revision adapter. Shared engine or platform code must not
+acquire Gears 1 policy merely because it is the first target. Finish Gears 1's
+declared compatibility and performance gates before beginning title-specific
+work for another Gears game.
 
 ## Clean distribution boundary
 
 USER 2026-08-22: "I don't want to provide copyrighted material in anyway either from a private repo or a download link, I only want to provide absolute clean code and others should only provide the ROMs"
 
 The public repository contains independently authored source, compatible
-open-source dependencies with their required notices, and factual interoperability
-metadata only. It must not contain or fetch UE3 source, game code/assets,
-extracted files, decoded shader listings, decompiler output, generated recomp
-bodies, or caches derived from a title. Do not instruct users to obtain private
-source or game files from a download. A user-owned disc/image is the only
-copyrighted input accepted by provisioning.
+open-source dependencies with their required notices, and factual
+interoperability metadata only. It must not contain or fetch UE3 source, game
+code/assets, extracted files, decoded shader listings, decompiler output,
+generated guest bodies, or caches derived from a title. A user-owned disc/image
+is the only copyrighted provisioning input.
 
-All disc-derived output belongs under ignored `scratch/titles/<fingerprint>/`
-and must be regenerable. Private UE3 source may settle a conceptual question for
-a developer, but no expression, comment, declaration, patch context, mechanical
-translation, or generated artifact from it may enter this repository. Public
-implementations must be independently written and verified against observable
-behavior or locally supplied game bytes. This is an engineering provenance
-rule, not a claim that the project has used a formal clean-room team process.
+Disc-derived output belongs under ignored `scratch/titles/<fingerprint>/` and
+must be regenerable. Private UE3 source may settle a conceptual question for a
+developer, but no expression, comment, declaration, patch context, mechanical
+translation, or generated artifact from it may enter this repository.
 
 ## Verification runs
 
 USER 2026-08-22: "don't do windowed runs please always run headless"
 
-Every run started by an agent for verification, profiling, capture, or
-diagnosis must use `./run.sh --headless` or a purpose-built headless tool. Do
-not open a game window for a smoke test, including when checking the launcher;
-exercise the launcher with its headless option instead.
+Every run started by an agent for verification, profiling, capture, or diagnosis
+must be headless. Do not open a game window for a smoke test. During the
+migration, do not invoke any path that builds, generates, or launches the
+XenonRecomp product. New comparison evidence comes from the independent Xenia
+oracle, hardware, binary analysis, or a separately built diagnostic target.
 
 ## Python tooling
 
@@ -65,63 +74,46 @@ USER 2026-08-24: "all python should run through uv projects"
 The repository root `pyproject.toml` and `uv.lock` are the only Python
 dependency authority. Run project tools as `uv run --locked python <tool>`;
 CMake generators and CTest use the same locked project. Do not select an
-ambient interpreter, install dependencies outside the project, or add inline
-script dependency metadata that creates a second environment.
+ambient interpreter or create a second environment.
 
 ## Host architecture
 
-Use `${DUSKLIGHT_REPO}` when set, otherwise the sibling checkout at
-`../../dusklight`, as the ownership reference. Adapt its cohesive host
-subsystems rather than copying platform-specific implementations.
+This repository's `docs/codemap.md` is the ownership authority. Keep the host
+self-contained: the entry point composes focused modules, each subsystem owns
+one coherent responsibility and its lifetime, and shared/title/platform policy
+crosses narrow explicit interfaces. Split a mixed or oversized owner before
+extending it; do not create forwarding fragments, catch-all helpers, or copy a
+platform implementation from another game project. Reusable cross-title Xbox
+360 execution belongs in `xenonport`; Gears-specific behavior stays here.
 
-- `run.sh` is only the stable locked-environment shim. `bootstrap.py` composes
-  focused owners under `tools/gearsue3_bootstrap/` for profile facts,
-  environment data, prerequisites, provisioning, process lifetime, and launch
-  policy. Do not move those implementations back into the entry point or
-  duplicate them in diagnostics.
-- Shared engine sources compose separately from locally generated title code.
-  One executable links one exact title/revision module; do not link multiple
-  generated images whose `_xstart`, `sub_*`, and `ppc_config.h` namespaces
-  collide.
-- The recompiler emits weak forwarding functions and retains `__imp__sub_*`
-  bodies. Generated sources are sacrosanct: no alias-stripping or other
-  post-generation mutation is allowed.
+- `run.sh` remains a slim locked-environment shim. Its next shipping route must
+  provision the authenticated runtime image and launch the xenonport/Xenia
+  product without offline translation. Until that route exists, documentation
+  must not present the static launcher as the product.
 - A title adapter owns exact image identity, semantic override bindings,
   title-specific probes, pass hashes, save namespace, and scripted navigation.
-  Unknown revisions refuse rather than falling back by title name or image size.
+  Unknown revisions refuse rather than falling back.
+- Normal calls honor the runtime override table. `super` suppresses only the
+  current override and re-enters the original guest address through Xenia.
+  Override mutation invalidates translated call paths that captured an older
+  decision.
 - `runtime/vd_null_gpu.cpp` composes guest GPU dispatch with host subsystems; it
   must not absorb their implementations.
 - `runtime/input.cpp` owns controller sources, arbitration, and the guest-facing
   controller snapshot.
-- Lucent owns the reusable loopback HTTP transport. `runtime/debug_http.cpp`
-  owns only Gears routes and translates requests through narrow input/probe
-  interfaces.
+- Lucent owns reusable loopback HTTP transport. Gears code owns only routes and
+  translations through narrow input/probe interfaces.
 - `runtime/graphics_probe.cpp` owns on-demand readback state and publication;
-  `runtime/graphics_probe_render.cpp` is the narrow renderer adapter. Shipping
-  render passes do not depend on HTTP.
-- `runtime/frame_probe_capture.h` owns the diagnostic-frame re-arm and the
-  report/probe distinction. A probe may bypass a held capture selector, but it
-  must not open that selector, consume its quota, or emit its artifacts.
+  shipping render passes do not depend on HTTP.
 - `runtime/gpu_scanout.cpp` owns finished-frame staging and scan-out transforms;
-  `runtime/gpu_scanout_gamma.cpp` owns the Vulkan guest-LUT pass, while
-  `runtime/scanout_gamma.cpp` owns the shared pure LUT conversion.
-- `runtime/gpu_present.cpp` orchestrates presentation. Swapchain-dependent
-  staging resources belong in focused owners such as `gpu_present_stage.cpp`,
-  not in the presenter orchestration file.
-- `runtime/native_rhi_resources.*` owns title-neutral guest-object resource
-  identity and non-boundary lifetime bookkeeping for a future native backend;
-  API-specific allocation and retirement remain in that backend.
-- `runtime/native_rhi.*` owns the title-neutral, PM4-independent semantic frame
-  plan boundary. It must not absorb Vulkan execution, Xenos translation, or
-  title-address bindings; host resource/pipeline execution belongs in a later
-  focused native backend behind the retained compatibility arm.
-- `runtime/native_rhi_backend.*` owns only the explicit host-backend execution
-  contract and ordered frame transaction. A backend must provide real native
-  resource/pipeline/submission ownership and may refuse a frame; no no-op
-  backend is installed, and this interface does not authorize bypassing the
-  retained compatibility renderer.
+  presentation orchestration does not own swapchain resources.
+- `runtime/native_rhi_resources.*` owns title-neutral guest-object identity and
+  non-boundary lifetime bookkeeping; API allocation and retirement belong to
+  the backend.
+- `runtime/native_rhi.*` owns the PM4-independent semantic frame plan;
+  title-address bindings, Xenos translation, and host backend execution stay in
+  their focused owners.
 
 Pure state transitions belong behind production interfaces with focused tests.
-Run `tools/check_source_structure.py`, its self-test, and the CTest suite before
-landing host changes; new sources are capped mechanically and legacy monoliths
-may not grow.
+Run the structure check, its self-test, and the relevant focused tests before a
+host change; run the combined gate once when semantic edits are frozen.

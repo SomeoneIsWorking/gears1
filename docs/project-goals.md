@@ -1,131 +1,140 @@
 # Project goals
 
-These goals define why GearsUE3 exists and the durable outcomes it must reach. They do not report
-what currently works; `docs/re-frontier.md` records the evidence-dependent implementation frontier,
-`docs/codemap.md` records ownership, and `docs/issues/` records atomic findings and work points.
+These goals define durable product outcomes. `docs/project-state.md` records
+current coverage, `docs/re-frontier.md` records the evidence chain, the codemap
+records ownership, and issues record atomic work.
 
-## G001 — Ship one shared native GearsUE3 engine
-
-### Why
-
-Gears of War's Xbox 360 executable is evidence for engine behavior, not the architecture the PC
-product should execute forever. The product is a native engine for the Gears UE3 family. Static
-recompilation provides the exact guest ABI, compatibility path, and migration oracle while native
-engine subsystems progressively own the shipping execution path.
-
-### Success conditions
-
-- Shared native owners implement rendering/RHI, audio, input, storage, configuration, timing, and
-  presentation above exact title/revision adapters.
-- Gears of War, Gears of War 2, Gears of War 3, and Gears of War: Judgment can each provision and
-  run as a separately linked exact-revision product without copying title policy into the engine.
-- The normal product path executes the grounded native owners; retained recompiled bodies remain
-  callable in the same binary as compatibility, comparison, and regression controls.
-- Adding a supported title or revision primarily adds a generated title module, factual bindings,
-  and conformance evidence rather than a second engine implementation.
-
-### Constraints
-
-- One executable links one exact generated title module because generated guest symbol namespaces
-  and image constants collide.
-- Generated recomp output is never edited, and every native replacement has a runtime original/native
-  seam with an explicit super-call until its parity gate authorizes native execution.
-- Shared engine code contains no Gears 1 guest addresses, hashes, or revision policy.
-- The shipping native engine must not emulate a console GPU: no GameCube GPU emulation and no
-  Xbox 360/Xenos/PM4 GPU emulation may be part of its final rendering path. Console GPU behavior
-  may remain in the retained compatibility oracle used for migration and conformance only.
-
-### Non-goals
-
-- A Gears 1-only source port.
-- Treating the PM4/Xenos compatibility renderer or the recompiled title executable as the final
-  engine architecture.
-- Making console-GPU emulation a required product dependency, default renderer, or performance
-  fallback for the native engine.
-- Reimplementing unrelated general-purpose Unreal Engine editor or content-authoring tools.
-
-## G002 — Preserve exact behavior while migrating ownership natively
+## G001 — Ship one shared native/dynarec GearsUE3 engine
 
 ### Why
 
-Native speed is useful only when the engine preserves the guest-visible behavior on which each title
-depends. The retained recomp path makes behavior measurable instead of requiring ungrounded rewrites.
+The product should preserve the original game while moving deliberately owned
+subsystems to native code. Recreating gameplay logic from scratch or compiling a
+generated per-title source corpus would make the original executable cease to
+be the runtime authority.
 
 ### Success conditions
 
-- Each native subsystem has complete ordered semantic observations at its boundary and a comparer
-  that has rejected a deliberately wrong control.
-- Faithful original/native runs agree on guest-visible state, resource lifetime, frame identity,
-  audio/input/storage effects, and pixels for the workloads that authorize each replacement.
-- Unknown executable revisions, ambiguous bindings, missing evidence, and unsupported operations
-  refuse rather than selecting a nearby profile or silently changing behavior.
-- Every compatibility claim names the exact title revision and the independently passed gate.
+- Gears of War, Gears 2, Gears 3, and Judgment each run from an authenticated
+  user-owned image through one shared engine and exact title/revision adapters.
+- Every non-native guest path executes on demand through Xenia's existing x64
+  or A64 Xenon dynarec.
+- The gameplay product neither links nor selects an interpreter and contains no
+  offline translator, generated guest source, precompiled title substrate, or
+  generated-function fallback.
+- Native overrides and scoped original calls compose through one image-aware
+  runtime dispatcher; an original call re-enters Xenia at the guest address.
 
 ### Constraints
 
-- Private UE3 source may not contribute code, declarations, comments, patch context, or mechanically
-  translated expression to the public implementation.
-- Gears 1 evidence does not automatically establish another title's policy or compatibility.
+- `xenonport` wraps Xenia `Memory`, `Processor`, `ThreadState`, `RawModule`,
+  typed imports, device callbacks, runtime overrides, and original calls. It
+  does not replace Xenia's decoder, host backends, or code cache with
+  `jit-common` machinery.
+- Shared engine/platform code contains no Gears 1 address, hash, or revision
+  policy.
+- Gears 1 is completed before title-specific implementation begins for another
+  Gears title.
 
 ### Non-goals
 
-- Pixel similarity scores without exact-state or deliberately differing instrument controls.
-- Declaring a native path complete because it boots, draws a frame, or passes a single scene.
+- A Gears 1-only port, a gameplay rewrite, a static recompilation product, or a
+  second Xenon CPU implementation.
+- Treating boot, a leaf-function test, or nonzero translated blocks as gameplay
+  compatibility.
+
+## G002 — Preserve exact behavior across the execution-owner migration
+
+### Why
+
+Replacing static generated execution with Xenia must preserve title behavior
+and the already grounded native seams. A successful build or early boot cannot
+certify this boundary.
+
+### Success conditions
+
+- The first Gears 1 discriminator executes real leaf `0x8222E868`, a typed
+  `DbgPrint` import, and disabled/enabled/`super` override paths through Xenia.
+- The authenticated dynarec product reaches representative interactive Gears 1
+  gameplay at least as far as the current verified frontier with native owners
+  active.
+- CPU state, relevant memory, imports, timing/interrupts, devices, audio,
+  rendering, and frame identity are compared against an independent oracle at
+  the boundary under test, with positive and controlled-negative invalidation
+  cases where executable mappings can change.
+- XenonRecomp, generated PPC modules, function maps, generator-only seeds,
+  tests, and methodology are deleted only after the representative-gameplay
+  gate passes, then are not retained as a compatibility mode or oracle.
+
+### Constraints
+
+- The old static path is preserved but not regenerated, built, or run while it
+  is awaiting deletion; already-recorded evidence is the migration baseline.
+- Unknown revisions, missing typed imports, unsupported execution, and stale
+  override/cache state refuse with exact context rather than falling back.
+- Private UE3 source contributes no public code or mechanically translated
+  expression.
+
+### Non-goals
+
+- Declaring migration complete from the first discriminator, logos, menus,
+  attract loops, or FMV.
+- Using the old generated product as new comparison evidence.
 
 ## G003 — Reach native-PC frame cost and responsiveness
 
 ### Why
 
-The compatibility path reconstructs Xenos command processing, EDRAM behavior, and console pass
-structure that a native PC engine should not pay for. A 2006-era title should not inherit emulator
-overhead as its permanent performance ceiling.
+The completed engine should not retain Xbox 360 CPU or GPU reconstruction work
+for subsystems whose behavior has been faithfully moved to native owners.
 
 ### Success conditions
 
-- The native renderer sustains a documented 8.33 ms / 120 frames-per-second budget on the
-  designated target hardware and representative gameplay workloads, including submission and
+- The native renderer sustains a documented 8.33 ms / 120 fps budget on named
+  target hardware and representative gameplay, including submission and
   retirement.
-- Presentation is uncapped by the compatibility architecture and remains bounded, monotonic, and
-  free of stale-frame glitches under load.
-- Per-title simulation/frame-production limiters are identified semantically and exposed through a
-  faithful/enhanced runtime seam; measured simulation cadence is reported separately from renderer
-  capacity.
-- Performance gates use same-run controls, warm representative workloads, and output/state parity so
-  an optimization cannot pass by dropping work.
+- Presentation is bounded and monotonic, and per-title simulation cadence is
+  measured separately from renderer capacity.
+- Optimizations retain same-run state/output controls and cannot pass by
+  dropping work.
 
 ### Constraints
 
-- The 8.33 ms target applies to the native engine path, not as a requirement to micro-optimize the
-  PM4 oracle into the product architecture.
-- Timing enhancements do not speed the general guest clock or patch unexplained constants.
+- Timing enhancements use a semantic faithful/enhanced seam; they do not speed
+  the general guest clock or patch unexplained constants.
+- Compatibility measurements guide migration but do not redefine the native
+  product's performance target.
 
 ### Non-goals
 
-- Counting repeated presentations as newly simulated frames.
-- Hiding a 30 Hz title producer behind a 60 Hz vblank or frame interpolation.
+- Counting repeated presentations as simulated frames or hiding a 30 Hz
+  producer behind a faster vblank.
 
 ## G004 — Distribute clean code with a user-owned game image as the only restricted input
 
 ### Why
 
-GearsUE3 must be independently distributable without shipping, fetching, or directing users to
-copyrighted game material or private engine source.
+The project must be independently distributable without shipping or fetching
+copyrighted game material, private engine source, or derived guest code.
 
 ### Success conditions
 
-- A fresh clone plus documented native dependencies, `uv`, and a user-owned disc/image can provision
-  and launch the default product through `./run.sh`.
-- All disc-derived source, assets, caches, and executable data remain under ignored content-addressed
-  storage and can be regenerated locally.
-- The tracked tree and full public history pass the distribution-clean gate.
+- A fresh clone plus documented native dependencies, `uv`, and a user-owned
+  disc/image provisions and launches the xenonport/Xenia product through
+  `./run.sh` with no offline translation step.
+- Disc-derived executable bytes, assets, and runtime caches stay ignored and
+  disposable; compiler output stays under `build/`.
+- The tracked tree and full public history pass the clean-distribution gate.
 
 ### Constraints
 
-- No ROM, disc image, extracted asset, generated recomp body, decompiler output, private-source
-  dependency, or game download link enters the repository.
-- Provisioning selects an exact supported revision by cryptographic identity and fails closed.
+- No ROM/disc image, extracted asset, generated guest body, decompiler output,
+  private-source dependency, or game download link enters the repository.
+- Provisioning validates exact container and normalized-image identity before
+  title policy activates.
 
 ### Non-goals
 
-- Shipping pre-generated title modules for convenience.
-- Requiring Ghidra or private development tools on the player setup path.
+- Shipping a generated module or persistent JIT cache as a fresh-install
+  prerequisite.
+- Requiring Ghidra or another maintainer-only analysis tool on the player path.
