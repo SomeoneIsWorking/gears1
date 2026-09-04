@@ -1,18 +1,16 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "guest_address.h"
-#include "ppc_config.h"
-#include "ppc_context.h"
 
 namespace gears
 {
 
-// The recompiled code addresses guest memory as `base + guestAddress`, where
-// guestAddress is a full 32-bit Xbox 360 address. So `base` has to anchor a
-// window covering the entire 4 GiB guest space, and the indirect-call table
-// that PPC_LOOKUP_FUNC indexes lives inside it, immediately after the image.
+// The retained native subsystems use absolute 32-bit Xenon addresses. This
+// temporary owner preserves their proven aliasing behavior until x360port
+// supplies Xenia Memory access; it owns no guest execution or function table.
 class GuestMemory
 {
   public:
@@ -64,10 +62,6 @@ class GuestMemory
     size_t reservedSize_{};
     int physicalFd_{-1};
 };
-
-// Populates the function table PPC_LOOKUP_FUNC reads, from PPCFuncMappings.
-// Returns the number of entries installed.
-size_t InstallFunctionTable(GuestMemory &memory);
 
 // Read-only walk of the GPU command stream, reporting packets that mention
 // `watchAddress`. Executes nothing; see pm4_trace.cpp.

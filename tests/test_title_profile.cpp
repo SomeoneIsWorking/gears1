@@ -45,7 +45,7 @@ void Check(bool condition, std::string_view message)
 [[nodiscard]] gears::TitleProfile SyntheticProfile(gears::XexIdentity identity)
 {
     gears::TitleCapabilities capabilities;
-    capabilities.status[static_cast<std::size_t>(gears::TitleCapability::RecompiledExecution)] =
+    capabilities.status[static_cast<std::size_t>(gears::TitleCapability::DynarecExecution)] =
         gears::CapabilityStatus::Verified;
     capabilities.status[static_cast<std::size_t>(gears::TitleCapability::NativeRhi)] =
         gears::CapabilityStatus::Untested;
@@ -70,7 +70,7 @@ void CheckExactMatch()
     Check(resolution.profile == &profiles.front(), "resolution refers to registry profile");
     Check(resolution.profile->revisionStatus == gears::RevisionStatus::Experimental,
           "revision status is retained");
-    Check(resolution.profile->capabilities.Get(gears::TitleCapability::RecompiledExecution) ==
+    Check(resolution.profile->capabilities.Get(gears::TitleCapability::DynarecExecution) ==
               gears::CapabilityStatus::Verified,
           "verified capability is retained");
     Check(resolution.profile->capabilities.Get(gears::TitleCapability::NativeRhi) ==
@@ -118,7 +118,7 @@ void CheckUnknownBuildIsRefused()
 void CheckErrorDescriptions()
 {
     Check(gears::TitleProfileErrorText(gears::TitleProfileError::UnknownBuild) ==
-              "executable does not match the generated title module",
+              "executable does not match a supported title revision",
           "unknown-build refusal has an actionable description");
     Check(!gears::TitleProfileErrorText(gears::TitleProfileError::InvalidProfile).empty(),
           "every registry refusal has a description");

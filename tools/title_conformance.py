@@ -18,8 +18,8 @@ Usage:
 
 Every evidence record names a local artifact relative to the results file, its
 SHA-256 digest, and the measurement source. The artifact may be a log, JSON
-report, or other generated measurement; game files and generated recompilation
-sources are not inputs to this reporter. Gears 2, 3, and Judgment evidence is
+report, or other generated measurement; game files and runtime code-cache
+artifacts are not inputs to this reporter. Gears 2, 3, and Judgment evidence is
 rejected when it names Xenia as its oracle; those titles require an independent
 headless invariant, compatibility-renderer A/B, or hardware-derived source.
 """
@@ -37,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 GAME_NAMES = {
     "gears1": "Gears of War",
@@ -48,7 +48,7 @@ GAME_NAMES = {
 
 COMPATIBILITY_GATES = (
     "identity",
-    "recompilation",
+    "dynarec_runtime_executor",
     "headless_boot",
     "content_mount",
     "menu",
@@ -397,7 +397,7 @@ def print_text(reports: list[CaseReport]) -> None:
                 print(f"    - {summary}")
         compatibility = "READY" if report.compatibility_ready else "NOT READY"
         sixty_fps = "READY" if report.sixty_fps_ready else "NOT READY"
-        print(f"  recomp-path compatibility: {compatibility}")
+        print(f"  runtime-executor compatibility: {compatibility}")
         print(f"  native renderer parity:    {report.native_parity.upper().replace('_', ' ')}")
         print(f"  60 fps enhancement:        {sixty_fps}")
 
@@ -461,7 +461,7 @@ def write_synthetic_case(
         if gate == "renderer_native_parity" and not has_native_renderer:
             gates[gate] = {
                 "status": "not_applicable",
-                "reason": "synthetic recomp renderer only",
+                "reason": "synthetic case has no native renderer",
             }
             continue
         artifact = case / f"{gate}.txt"
@@ -514,7 +514,7 @@ def selftest() -> int:
         with redirect_stdout(text_output):
             assert run_check([str(cases[0][0]), str(cases[0][1])], False) == 0
         text_report = text_output.getvalue()
-        assert "recomp-path compatibility: READY" in text_report
+        assert "runtime-executor compatibility: READY" in text_report
         assert "native renderer parity:    READY" in text_report
         assert "60 fps enhancement:        READY" in text_report
         assert "supported" not in text_report.lower()
@@ -554,6 +554,18 @@ def selftest() -> int:
             lambda: evaluate_case(manifest, identity_only_path), "missing field(s)"
         )
 
+        stale_executor = json.loads(results.read_text(encoding="utf-8"))
+        stale_name = "generated-" + "cpu"
+        stale_executor["gates"][stale_name] = stale_executor["gates"].pop(
+            "dynarec_runtime_executor"
+        )
+        stale_executor_path = results.parent / "stale-executor-gate.json"
+        stale_executor_path.write_text(json.dumps(stale_executor), encoding="utf-8")
+        expect_refusal(
+            lambda: evaluate_case(manifest, stale_executor_path),
+            "dynarec_runtime_executor",
+        )
+
         missing_60fps = json.loads(results.read_text(encoding="utf-8"))
         del missing_60fps["gates"]["gameplay_60fps"]
         missing_60fps_path = results.parent / "missing-60fps.json"
@@ -572,7 +584,7 @@ def selftest() -> int:
         deferred_output = io.StringIO()
         with redirect_stdout(deferred_output):
             assert run_check([str(manifest), str(deferred_60fps_path)], False) == 0
-        assert "recomp-path compatibility: READY" in deferred_output.getvalue()
+        assert "runtime-executor compatibility: READY" in deferred_output.getvalue()
         assert "60 fps enhancement:        NOT READY" in deferred_output.getvalue()
 
         absent = json.loads(results.read_text(encoding="utf-8"))
@@ -634,11 +646,12 @@ def selftest() -> int:
         failed_output = io.StringIO()
         with redirect_stdout(failed_output):
             assert run_check([str(cases[1][0]), str(failed_path)], False) == 1
-        assert "recomp-path compatibility: NOT READY" in failed_output.getvalue()
+        assert "runtime-executor compatibility: NOT READY" in failed_output.getvalue()
 
     print(
         "title conformance selftest passed: four-title distinction, exact-build binding, "
-        "schema-version, identity-only, missing-60fps, deferred-60fps compatibility, "
+        "schema-version, identity-only, stale-executor-gate, missing-60fps, "
+        "deferred-60fps compatibility, "
         "and unknown-evidence refusal, "
         "artifact tamper/escape detection, "
         "non-Gears-1 Xenia-oracle refusal, CLI reporting/exit status, "

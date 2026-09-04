@@ -1,167 +1,25 @@
-# Reusing Xenia's Xenon runtime and Xenos translator
+# Xenia reuse boundary
 
-## Xenon CPU product boundary
+`shared/x360port` is the sole Xbox 360 execution owner. Gears pins an exact local
+revision and currently consumes only its authenticated image/import validation
+target. The missing product target must wrap Xenia's existing `Memory`, `Processor`,
+`ThreadState`, `RawModule`, x64/A64 translators, and code cache rather than creating
+a second Xenon CPU implementation.
 
-The target product embeds Xenia's existing x64 and A64 Xenon dynarecs through a
-new title-neutral `x360port` framework. Xenia continues to own PPC decoding,
-lowering, host-code emission, executable memory, translated-block lookup, and
-cache invalidation. Do not write a PPC interpreter and do not put Xenia behind
-`jit-common` code-memory or block-cache abstractions.
+The product contract must expose:
 
-`x360port` owns only the narrow embedding contract around Xenia `Memory`,
-`Processor`, `ThreadState`, and `RawModule`: authenticated runtime images, typed
-imports, device-memory callbacks, image-aware native overrides, scoped original
-calls, bounded executor exits, and explicit treatment of Xenia's process-global
-memory/MMIO/clock assumptions. Checked image and import-validation facts now in
-`shared/xenon-host` move there. The generated function map and concrete static
-PPC ABI do not.
+- typed execution context, guest memory, imports, device callbacks, and exits;
+- native override selection and a scoped call to the original guest address;
+- executable-state invalidation owned by Xenia's cache;
+- dynarec-first selection with a bounded interpreter fallback only for compilation
+  failure, unsupported instructions, or unsafe generated host execution;
+- reason-labelled fallback counters and an explicit diagnostic-only interpreter mode;
+- independent x86-64, Apple Silicon macOS A64, and Android arm64-v8a qualification.
 
-The first Gears discriminator executes real leaf `0x8222E868`, invokes
-`DbgPrint` through a typed import, and proves disabled, enabled, and scoped
-`super` override paths through Xenia. It is intentionally smaller than entry
-boot and does not establish gameplay compatibility. Static execution is
-already deleted before this milestone; representative interactive gameplay
-under the full migration gate is still required to complete the migration.
+Fallback coverage is not gameplay or performance evidence. Normal gameplay and all
+performance gates must report dynarec selection and nonzero translated blocks.
 
-## Xenos translator evidence
-
-The reconnaissance in `d3d-seam.md` put shader translation at the hard core of
-the HLE backend: shaders reach the seam as Xenos microcode, and no amount of
-knowing this is Unreal Engine changes that, because the microcode was produced
-by the console's shader compiler and shipped in the cooked packages.
-
-Xenia has already solved that problem, and it is BSD-3-Clause. This records what
-is worth taking, how tightly it is bound to the rest of Xenia, and what the
-obligations are.
-
-## Licence obligations
-
-BSD-3-Clause: permissive, but it requires the copyright notice, the condition
-list and the disclaimer to be retained, and forbids using the project's or its
-contributors' names to endorse this one. `gears1` is a public repository, so
-this is a real obligation rather than a formality.
-
-This is satisfied by taking a **fork** rather than copying a subset in, which
-is both cleaner and less work to keep honest:
-
-- `extern/xenia` is a submodule of `SomeoneIsWorking/xenia-canary`, a public
-  fork of `xenia-canary/xenia-canary`, pinned at upstream commit `a635ac6`;
-- upstream's `LICENSE`, copyright notices and full history come with it
-  untouched, so retention is automatic rather than something to remember;
-- the submodule boundary makes it obvious which code is ours and which is not,
-  with no file-by-file provenance to maintain;
-- changes we need (the capability shim below) are commits on the fork, so they
-  are visibly ours and can be offered upstream or rebased.
-
-Attribution still belongs in the top-level `README.md`, and the fork must stay
-public or `git clone --recursive` breaks for anyone else.
-
-## What the dependency graph actually looks like
-
-Measured from the headers rather than assumed. The front end is shallow:
-
-    shader_translator.h -> shader.h -> base/{byte_order,math,string_buffer},
-                                       registers.h, ucode.h
-    ucode.h             -> xenos.h  -> base/{math,memory}
-    registers.h         -> base/assert, xenos.h, register_table.inc
-    texture_info.h      -> xenos.h
-
-So the microcode front end, the instruction-set definitions and the texture
-tiling code come across with a handful of `xenia/base` headers behind them
-(math, memory, byte_order, string_buffer, assert — on the order of 1800 lines).
-Nothing there reaches into Xenia's GPU abstraction, its command processor or its
-window system.
-
-The back ends each carry exactly one dependency on Xenia's UI layer:
-
-- the SPIR-V back end includes `ui/vulkan/vulkan_device.h`
-- the DXBC back end includes `ui/graphics_provider.h`
-
-That sounds worse than it is. The SPIR-V translator uses its Vulkan device for
-**capability queries only** — thirteen `properties()` calls and one
-`extensions()` call. Replacing it with a small struct we populate from our own
-device is a shim, not a port.
-
-## Recommendation
-
-Take the SPIR-V path. Vulkan is the right target on this machine, and the
-back end's only coupling is the capability shim described above.
-
-### Done — and the shim estimate was wrong in both directions
-
-`xenia_gpu/CMakeLists.txt` is the build island; the exact translation-unit list
-lives there rather than being duplicated here. What the estimate above got
-wrong, measured by building it:
-
-- **The capability shim was not needed at all.**
-  `SpirvShaderTranslator::Features` already has a device-free constructor
-  (`explicit Features(bool all = false)`) beside the `VulkanDevice*` one, so
-  the thirteen `properties()` calls are never reached. The `vulkan_device.h`
-  include still has to *compile*, which costs `third_party/Vulkan-Headers` and
-  `-DVULKAN_HPP_NO_TO_STRING` — headers only, nothing links against Vulkan.
-- **The front end is not as shallow as the headers suggest.** Header inclusion
-  understates it: `spirv_shader_translator_rb.cc` needs
-  `draw_util::kD3D10StandardSamplePositions*` and a cvar from
-  `render_target_cache.cc`, which drags in `draw_extent_estimator` →
-  `shader_interpreter` → `trace_writer` → snappy. Roughly 40 translation units
-  and eight of Xenia's own third-party submodules (glslang, fmt,
-  Vulkan-Headers, cxxopts, tomlplusplus, disruptorplus, utfcpp, xxhash, xbyak,
-  snappy), rather than "a handful of `xenia/base` headers".
-- **One shim file was needed, but a different one.** `xenia_gpu/xenia_host_shim.cpp`
-  defines `ShowSimpleMessageBox` / `LaunchWebBrowser` / `LaunchFileExplorer`,
-  whose Linux implementations live in `base/system_gnulinux.cc` and pull in
-  SDL2 for a message box a batch translation run can never raise.
-- `version.h` is generated by `xenia-build.py`; we regenerate it from the
-  pinned submodule commit instead of running Xenia's build script.
-
-Nothing links Xenia's GPU abstraction, command processor or window system.
-
-**Result on this title's real data: 425 of 425 distinct shaders translate and
-pass `spirv-val --target-env vulkan1.3`.** See `docs/d3d-seam.md` §3 for the
-corpus, the container layout, and the one behavioural surprise (zero vertex
-fetch strides).
-
-## What this does and does not change
-
-It removes the largest single unknown from the estimate. Writing a Xenos
-microcode translator from scratch was the reason "small weeks" was the floor for
-a first frame; that reason is gone, and integration is a smaller and much better
-understood job than authorship.
-
-It changes nothing else. The seam still has to be hooked, resources still arrive
-as precomputed hardware descriptors carrying tiled formats and physical
-addresses, and the EDRAM/resolve model is still ours to deal with. Translating
-shaders correctly does not draw anything by itself.
-
-And it does not touch the finding that decides sequencing: in the post-load
-state the title calls no D3D entry points at all. A shader translator cannot fix
-a title that is not drawing, and building the backend first would leave us
-unable to tell a broken backend from a game that never called it.
-
-## The fork's second use: a headless oracle
-
-Beyond the translator, the same fork answers "what should this frame look
-like?". `xenia-gpu-vulkan-trace-dump` renders a GPU trace to a PNG with no
-window and no playthrough, and `tools/gfr_to_xtr.py` turns one of our frame
-captures into such a trace. What that can and cannot settle is written at the
-top of that tool; the defects that had to be fixed before it produced anything
-are in `catalog.py show 7`.
-
-**Build it from `extern/xenia`, and only from there.** For a while a second
-clone under `scratch/oracle/xenia-canary` held the same fixes as uncommitted
-working-tree edits, and a fix applied to one tree while the other was rebuilt
-produced the conclusion that the fix did nothing. The submodule is the fork,
-with the fixes as commits; the clone is not the source of anything.
-
-    # version.h: the CMake path has no rule for it (premake generates it)
-    scratch/oracle/xenia-build/generated/version.h   <- from the pinned commit
-    CC=clang CXX=clang++ cmake -S extern/xenia -B scratch/oracle/xenia-build \
-        -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DXENIA_BUILD_MISC=ON \
-        -DCMAKE_CXX_FLAGS=-I<abs>/scratch/oracle/xenia-build/generated \
-        -DCMAKE_EXE_LINKER_FLAGS=-L<abs>/scratch/oracle/localdev
-    ninja -C scratch/oracle/xenia-build xenia-gpu-vulkan-trace-dump
-
-`RelWithDebInfo` rather than `Release` on purpose: the Release config forces
-`-flto=thin` and `-fuse-ld=lld`, and lld is not installed here. That sidesteps
-the CMakeLists edit the earlier build needed, leaving `liblz4.so` (a symlink in
-`scratch/oracle/localdev`) as the only local workaround besides `version.h`.
+Gears owns exact title hashes, addresses, native subsystem policy, renderer behavior,
+and conformance scenarios. The future `shared/x360ue3` may own only independently
+authored UE3/Xbox interfaces that are proven from the executing boundary; it must not
+be created as an empty framework or use the local `shared/ue3` reference source.

@@ -19,7 +19,7 @@
 
 #include <lucent/log.h>
 
-#include <byteswap.h>
+#include "byte_order.h"
 
 #include "guest_memory.h"
 
@@ -37,21 +37,32 @@ uint32_t PhysicalOffset(uint32_t address)
     return address & 0x1FFFFFFF;
 }
 
-const char* OpcodeName(uint32_t opcode)
+const char *OpcodeName(uint32_t opcode)
 {
     switch (opcode)
     {
-    case 0x3F: return "INDIRECT_BUFFER";
-    case 0x3D: return "MEM_WRITE";
-    case 0x46: return "EVENT_WRITE";
-    case 0x22: return "COND_EXEC";
-    case 0x2D: return "SET_CONSTANT";
-    case 0x10: return "NOP";
-    case 0x48: return "ME_INIT";
-    case 0x3C: return "WAIT_REG_MEM";
-    case 0x54: return "INTERRUPT";
-    case 0x58: return "EVENT_WRITE_SHD";
-    default: return "?";
+    case 0x3F:
+        return "INDIRECT_BUFFER";
+    case 0x3D:
+        return "MEM_WRITE";
+    case 0x46:
+        return "EVENT_WRITE";
+    case 0x22:
+        return "COND_EXEC";
+    case 0x2D:
+        return "SET_CONSTANT";
+    case 0x10:
+        return "NOP";
+    case 0x48:
+        return "ME_INIT";
+    case 0x3C:
+        return "WAIT_REG_MEM";
+    case 0x54:
+        return "INTERRUPT";
+    case 0x58:
+        return "EVENT_WRITE_SHD";
+    default:
+        return "?";
     }
 }
 
@@ -74,7 +85,7 @@ struct WalkStats
 };
 
 void Walk(uint32_t base, uint32_t words, uint32_t watchAddress, int depth,
-    std::vector<uint32_t>& visited, WalkStats& stats)
+          std::vector<uint32_t> &visited, WalkStats &stats)
 {
     if (depth > 4)
         return; // indirect buffers nest, but not deeply; this guards a cycle
@@ -116,21 +127,22 @@ void Walk(uint32_t base, uint32_t words, uint32_t watchAddress, int depth,
                 // why a watch on the address alone cannot see them.
                 if (reg >= 0x578 && reg <= 0x57F)
                 {
-                    lucent::info("pm4", "SCRATCH_REG{} <- {:#010x} (TYPE0 at {:#x})",
-                        reg - 0x578, value, base + (i - 1) * 4);
+                    lucent::info("pm4", "SCRATCH_REG{} <- {:#010x} (TYPE0 at {:#x})", reg - 0x578,
+                                 value, base + (i - 1) * 4);
                 }
                 else if (reg == 0x1DC || reg == 0x1DD)
                 {
                     lucent::info("pm4", "{} <- {:#010x} (TYPE0 at {:#x})",
-                        reg == 0x1DC ? "SCRATCH_UMSK" : "SCRATCH_ADDR", value,
-                        base + (i - 1) * 4);
+                                 reg == 0x1DC ? "SCRATCH_UMSK" : "SCRATCH_ADDR", value,
+                                 base + (i - 1) * 4);
                 }
                 if (PhysicalOffset(value) == PhysicalOffset(watchAddress))
                 {
                     ++stats.hits;
-                    lucent::info("pm4", "TYPE{} register write at {:#x} puts the watched"
-                        " address in register {:#x}", type, base + (i - 1) * 4,
-                        baseRegister + w);
+                    lucent::info("pm4",
+                                 "TYPE{} register write at {:#x} puts the watched"
+                                 " address in register {:#x}",
+                                 type, base + (i - 1) * 4, baseRegister + w);
                 }
             }
             i += count;
@@ -141,8 +153,8 @@ void Walk(uint32_t base, uint32_t words, uint32_t watchAddress, int depth,
 
         if (opcode == 0x40)
         {
-            lucent::info("pm4", "INTERRUPT packet at {:#x}, data {:#010x}",
-                base + (i - 1) * 4, count >= 1 ? Read(base + i * 4) : 0u);
+            lucent::info("pm4", "INTERRUPT packet at {:#x}, data {:#010x}", base + (i - 1) * 4,
+                         count >= 1 ? Read(base + i * 4) : 0u);
         }
 
         // Any packet carrying the watched address is the one being looked for,
@@ -155,8 +167,10 @@ void Walk(uint32_t base, uint32_t words, uint32_t watchAddress, int depth,
             if (PhysicalOffset(value) == PhysicalOffset(watchAddress))
             {
                 ++stats.hits;
-                lucent::info("pm4", "packet {:#x} ({}) at {:#x} carries the watched address"
-                    " in word {}", opcode, OpcodeName(opcode), base + (i - 1) * 4, w);
+                lucent::info("pm4",
+                             "packet {:#x} ({}) at {:#x} carries the watched address"
+                             " in word {}",
+                             opcode, OpcodeName(opcode), base + (i - 1) * 4, w);
                 for (uint32_t d = 0; d < count && i + d < words; d++)
                     lucent::info("pm4", "    data[{}] = {:#010x}", d, Read(base + (i + d) * 4));
                 break;
@@ -186,15 +200,15 @@ void Walk(uint32_t base, uint32_t words, uint32_t watchAddress, int depth,
 // mentions `watchAddress`.
 void TraceCommandStream(uint32_t ringBase, uint32_t ringWords, uint32_t watchAddress)
 {
-    lucent::info("pm4", "walking ring {:#x} ({} words) for writes to {:#x}",
-        ringBase, ringWords, watchAddress);
+    lucent::info("pm4", "walking ring {:#x} ({} words) for writes to {:#x}", ringBase, ringWords,
+                 watchAddress);
     std::vector<uint32_t> visited;
     WalkStats stats;
     Walk(ringBase, ringWords, watchAddress, 0, visited, stats);
-    lucent::info("pm4", "walk complete: {} packets ({} padding/no-op words),"
-        " {} data words compared, {} indirect buffers followed, {} hits",
-        stats.packets, stats.padding, stats.dataWords, visited.size(),
-        stats.hits);
+    lucent::info("pm4",
+                 "walk complete: {} packets ({} padding/no-op words),"
+                 " {} data words compared, {} indirect buffers followed, {} hits",
+                 stats.packets, stats.padding, stats.dataWords, visited.size(), stats.hits);
     // A NEGATIVE IS ONLY A NEGATIVE IF SOMETHING WAS ACTUALLY READ. A wrong
     // ring base, a stale word count, or a ring the title has not filled yet all
     // walk zero real packets and report zero hits -- indistinguishable, without
@@ -202,17 +216,20 @@ void TraceCommandStream(uint32_t ringBase, uint32_t ringWords, uint32_t watchAdd
     if (stats.hits == 0)
     {
         if (stats.packets == 0)
-            lucent::warn("pm4", "  ...but NOT ONE packet was parsed at {:#x}."
-                " This is a failed walk, not evidence that nothing writes"
-                " {:#x}: check the ring base and the word count.", ringBase,
-                watchAddress);
+            lucent::warn("pm4",
+                         "  ...but NOT ONE packet was parsed at {:#x}."
+                         " This is a failed walk, not evidence that nothing writes"
+                         " {:#x}: check the ring base and the word count.",
+                         ringBase, watchAddress);
         else
-            lucent::info("pm4", "  no packet in the {} examined carries {:#x}."
-                " This walk cannot see: a value the GPU computes rather than is"
-                " handed literally, a write through a register programmed"
-                " before this snapshot, buffers nested deeper than 4, an IB"
-                " sized >= 0x40000 words (skipped), or anything submitted"
-                " outside the window walked here.", stats.packets, watchAddress);
+            lucent::info("pm4",
+                         "  no packet in the {} examined carries {:#x}."
+                         " This walk cannot see: a value the GPU computes rather than is"
+                         " handed literally, a write through a register programmed"
+                         " before this snapshot, buffers nested deeper than 4, an IB"
+                         " sized >= 0x40000 words (skipped), or anything submitted"
+                         " outside the window walked here.",
+                         stats.packets, watchAddress);
     }
 }
 

@@ -4,7 +4,7 @@
 
 #include <lucent/log.h>
 
-#include <byteswap.h>
+#include "byte_order.h"
 
 #include "guest_heap.h"
 #include "guest_memory.h"
@@ -37,9 +37,8 @@ std::mutex g_dispatcherMutex;
 // leaving one registered would be a dangling pointer in the next signal.
 class RegisteredWaiter
 {
-public:
-    RegisteredWaiter(KernelObject* const* objects, size_t count,
-                     std::condition_variable& cv)
+  public:
+    RegisteredWaiter(KernelObject *const *objects, size_t count, std::condition_variable &cv)
         : objects_(objects), count_(count), cv_(&cv)
     {
         for (size_t i = 0; i < count_; ++i)
@@ -52,22 +51,22 @@ public:
             if (objects_[i])
                 objects_[i]->RemoveWaiterLocked(cv_);
     }
-    RegisteredWaiter(const RegisteredWaiter&) = delete;
-    RegisteredWaiter& operator=(const RegisteredWaiter&) = delete;
+    RegisteredWaiter(const RegisteredWaiter &) = delete;
+    RegisteredWaiter &operator=(const RegisteredWaiter &) = delete;
 
-private:
-    KernelObject* const* objects_;
+  private:
+    KernelObject *const *objects_;
     size_t count_;
-    std::condition_variable* cv_;
+    std::condition_variable *cv_;
 };
 } // namespace
 
-void KernelObject::AddWaiterLocked(std::condition_variable* cv)
+void KernelObject::AddWaiterLocked(std::condition_variable *cv)
 {
     waiters_.push_back(cv);
 }
 
-void KernelObject::RemoveWaiterLocked(std::condition_variable* cv)
+void KernelObject::RemoveWaiterLocked(std::condition_variable *cv)
 {
     for (auto it = waiters_.begin(); it != waiters_.end(); ++it)
         if (*it == cv)
@@ -81,18 +80,22 @@ void KernelObject::WakeWaitersLocked()
 {
     // notify_all on each: a waiter registers exactly one condition variable, so
     // this is one wakeup per thread actually waiting on THIS object.
-    for (std::condition_variable* cv : waiters_)
+    for (std::condition_variable *cv : waiters_)
         cv->notify_all();
 }
 
-const char* KernelObject::KindName() const
+const char *KernelObject::KindName() const
 {
     switch (kind_)
     {
-    case Kind::NotificationEvent: return "notification-event";
-    case Kind::SynchronizationEvent: return "sync-event";
-    case Kind::Semaphore: return "semaphore";
-    case Kind::Mutant: return "mutant";
+    case Kind::NotificationEvent:
+        return "notification-event";
+    case Kind::SynchronizationEvent:
+        return "sync-event";
+    case Kind::Semaphore:
+        return "semaphore";
+    case Kind::Mutant:
+        return "mutant";
     }
     return "?";
 }
@@ -101,10 +104,12 @@ bool KernelObject::SatisfiedLocked() const
 {
     switch (kind_)
     {
-    case Kind::Semaphore: return count_ > 0;
+    case Kind::Semaphore:
+        return count_ > 0;
     case Kind::Mutant:
         return recursion_ == 0 || owner_ == std::this_thread::get_id();
-    default: return signalled_;
+    default:
+        return signalled_;
     }
 }
 
@@ -131,15 +136,16 @@ void KernelObject::ConsumeLocked()
     }
 }
 
-int KernelObject::WaitMultiple(KernelObject* const* objects, size_t count,
-                               bool waitAll, int64_t timeout100ns)
+int KernelObject::WaitMultiple(KernelObject *const *objects, size_t count, bool waitAll,
+                               int64_t timeout100ns)
 {
     if (count == 0)
         return -1;
     std::unique_lock<std::mutex> lock(g_dispatcherMutex);
 
     int satisfiedIndex = -1;
-    auto ready = [&] {
+    auto ready = [&]
+    {
         if (waitAll)
         {
             for (size_t i = 0; i < count; ++i)
@@ -182,7 +188,6 @@ int KernelObject::WaitMultiple(KernelObject* const* objects, size_t count,
     }
     return satisfiedIndex;
 }
-
 
 void KernelObject::Set()
 {
@@ -248,18 +253,21 @@ bool KernelObject::Wait(int64_t timeout100ns)
 {
     std::unique_lock<std::mutex> lock(g_dispatcherMutex);
 
-    auto satisfied = [this] {
+    auto satisfied = [this]
+    {
         switch (kind_)
         {
-        case Kind::Semaphore: return count_ > 0;
+        case Kind::Semaphore:
+            return count_ > 0;
         case Kind::Mutant:
             return recursion_ == 0 || owner_ == std::this_thread::get_id();
-        default: return signalled_;
+        default:
+            return signalled_;
         }
     };
 
     std::condition_variable cv;
-    KernelObject* self = this;
+    KernelObject *self = this;
     RegisteredWaiter registration(&self, 1, cv);
     if (timeout100ns < 0)
     {
@@ -309,7 +317,7 @@ bool HandleTable::Close(uint32_t handle)
     return objects_.erase(handle) != 0;
 }
 
-HandleTable& Handles()
+HandleTable &Handles()
 {
     static HandleTable table;
     return table;
@@ -327,10 +335,10 @@ std::unordered_map<uint32_t, std::shared_ptr<KernelObject>> g_byGuestAddress;
 // recognised one of them did not recognise the other -- which is how one
 // thread's KeSetAffinityThread went unrecognised in every run (catalog #42).
 // The console has one object pointer per object, whatever handle you name it by.
-std::unordered_map<const KernelObject*, uint32_t> g_addressByObject;
+std::unordered_map<const KernelObject *, uint32_t> g_addressByObject;
 
 std::mutex g_resumeMutex;
-std::unordered_map<const KernelObject*, std::shared_ptr<KernelObject>> g_resumeGates;
+std::unordered_map<const KernelObject *, std::shared_ptr<KernelObject>> g_resumeGates;
 } // namespace
 
 uint32_t GuestAddressForHandle(uint32_t handle)
@@ -396,12 +404,12 @@ std::shared_ptr<KernelObject> BindGuestDispatcherObject(uint32_t address)
     switch (type)
     {
     case kDispatcherTypeNotificationEvent:
-        object = std::make_shared<KernelObject>(
-            KernelObject::Kind::NotificationEvent, signalState != 0);
+        object =
+            std::make_shared<KernelObject>(KernelObject::Kind::NotificationEvent, signalState != 0);
         break;
     case kDispatcherTypeSynchronizationEvent:
-        object = std::make_shared<KernelObject>(
-            KernelObject::Kind::SynchronizationEvent, signalState != 0);
+        object = std::make_shared<KernelObject>(KernelObject::Kind::SynchronizationEvent,
+                                                signalState != 0);
         break;
     case kDispatcherTypeSemaphore:
         object = std::make_shared<KernelObject>(signalState, 0);
@@ -411,17 +419,17 @@ std::shared_ptr<KernelObject> BindGuestDispatcherObject(uint32_t address)
         return nullptr;
     }
 
-    lucent::debug("kernel", "bound guest dispatcher object at {:#x} (type {}, state {})",
-        address, type, signalState);
+    lucent::debug("kernel", "bound guest dispatcher object at {:#x} (type {}, state {})", address,
+                  type, signalState);
 
     std::lock_guard<std::mutex> guard(g_guestObjectMutex);
-    auto& slot = g_byGuestAddress[address];
+    auto &slot = g_byGuestAddress[address];
     if (!slot)
         slot = object;
     return slot;
 }
 
-void RegisterThreadResume(const std::shared_ptr<KernelObject>& threadObject,
+void RegisterThreadResume(const std::shared_ptr<KernelObject> &threadObject,
                           std::shared_ptr<KernelObject> resumed)
 {
     if (!threadObject || !resumed)
@@ -454,8 +462,7 @@ void ResumeThread(uint32_t handleOrObject)
         auto it = g_resumeGates.find(object.get());
         if (it == g_resumeGates.end())
         {
-            lucent::debug("thread", "resume of {:#x}: not a suspended thread",
-                handleOrObject);
+            lucent::debug("thread", "resume of {:#x}: not a suspended thread", handleOrObject);
             return; // never suspended, so nothing to release
         }
 

@@ -46,7 +46,7 @@ CONFIRMED and fixed. The hypothesis in this entry was right, and scratch/logs/ph
     [kernel] ObReferenceObjectByHandle(0xf8000044) -> 0x42932000
     [thread:warn] KeSetAffinityThread(object=0x42932000, mask=0x10): no thread behind that object
 
-The chain, from the recompiled image: the title creates the thread whose entry is
+The chain recovered from the retail executable: the title creates the thread whose entry is
 0x82941df0 at 0x8294214C, then at 0x8294218C calls DuplicateHandle (guest
 sub_8294F198 -> NtDuplicateObject) on the handle it got back. It is the DUPLICATE
 it later passes to XSetThreadProcessor (guest sub_82613900), which does

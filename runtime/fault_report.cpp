@@ -123,16 +123,11 @@ void OnFatalMemorySignal(int signal, siginfo_t *info, void *context)
         Emit(where.c_str());
         Emit("\n");
 
-        // THE HOST BACKTRACE IS THE GUEST CALL CHAIN. Recompiled guest
-        // functions are ordinary host functions named `sub_82xxxxxx`, so the
-        // frames below name guest code directly. backtrace_symbols_fd is used
-        // rather than backtrace_symbols because the latter allocates, and
-        // allocating from a signal handler in a broken process is how a crash
-        // reporter becomes a hang.
+        // This is a host-runtime backtrace only. Guest state must be captured
+        // from Xenia's ThreadState at a safe executor boundary.
         void *frames[64];
         const int count = backtrace(frames, 64);
-        Emit("host backtrace (recompiled frames are named for their guest"
-             " addresses):\n");
+        Emit("host runtime backtrace:\n");
         backtrace_symbols_fd(frames, count, STDERR_FILENO);
         if (g_contextLabel != nullptr)
         {

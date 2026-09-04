@@ -11,7 +11,7 @@ namespace gears
 
 // Both digests are produced by local provisioning. The container digest names
 // the exact input XEX, while the image digest names the executable bytes that
-// generated code and bindings describe.
+// the runtime image and exact-revision bindings describe.
 using Sha256Digest = std::array<std::uint8_t, 32>;
 
 struct XexIdentity
@@ -34,7 +34,7 @@ enum class RevisionStatus : std::uint8_t
 
 enum class TitleCapability : std::uint8_t
 {
-    RecompiledExecution,
+    DynarecExecution,
     HeadlessBoot,
     ContentMount,
     OracleComparison,
@@ -58,9 +58,9 @@ struct TitleCapabilities
     [[nodiscard]] CapabilityStatus Get(TitleCapability capability) const noexcept;
 };
 
-// Instances are supplied by a locally generated title module. The shared
-// runtime owns this schema and its fail-closed selection rules, but no tracked
-// profile contains title-derived values.
+// Exact-revision adapters supply instances after x360port has parsed the
+// user-owned runtime image. The shared runtime owns this schema and its
+// fail-closed selection rules.
 struct TitleProfile
 {
     std::string_view titleKey;
@@ -93,7 +93,7 @@ struct TitleProfileResolution
 
 // The returned pointer refers to an element of profiles and remains valid only
 // as long as that profile storage does. Every registry entry is validated
-// before a match is returned, so malformed or duplicate generated bindings
+// before a match is returned, so malformed or duplicate revision bindings
 // cannot activate a partially valid profile.
 [[nodiscard]] TitleProfileResolution ResolveTitleProfile(std::span<const TitleProfile> profiles,
                                                          const XexIdentity &observed) noexcept;

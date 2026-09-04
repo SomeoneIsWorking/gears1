@@ -27,7 +27,7 @@
 #include <memory>
 #include <map>
 
-#include <byteswap.h>
+#include "byte_order.h"
 #include <lucent/log.h>
 
 #include "guest_filesystem.h"
@@ -47,34 +47,34 @@ constexpr uint32_t kSignedInLocally = 1;
 // mistaken for a real Live account.
 constexpr uint64_t kOfflineXuid = 0xE000000000000001ull;
 
-void Store32(uint8_t* base, uint32_t address, uint32_t value)
+void Store32(uint8_t *base, uint32_t address, uint32_t value)
 {
     if (address != 0)
-        *reinterpret_cast<uint32_t*>(base + address) = ByteSwap(value);
+        *reinterpret_cast<uint32_t *>(base + address) = ByteSwap(value);
 }
 
-void Store64(uint8_t* base, uint32_t address, uint64_t value)
+void Store64(uint8_t *base, uint32_t address, uint64_t value)
 {
     if (address != 0)
-        *reinterpret_cast<uint64_t*>(base + address) = ByteSwap(value);
+        *reinterpret_cast<uint64_t *>(base + address) = ByteSwap(value);
 }
 
-uint32_t Load32(const uint8_t* base, uint32_t address)
+uint32_t Load32(const uint8_t *base, uint32_t address)
 {
     if (address == 0)
         return 0;
-    return ByteSwap(*reinterpret_cast<const uint32_t*>(base + address));
+    return ByteSwap(*reinterpret_cast<const uint32_t *>(base + address));
 }
 
-void Store16(uint8_t* base, uint32_t address, uint16_t value)
+void Store16(uint8_t *base, uint32_t address, uint16_t value)
 {
     if (address != 0)
-        *reinterpret_cast<uint16_t*>(base + address) = ByteSwap(value);
+        *reinterpret_cast<uint16_t *>(base + address) = ByteSwap(value);
 }
 
 // X_INPUT_GAMEPAD, 12 bytes: buttons (BE u16), the two triggers as bytes, then
 // four big-endian signed thumb axes.
-void StoreGamepad(uint8_t* base, uint32_t address, const gears::PadState& pad)
+void StoreGamepad(uint8_t *base, uint32_t address, const gears::PadState &pad)
 {
     Store16(base, address + 0, pad.buttons);
     base[address + 2] = pad.leftTrigger;
@@ -116,10 +116,9 @@ uint32_t g_nextEnumerator = 0xE0000000;
 // become a path. This string comes from the guest and is about to name a
 // directory on the player's disk, so anything that is not plainly a file name
 // is dropped rather than escaped.
-std::string SafeContentFileName(const uint8_t* base, uint32_t contentDataPtr)
+std::string SafeContentFileName(const uint8_t *base, uint32_t contentDataPtr)
 {
-    const char* raw = reinterpret_cast<const char*>(
-        base + contentDataPtr + 0x108);
+    const char *raw = reinterpret_cast<const char *>(base + contentDataPtr + 0x108);
     std::string name;
     for (size_t i = 0; i < gears::kContentFileNameBytes && raw[i]; ++i)
     {
@@ -131,13 +130,13 @@ std::string SafeContentFileName(const uint8_t* base, uint32_t contentDataPtr)
 } // namespace
 
 // DWORD XamUserGetSigninState(DWORD UserIndex)
-void __imp__XamUserGetSigninState(PPCContext& __restrict ctx, uint8_t*)
+void __imp__XamUserGetSigninState(PPCContext &__restrict ctx, uint8_t *)
 {
     ctx.r3.u64 = IsLocalUser(ctx.r3.u32) ? kSignedInLocally : 0;
 }
 
 // DWORD XamUserGetXUID(DWORD UserIndex, DWORD Type, PXUID Xuid)
-void __imp__XamUserGetXUID(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamUserGetXUID(PPCContext &__restrict ctx, uint8_t *base)
 {
     if (!IsLocalUser(ctx.r3.u32))
     {
@@ -155,7 +154,7 @@ void __imp__XamUserGetXUID(PPCContext& __restrict ctx, uint8_t* base)
 // short buffer. An observed save-path caller relies on a truncated suffix;
 // returning ERROR_INSUFFICIENT_BUFFER leaves the path incomplete. The rule
 // itself is in gears::CopyGamertag.
-void __imp__XamUserGetName(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamUserGetName(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t userIndex = ctx.r3.u32;
     const uint32_t buffer = ctx.r4.u32;
@@ -185,7 +184,7 @@ void __imp__XamUserGetName(PPCContext& __restrict ctx, uint8_t* base)
     // status is not a guess about what XAM returns for it -- there is no
     // caller passing null, so there is nothing to be faithful to.
     if (buffer != 0)
-        gears::CopyGamertag(reinterpret_cast<char*>(base + buffer), length);
+        gears::CopyGamertag(reinterpret_cast<char *>(base + buffer), length);
 
     ctx.r3.u64 = gears::kErrorSuccess;
 }
@@ -194,14 +193,14 @@ void __imp__XamUserGetName(PPCContext& __restrict ctx, uint8_t* base)
 //
 // Every privilege this matters for is an online one, and there is no Live
 // session to grant them. Denying is the same answer an offline profile gets.
-void __imp__XamUserCheckPrivilege(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamUserCheckPrivilege(PPCContext &__restrict ctx, uint8_t *base)
 {
     Store32(base, ctx.r5.u32, 0);
     ctx.r3.u64 = IsLocalUser(ctx.r3.u32) ? gears::kErrorSuccess : gears::kErrorNoSuchUser;
 }
 
 // DWORD XamUserAreUsersFriends(DWORD UserIndex, PDWORD, DWORD, PBOOL Result, PVOID)
-void __imp__XamUserAreUsersFriends(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamUserAreUsersFriends(PPCContext &__restrict ctx, uint8_t *base)
 {
     Store32(base, ctx.r6.u32, 0);
     ctx.r3.u64 = gears::kErrorSuccess;
@@ -216,7 +215,7 @@ void __imp__XamUserAreUsersFriends(PPCContext& __restrict ctx, uint8_t* base)
 // one, is told the size it needs; a caller with room gets a result whose
 // per-setting source says whether the value was ever set, which is how the
 // title tells "no value" from "the value is zero".
-void __imp__XamUserReadProfileSettings(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamUserReadProfileSettings(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t settingCount = ctx.r7.u32;
     const uint32_t settingIdsPtr = ctx.r8.u32;
@@ -225,8 +224,7 @@ void __imp__XamUserReadProfileSettings(PPCContext& __restrict ctx, uint8_t* base
 
     // The console bounds this, and a count outside it would size a buffer from
     // a number the title never meant as one.
-    if (settingCount < 1 || settingCount > 32 || bufferSizePtr == 0 ||
-        settingIdsPtr == 0)
+    if (settingCount < 1 || settingCount > 32 || bufferSizePtr == 0 || settingIdsPtr == 0)
     {
         ctx.r3.u64 = gears::kErrorInvalidParameter;
         return;
@@ -236,8 +234,7 @@ void __imp__XamUserReadProfileSettings(PPCContext& __restrict ctx, uint8_t* base
     for (uint32_t i = 0; i < settingCount; ++i)
         ids[i] = Load32(base, settingIdsPtr + i * 4);
 
-    const uint32_t needed =
-        gears::ProfileReadBufferSize(ids.data(), settingCount);
+    const uint32_t needed = gears::ProfileReadBufferSize(ids.data(), settingCount);
     const uint32_t bufferSize = Load32(base, bufferSizePtr);
 
     if (buffer == 0 || bufferSize < needed)
@@ -247,8 +244,8 @@ void __imp__XamUserReadProfileSettings(PPCContext& __restrict ctx, uint8_t* base
         return;
     }
 
-    gears::WriteProfileReadResult(base, buffer, bufferSize, gears::Profile(),
-                                  ids.data(), settingCount);
+    gears::WriteProfileReadResult(base, buffer, bufferSize, gears::Profile(), ids.data(),
+                                  settingCount);
     lucent::debug("xam", "read {} profile setting(s)", settingCount);
     ctx.r3.u64 = gears::kErrorSuccess;
 }
@@ -260,7 +257,7 @@ void __imp__XamUserReadProfileSettings(PPCContext& __restrict ctx, uint8_t* base
 // Settings now have somewhere to go: they are stored and written to disk, so a
 // player's choices survive the run. Refusing this was what made the profile
 // read-only in practice.
-void __imp__XamUserWriteProfileSettings(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamUserWriteProfileSettings(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t settingCount = ctx.r4.u32;
     const uint32_t settings = ctx.r5.u32;
@@ -291,15 +288,15 @@ void __imp__XamUserWriteProfileSettings(PPCContext& __restrict ctx, uint8_t* bas
             const uint32_t data = Load32(base, record + 36);
             if (data != 0 && size != 0 && size <= 0x1000)
                 gears::Profile().SetBinary(id,
-                    std::vector<uint8_t>(base + data, base + data + size));
+                                           std::vector<uint8_t>(base + data, base + data + size));
             break;
         }
 
         default:
             // Storing a type this runtime cannot round-trip would lose it
             // silently on the next read; saying so keeps the gap visible.
-            lucent::debug("xam", "profile setting {:#x} has unsupported type {}",
-                          id, uint32_t(type));
+            lucent::debug("xam", "profile setting {:#x} has unsupported type {}", id,
+                          uint32_t(type));
             break;
         }
     }
@@ -309,7 +306,7 @@ void __imp__XamUserWriteProfileSettings(PPCContext& __restrict ctx, uint8_t* bas
     ctx.r3.u64 = gears::kErrorSuccess;
 }
 
-void __imp__XamUserCreateStatsEnumerator(PPCContext& __restrict ctx, uint8_t*)
+void __imp__XamUserCreateStatsEnumerator(PPCContext &__restrict ctx, uint8_t *)
 {
     ctx.r3.u64 = gears::kErrorNotFound; // leaderboards are a Live service
 }
@@ -322,7 +319,7 @@ void __imp__XamUserCreateStatsEnumerator(PPCContext& __restrict ctx, uint8_t*)
 // really produces and every title handles.
 
 // DWORD XamInputGetState(DWORD UserIndex, DWORD Flags, PXINPUT_STATE State)
-void __imp__XamInputGetState(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamInputGetState(PPCContext &__restrict ctx, uint8_t *base)
 {
     // A scripted run has no event loop of its own; the guest's own poll is what
     // advances it, which is also what makes the timings line up with the frames
@@ -361,7 +358,7 @@ void __imp__XamInputGetState(PPCContext& __restrict ctx, uint8_t* base)
 }
 
 // DWORD XamInputGetCapabilities(DWORD UserIndex, DWORD Flags, PXINPUT_CAPABILITIES Caps)
-void __imp__XamInputGetCapabilities(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamInputGetCapabilities(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t userIndex = ctx.r3.u32;
     const uint32_t capsAddress = ctx.r5.u32;
@@ -392,12 +389,11 @@ void __imp__XamInputGetCapabilities(PPCContext& __restrict ctx, uint8_t* base)
 // DWORD XamInputSetState(DWORD UserIndex, DWORD Unknown, PXINPUT_VIBRATION Vibration)
 // Accepted and dropped: there is no motor to drive, and failing the call would
 // be a lie about a pad we have just reported as connected and capable.
-void __imp__XamInputSetState(PPCContext& __restrict ctx, uint8_t*)
+void __imp__XamInputSetState(PPCContext &__restrict ctx, uint8_t *)
 {
     const uint32_t slot = (ctx.r3.u32 & kUserIndexAny) == kUserIndexAny ? kLocalUser : ctx.r3.u32;
-    ctx.r3.u64 = (IsLocalUser(slot) && gears::PadConnected())
-        ? gears::kErrorSuccess
-        : gears::kErrorDeviceNotConnected;
+    ctx.r3.u64 = (IsLocalUser(slot) && gears::PadConnected()) ? gears::kErrorSuccess
+                                                              : gears::kErrorDeviceNotConnected;
 }
 
 // The console's storage device, which on a PC is a directory.
@@ -418,7 +414,7 @@ constexpr uint32_t kDeviceId = gears::kContentDeviceId;
 constexpr uint32_t kDeviceTypeHdd = 1;
 } // namespace
 
-void __imp__XamContentGetDeviceState(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamContentGetDeviceState(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t deviceId = ctx.r3.u32;
     const uint32_t statePtr = ctx.r4.u32;
@@ -428,11 +424,11 @@ void __imp__XamContentGetDeviceState(PPCContext& __restrict ctx, uint8_t* base)
         return;
     }
     if (statePtr != 0)
-        *reinterpret_cast<uint32_t*>(base + statePtr) = 0; // no error
+        *reinterpret_cast<uint32_t *>(base + statePtr) = 0; // no error
     ctx.r3.u64 = gears::kErrorSuccess;
 }
 
-void __imp__XamContentGetDeviceData(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamContentGetDeviceData(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t deviceId = ctx.r3.u32;
     const uint32_t dataPtr = ctx.r4.u32;
@@ -461,15 +457,15 @@ void __imp__XamContentGetDeviceData(PPCContext& __restrict ctx, uint8_t* base)
     const uint64_t total = kDeviceBytes;
     const uint64_t free = ec ? kDeviceBytes : std::min<uint64_t>(kDeviceBytes, space.available);
 
-    uint8_t* d = base + dataPtr;
-    *reinterpret_cast<uint32_t*>(d + 0) = ByteSwap(kDeviceId);
-    *reinterpret_cast<uint32_t*>(d + 4) = ByteSwap(kDeviceTypeHdd);
-    *reinterpret_cast<uint64_t*>(d + 8) = ByteSwap(total);
-    *reinterpret_cast<uint64_t*>(d + 16) = ByteSwap(free);
+    uint8_t *d = base + dataPtr;
+    *reinterpret_cast<uint32_t *>(d + 0) = ByteSwap(kDeviceId);
+    *reinterpret_cast<uint32_t *>(d + 4) = ByteSwap(kDeviceTypeHdd);
+    *reinterpret_cast<uint64_t *>(d + 8) = ByteSwap(total);
+    *reinterpret_cast<uint64_t *>(d + 16) = ByteSwap(free);
     // A UTF-16 name, which is what the console's dashboard would show.
     static const char16_t kName[] = u"PC Storage";
     for (size_t i = 0; i < std::size(kName); ++i)
-        *reinterpret_cast<uint16_t*>(d + 24 + i * 2) = ByteSwap(uint16_t(kName[i]));
+        *reinterpret_cast<uint16_t *>(d + 24 + i * 2) = ByteSwap(uint16_t(kName[i]));
 
     ctx.r3.u64 = gears::kErrorSuccess;
 }
@@ -482,7 +478,7 @@ void __imp__XamContentGetDeviceData(PPCContext& __restrict ctx, uint8_t* base)
 // Walks the player's saves. This used to report no storage device, which meant
 // a title could never discover a save it had written -- the write path existed
 // and nothing could find its results.
-void __imp__XamContentCreateEnumerator(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamContentCreateEnumerator(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t contentType = ctx.r5.u32;
     const uint32_t itemCount = ctx.r7.u32;
@@ -496,8 +492,7 @@ void __imp__XamContentCreateEnumerator(PPCContext& __restrict ctx, uint8_t* base
     }
 
     auto enumerator = std::make_unique<ContentEnumerator>();
-    enumerator->items = gears::EnumerateContent(gears::Files().SaveDirectory(),
-                                                contentType);
+    enumerator->items = gears::EnumerateContent(gears::Files().SaveDirectory(), contentType);
     enumerator->itemsPerCall = itemCount;
 
     // The caller sizes its buffer from this, so it must be what a single call
@@ -522,8 +517,8 @@ void __imp__XamContentCreateEnumerator(PPCContext& __restrict ctx, uint8_t* base
     }
     Store32(base, handlePtr, handle);
 
-    lucent::debug("xam", "content enumerator {:#x}: {} item(s) of type {:#x}",
-                  handle, itemsFound, contentType);
+    lucent::debug("xam", "content enumerator {:#x}: {} item(s) of type {:#x}", handle, itemsFound,
+                  contentType);
     ctx.r3.u64 = gears::kErrorSuccess;
 }
 
@@ -534,7 +529,7 @@ void __imp__XamContentCreateEnumerator(PPCContext& __restrict ctx, uint8_t* base
 // opens files as "SAVE:\...". So creating content is, on a PC, making a
 // directory and mounting it under that name -- after which the ordinary file
 // path does the rest.
-void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamContentCreateEx(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t rootNamePtr = ctx.r4.u32;
     const uint32_t contentDataPtr = ctx.r5.u32;
@@ -551,15 +546,14 @@ void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
     // payload. The observed asynchronous caller contract requires IO_PENDING,
     // followed by the completion status carried by the overlapped block
     // (catalog #45).
-    const uint32_t overlapped =
-        gears::GuestStackArgument32(base, ctx.r1.u32, 8);
+    const uint32_t overlapped = gears::GuestStackArgument32(base, ctx.r1.u32, 8);
 
     if (rootNamePtr == 0)
     {
         ctx.r3.u64 = gears::kErrorInvalidParameter;
         return;
     }
-    const std::string rootName(reinterpret_cast<const char*>(base + rootNamePtr));
+    const std::string rootName(reinterpret_cast<const char *>(base + rootNamePtr));
 
     // XCONTENT_DATA is device id, content type, then a UTF-16 display name and
     // an ASCII file name. The file name is what distinguishes one save from
@@ -567,7 +561,7 @@ void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
     std::string fileName = "savedata";
     if (contentDataPtr != 0)
     {
-        const char* raw = reinterpret_cast<const char*>(base + contentDataPtr + 8 + 128 * 2);
+        const char *raw = reinterpret_cast<const char *>(base + contentDataPtr + 8 + 128 * 2);
         std::string candidate;
         for (size_t i = 0; i < 42 && raw[i]; ++i)
         {
@@ -591,16 +585,16 @@ void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
     // passes flags 0x13, whose low nibble is 3 (OPEN_EXISTING); the previous
     // table called 2 OPEN_EXISTING, so that request matched nothing and was
     // answered as a creation.
-    const gears::ContentDecision decision =
-        gears::DecideContentCreate(flags, existed);
-    lucent::info("xam", "XamContentCreateEx('{}') flags {:#x} (disposition {}),"
-        " content {} -> {}", fileName, flags, flags & 0xF,
-        existed ? "exists" : "absent",
-        decision == gears::ContentDecision::Open ? "open"
-        : decision == gears::ContentDecision::Create ? "create"
-        : decision == gears::ContentDecision::NotFound ? "NOT FOUND"
-        : decision == gears::ContentDecision::AlreadyExists ? "already exists"
-        : "invalid");
+    const gears::ContentDecision decision = gears::DecideContentCreate(flags, existed);
+    lucent::info("xam",
+                 "XamContentCreateEx('{}') flags {:#x} (disposition {}),"
+                 " content {} -> {}",
+                 fileName, flags, flags & 0xF, existed ? "exists" : "absent",
+                 decision == gears::ContentDecision::Open            ? "open"
+                 : decision == gears::ContentDecision::Create        ? "create"
+                 : decision == gears::ContentDecision::NotFound      ? "NOT FOUND"
+                 : decision == gears::ContentDecision::AlreadyExists ? "already exists"
+                                                                     : "invalid");
 
     uint32_t status = gears::kErrorSuccess;
     switch (decision)
@@ -637,7 +631,7 @@ void __imp__XamContentCreateEx(PPCContext& __restrict ctx, uint8_t* base)
 // Everything on this machine was created by its one local profile, so the
 // player always owns their own saves -- which is what lets a title offer to
 // overwrite or delete them.
-void __imp__XamContentGetCreator(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamContentGetCreator(PPCContext &__restrict ctx, uint8_t *base)
 {
     Store32(base, ctx.r5.u32, 1); // the local user is the creator
     Store64(base, ctx.r6.u32, kOfflineXuid);
@@ -649,7 +643,7 @@ void __imp__XamContentGetCreator(PPCContext& __restrict ctx, uint8_t* base)
 //
 // A player deleting a save from inside the game. This removes the directory
 // the content lives in, which is the same thing the console does to a package.
-void __imp__XamContentDelete(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamContentDelete(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t contentDataPtr = ctx.r4.u32;
     if (contentDataPtr == 0)
@@ -676,8 +670,7 @@ void __imp__XamContentDelete(PPCContext& __restrict ctx, uint8_t* base)
     const auto removed = std::filesystem::remove_all(dir, ec);
     if (ec)
     {
-        lucent::warn("xam", "could not delete content '{}': {}", fileName,
-                     ec.message());
+        lucent::warn("xam", "could not delete content '{}': {}", fileName, ec.message());
         ctx.r3.u64 = gears::kErrorAccessDenied;
         return;
     }
@@ -688,10 +681,10 @@ void __imp__XamContentDelete(PPCContext& __restrict ctx, uint8_t* base)
 
 // Closing content unmounts its root, so a later open of the same name cannot
 // reach the previous save's directory by accident.
-void __imp__XamContentClose(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamContentClose(PPCContext &__restrict ctx, uint8_t *base)
 {
     if (const uint32_t rootNamePtr = ctx.r3.u32; rootNamePtr != 0)
-        gears::Files().Unmount(reinterpret_cast<const char*>(base + rootNamePtr));
+        gears::Files().Unmount(reinterpret_cast<const char *>(base + rootNamePtr));
     ctx.r3.u64 = gears::kErrorSuccess;
 }
 
@@ -703,15 +696,15 @@ void __imp__XamContentClose(PPCContext& __restrict ctx, uint8_t* base)
 // XamShowDeviceSelectorUI sat here quietly while the title, unable to obtain a
 // storage device, failed sixty seconds later and four subsystems away. Once
 // each, so a title that polls one cannot drown the log.
-#define GEARS_XAM_NO_UI(name)                                            \
-    void __imp__##name(PPCContext& __restrict ctx, uint8_t*)             \
-    {                                                                    \
-        static std::atomic<bool> reported{false};                        \
-        if (!reported.exchange(true))                                    \
-            lucent::warn("xam", #name " refused: this runtime has no"    \
-                " system UI. If the title misbehaves after this, that"   \
-                " refusal is a candidate for why");                      \
-        ctx.r3.u64 = gears::kErrorAccessDenied;                          \
+#define GEARS_XAM_NO_UI(name)                                                                      \
+    void __imp__##name(PPCContext &__restrict ctx, uint8_t *)                                      \
+    {                                                                                              \
+        static std::atomic<bool> reported{false};                                                  \
+        if (!reported.exchange(true))                                                              \
+            lucent::warn("xam", #name " refused: this runtime has no"                              \
+                                      " system UI. If the title misbehaves after this, that"       \
+                                      " refusal is a candidate for why");                          \
+        ctx.r3.u64 = gears::kErrorAccessDenied;                                                    \
     }
 
 // DWORD XamShowDeviceSelectorUI(DWORD UserIndex, DWORD ContentType,
@@ -726,7 +719,7 @@ void __imp__XamContentClose(PPCContext& __restrict ctx, uint8_t* base)
 // Refusing it was not harmless. A title that cannot obtain a device has no
 // destination for a save, and carries on with a save context it never
 // established.
-void __imp__XamShowDeviceSelectorUI(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamShowDeviceSelectorUI(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t deviceIdPtr = ctx.r7.u32;
     const uint32_t overlapped = ctx.r8.u32;
@@ -745,13 +738,12 @@ void __imp__XamShowDeviceSelectorUI(PPCContext& __restrict ctx, uint8_t* base)
     gears::BroadcastNotification(gears::kXNotificationSystemUI, 1);
     Store32(base, deviceIdPtr, gears::kContentDeviceId);
     lucent::info("xam", "storage device selected automatically: this machine has"
-        " one place for saves, so there is nothing to ask");
+                        " one place for saves, so there is nothing to ask");
 
     // Asynchronous on the console: a caller waiting on the overlapped learns
     // the outcome only through it.
     gears::CompleteOverlapped(base, overlapped, gears::kErrorSuccess);
-    gears::ScheduleNotification(gears::kXNotificationSystemUI, 0,
-        std::chrono::milliseconds(200));
+    gears::ScheduleNotification(gears::kXNotificationSystemUI, 0, std::chrono::milliseconds(200));
     ctx.r3.u64 = overlapped != 0 ? gears::kErrorIoPending : gears::kErrorSuccess;
 }
 
@@ -777,7 +769,7 @@ GEARS_XAM_NO_UI(XamShowSigninUI)
 // is how an exhausted enumeration ends normally -- so a caller that loops until
 // it sees this terminates on the first pass rather than on an error it may not
 // check for.
-void __imp__XamEnumerate(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XamEnumerate(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t handle = ctx.r3.u32;
     const uint32_t buffer = ctx.r5.u32;
@@ -793,7 +785,7 @@ void __imp__XamEnumerate(PPCContext& __restrict ctx, uint8_t* base)
         return;
     }
 
-    ContentEnumerator& enumerator = *it->second;
+    ContentEnumerator &enumerator = *it->second;
 
     // "No more items" is how an exhausted enumeration ends normally, so a
     // caller looping until it sees this terminates rather than treating the end
@@ -806,8 +798,7 @@ void __imp__XamEnumerate(PPCContext& __restrict ctx, uint8_t* base)
     }
 
     uint32_t written = 0;
-    while (written < enumerator.itemsPerCall &&
-           enumerator.next < enumerator.items.size() &&
+    while (written < enumerator.itemsPerCall && enumerator.next < enumerator.items.size() &&
            (written + 1) * gears::kContentDataSize <= length)
     {
         gears::WriteContentData(base, buffer + written * gears::kContentDataSize,

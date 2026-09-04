@@ -7,12 +7,9 @@
 // nice-to-have on a port: the fault IS the observation, and without one every
 // run costs the same and returns nothing.
 //
-// The handler cannot reach a PPCContext -- the recompiler passes it by
-// parameter, so there is no thread-local to read -- but it can reach three
-// things that between them name the fault: the address, which guest thread was
-// running, and the HOST backtrace. The last is the valuable one, because the
-// recompiled functions are ordinary host functions named after their guest
-// addresses, so a host backtrace through them is the guest call chain.
+// The handler reports the address, current guest-thread label, and host
+// backtrace. Guest register/backtrace reporting belongs at the future x360port
+// execution boundary where Xenia ThreadState is available.
 #pragma once
 
 #include <cstdint>

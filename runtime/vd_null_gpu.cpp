@@ -17,7 +17,7 @@
 #include <mutex>
 #include <thread>
 
-#include <byteswap.h>
+#include "byte_order.h"
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -29,10 +29,10 @@
 #include "gpu_present.h"
 #include "gpu_packet_memory.h"
 #include "gpu_register_watch.h"
-#include "gpu_shader_load_watch.h"
 #include "gpu_shader_module_observation.h"
 #include "gpu_swap_packet.h"
 #include "input.h"
+#include "missing_x360port_executor.h"
 #include "debug_http.h"
 #include "graphics_probe.h"
 #include "graphics_probe_render.h"
@@ -125,7 +125,6 @@ struct InterruptThreadState
         if (!ready || g_graphicsInterruptCallback == 0)
             return;
         std::lock_guard<std::mutex> lock(g_interruptMutex);
-        uint8_t *base = gears::Memory().Base();
         *gears::Memory().Translate<uint8_t>(block.pcrAddress + kPcrCpuNumber) = uint8_t(cpu);
         ctx.r1.u32 = block.stackBase - 0x100;
         ctx.r3.u32 = source;
@@ -150,7 +149,7 @@ struct InterruptThreadState
                 }
             }
         }
-        (PPC_LOOKUP_FUNC(base, g_graphicsInterruptCallback))(ctx, base);
+        gears::RefuseMissingX360PortExecutor(g_graphicsInterruptCallback);
     }
 };
 
@@ -359,10 +358,8 @@ void ShaderCaptureInit()
     if (cap.ready)
         return;
     cap.ready = true;
-    // Capturing the microcode is not optional: the renderer translates the pair
-    // bound at each draw, and this is how that microcode is kept in memory. What
-    // GEARS_SHADER_CAPTURE controls is whether a COPY is also written to disk for
-    // the offline tools (tools/xenos_translate, tools/compare_bound_shaders.py).
+    // Bound microcode is always retained in memory. SHADER_CAPTURE additionally
+    // publishes a copy for offline inspection.
     cap.enabled = true;
     cap.writeFiles = lucent::config::flag("SHADER_CAPTURE");
     if (!cap.writeFiles)
@@ -370,8 +367,14 @@ void ShaderCaptureInit()
     const std::string &dir = lucent::config::text("SHADER_CAPTURE_DIR");
     if (!dir.empty())
         cap.dir = dir;
-    if (std::system(("mkdir -p '" + cap.dir + "'").c_str()) != 0)
-        lucent::warn("gpu", "shader capture: cannot create {}", cap.dir);
+    std::error_code error;
+    std::filesystem::create_directories(cap.dir, error);
+    if (error)
+    {
+        cap.writeFiles = false;
+        lucent::warn("gpu", "shader capture: cannot create {}: {}", cap.dir, error.message());
+        return;
+    }
     lucent::info("gpu", "shader capture armed (PM4 IM_LOAD), writing microcode to {}", cap.dir);
 }
 
@@ -1166,19 +1169,16 @@ struct CommandProcessor
         lucent::info("gpu", "  bool file non-zero dwords: {}/8; loop file non-zero: {}/32",
                      nonZeroBool, nonZeroLoop);
 
-        // Raw register-file snapshot for the offline system-constants verifier
-        // (tools/system_constants). It reloads these dwords into a Xenia
-        // RegisterFile and runs Xenia's own draw_util + SystemConstants
-        // derivation against them, so the NDC/index-endian bytes it produces are
-        // checked against the actual register state of this draw rather than an
-        // assumed one. The whole 0x8000-dword space is written little-endian;
-        // Xenia's RegisterFile only spans the first 0x5003, which is a prefix.
+        // Snapshot the little-endian register-file prefix consumed by the
+        // offline system-constants verifier.
         {
             namespace fs = std::filesystem;
-            const char *dir = std::getenv("GEARS_CONST_DUMP_DIR");
-            fs::path outdir = dir ? fs::path(dir) : fs::path("scratch/bin");
+            const std::string &dir = lucent::config::text("CONST_DUMP_DIR");
+            fs::path outdir = dir.empty() ? fs::path("scratch/bin") : fs::path(dir);
             std::error_code ec;
             fs::create_directories(outdir, ec);
+            if (ec)
+                lucent::warn("gpu", "  cannot create {}: {}", outdir.string(), ec.message());
             const fs::path out = outdir / "regfile_hotpair.bin";
             std::ofstream f(out, std::ios::binary);
             if (f)
@@ -1968,8 +1968,7 @@ struct CommandProcessor
         const uint32_t indexSizeBit = (initiator >> 11) & 0x1; // 0=int16,1=int32
         const uint32_t numIndices = (initiator >> 16) & 0xFFFF;
 
-        // Gate on a populated profile-selected fetch so the one-shot does not
-        // latch on an early degenerate draw.
+        // Require the profile-selected fetch to be populated.
         const uint32_t fetchBase = kConstBaseFetch + representative->vertexFetchIndex * 2;
         const uint32_t vf0 = g_gpuRegisters[fetchBase];
         const uint32_t vf1 = g_gpuRegisters[fetchBase + 1];
@@ -1978,10 +1977,12 @@ struct CommandProcessor
         drawCaptureDone = true;
 
         namespace fs = std::filesystem;
-        const char *dir = std::getenv("GEARS_DRAW_CAPTURE_DIR");
-        fs::path outdir = dir ? fs::path(dir) : fs::path("scratch/draw-params");
+        const std::string &dir = lucent::config::text("DRAW_CAPTURE_DIR");
+        fs::path outdir = dir.empty() ? fs::path("scratch/draw-params") : fs::path(dir);
         std::error_code ec;
         fs::create_directories(outdir, ec);
+        if (ec)
+            lucent::warn("gpu", "cannot create {}: {}", outdir.string(), ec.message());
         std::ofstream rep(outdir / "hot_draw.txt");
 
         auto emit = [&](const std::string &s)
@@ -2633,7 +2634,7 @@ struct CommandProcessor
                     line.add(" |");
                     for (uint32_t w = usable; w < usable + 8; ++w)
                         line.add(" {:08x}", fetch(w));
-                    // A dropped dereference -- the recompiler emitting the
+                    // A dropped dereference in guest execution -- the value
                     // ADDRESS of a float where the guest loads the float --
                     // would leave the wanted value sitting AT the address, so
                     // read it. If these words are not a plausible float the
@@ -2921,10 +2922,8 @@ bool CommitDeviceWindow(GuestMemory &memory)
 
     // One register in this window is not inert, because leaving it zero is not
     // a neutral choice.
-    //
     // Bit 0 of the vblank status register gates the observed vblank interrupt
     // path. Guest code samples but never writes it, so the GPU owns the value.
-    //
     // The runtime is the GPU here and it does deliver vblank, at 60 Hz from a
     // host thread. Reporting the bit clear while delivering the interrupt
     // describes a machine that cannot exist. It stays set rather than
@@ -2935,8 +2934,8 @@ bool CommitDeviceWindow(GuestMemory &memory)
     constexpr uint32_t kVblankStatusRegister = 0x7FC86544;
     *memory.Translate<uint32_t>(kVblankStatusRegister) = ByteSwap(1u);
 
-    // Frame pacing observes scanline progress relative to the vertical total.
-    // A zero total is invalid; the reported 1280x720p60 mode uses 750 lines
+    // Frame pacing observes scanline progress relative to the vertical total;
+    // the reported 1280x720p60 mode uses 750 lines
     // (CEA-861). A zero scanline models the display in vblank and agrees with
     // the status bit above. The guest observes both words in guest byte order.
     constexpr uint32_t kVerticalTotalRegister = 0x7FC86584;
@@ -2951,9 +2950,9 @@ bool CommitDeviceWindow(GuestMemory &memory)
 
 void __imp__VdInitializeEngines(PPCContext &__restrict ctx, uint8_t *)
 {
-    if (const char *watch = getenv("GEARS_PM4_WATCH"))
+    if (const std::string &watch = lucent::config::text("PM4_WATCH"); !watch.empty())
     {
-        g_pm4WatchAddress = uint32_t(strtoul(watch, nullptr, 16));
+        g_pm4WatchAddress = uint32_t(strtoul(watch.c_str(), nullptr, 16));
         lucent::info("gpu", "command stream will be traced for writes to {:#x}", g_pm4WatchAddress);
     }
 
@@ -3124,7 +3123,7 @@ void __imp__VdSetGraphicsInterruptCallback(PPCContext &__restrict ctx, uint8_t *
     g_graphicsInterruptCallback = ctx.r3.u32;
     g_graphicsInterruptContext = ctx.r4.u32;
 
-    if (getenv("GEARS_NO_VBLANK") != nullptr)
+    if (lucent::config::flag("NO_VBLANK"))
     {
         lucent::warn("gpu", "GEARS_NO_VBLANK set: interrupt callback {:#x} will never fire",
                      g_graphicsInterruptCallback);
@@ -3150,7 +3149,6 @@ void __imp__VdSetGraphicsInterruptCallback(PPCContext &__restrict ctx, uint8_t *
 void __imp__VdSwap(PPCContext &__restrict ctx, uint8_t *)
 {
     const uint64_t frame = g_frameCount.fetch_add(1) + 1;
-    gears::NoteShaderLoadWatchGuestSwap(static_cast<uint32_t>(frame), g_ringBuffer.base);
     // The guest's clock advances HERE only when the trigger is `present`.
     // EXACTLY ONE trigger drives it -- two would double the step and make the
     // guest's second read of the same frame's time disagree with its first.

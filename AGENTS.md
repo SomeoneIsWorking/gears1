@@ -1,9 +1,9 @@
 # GearsUE3 engine-port guidance
 
 The repository-wide rules in `../../AGENTS.md` apply here. Read
-`../../shared/jit-common/docs/migration.md`, `docs/project-state.md`, and
-`docs/codemap.md` before changing a subsystem. Update the nearest authority in
-the same change when its answer changes.
+`docs/project-state.md`, `docs/re-frontier.md`, and `docs/codemap.md` before
+changing a subsystem. Update the nearest authority in the same change when its
+answer changes.
 
 ## Product target
 
@@ -20,8 +20,11 @@ USER 2026-09-04: "Gears still needs its own GearsUE3 or maybe we need a x360ue3 
 GearsUE3 is one native/dynarec engine port for the Xbox 360 Gears of War UE3
 titles. The two cooperating execution paths are measured native overrides and
 an emulated path that executes every other guest instruction through Xenia's
-existing x64 or A64 Xenon dynarec. The gameplay product contains no interpreter
-and has no interpreter or generated-code fallback.
+existing x64 or A64 Xenon dynarec by default. `x360port` may use a bounded,
+reason-labelled interpreter fallback only after compilation failure, an
+unsupported guest instruction, or unsafe generated host execution. Explicit
+interpreter mode is diagnostic-only; fallback coverage is never gameplay or
+performance proof.
 
 The dependency direction has three deliberate layers:
 
@@ -57,11 +60,11 @@ is deliberately smaller than boot: execute the real leaf at `0x8222E868`, bind
 and call `DbgPrint` through a typed import, and prove disabled, enabled, and
 `super` override paths through Xenia. Disabled and `super` both execute the
 original guest body through the dynarec; `super` suppresses only the current
-override for one call. Before implementing this discriminator, preserve
-independently useful evidence and native owners, then delete XenonRecomp,
-generated PPC modules, function maps, generator-only configuration/tests, and
-their methodology. The product may fail at one explicit missing `x360port`
-boundary until the replacement is wired; the static executable is never kept
+override for one call. The independently useful evidence and native owners are
+preserved; the retired translator, generated PPC modules, function maps, generator-only
+configuration/tests, precomputed dispatch, and their methodology are deleted and
+must not return. The product may fail at one explicit missing `x360port`
+boundary until the replacement is wired; the old executable is never kept
 as a bridge or oracle.
 
 Guest addresses, image identity, shader hashes, menu walks, and diagnostics
@@ -78,7 +81,7 @@ The public repository contains independently authored source, compatible
 open-source dependencies with their required notices, and factual
 interoperability metadata only. It must not contain or fetch UE3 source, game
 code/assets, extracted files, decoded shader listings, decompiler output,
-generated guest bodies, or caches derived from a title. A user-owned disc/image
+derived guest source, or caches derived from a title. A user-owned disc/image
 is the only copyrighted provisioning input.
 
 Disc-derived output belongs under ignored `scratch/titles/<fingerprint>/` and
@@ -93,7 +96,7 @@ USER 2026-08-22: "don't do windowed runs please always run headless"
 Every run started by an agent for verification, profiling, capture, or diagnosis
 must be headless. Do not open a game window for a smoke test. During the
 migration, do not invoke any path that builds, generates, or launches the
-XenonRecomp product. New comparison evidence comes from the independent Xenia
+retired generated-code product. New comparison evidence comes from the independent Xenia
 oracle, hardware, binary analysis, or a separately built diagnostic target.
 
 ## Python tooling
@@ -119,7 +122,7 @@ in `x360ue3`; Gears-specific behavior stays in `GearsUE3` here.
 - `run.sh` remains a slim locked-environment shim. Its next shipping route must
   provision the authenticated runtime image and launch the x360port/Xenia
   product without offline translation. Until that route exists, documentation
-  must not present the static launcher as the product.
+  must not present an obsolete launcher as the product.
 - A title adapter owns exact image identity, semantic override bindings,
   title-specific probes, pass hashes, save namespace, and scripted navigation.
   Unknown revisions refuse rather than falling back.

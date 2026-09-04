@@ -20,7 +20,7 @@ discarding the ordered record/thunk identity encoded by the container.
 ## What was tried / dead ends
 
 A separate inspector-side bounds precheck was rejected. It would duplicate only
-part of the loader grammar and could drift while XenonAnalyse and XenonRecomp
+part of the loader grammar and could drift while independent loader implementations
 continued to call the unchecked authority.
 
 ## Resolution

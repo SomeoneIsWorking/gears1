@@ -8,7 +8,7 @@ from ghidra.program.model.symbol import SourceType
 af = currentProgram.getAddressFactory().getDefaultAddressSpace()
 fm = currentProgram.getFunctionManager()
 
-# From config/gears.toml, byte-pattern scanned by XenonRecomp's xex-inspect.
+# Exact Gears 1 save/restore helper ranges recovered from the authenticated image.
 RANGES = [
     (0x828D27E0, 0x828D2850),  # save/restgprlr
     (0x828D4200, 0x828D4290),  # save/restfpr

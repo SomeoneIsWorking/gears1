@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Remove explicitly selected build trees and the retired scratch build roots."""
+"""Remove explicitly selected build trees and retired scratch build roots."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 BUILD_ROOT = REPO_ROOT / "build"
 LEGACY_BUILD_ROOTS = (
     REPO_ROOT / "scratch/build",
-    REPO_ROOT / "scratch/build-xenonrecomp",
     REPO_ROOT / "scratch/oracle/oracle-build",
 )
 
@@ -64,7 +63,7 @@ def parse_arguments(arguments: list[str]) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     selected = parser.parse_args(arguments)
     if not selected.build and not selected.legacy:
-        parser.error("select at least one --build NAME or --legacy")
+        parser.error("select at least one cleanup scope")
     return selected
 
 

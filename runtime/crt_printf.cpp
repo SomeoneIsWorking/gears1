@@ -25,33 +25,35 @@
 
 #include <lucent/log.h>
 
-#include <byteswap.h>
+#include "byte_order.h"
 
 namespace
 {
-constexpr uint32_t kMaxRegisterArgs = 6;    // r5..r10
-constexpr uint32_t kMaxFloatArgs = 13;      // f1..f13
+constexpr uint32_t kMaxRegisterArgs = 6; // r5..r10
+constexpr uint32_t kMaxFloatArgs = 13;   // f1..f13
 
 // Reads successive varargs in guest order, from registers then memory for
 // sprintf, or straight from memory for a va_list.
 class GuestArgs
 {
-public:
-    GuestArgs(PPCContext& ctx, uint8_t* base, uint32_t vaList)
-        : ctx_(ctx), base_(base), memory_(vaList), fromRegisters_(vaList == 0) {}
+  public:
+    GuestArgs(PPCContext &ctx, uint8_t *base, uint32_t vaList)
+        : ctx_(ctx), base_(base), memory_(vaList), fromRegisters_(vaList == 0)
+    {
+    }
 
     uint32_t NextU32()
     {
         if (fromRegisters_ && slot_ < kMaxRegisterArgs)
         {
-            const PPCRegister* registers[kMaxRegisterArgs] = {
-                &ctx_.r5, &ctx_.r6, &ctx_.r7, &ctx_.r8, &ctx_.r9, &ctx_.r10 };
+            const PPCRegister *registers[kMaxRegisterArgs] = {&ctx_.r5, &ctx_.r6, &ctx_.r7,
+                                                              &ctx_.r8, &ctx_.r9, &ctx_.r10};
             return registers[slot_++]->u32;
         }
 
         const uint32_t address = SlotAddress();
         ++slot_;
-        return ByteSwap(*reinterpret_cast<uint32_t*>(base_ + address));
+        return ByteSwap(*reinterpret_cast<uint32_t *>(base_ + address));
     }
 
     uint64_t NextU64()
@@ -74,7 +76,7 @@ public:
         return value;
     }
 
-private:
+  private:
     uint32_t SlotAddress() const
     {
         if (!fromRegisters_)
@@ -84,8 +86,8 @@ private:
         return ctx_.r1.u32 + 0x08 + (2 + slot_) * 4;
     }
 
-    PPCContext& ctx_;
-    uint8_t* base_;
+    PPCContext &ctx_;
+    uint8_t *base_;
     uint32_t memory_;
     bool fromRegisters_;
     uint32_t slot_ = 0;
@@ -95,28 +97,39 @@ private:
 // Formats one conversion with the host library, so the exact semantics of
 // width, precision and flags come from an implementation that already has them
 // right rather than from a reimplementation of them here.
-void AppendConversion(std::string& out, const std::string& spec, char conversion,
-    GuestArgs& args, uint8_t* base, bool isLong)
+void AppendConversion(std::string &out, const std::string &spec, char conversion, GuestArgs &args,
+                      uint8_t *base, bool isLong)
 {
     char buffer[512];
 
     switch (conversion)
     {
-    case 'd': case 'i':
+    case 'd':
+    case 'i':
         if (isLong)
             snprintf(buffer, sizeof(buffer), spec.c_str(), int64_t(args.NextU64()));
         else
             snprintf(buffer, sizeof(buffer), spec.c_str(), int32_t(args.NextU32()));
         break;
 
-    case 'u': case 'o': case 'x': case 'X':
+    case 'u':
+    case 'o':
+    case 'x':
+    case 'X':
         if (isLong)
             snprintf(buffer, sizeof(buffer), spec.c_str(), args.NextU64());
         else
             snprintf(buffer, sizeof(buffer), spec.c_str(), args.NextU32());
         break;
 
-    case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': case 'a': case 'A':
+    case 'f':
+    case 'F':
+    case 'e':
+    case 'E':
+    case 'g':
+    case 'G':
+    case 'a':
+    case 'A':
         snprintf(buffer, sizeof(buffer), spec.c_str(), args.NextDouble());
         break;
 
@@ -133,8 +146,7 @@ void AppendConversion(std::string& out, const std::string& spec, char conversion
     case 's':
     {
         const uint32_t address = args.NextU32();
-        const char* text = address != 0
-            ? reinterpret_cast<const char*>(base + address) : "(null)";
+        const char *text = address != 0 ? reinterpret_cast<const char *>(base + address) : "(null)";
         snprintf(buffer, sizeof(buffer), spec.c_str(), text);
         break;
     }
@@ -148,11 +160,11 @@ void AppendConversion(std::string& out, const std::string& spec, char conversion
     out += buffer;
 }
 
-std::string Format(const char* format, GuestArgs& args, uint8_t* base)
+std::string Format(const char *format, GuestArgs &args, uint8_t *base)
 {
     std::string out;
 
-    for (const char* p = format; *p != '\0'; ++p)
+    for (const char *p = format; *p != '\0'; ++p)
     {
         if (*p != '%')
         {
@@ -210,12 +222,12 @@ std::string Format(const char* format, GuestArgs& args, uint8_t* base)
 
 // Writes the result under the count limit and returns what the C library
 // would: the length written, or -1 when it did not fit.
-int32_t Emit(uint8_t* base, uint32_t buffer, size_t count, const std::string& text)
+int32_t Emit(uint8_t *base, uint32_t buffer, size_t count, const std::string &text)
 {
     if (buffer == 0)
         return -1;
 
-    char* destination = reinterpret_cast<char*>(base + buffer);
+    char *destination = reinterpret_cast<char *>(base + buffer);
     if (text.size() >= count)
     {
         std::memcpy(destination, text.data(), count);
@@ -229,7 +241,7 @@ int32_t Emit(uint8_t* base, uint32_t buffer, size_t count, const std::string& te
 } // namespace
 
 // int _vsnprintf(char* buffer, size_t count, const char* format, va_list args)
-void __imp___vsnprintf(PPCContext& __restrict ctx, uint8_t* base)
+void __imp___vsnprintf(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t buffer = ctx.r3.u32;
     const size_t count = ctx.r4.u32;
@@ -242,12 +254,12 @@ void __imp___vsnprintf(PPCContext& __restrict ctx, uint8_t* base)
     }
 
     GuestArgs args(ctx, base, ctx.r6.u32);
-    const std::string text = Format(reinterpret_cast<const char*>(base + format), args, base);
+    const std::string text = Format(reinterpret_cast<const char *>(base + format), args, base);
     ctx.r3.s64 = Emit(base, buffer, count, text);
 }
 
 // int sprintf(char* buffer, const char* format, ...)
-void __imp__sprintf(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__sprintf(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t buffer = ctx.r3.u32;
     const uint32_t format = ctx.r4.u32;
@@ -259,7 +271,7 @@ void __imp__sprintf(PPCContext& __restrict ctx, uint8_t* base)
     }
 
     GuestArgs args(ctx, base, 0);
-    const std::string text = Format(reinterpret_cast<const char*>(base + format), args, base);
+    const std::string text = Format(reinterpret_cast<const char *>(base + format), args, base);
 
     // sprintf has no bound; the guest promises the buffer is large enough.
     ctx.r3.s64 = Emit(base, buffer, text.size() + 1, text);

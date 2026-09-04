@@ -14,12 +14,7 @@ namespace gears
 
 namespace
 {
-// PPC_LOOKUP_FUNC indexes a table at base + PPC_IMAGE_BASE + PPC_IMAGE_SIZE,
-// scaling (address - PPC_CODE_BASE) by 2. Guest instructions are 4-byte
-// aligned, so that scaling yields 8 bytes -- one host pointer -- per
-// instruction slot.
-constexpr uint64_t kFuncTableBase = PPC_IMAGE_BASE + PPC_IMAGE_SIZE;
-constexpr uint64_t kFuncTableSize = uint64_t(PPC_CODE_SIZE) * 2;
+constexpr uint64_t kXenonAddressSpaceSize = uint64_t{1} << 32U;
 
 // The console has 512 MiB of RAM, and exposes it through several virtual
 // windows that differ only in caching and page size. Guest code converts
@@ -41,33 +36,31 @@ bool GuestMemory::Reserve()
     // console's physical-memory ranges live near the top of it, and the graphics
     // path allocates there. It costs address space, not pages -- Commit() faults
     // in only what is used.
-    reservedSize_ = PPC_MEMORY_SIZE;
-    static_assert(kFuncTableBase + kFuncTableSize <= PPC_MEMORY_SIZE,
-        "function table must fit inside the 4 GiB guest window");
+    reservedSize_ = kXenonAddressSpaceSize;
 
     // Reserved without backing pages; Commit() faults in only what is used.
     // MAP_NORESERVE keeps this off the commit charge on overcommit-strict hosts.
-    void* p = mmap(nullptr, reservedSize_, PROT_NONE,
-        MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    void *p =
+        mmap(nullptr, reservedSize_, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
     if (p == MAP_FAILED)
     {
         lucent::error("mem", "failed to reserve {} bytes of guest address space", reservedSize_);
         return false;
     }
 
-    base_ = static_cast<uint8_t*>(p);
+    base_ = static_cast<uint8_t *>(p);
 
     // PPC_FUNC_PROLOGUE tells Clang to assume this; an unaligned base would
     // silently miscompile every guest function.
     if ((reinterpret_cast<uintptr_t>(base_) & 0x1F) != 0)
     {
-        lucent::error("mem", "guest base {} is not 32-byte aligned", static_cast<void*>(base_));
+        lucent::error("mem", "guest base {} is not 32-byte aligned", static_cast<void *>(base_));
         Release();
         return false;
     }
 
     lucent::info("mem", "reserved {:.2f} GiB of guest address space at {}",
-        double(reservedSize_) / (1024.0 * 1024.0 * 1024.0), static_cast<void*>(base_));
+                 double(reservedSize_) / (1024.0 * 1024.0 * 1024.0), static_cast<void *>(base_));
 
     return MapPhysicalAliases();
 }
@@ -92,8 +85,8 @@ bool GuestMemory::MapPhysicalAliases()
     // until the guest actually touches them.
     for (uint32_t alias : kPhysicalAliases)
     {
-        void* p = mmap(base_ + alias, kPhysicalSize, PROT_READ | PROT_WRITE,
-            MAP_SHARED | MAP_FIXED, physicalFd_, 0);
+        void *p = mmap(base_ + alias, kPhysicalSize, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED,
+                       physicalFd_, 0);
         if (p == MAP_FAILED)
         {
             lucent::error("mem", "cannot map physical RAM at guest {:#x}", alias);
@@ -102,8 +95,8 @@ bool GuestMemory::MapPhysicalAliases()
     }
 
     lucent::info("mem", "physical RAM ({} MiB) aliased at {:#x}, {:#x}, {:#x}, {:#x}",
-        kPhysicalSize / (1024 * 1024), kPhysicalAliases[0], kPhysicalAliases[1],
-        kPhysicalAliases[2], kPhysicalAliases[3]);
+                 kPhysicalSize / (1024 * 1024), kPhysicalAliases[0], kPhysicalAliases[1],
+                 kPhysicalAliases[2], kPhysicalAliases[3]);
     return true;
 }
 
@@ -150,7 +143,7 @@ void GuestMemory::Zero(uint32_t address, uint32_t size)
     lucent::debug("mem", "zeroed {:#x}+{:#x}", address, size);
 }
 
-bool GuestMemory::Contains(const void* host) const
+bool GuestMemory::Contains(const void *host) const
 {
     const uintptr_t p = reinterpret_cast<uintptr_t>(host);
     const uintptr_t b = reinterpret_cast<uintptr_t>(base_);
@@ -164,45 +157,17 @@ uint64_t GuestMemory::AliasOffset(size_t i) const
 }
 namespace
 {
-GuestMemory* g_memory = nullptr;
+GuestMemory *g_memory = nullptr;
 }
 
-GuestMemory& Memory()
+GuestMemory &Memory()
 {
     return *g_memory;
 }
 
-void SetMemory(GuestMemory& memory)
+void SetMemory(GuestMemory &memory)
 {
     g_memory = &memory;
-}
-
-size_t InstallFunctionTable(GuestMemory& memory)
-{
-    if (!memory.Commit(uint32_t(kFuncTableBase), uint32_t(kFuncTableSize)))
-        return 0;
-
-    uint8_t* base = memory.Base();
-    size_t installed = 0;
-    size_t outOfRange = 0;
-
-    for (const PPCFuncMapping* m = PPCFuncMappings; m->host != nullptr; ++m)
-    {
-        // Imports live outside the .text range the table covers; they are
-        // called directly by name from the recompiled code, not through it.
-        if (m->guest < PPC_CODE_BASE || m->guest >= PPC_CODE_BASE + PPC_CODE_SIZE)
-        {
-            ++outOfRange;
-            continue;
-        }
-
-        PPC_LOOKUP_FUNC(base, m->guest) = m->host;
-        ++installed;
-    }
-
-    lucent::info("loader", "installed {} functions into the indirect-call table ({} outside .text)",
-        installed, outOfRange);
-    return installed;
 }
 
 } // namespace gears

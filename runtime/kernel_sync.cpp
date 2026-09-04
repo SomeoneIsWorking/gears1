@@ -5,7 +5,7 @@
 #include <thread>
 #include <unordered_map>
 
-#include <byteswap.h>
+#include "byte_order.h"
 #include <lucent/log.h>
 #include "wait_probe.h"
 
@@ -29,35 +29,35 @@ struct GuestCriticalSection
 // correct once guest threads exist, rather than only under single-threaded
 // bring-up. Keyed by guest address because that is the only stable identity a
 // guest critical section has.
-std::recursive_mutex& HostLockFor(uint32_t guestAddress)
+std::recursive_mutex &HostLockFor(uint32_t guestAddress)
 {
     static std::mutex tableLock;
     static std::unordered_map<uint32_t, std::unique_ptr<std::recursive_mutex>> table;
 
     std::lock_guard<std::mutex> guard(tableLock);
-    auto& slot = table[guestAddress];
+    auto &slot = table[guestAddress];
     if (!slot)
         slot = std::make_unique<std::recursive_mutex>();
     return *slot;
 }
 
-GuestCriticalSection* CriticalSectionAt(uint8_t* base, uint32_t address)
+GuestCriticalSection *CriticalSectionAt(uint8_t *base, uint32_t address)
 {
-    return reinterpret_cast<GuestCriticalSection*>(base + address);
+    return reinterpret_cast<GuestCriticalSection *>(base + address);
 }
 
 } // namespace
 
 // X_PROCTYPE_TITLE. The other values (idle, system) describe processes a title
 // never runs as.
-void __imp__KeGetCurrentProcessType(PPCContext& __restrict ctx, uint8_t*)
+void __imp__KeGetCurrentProcessType(PPCContext &__restrict ctx, uint8_t *)
 {
     ctx.r3.u64 = 1;
 }
 
-void __imp__RtlInitializeCriticalSection(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__RtlInitializeCriticalSection(PPCContext &__restrict ctx, uint8_t *base)
 {
-    GuestCriticalSection* cs = CriticalSectionAt(base, ctx.r3.u32);
+    GuestCriticalSection *cs = CriticalSectionAt(base, ctx.r3.u32);
     cs->unknown = 0;
     cs->spinCountDiv256 = 0;
     cs->padding = 0;
@@ -69,7 +69,7 @@ void __imp__RtlInitializeCriticalSection(PPCContext& __restrict ctx, uint8_t* ba
     ctx.r3.u64 = 0;
 }
 
-void __imp__RtlInitializeCriticalSectionAndSpinCount(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__RtlInitializeCriticalSectionAndSpinCount(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t spinCount = ctx.r4.u32;
     __imp__RtlInitializeCriticalSection(ctx, base);
@@ -77,7 +77,7 @@ void __imp__RtlInitializeCriticalSectionAndSpinCount(PPCContext& __restrict ctx,
     ctx.r3.u64 = 0;
 }
 
-void __imp__RtlEnterCriticalSection(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__RtlEnterCriticalSection(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t address = ctx.r3.u32;
     {
@@ -85,12 +85,12 @@ void __imp__RtlEnterCriticalSection(PPCContext& __restrict ctx, uint8_t* base)
         HostLockFor(address).lock();
     }
 
-    GuestCriticalSection* cs = CriticalSectionAt(base, address);
+    GuestCriticalSection *cs = CriticalSectionAt(base, address);
     cs->lockCount = ByteSwap(int32_t(ByteSwap(cs->lockCount) + 1));
     cs->recursionCount = ByteSwap(int32_t(ByteSwap(cs->recursionCount) + 1));
 }
 
-void __imp__RtlTryEnterCriticalSection(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__RtlTryEnterCriticalSection(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t address = ctx.r3.u32;
     if (!HostLockFor(address).try_lock())
@@ -99,16 +99,16 @@ void __imp__RtlTryEnterCriticalSection(PPCContext& __restrict ctx, uint8_t* base
         return;
     }
 
-    GuestCriticalSection* cs = CriticalSectionAt(base, address);
+    GuestCriticalSection *cs = CriticalSectionAt(base, address);
     cs->lockCount = ByteSwap(int32_t(ByteSwap(cs->lockCount) + 1));
     cs->recursionCount = ByteSwap(int32_t(ByteSwap(cs->recursionCount) + 1));
     ctx.r3.u64 = 1;
 }
 
-void __imp__RtlLeaveCriticalSection(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__RtlLeaveCriticalSection(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t address = ctx.r3.u32;
-    GuestCriticalSection* cs = CriticalSectionAt(base, address);
+    GuestCriticalSection *cs = CriticalSectionAt(base, address);
     cs->lockCount = ByteSwap(int32_t(ByteSwap(cs->lockCount) - 1));
     cs->recursionCount = ByteSwap(int32_t(ByteSwap(cs->recursionCount) - 1));
 
@@ -123,12 +123,12 @@ namespace
 thread_local int32_t t_criticalRegionDepth = 0;
 } // namespace
 
-void __imp__KeEnterCriticalRegion(PPCContext& __restrict ctx, uint8_t*)
+void __imp__KeEnterCriticalRegion(PPCContext &__restrict ctx, uint8_t *)
 {
     ++t_criticalRegionDepth;
 }
 
-void __imp__KeLeaveCriticalRegion(PPCContext& __restrict ctx, uint8_t*)
+void __imp__KeLeaveCriticalRegion(PPCContext &__restrict ctx, uint8_t *)
 {
     if (--t_criticalRegionDepth < 0)
     {

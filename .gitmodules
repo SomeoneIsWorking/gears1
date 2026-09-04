@@ -1,7 +1,3 @@
-[submodule "extern/XenonRecomp"]
-	path = extern/XenonRecomp
-	url = https://github.com/SomeoneIsWorking/XenonRecomp.git
-	branch = gears
 [submodule "extern/xenia"]
 	path = extern/xenia
 	url = https://github.com/SomeoneIsWorking/xenia-canary.git

@@ -10,7 +10,7 @@ namespace
 {
 
 // Xenos vectors load and store guest words in big-endian lane order. The
-// recompiler's VectorMaskL performs this byte reversal for aligned lvx/stvx;
+// original guest vector loads/stores perform this byte reversal for aligned lvx/stvx;
 // keeping the same operation here makes the native path independent of host
 // endianness and preserves the guest's memory representation.
 alignas(16) constexpr std::uint8_t kReverseGuestVector[16] = {

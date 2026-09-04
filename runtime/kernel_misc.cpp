@@ -9,7 +9,7 @@
 #include <string>
 #include <string_view>
 
-#include <byteswap.h>
+#include "byte_order.h"
 #include <lucent/log.h>
 
 #include "bugcheck_policy.h"

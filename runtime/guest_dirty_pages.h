@@ -46,7 +46,7 @@ inline bool PagemapEntrySoftDirty(uint64_t entry)
 
 // Registers the process's LIVE guest-memory layout so staleness queries can
 // recognise it and consult every alias window. Call once after the guest
-// reservation exists (runtime/main.cpp). A process that never registers --
+// reservation exists. A process that never registers --
 // a capture replay tool with its flat mirror -- gets single-window behaviour,
 // which is exact there because nothing writes through another view.
 void RegisterGuestAliasLayout(const void *base, std::vector<uint64_t> windows, uint64_t aliasMask);

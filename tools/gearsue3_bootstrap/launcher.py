@@ -2,25 +2,22 @@
 
 from __future__ import annotations
 
-import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from .environment import EnvironmentError, environment_file, load_environment
-from .process import run_logged_child
-from .paths import BuildPathError, build_directory
+from .paths import BuildPathError
 from .profile import ProfileError, load_profile
-from .provision import PreparedTitle, ProvisionError, prepare_title
+from .provision import ProvisionError, prepare_title
 
 USAGE = """Usage: ./run.sh [options] [-- extra runtime arguments]
 
-Build the current GearsUE3 product from a user-owned Gears of War disc image
-and launch it. Select the image with GEARS_ISO, .env, or one file in roms/.
+Launch the GearsUE3 native/dynarec product from a user-owned Gears of War disc
+image. The product currently refuses at the missing x360port executor boundary.
 
 Options:
   --headless          no window (GEARS_NO_WINDOW=1); measurement runs
-  --no-build          launch an already prepared GEARS_GAME_DIR/GEARS_BUILD_DIR
   --prepare           provision and build, but do not launch
   --iso <path>        explicit user-owned disc image
   --log <path>        tee runtime output (default scratch/logs/run.log)
@@ -39,7 +36,6 @@ class CliError(RuntimeError):
 @dataclass
 class LaunchOptions:
     headless: bool = False
-    no_build: bool = False
     prepare_only: bool = False
     image: str | None = None
     log_path: Path = Path("scratch/logs/run.log")
@@ -72,9 +68,6 @@ def parse_arguments(
         elif argument == "--headless":
             options.headless = True
             index += 1
-        elif argument == "--no-build":
-            options.no_build = True
-            index += 1
         elif argument == "--prepare":
             options.prepare_only = True
             index += 1
@@ -98,8 +91,6 @@ def parse_arguments(
         else:
             options.runtime_arguments.extend(arguments[index:])
             break
-    if options.no_build and options.prepare_only:
-        raise CliError("--no-build and --prepare are mutually exclusive")
     if not options.http_port.isdecimal() or not 0 <= int(options.http_port) <= 65535:
         raise CliError("--http-port must be an integer from 0 through 65535")
     if options.present_dump is not None and (
@@ -107,31 +98,6 @@ def parse_arguments(
     ):
         raise CliError("--present-dump must be a positive integer")
     return options
-
-
-def _existing_title(repo_root: Path, environment: dict[str, str]) -> PreparedTitle:
-    game_dir = Path(environment.get("GEARS_GAME_DIR", repo_root / "scratch/game")).resolve()
-    build_dir = build_directory(
-        repo_root,
-        environment.get("GEARS_BUILD_DIR"),
-        repo_root / "build/release",
-    )
-    executable = game_dir / "default.xex"
-    runtime = build_dir / "runtime/gears1"
-    if not executable.is_file():
-        raise ProvisionError(f"--no-build requires extracted title executable {executable}")
-    if not runtime.is_file() or not os.access(runtime, os.X_OK):
-        raise ProvisionError(f"--no-build requires built product executable {runtime}")
-    return PreparedTitle(
-        disc_image=Path(),
-        title_root=game_dir.parent,
-        game_dir=game_dir,
-        ppc_dir=Path(environment.get("GEARS_PPC_DIR", repo_root / "scratch/ppc")),
-        build_dir=build_dir,
-        executable=executable,
-        runtime=runtime,
-        identity_path=Path(),
-    )
 
 
 def _launch_environment(
@@ -164,39 +130,14 @@ def main(arguments: list[str] | None = None, repo_root: Path | None = None) -> i
         print(USAGE)
         return 0
 
-    target = (
-        _existing_title(root, environment)
-        if options.no_build
-        else prepare_title(
-            root,
-            profile,
-            image=options.image,
-            environ=environment,
-            env_file=selected_environment_file,
-        )
+    prepare_title(
+        root,
+        profile,
+        image=options.image,
+        environ=environment,
+        env_file=selected_environment_file,
     )
-    print(
-        f"bootstrap: prepared {profile.display_name} at {target.title_root.relative_to(root)}",
-        file=sys.stderr,
-    )
-    if options.prepare_only:
-        return 0
-
-    launch_environment = _launch_environment(environment, options, root)
-    command = [target.runtime, target.executable, target.game_dir, *options.runtime_arguments]
-    log_path = options.log_path if options.log_path.is_absolute() else root / options.log_path
-    print(f"bootstrap: launching {target.runtime} (log: {log_path})", file=sys.stderr)
-    if options.http_port != "0":
-        print(
-            f"bootstrap: interactive debug API http://127.0.0.1:{options.http_port}",
-            file=sys.stderr,
-        )
-    return run_logged_child(
-        command,
-        cwd=root,
-        environ=launch_environment,
-        log_path=log_path,
-    )
+    raise AssertionError("x360port preparation returned without a runnable product")
 
 
 def entrypoint(arguments: list[str] | None = None) -> int:

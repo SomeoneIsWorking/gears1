@@ -17,7 +17,7 @@
 // measurement, it is a guess with a long wait attached.
 //
 // A FrameDrawInputs is just register-file snapshots, microcode blobs and a
-// window of guest memory: nothing that needs the recompiled title to be running.
+// window of guest memory: nothing that needs a guest executor to be running.
 // gpu_draw.cpp depends on nothing but gpu_draw_xlate, so a captured frame can be
 // re-rendered offline in about a second, as many times as needed, with every arm
 // hitting byte-identical input.
@@ -29,8 +29,8 @@ namespace gears
 struct FrameCapture
 {
     FrameDrawInputs inputs;
-    std::vector<uint8_t> guest;                // the reconstructed guest window
-    std::vector<std::vector<uint8_t>> ucode;    // blobs the draws' pointers name
+    std::vector<uint8_t> guest;              // the reconstructed guest window
+    std::vector<std::vector<uint8_t>> ucode; // blobs the draws' pointers name
 };
 
 // Writes `in` to `path`. Guest memory is stored as its non-zero blocks, so the
@@ -38,10 +38,10 @@ struct FrameCapture
 // nothing. Microcode is deduplicated by hash. Returns false (and says why) on
 // any I/O failure -- a partial capture is deleted rather than left to be
 // replayed as if it were whole.
-bool WriteFrameCapture(const std::filesystem::path& path, const FrameDrawInputs& in);
+bool WriteFrameCapture(const std::filesystem::path &path, const FrameDrawInputs &in);
 
 // Loads a capture written by WriteFrameCapture. On success `out.inputs` is ready
 // to hand to RenderFrame.
-bool ReadFrameCapture(const std::filesystem::path& path, FrameCapture& out);
+bool ReadFrameCapture(const std::filesystem::path &path, FrameCapture &out);
 
 } // namespace gears

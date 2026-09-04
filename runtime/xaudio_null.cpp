@@ -18,7 +18,7 @@
 
 #include <sys/resource.h>
 
-#include <byteswap.h>
+#include "byte_order.h"
 #include <lucent/config.h>
 #include <lucent/log.h>
 
@@ -28,6 +28,7 @@
 #include "audio_frame.h"
 #include "audio_out.h"
 #include "guest_thread.h"
+#include "missing_x360port_executor.h"
 #include "wait_probe.h"
 #include "xma.h"
 
@@ -53,7 +54,7 @@ constexpr uint32_t kFrameSamplesPerChannel = 256;
 constexpr uint32_t kFrameFloats = kFrameChannels * kFrameSamplesPerChannel;
 constexpr uint32_t kFrameSampleRate = 48000;
 
-float LoadGuestFloat(const uint8_t* at)
+float LoadGuestFloat(const uint8_t *at)
 {
     uint32_t bits;
     std::memcpy(&bits, at, sizeof(bits));
@@ -69,7 +70,7 @@ float LoadGuestFloat(const uint8_t* at)
 // submitted 11250 frames of digital silence" are the same observation from the
 // driver's side, and only one of them is audio working. Cheap enough to run
 // unconditionally at 187.5 Hz.
-float FramePeak(const uint8_t* samples)
+float FramePeak(const uint8_t *samples)
 {
     float peak = 0.0f;
     for (uint32_t i = 0; i < kFrameFloats; ++i)
@@ -90,8 +91,8 @@ float FramePeak(const uint8_t* samples)
 // container honest would be a second thing that can be wrong.
 class WavWriter
 {
-public:
-    void Open(const std::string& path)
+  public:
+    void Open(const std::string &path)
     {
         std::error_code ec;
         const std::filesystem::path out(path);
@@ -104,11 +105,11 @@ public:
             return;
         }
         WriteHeader(0);
-        lucent::info("audio", "writing submitted samples to {} ({} ch, {} Hz, f32)",
-                     path, kFrameChannels, kFrameSampleRate);
+        lucent::info("audio", "writing submitted samples to {} ({} ch, {} Hz, f32)", path,
+                     kFrameChannels, kFrameSampleRate);
     }
 
-    void Write(const uint8_t* samples)
+    void Write(const uint8_t *samples)
     {
         if (!file_)
             return;
@@ -117,8 +118,7 @@ public:
         // would be a file that lies about its own format -- which is how this
         // dump managed to look like evidence while carrying the layout bug.
         float host[kFrameFloats];
-        gears::DeinterleaveGuestAudioFrame(samples, host, kFrameChannels,
-                                           kFrameSamplesPerChannel);
+        gears::DeinterleaveGuestAudioFrame(samples, host, kFrameChannels, kFrameSamplesPerChannel);
         std::fwrite(host, sizeof(float), kFrameFloats, file_);
         dataBytes_ += sizeof(host);
 
@@ -145,14 +145,13 @@ public:
         WriteHeader(dataBytes_);
         std::fclose(file_);
         file_ = nullptr;
-        lucent::info("audio", "sample dump closed: {} bytes of PCM ({:.1f} s)",
-                     dataBytes_,
+        lucent::info("audio", "sample dump closed: {} bytes of PCM ({:.1f} s)", dataBytes_,
                      double(dataBytes_) / (sizeof(float) * kFrameChannels * kFrameSampleRate));
     }
 
     bool open() const { return file_ != nullptr; }
 
-private:
+  private:
     void WriteHeader(uint32_t dataBytes)
     {
         const uint32_t byteRate = kFrameSampleRate * kFrameChannels * sizeof(float);
@@ -175,7 +174,7 @@ private:
 
     static constexpr uint32_t kHeaderRefreshFrames = 188; // ~1 s at 187.5 Hz
 
-    std::FILE* file_ = nullptr;
+    std::FILE *file_ = nullptr;
     uint32_t dataBytes_ = 0;
     uint32_t framesSinceHeader_ = 0;
 };
@@ -197,9 +196,9 @@ std::mutex g_wavMutex;
 // captured at registration (Xenia: AudioSystem::WorkerThreadMain passes
 // client_callback_arg alone).
 //
-// Calling guest code from a host thread is the same mechanism the graphics ISR
-// already uses -- a GuestThreadBlock for the PCR and stack, a PPCContext, then
-// PPC_LOOKUP_FUNC.
+// Calling the registered guest callback requires x360port to supply a Xenia
+// ThreadState. The retained pacing and frame contracts do not implement that
+// executor boundary themselves.
 constexpr double kAudioFramesPerSecond = 48000.0 / 256.0;
 std::atomic<bool> g_pumpStop{false};
 std::thread g_pumpThread;
@@ -224,7 +223,7 @@ uint64_t PumpThreadCpuNanos()
 // scheduler taking the core away while the thread was RUNNABLE. Wall >> CPU
 // with no named wait site and rising involuntary switches is preemption under
 // load, which no amount of code inside the callback can fix.
-void PumpThreadSwitches(uint64_t& voluntary, uint64_t& involuntary)
+void PumpThreadSwitches(uint64_t &voluntary, uint64_t &involuntary)
 {
     rusage usage{};
     getrusage(RUSAGE_THREAD, &usage);
@@ -241,7 +240,7 @@ uint64_t PumpThreadRunqueueNanos()
 {
     // Reopened per read: the file is per-thread and this runs 10 times a
     // second on a thread whose whole job is waiting.
-    std::FILE* f = std::fopen("/proc/thread-self/schedstat", "r");
+    std::FILE *f = std::fopen("/proc/thread-self/schedstat", "r");
     if (!f)
         return 0;
     unsigned long long ran = 0, waited = 0, slices = 0;
@@ -256,17 +255,15 @@ void AudioPump()
     if (!gears::CreateGuestThreadBlock(gears::Memory(), 0x10000, block))
     {
         lucent::error("audio", "audio pump: no guest thread block; the title will"
-            " never be asked for a frame");
+                               " never be asked for a frame");
         return;
     }
     gears::SetGuestThreadName("audio-pump");
-    lucent::info("audio", "audio pump thread running (pcr {:#x}, stack {:#x})",
-                 block.pcrAddress, block.stackBase);
+    lucent::info("audio", "audio pump thread running (pcr {:#x}, stack {:#x})", block.pcrAddress,
+                 block.stackBase);
     PPCContext ctx{};
     ctx.r13.u32 = block.pcrAddress;
     ctx.fpscr.loadFromHost();
-    uint8_t* base = gears::Memory().Base();
-
     using clock = std::chrono::steady_clock;
     const auto period = std::chrono::duration_cast<clock::duration>(
         std::chrono::duration<double>(1.0 / kAudioFramesPerSecond));
@@ -305,13 +302,13 @@ void AudioPump()
         ctx.r1.u32 = block.stackBase - 0x100;
         ctx.r3.u32 = g_callbackContext;
         gears::t_inAudioPumpCallback = true;
-        (PPC_LOOKUP_FUNC(base, callback))(ctx, base);
+        gears::RefuseMissingX360PortExecutor(callback);
         gears::t_inAudioPumpCallback = false;
 
         const uint64_t cpuDelta = PumpThreadCpuNanos() - cpuBefore;
         const uint64_t wallDelta =
-            uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                clock::now() - wallBefore).count());
+            uint64_t(std::chrono::duration_cast<std::chrono::nanoseconds>(clock::now() - wallBefore)
+                         .count());
         wallNanos += wallDelta;
         cpuNanos += cpuDelta;
         wallMaxNanos = std::max(wallMaxNanos, wallDelta);
@@ -326,13 +323,14 @@ void AudioPump()
         // runtime/audio_pace.h and tests/test_audio_pace.cpp.
         {
             const auto nowNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                clock::now().time_since_epoch()).count();
-            const auto dueNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                due.time_since_epoch()).count();
-            const auto periodNanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                period).count();
-            const gears::PaceDecision paced =
-                gears::PaceAudioPump(nowNanos, dueNanos, periodNanos);
+                                      clock::now().time_since_epoch())
+                                      .count();
+            const auto dueNanos =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(due.time_since_epoch())
+                    .count();
+            const auto periodNanos =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(period).count();
+            const gears::PaceDecision paced = gears::PaceAudioPump(nowNanos, dueNanos, periodNanos);
             droppedSlots += uint64_t(paced.droppedSlots);
             next = clock::time_point(std::chrono::duration_cast<clock::duration>(
                 std::chrono::nanoseconds(paced.nextSlotNanos)));
@@ -345,9 +343,10 @@ void AudioPump()
         if (n == 1 || n % 1875 == 0)
         {
             const auto now = clock::now();
-            const double backlogSlots = now < next ? 0.0
-                : std::chrono::duration<double>(now - next).count() *
-                  kAudioFramesPerSecond;
+            const double backlogSlots =
+                now < next
+                    ? 0.0
+                    : std::chrono::duration<double>(now - next).count() * kAudioFramesPerSecond;
             static uint64_t lastVoluntary = 0, lastInvoluntary = 0;
             static uint64_t lastRunqueue = 0;
             uint64_t voluntary = 0, involuntary = 0;
@@ -356,20 +355,18 @@ void AudioPump()
             const double intervalSeconds =
                 std::chrono::duration<double>(now - intervalStart).count();
             intervalStart = now;
-            lucent::info("audio", "pump: {} callback invocations, {} frames"
-                " submitted by the title; last {} in {:.2f}s = {:.1f} Hz against"
-                " 187.5 ({} slots dropped): wall {}/{} us mean/max,"
-                " cpu {}/{} us mean/max, {} late slots, backlog {:.0f} slots,"
-                " csw {} vol {} invol, runqueue {} ms",
-                n, g_submittedFrames.load(), timedCalls, intervalSeconds,
-                intervalSeconds > 0 ? double(timedCalls) / intervalSeconds : 0.0,
-                droppedSlots,
-                timedCalls ? wallNanos / timedCalls / 1000 : 0,
-                wallMaxNanos / 1000,
-                timedCalls ? cpuNanos / timedCalls / 1000 : 0,
-                cpuMaxNanos / 1000, lateSlots, backlogSlots,
-                voluntary - lastVoluntary, involuntary - lastInvoluntary,
-                (runqueue - lastRunqueue) / 1000000);
+            lucent::info("audio",
+                         "pump: {} callback invocations, {} frames"
+                         " submitted by the title; last {} in {:.2f}s = {:.1f} Hz against"
+                         " 187.5 ({} slots dropped): wall {}/{} us mean/max,"
+                         " cpu {}/{} us mean/max, {} late slots, backlog {:.0f} slots,"
+                         " csw {} vol {} invol, runqueue {} ms",
+                         n, g_submittedFrames.load(), timedCalls, intervalSeconds,
+                         intervalSeconds > 0 ? double(timedCalls) / intervalSeconds : 0.0,
+                         droppedSlots, timedCalls ? wallNanos / timedCalls / 1000 : 0,
+                         wallMaxNanos / 1000, timedCalls ? cpuNanos / timedCalls / 1000 : 0,
+                         cpuMaxNanos / 1000, lateSlots, backlogSlots, voluntary - lastVoluntary,
+                         involuntary - lastInvoluntary, (runqueue - lastRunqueue) / 1000000);
             lastVoluntary = voluntary;
             lastInvoluntary = involuntary;
             lastRunqueue = runqueue;
@@ -393,15 +390,15 @@ void StopAudioPump()
 } // namespace gears
 
 // NTSTATUS XAudioRegisterRenderDriverClient(PDWORD Callback, PDWORD ClientId)
-void __imp__XAudioRegisterRenderDriverClient(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XAudioRegisterRenderDriverClient(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t callbackPtr = ctx.r3.u32;
     const uint32_t clientIdPtr = ctx.r4.u32;
 
     if (callbackPtr != 0)
     {
-        g_callback = ByteSwap(*reinterpret_cast<uint32_t*>(base + callbackPtr));
-        g_callbackContext = ByteSwap(*reinterpret_cast<uint32_t*>(base + callbackPtr + 4));
+        g_callback = ByteSwap(*reinterpret_cast<uint32_t *>(base + callbackPtr));
+        g_callbackContext = ByteSwap(*reinterpret_cast<uint32_t *>(base + callbackPtr + 4));
     }
 
     // The driver handle the title gets back is 0x41550000 | index -- an 'AU'
@@ -412,7 +409,7 @@ void __imp__XAudioRegisterRenderDriverClient(PPCContext& __restrict ctx, uint8_t
     const uint32_t index = g_nextClientId.fetch_add(1);
     const uint32_t clientId = 0x41550000u | (index & 0xFFFFu);
     if (clientIdPtr != 0)
-        *reinterpret_cast<uint32_t*>(base + clientIdPtr) = ByteSwap(clientId);
+        *reinterpret_cast<uint32_t *>(base + clientIdPtr) = ByteSwap(clientId);
 
     // ON BY DEFAULT now. It was opt-in while driving the callback turned a
     // stable silent title into a crashing one, and then into a stalled one;
@@ -423,28 +420,30 @@ void __imp__XAudioRegisterRenderDriverClient(PPCContext& __restrict ctx, uint8_t
     // It costs about 4% of frame rate under a CPU-bound guest (15.9 fps against
     // 16.6 in a control with no pump), which is the price of the title actually
     // mixing its audio.
-    const bool pumpWanted = !lucent::config::present("AUDIO_PUMP") ||
-                            lucent::config::flag("AUDIO_PUMP");
-    if (pumpWanted && g_callback &&
-        !g_pumpThread.joinable())
+    const bool pumpWanted =
+        !lucent::config::present("AUDIO_PUMP") || lucent::config::flag("AUDIO_PUMP");
+    if (pumpWanted && g_callback && !g_pumpThread.joinable())
     {
         g_pumpThread = std::thread(AudioPump);
-        lucent::info("audio", "client {} registered; pumping callback {:#x} at"
-            " {:.1f} Hz", clientId, g_callback, kAudioFramesPerSecond);
+        lucent::info("audio",
+                     "client {} registered; pumping callback {:#x} at"
+                     " {:.1f} Hz",
+                     clientId, g_callback, kAudioFramesPerSecond);
     }
     else
     {
-        lucent::warn("audio", "client {} registered, callback {:#x} NOT driven"
-            " (GEARS_AUDIO_PUMP=1 drives it) -- the title will submit no frames",
-            clientId, g_callback);
+        lucent::warn("audio",
+                     "client {} registered, callback {:#x} NOT driven"
+                     " (GEARS_AUDIO_PUMP=1 drives it) -- the title will submit no frames",
+                     clientId, g_callback);
     }
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
-void __imp__XAudioUnregisterRenderDriverClient(PPCContext& __restrict ctx, uint8_t*)
+void __imp__XAudioUnregisterRenderDriverClient(PPCContext &__restrict ctx, uint8_t *)
 {
     lucent::info("audio", "client unregistered after {} submitted frames",
-        g_submittedFrames.load());
+                 g_submittedFrames.load());
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
@@ -453,7 +452,7 @@ void __imp__XAudioUnregisterRenderDriverClient(PPCContext& __restrict ctx, uint8
 // r4 is the SAMPLES -- a float* of 6 channels x 256 samples interleaved (Xenia:
 // xboxkrnl_audio.cc). It used to be discarded, which would have thrown the audio
 // away even once the pump started asking for it.
-void __imp__XAudioSubmitRenderDriverFrame(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XAudioSubmitRenderDriverFrame(PPCContext &__restrict ctx, uint8_t *base)
 {
     const uint32_t samplesPtr = ctx.r4.u32;
     const uint64_t frames = g_submittedFrames.fetch_add(1) + 1;
@@ -468,7 +467,7 @@ void __imp__XAudioSubmitRenderDriverFrame(PPCContext& __restrict ctx, uint8_t* b
     }
     else
     {
-        const uint8_t* samples = base + samplesPtr;
+        const uint8_t *samples = base + samplesPtr;
         peak = FramePeak(samples);
         // Exact zero, not a threshold: the question here is whether the title
         // wrote anything at all, and a quiet frame is a different finding from
@@ -493,17 +492,19 @@ void __imp__XAudioSubmitRenderDriverFrame(PPCContext& __restrict ctx, uint8_t* b
         // mode runs the whole present path against a headless surface, so it has
         // every property of a measurement run except the name, and it played sound
         // out of the operator's speakers in the middle of their work.
-        const bool measurementRun = lucent::config::flag("NO_WINDOW") ||
-                                    lucent::config::flag("PRESENT_HEADLESS");
+        const bool measurementRun =
+            lucent::config::flag("NO_WINDOW") || lucent::config::flag("PRESENT_HEADLESS");
         const bool audioOutDefault = !measurementRun;
         if (lucent::config::present("AUDIO_OUT") ? lucent::config::flag("AUDIO_OUT")
                                                  : audioOutDefault)
         {
             static std::once_flag opened;
-            std::call_once(opened, [] {
-                if (gears::OpenAudioOutput(kFrameChannels, kFrameSampleRate))
-                    std::atexit(gears::CloseAudioOutput);
-            });
+            std::call_once(opened,
+                           []
+                           {
+                               if (gears::OpenAudioOutput(kFrameChannels, kFrameSampleRate))
+                                   std::atexit(gears::CloseAudioOutput);
+                           });
             float host[kFrameFloats];
             gears::DeinterleaveGuestAudioFrame(samples, host, kFrameChannels,
                                                kFrameSamplesPerChannel);
@@ -511,40 +512,43 @@ void __imp__XAudioSubmitRenderDriverFrame(PPCContext& __restrict ctx, uint8_t* b
             g_playing = true;
         }
 
-        if (const std::string& path = lucent::config::text("AUDIO_WAV"); !path.empty())
+        if (const std::string &path = lucent::config::text("AUDIO_WAV"); !path.empty())
         {
-            std::call_once(g_wavOpened, [&path] {
-                g_wav.Open(path);
-                if (g_wav.open())
-                    std::atexit([] { g_wav.Close(); });
-            });
+            std::call_once(g_wavOpened,
+                           [&path]
+                           {
+                               g_wav.Open(path);
+                               if (g_wav.open())
+                                   std::atexit([] { g_wav.Close(); });
+                           });
             std::lock_guard<std::mutex> guard(g_wavMutex);
             g_wav.Write(samples);
         }
     }
 
     if (frames == 1 || frames % 1000 == 0)
-        lucent::info("audio", "{} frames submitted ({} pump calls, samples at"
-            " {:#x}, {} with no buffer, {} silent), peak {:.4f}{}",
-            frames, g_pumpCalls.load(), samplesPtr, g_nullSampleFrames.load(),
-            g_silentFrames.load(), peak,
-            g_playing ? "" : " -- not played, no device on this run");
+        lucent::info("audio",
+                     "{} frames submitted ({} pump calls, samples at"
+                     " {:#x}, {} with no buffer, {} silent), peak {:.4f}{}",
+                     frames, g_pumpCalls.load(), samplesPtr, g_nullSampleFrames.load(),
+                     g_silentFrames.load(), peak,
+                     g_playing ? "" : " -- not played, no device on this run");
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
-void __imp__XAudioGetVoiceCategoryVolume(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XAudioGetVoiceCategoryVolume(PPCContext &__restrict ctx, uint8_t *base)
 {
     // 1.0f, i.e. unattenuated.
     if (ctx.r4.u32 != 0)
-        *reinterpret_cast<uint32_t*>(base + ctx.r4.u32) = ByteSwap(0x3F800000u);
+        *reinterpret_cast<uint32_t *>(base + ctx.r4.u32) = ByteSwap(0x3F800000u);
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
-void __imp__XAudioGetVoiceCategoryVolumeChangeMask(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XAudioGetVoiceCategoryVolumeChangeMask(PPCContext &__restrict ctx, uint8_t *base)
 {
     // No volume has changed, because nothing can change one.
     if (ctx.r4.u32 != 0)
-        *reinterpret_cast<uint32_t*>(base + ctx.r4.u32) = 0;
+        *reinterpret_cast<uint32_t *>(base + ctx.r4.u32) = 0;
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
@@ -558,7 +562,7 @@ void __imp__XAudioGetVoiceCategoryVolumeChangeMask(PPCContext& __restrict ctx, u
 // programs it and kicks the decoder block through MMIO, where xma_context.cpp
 // decodes it (verified against an independent reference, catalog #43's
 // neighbours).
-void __imp__XMACreateContext(PPCContext& __restrict ctx, uint8_t* base)
+void __imp__XMACreateContext(PPCContext &__restrict ctx, uint8_t *base)
 {
     static std::atomic<uint64_t> s_created{0};
 
@@ -574,14 +578,14 @@ void __imp__XMACreateContext(PPCContext& __restrict ctx, uint8_t* base)
     }
 
     if (ctx.r3.u32 != 0)
-        *reinterpret_cast<uint32_t*>(base + ctx.r3.u32) = ByteSwap(context);
+        *reinterpret_cast<uint32_t *>(base + ctx.r3.u32) = ByteSwap(context);
 
     const uint64_t n = s_created.fetch_add(1) + 1;
     lucent::debug("audio", "XMACreateContext -> {:#x} ({} live)", context, n);
     ctx.r3.u64 = gears::kStatusSuccess;
 }
 
-void __imp__XMAReleaseContext(PPCContext& __restrict ctx, uint8_t*)
+void __imp__XMAReleaseContext(PPCContext &__restrict ctx, uint8_t *)
 {
     gears::ReleaseXmaContext(ctx.r3.u32);
     ctx.r3.u64 = 0;

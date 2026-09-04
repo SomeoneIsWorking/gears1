@@ -5,7 +5,7 @@ save_namespace = "gears1"
 
 # Factual interoperability metadata for the one supported retail revision.
 # Provisioning computes these hashes from the user's disc and refuses every
-# other title or revision before generating code.
+# other title or revision before runtime execution.
 [identity]
 title_id = "4d5307d5"
 savegame_id = "00000000"
@@ -14,10 +14,6 @@ disc_number = 1
 disc_count = 1
 xex_sha256 = "df1041da72d2b947e3bb2f701a19fde9e84488dc848fea2decd6d43434efe2d1"
 image_sha256 = "f61cc78e4057bc68a2c65386a0341f6d26a7add3dfd9918007a455750ec6ed5c"
-
-[recompiler]
-template = "config/gears.toml"
-switch_tables_extra = "config/gears_switch_tables.extra.toml"
 
 [navigation]
 # Timed shipping/demo route. Times are guest-input milliseconds; the title only

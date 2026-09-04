@@ -49,8 +49,6 @@ class TitleProfile:
     display_name: str
     save_namespace: str
     identity: TitleIdentity
-    recompiler_template: Path
-    switch_tables_extra: Path
     navigation: Navigation
 
 
@@ -86,13 +84,6 @@ def _unsigned_byte(table: dict[str, object], key: str, description: str) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or not 0 <= value <= 0xFF:
         raise ProfileError(f"{description}.{key} must be an unsigned byte")
     return value
-
-
-def _portable_relative_path(value: str, description: str) -> Path:
-    path = Path(value)
-    if path.is_absolute() or ".." in path.parts:
-        raise ProfileError(f"{description} must be a repository-relative path")
-    return path
 
 
 def _sha256(table: dict[str, object], key: str) -> str:
@@ -147,7 +138,6 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
     if _HEX32.fullmatch(title_id) is None or _HEX32.fullmatch(savegame_id) is None:
         raise ProfileError("identity title_id and savegame_id must be 8 lowercase hex digits")
 
-    recompiler = _mapping(document.get("recompiler"), "recompiler")
     navigation_table = _mapping(document.get("navigation"), "navigation")
     menu_walk = _string(navigation_table, "menu_walk", "navigation")
     start_walk = _string(navigation_table, "start_walk", "navigation")
@@ -176,13 +166,6 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
             disc_count=_positive_integer(identity_table, "disc_count", "identity"),
             xex_sha256=_sha256(identity_table, "xex_sha256"),
             image_sha256=_sha256(identity_table, "image_sha256"),
-        ),
-        recompiler_template=_portable_relative_path(
-            _string(recompiler, "template", "recompiler"), "recompiler.template"
-        ),
-        switch_tables_extra=_portable_relative_path(
-            _string(recompiler, "switch_tables_extra", "recompiler"),
-            "recompiler.switch_tables_extra",
         ),
         navigation=Navigation(
             menu_walk=menu_walk,

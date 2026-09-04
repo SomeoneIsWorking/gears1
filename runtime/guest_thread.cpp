@@ -6,7 +6,7 @@
 #include <thread>
 #include <vector>
 
-#include <byteswap.h>
+#include "byte_order.h"
 #include <lucent/log.h>
 
 #include "guest_heap.h"
@@ -68,12 +68,12 @@ constexpr uint32_t kPcrSize = 0x1000;
 constexpr uint32_t kThreadSize = 0x1000;
 constexpr uint32_t kTlsSize = 0x1000;
 
-void Store32(GuestMemory& memory, uint32_t address, uint32_t value)
+void Store32(GuestMemory &memory, uint32_t address, uint32_t value)
 {
     *memory.Translate<uint32_t>(address) = ByteSwap(value);
 }
 
-void Store8(GuestMemory& memory, uint32_t address, uint8_t value)
+void Store8(GuestMemory &memory, uint32_t address, uint8_t value)
 {
     *memory.Translate<uint8_t>(address) = value;
 }
@@ -85,14 +85,14 @@ std::mutex g_threadBlockMutex;
 std::vector<uint32_t> g_threadBlocks;
 std::once_flag g_tickerStarted;
 
-void PublishTicks(GuestMemory& memory)
+void PublishTicks(GuestMemory &memory)
 {
     const auto start = std::chrono::steady_clock::now();
     for (;;)
     {
         const auto elapsed = std::chrono::steady_clock::now() - start;
-        const uint32_t tick = uint32_t(
-            std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
+        const uint32_t tick =
+            uint32_t(std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count());
 
         {
             std::lock_guard<std::mutex> guard(g_threadBlockMutex);
@@ -119,7 +119,7 @@ void SetGuestThreadName(std::string name)
     t_guestThreadName = std::move(name);
 }
 
-const char* GuestThreadName()
+const char *GuestThreadName()
 {
     return t_guestThreadName.c_str();
 }
@@ -137,15 +137,18 @@ uint8_t ProcessorNumberFromMask(uint32_t mask)
         // `ctz(mask) % 6`, which turned 0x40 into processor 0 and 0x100 into
         // processor 2 -- a processor the title never asked for, indistinguishable
         // afterwards from one it did.
-        lucent::warn("thread", "processor mask {:#x} names none of the console's"
-            " {} hardware threads", mask, kHardwareThreadCount);
+        lucent::warn("thread",
+                     "processor mask {:#x} names none of the console's"
+                     " {} hardware threads",
+                     mask, kHardwareThreadCount);
         return kProcessorNone;
     }
     if (named != mask)
     {
-        lucent::warn("thread", "processor mask {:#x} has bits outside the console's"
-            " {} hardware threads; only {:#x} of it is a processor",
-            mask, kHardwareThreadCount, named);
+        lucent::warn("thread",
+                     "processor mask {:#x} has bits outside the console's"
+                     " {} hardware threads; only {:#x} of it is a processor",
+                     mask, kHardwareThreadCount, named);
     }
 
     // The console affinity contract reports the highest processor named by a
@@ -156,8 +159,10 @@ uint8_t ProcessorNumberFromMask(uint32_t mask)
     const uint8_t cpu = uint8_t(31 - __builtin_clz(named));
     if ((named & (named - 1)) != 0)
     {
-        lucent::warn("thread", "processor mask {:#x} names {} hardware threads;"
-            " recording the highest, {}", mask, __builtin_popcount(named), cpu);
+        lucent::warn("thread",
+                     "processor mask {:#x} names {} hardware threads;"
+                     " recording the highest, {}",
+                     mask, __builtin_popcount(named), cpu);
     }
     return cpu;
 }
@@ -172,15 +177,15 @@ void SetCurrentGuestProcessor(uint8_t cpu)
     t_currentProcessor = cpu;
 }
 
-void SetGuestThreadProcessor(GuestMemory& memory, uint32_t pcrAddress,
-                             uint32_t threadObject, uint8_t cpu)
+void SetGuestThreadProcessor(GuestMemory &memory, uint32_t pcrAddress, uint32_t threadObject,
+                             uint8_t cpu)
 {
     Store8(memory, pcrAddress + kPcrCurrentCpu, cpu);
     if (threadObject != 0)
         Store8(memory, threadObject + kThreadCurrentCpu, cpu);
 }
 
-bool CreateGuestThreadBlock(GuestMemory& memory, uint32_t stackSize, GuestThreadBlock& out)
+bool CreateGuestThreadBlock(GuestMemory &memory, uint32_t stackSize, GuestThreadBlock &out)
 {
     uint32_t pcrSize = kPcrSize;
     uint32_t threadSize = kThreadSize;
@@ -214,7 +219,7 @@ bool CreateGuestThreadBlock(GuestMemory& memory, uint32_t stackSize, GuestThread
     // it from the title's own request; the host threads the runtime drives into
     // guest code keep this, and only need it to be a legal processor.
     SetGuestThreadProcessor(memory, pcr, thread,
-        uint8_t(g_nextProcessorNumber.fetch_add(1) % kHardwareThreadCount));
+                            uint8_t(g_nextProcessorNumber.fetch_add(1) % kHardwareThreadCount));
 
     {
         std::lock_guard<std::mutex> guard(g_threadBlockMutex);
@@ -223,13 +228,15 @@ bool CreateGuestThreadBlock(GuestMemory& memory, uint32_t stackSize, GuestThread
 
     // Started with the first thread block rather than at boot, so the ticker
     // never runs without a block to write into.
-    std::call_once(g_tickerStarted, [&memory] {
-        std::thread(PublishTicks, std::ref(memory)).detach();
-        lucent::info("thread", "publishing the scheduler tick into thread blocks");
-    });
+    std::call_once(g_tickerStarted,
+                   [&memory]
+                   {
+                       std::thread(PublishTicks, std::ref(memory)).detach();
+                       lucent::info("thread", "publishing the scheduler tick into thread blocks");
+                   });
 
-    lucent::info("thread", "thread block: pcr={:#x} thread={:#x} tls={:#x} stack={:#x}..{:#x}",
-        pcr, thread, tls, out.stackLimit, out.stackBase);
+    lucent::info("thread", "thread block: pcr={:#x} thread={:#x} tls={:#x} stack={:#x}..{:#x}", pcr,
+                 thread, tls, out.stackLimit, out.stackBase);
     return true;
 }
 

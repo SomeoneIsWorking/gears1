@@ -1,6 +1,6 @@
 #include "guest_texture_hash.h"
 
-// XXH3, from the xxHash the recompiler already vendors. On x86 the vendor's
+// XXH3, from the shared xxHash dependency. On x86 the vendor's
 // dispatcher selects SSE2, AVX2, or AVX-512 at runtime, so a portable binary is
 // not permanently limited to the generic x86-64 SSE2 baseline. Other
 // architectures retain xxHash's normal compile-time SIMD selection.

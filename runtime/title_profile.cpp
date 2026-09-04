@@ -130,11 +130,11 @@ std::string_view TitleProfileErrorText(TitleProfileError error) noexcept
     case TitleProfileError::InvalidObservedIdentity:
         return "invalid executable identity";
     case TitleProfileError::InvalidProfile:
-        return "invalid generated title profile";
+        return "invalid title profile";
     case TitleProfileError::AmbiguousRegistry:
-        return "ambiguous generated title registry";
+        return "ambiguous title registry";
     case TitleProfileError::UnknownBuild:
-        return "executable does not match the generated title module";
+        return "executable does not match a supported title revision";
     }
     return "unknown title profile error";
 }

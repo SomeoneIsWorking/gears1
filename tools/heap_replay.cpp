@@ -19,20 +19,18 @@
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <string>
 
 #include "guest_heap.h"
 #include "guest_memory.h"
-#include "ppc_config.h"
-#include "ppc_context.h"
-
-PPCFuncMapping PPCFuncMappings[] = { { 0, nullptr } };
+#include "lucent/log.h"
 
 namespace
 {
 struct Replay
 {
-    gears::GuestHeap& heap;
+    gears::GuestHeap &heap;
     std::map<uint32_t, uint32_t> mapping; // recorded address -> replayed address
     uint64_t allocs = 0;
     uint64_t frees = 0;
@@ -40,18 +38,18 @@ struct Replay
 };
 } // namespace
 
-int main(int argc, char** argv)
+int main(int argc, char **argv)
 {
     if (argc < 2)
     {
-        fprintf(stderr, "usage: heap_replay <trace.log>\n");
+        lucent::error("heap-replay", "usage: heap_replay <trace.log>");
         return 2;
     }
 
-    FILE* f = fopen(argv[1], "r");
-    if (!f)
+    std::unique_ptr<FILE, decltype(&fclose)> input(fopen(argv[1], "r"), fclose);
+    if (!input)
     {
-        fprintf(stderr, "cannot open %s\n", argv[1]);
+        lucent::error("heap-replay", "cannot open {}", argv[1]);
         return 2;
     }
 
@@ -61,15 +59,15 @@ int main(int argc, char** argv)
 
     static gears::GuestHeap titleHeap(memory, 0x40000000, 0x20000000);
     static gears::GuestHeap physicalHeap(memory, 0xA0000000, 0x20000000);
-    Replay title{ titleHeap };
-    Replay physical{ physicalHeap };
+    Replay title{titleHeap};
+    Replay physical{physicalHeap};
 
     char line[512];
     uint64_t lineNumber = 0;
-    while (fgets(line, sizeof(line), f))
+    while (fgets(line, sizeof(line), input.get()))
     {
         ++lineNumber;
-        const char* p = strstr(line, "[heap] allocated ");
+        const char *p = strstr(line, "[heap] allocated ");
         bool freeing = false;
         if (!p)
         {
@@ -90,7 +88,7 @@ int main(int argc, char** argv)
             continue;
         }
 
-        Replay& r = (address >= 0xA0000000) ? physical : title;
+        Replay &r = (address >= 0xA0000000) ? physical : title;
 
         if (freeing)
         {
@@ -110,7 +108,7 @@ int main(int argc, char** argv)
         // blocks the real allocator would have used. Fall back to 0, which is
         // what every title-heap caller passes.
         uint32_t alignment = 0;
-        const char* alignField = strstr(p, ", align ");
+        const char *alignField = strstr(p, ", align ");
         if (alignField)
             sscanf(alignField, ", align %x", &alignment);
 
@@ -121,23 +119,21 @@ int main(int argc, char** argv)
         {
             ++r.failures;
             if (r.failures <= 3)
-                fprintf(stderr, "line %llu: allocation of %#x failed\n",
-                    (unsigned long long)lineNumber, size);
+                lucent::error("heap-replay", "line {}: allocation of {:#x} failed", lineNumber,
+                              size);
             continue;
         }
         r.mapping[address] = got;
     }
-    fclose(f);
-
-    auto report = [](const char* name, Replay& r) {
+    auto report = [](const char *name, Replay &r)
+    {
         const gears::GuestHeap::Usage u = r.heap.GetUsage();
-        printf("%s: %llu allocs, %llu frees, %llu FAILURES\n", name,
-            (unsigned long long)r.allocs, (unsigned long long)r.frees,
-            (unsigned long long)r.failures);
-        printf("  peak %.2f MiB, live %.2f MiB in %u regions\n",
-            u.peak / 1048576.0, u.allocated / 1048576.0, u.regions);
-        printf("  free %.2f MiB in %u blocks, largest %.2f MiB\n",
-            u.free / 1048576.0, u.freeBlocks, u.largestFree / 1048576.0);
+        lucent::info("heap-replay", "{}: {} allocs, {} frees, {} failures", name, r.allocs, r.frees,
+                     r.failures);
+        lucent::info("heap-replay", "peak {:.2f} MiB, live {:.2f} MiB in {} regions",
+                     u.peak / 1048576.0, u.allocated / 1048576.0, u.regions);
+        lucent::info("heap-replay", "free {:.2f} MiB in {} blocks, largest {:.2f} MiB",
+                     u.free / 1048576.0, u.freeBlocks, u.largestFree / 1048576.0);
     };
     report("title heap", title);
     report("physical heap", physical);

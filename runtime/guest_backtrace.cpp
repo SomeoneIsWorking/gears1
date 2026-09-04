@@ -1,7 +1,5 @@
 #include "guest_backtrace.h"
 
-#include "../extern/XenonRecomp/XenonUtils/byteswap.h"
-
 #include "guest_memory.h"
 
 namespace gears
@@ -9,7 +7,7 @@ namespace gears
 namespace
 {
 
-// The Xbox 360 stack frame, as the recompiled __savegprlr_N helpers show it:
+// The Xbox 360 stack-frame contract recovered from the executable is:
 //
 //     std  r28,-40(r1)      ... callee-saved registers, below the frame
 //     stw  r12,-8(r1)       ... the RETURN ADDRESS, at -8 from the frame top
@@ -35,7 +33,7 @@ bool InImage(uint32_t address)
 
 uint32_t ReadWord(uint32_t address)
 {
-    return ByteSwap(*Memory().Translate<uint32_t>(address));
+    return __builtin_bswap32(*Memory().Translate<uint32_t>(address));
 }
 
 } // namespace

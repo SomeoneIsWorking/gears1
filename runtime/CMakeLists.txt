@@ -1,103 +1,13 @@
-# The translated game code. Gitignored and machine-local: it is produced from
-# the user's own XEX by XenonRecomp.
-file(GLOB PPC_RECOMP_SOURCES CONFIGURE_DEPENDS "${GEARS_PPC_DIR}/ppc_recomp.*.cpp")
+# The gameplay target is intentionally absent until shared/x360port embeds
+# Xenia's Xenon dynarec. Keeping this named target makes direct build attempts
+# fail at the same explicit boundary as the launcher, without preserving a
+# generated-code bridge.
+add_custom_target(gears1
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/require_x360port.py"
+    COMMENT "Checking the GearsUE3 gameplay executor boundary"
+    VERBATIM)
 
-if(NOT PPC_RECOMP_SOURCES)
-    message(FATAL_ERROR
-        "No generated sources in ${GEARS_PPC_DIR}. Run XenonRecomp first:\n"
-        "  XenonRecomp config/gears.toml extern/XenonRecomp/XenonUtils/ppc_context.h")
-endif()
-
-# ppc_context.h IS COPIED into the generated directory by XenonRecomp (with a
-# two-line prologue), and the copy -- not the submodule's -- is what the guest
-# code compiles against. So an edit to the submodule header does NOTHING until
-# the recompiler is re-run, and the symptom is a compile error in the RUNTIME
-# about a symbol that is plainly present in the file you just edited. Worse, an
-# edit that happens to compile silently does not reach the guest at all.
-#
-# Compare the bodies and fail loudly. A drift guard is worth it here because the
-# stale copy is gitignored, so nothing else can notice.
-set(_ppc_ctx_generated "${GEARS_PPC_DIR}/ppc_context.h")
-set(_ppc_ctx_source "${CMAKE_SOURCE_DIR}/extern/XenonRecomp/XenonUtils/ppc_context.h")
-if(EXISTS "${_ppc_ctx_generated}" AND EXISTS "${_ppc_ctx_source}")
-    file(READ "${_ppc_ctx_generated}" _ppc_ctx_gen_text)
-    file(READ "${_ppc_ctx_source}" _ppc_ctx_src_text)
-    string(FIND "${_ppc_ctx_gen_text}" "${_ppc_ctx_src_text}" _ppc_ctx_at)
-    if(_ppc_ctx_at EQUAL -1)
-        message(FATAL_ERROR
-            "${_ppc_ctx_generated} is STALE: it does not contain the current "
-            "body of ${_ppc_ctx_source}. The guest code compiles against the "
-            "generated copy, so your edit to the submodule header is not "
-            "reaching it. Re-run XenonRecomp, or refresh the copy:\n"
-            "  uv run --locked python tools/refresh_recompiler_header.py "
-            "--ppc-dir ${GEARS_PPC_DIR}")
-    endif()
-endif()
-
-list(LENGTH PPC_RECOMP_SOURCES PPC_RECOMP_COUNT)
-message(STATUS "gears1: ${PPC_RECOMP_COUNT} recompiled translation units")
-
-add_library(gears_ppc STATIC
-    ${PPC_RECOMP_SOURCES}
-    "${GEARS_PPC_DIR}/ppc_func_mapping.cpp")
-
-target_include_directories(gears_ppc PUBLIC
-    "${GEARS_PPC_DIR}"
-    "${THIRDPARTY_ROOT}/simde")
-
-# Take over the recompiler's device-store hook. ppc_context.h leaves the
-# PPC_MM_STORE_* macros #ifndef-guarded precisely so a runtime can define them,
-# and this must reach every translation unit BEFORE that header, so it is a
-# forced include rather than an #include anyone could forget. Eleven sites in
-# the whole image use it, so nothing hot is affected.
-target_include_directories(gears_ppc PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
-# And the exact-title indirect-call adapter, for the same reason and by the same
-# route. It must come AFTER ppc_mmio.h in this list: that header only defines
-# macros, while this one composes the shared checked call with the Gears 1
-# observation selector and then pulls in ppc_context.h. An unchecked indirect
-# call is how a stale guest vtable becomes a jump into host memory with nothing
-# to say which pointer was bad.
-# SHELL: keeps each flag glued to its argument. Without it CMake de-duplicates
-# the repeated `-include` token and the second header arrives as a bare input
-# file, which fails as "cannot specify -o when generating multiple output files"
-# -- an error that says nothing about the actual cause.
-target_compile_options(gears_ppc PRIVATE
-    "SHELL:-include ppc_mmio.h"
-    "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/titles/gears1/guest_indirect_call.h")
-
-# 49k functions of straight-line translated code. The optimisation level is a
-# knob because it is a real trade: -O0 keeps the build under a couple of minutes
-# while the runtime is being brought up, and the translated code is exactly the
-# kind of thing -- long straight-line basic blocks over a register struct --
-# that an optimiser eats for breakfast. GEARS_PPC_OPT=-O1 (or -O2) rebuilds it
-# optimised.
-# -O2 by default. The old default was -O0 with the comment "keeps build times
-# sane", and that reason turned out to be false when anyone measured it: the
-# whole 49k-function image rebuilds at -O2 in 106 seconds on this machine,
-# against 98 at -O1. The cost was being paid for nothing, and it was not small
-# -- the title's own audio mixer took 16.7 ms per frame at -O0 and 6.7 ms at
-# -O2, which is the difference between the audio pipeline missing its rate by
-# 3x and missing it by 1.25x.
-set(GEARS_PPC_OPT "-O2" CACHE STRING "Optimisation level for the translated guest code")
-target_compile_options(gears_ppc PRIVATE -Wno-unused-variable ${GEARS_PPC_OPT})
-
-# THE HOST RUNTIME IS OPTIMISED TOO, and it was not.
-#
-# The project is configured with CMAKE_BUILD_TYPE=Debug, which is right for the
-# guest side -- a breakpoint in translated code has to land somewhere meaningful --
-# and GEARS_PPC_OPT keeps the 191 generated translation units at -O2 regardless.
-# But it left every host source at -O0, the renderer included, and the renderer is
-# the thing whose per-frame cost this project spends its time measuring.
-#
-# Measured: the texture staleness hash ran at 0.95 GB/s in the runtime while the
-# identical XXH3 over the identical mapping ran at 7-22 GB/s in a -O2 microbench.
-# That is not a memory effect, it is an unoptimised build, and every frame-time
-# number taken before this was of a debug renderer.
-#
-# -O2 with -g, not RelWithDebInfo: the build type stays Debug for the guest side,
-# and host frames stay debuggable. GEARS_HOST_OPT=-O0 turns it off for bisecting a
-# miscompile in our own code, the same escape hatch GEARS_PPC_OPT provides.
-set(GEARS_HOST_OPT "-O2" CACHE STRING "Optimisation level for the host runtime")
+set(GEARS_HOST_OPT "-O2" CACHE STRING "Optimisation level for host-native code")
 function(gears_optimise_host target)
     if(TARGET ${target})
         target_compile_options(${target} PRIVATE $<$<CONFIG:Debug>:${GEARS_HOST_OPT}>)
@@ -107,383 +17,109 @@ endfunction()
 add_library(gears_title_profile STATIC title_profile.cpp)
 target_include_directories(gears_title_profile PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
-add_library(gears_generated_title_profile STATIC generated_title_profile.cpp)
-target_include_directories(gears_generated_title_profile PRIVATE "${GEARS_PPC_DIR}")
-target_link_libraries(gears_generated_title_profile PUBLIC gears_title_profile)
-
-add_library(gears_title_executable STATIC title_executable.cpp)
-target_include_directories(gears_title_executable PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(gears_title_executable PUBLIC gears_title_profile XenonUtils)
-
 add_library(gears_gpu_queue_access STATIC gpu_queue_access.cpp)
 target_include_directories(gears_gpu_queue_access PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 
-# Import stubs are generated because the import list comes from the game.
-set(IMPORT_STUBS "${CMAKE_CURRENT_BINARY_DIR}/imports_generated.cpp")
-add_custom_command(
-    OUTPUT "${IMPORT_STUBS}"
-    COMMAND ${GEARS_UV_RUN} python
-            "${CMAKE_SOURCE_DIR}/tools/gen_import_stubs.py"
-            "${GEARS_PPC_DIR}/ppc_func_mapping.cpp"
-            "${IMPORT_STUBS}"
-    DEPENDS "${CMAKE_SOURCE_DIR}/tools/gen_import_stubs.py"
-            "${GEARS_PPC_DIR}/ppc_func_mapping.cpp"
-    COMMENT "Generating Xbox 360 kernel import stubs")
+# The watchdog is retained native diagnostic infrastructure. Building it here
+# keeps its lock-free guest-call path checked while execution wiring waits for
+# x360port; it does not create or call a guest executor.
+add_library(gears_wait_probe STATIC wait_probe.cpp)
+target_include_directories(gears_wait_probe PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(gears_wait_probe PRIVATE lucent::lucent)
 
-# Texture content identity is shared by the live renderer and its focused test.
-# Build it once so both exercise the same CPU-dispatch path rather than compiling
-# separate copies with potentially different target-feature flags.
-#
-# Probe the TARGET compiler rather than the host architecture: the latter is
-# wrong for cross-compiles. An Apple universal ARM64+x86_64 build deliberately
-# fails this compile-only probe and uses normal xxHash for both slices.
-include(CheckCSourceCompiles)
-if(DEFINED CMAKE_TRY_COMPILE_TARGET_TYPE)
-    set(GEARS_SAVED_TRY_COMPILE_TARGET_TYPE "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
-    set(GEARS_HAD_TRY_COMPILE_TARGET_TYPE TRUE)
-endif()
-set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
-check_c_source_compiles([[
-#if !(defined(__x86_64__) || defined(__i386__) || defined(_M_IX86) || defined(_M_X64))
-#error xxHash x86 dispatch requires an exclusively x86 target
-#endif
-#if !(defined(__GNUC__) || defined(_MSC_VER))
-#error xxHash x86 dispatch requires a compiler supported by the vendor source
-#endif
-int main(void) { return 0; }
-]] GEARS_HAVE_XXHASH_X86_DISPATCH)
-if(GEARS_HAD_TRY_COMPILE_TARGET_TYPE)
-    set(CMAKE_TRY_COMPILE_TARGET_TYPE "${GEARS_SAVED_TRY_COMPILE_TARGET_TYPE}")
-else()
-    unset(CMAKE_TRY_COMPILE_TARGET_TYPE)
-endif()
-unset(GEARS_HAD_TRY_COMPILE_TARGET_TYPE)
-unset(GEARS_SAVED_TRY_COMPILE_TARGET_TYPE)
-
-add_library(gears_guest_texture_hash STATIC guest_texture_hash.cpp)
-target_include_directories(gears_guest_texture_hash PUBLIC .
-    PRIVATE "${THIRDPARTY_ROOT}/xxHash")
-target_link_libraries(gears_guest_texture_hash PRIVATE xxHash::xxhash)
-if(GEARS_HAVE_XXHASH_X86_DISPATCH)
-    target_sources(gears_guest_texture_hash PRIVATE
-        "${THIRDPARTY_ROOT}/xxHash/xxh_x86dispatch.c")
-    target_compile_definitions(gears_guest_texture_hash PRIVATE
-        GEARS_XXHASH_X86_DISPATCH=1)
+if(TARGET xxHash::xxhash)
+    add_library(gears_guest_texture_hash STATIC guest_texture_hash.cpp)
+    target_include_directories(gears_guest_texture_hash PUBLIC .
+        PRIVATE "${GEARS_XXHASH_ROOT}")
+    target_link_libraries(gears_guest_texture_hash PRIVATE xxHash::xxhash)
 endif()
 
-add_executable(gears1
-    main.cpp
-    guest_memory.cpp
-    import_stub.cpp
-    import_variables.cpp
-    guest_heap.cpp
-    guest_thread.cpp
-    kernel_memory.cpp
-    kernel_sync.cpp
-    crt_printf.cpp
-    xam_loader.cpp
-    xam_user.cpp
-    xam_notify.cpp
-    xam_overlapped.cpp
-    xnet_null.cpp
-    kernel_misc.cpp
-    bugcheck_policy.cpp
-    guest_clock.cpp
-    kernel_time.cpp
-    kernel_timer.cpp
-    kernel_objects.cpp
-    kernel_events.cpp
-    kernel_thread.cpp
-    kernel_object_api.cpp
-    kernel_video.cpp
-    pm4_trace.cpp
-    vd_null_gpu.cpp
-    gpu_diagnostics_profile.cpp
-    gpu_shader_load_watch.cpp
-    gpu_shader_module_observation.cpp
-    gpu_present.cpp
-    gpu_present_source.cpp
-    gpu_present_stage.cpp
-    debug_http.cpp
-    graphics_probe.cpp
-    graphics_probe_render.cpp
-    input.cpp
-    hle_d3d.cpp
-    rhi_pm4_shader_evidence.cpp
-    rhi_renderer_input.cpp
-    rhi_renderer_report_diagnostics.cpp
-    rhi_semantic_state.cpp
-    rhi_semantic_stream.cpp
-    rhi_resource_reference.cpp
-    native_rhi.cpp
-    native_rhi_backend.cpp
-    native_rhi_resources.cpp
-    native_rhi_present.cpp
-    gpu_ticket_wait.cpp
-    frame_production_timing.cpp
-    titles/gears1/bugcheck_policy.cpp
-    titles/gears1/gpu_diagnostics_profile.cpp
-    titles/gears1/hle_d3d.cpp
-    titles/gears1/color_write_gamma_override.cpp
-    titles/gears1/rhi_bindings.cpp
-    titles/gears1/rhi_device_state_reset_binding.cpp
-    titles/gears1/rhi_index_buffer.cpp
-    titles/gears1/rhi_resolve.cpp
-    titles/gears1/rhi_resolve_binding.cpp
-    titles/gears1/rhi_resource_construction_binding.cpp
-    titles/gears1/rhi_resource_identity.cpp
-    titles/gears1/rhi_resource_lifetime_binding.cpp
-    titles/gears1/gpu_ticket_wait_binding.cpp
-    titles/gears1/gpu_ticket_wait_state.cpp
-    titles/gears1/frame_production_timing_binding.cpp
-    titles/gears1/guest_indirect_call.cpp
-    titles/gears1/audio_mix.cpp
-    titles/gears1/audio_mix_override.cpp
-    titles/gears1/rhi_target_descriptor_watch.cpp
-    titles/gears1/rhi_texture_descriptor_watch.cpp
-    titles/gears1/rhi_shader_object_watch.cpp
-    titles/gears1/rhi_vertex_buffer.cpp
-    titles/gears1/rhi_vertex_stream_watch.cpp
-    titles/gears1/shader_binding_capture.cpp
-    titles/gears1/shader_flush_capture.cpp
-    titles/gears1/shader_load_watch.cpp
-    titles/gears1/shader_setter_override.cpp
-    guest_write_watch.cpp
-    gpu_register_watch.cpp
-    kernel_rtl.cpp
-    kernel_config.cpp
-    kernel_dispatcher.cpp
-    kernel_spinlock.cpp
-    audio_out.cpp
-    titles/gears1/guest_probe_core.cpp
-    titles/gears1/guest_probe_runtime.cpp
-    titles/gears1/guest_probe_loader.cpp
-    guest_backtrace.cpp
-    fault_report.cpp
-    file_disposition.cpp
-    guest_stack_argument.cpp
-    frame_queue.cpp
-    gpu_queue_family.cpp
-    gpu_instance.cpp
-    gpu_device_features.cpp
-    gpu_packet_memory.cpp
-    gpu_swap_packet.cpp
-    render_thread.cpp
-    guest_indirect_call.cpp
-    user_profile.cpp
-    xam_apps.cpp
-    xam_content.cpp
-    directory_info.cpp
-    xconfig.cpp
-    host_time_zone.cpp
-    ppc_mmio.cpp
-    wait_probe.cpp
-    xaudio_null.cpp
-    xma.cpp
-    xma_context.cpp
-    xma_decode.cpp
-    guest_filesystem.cpp
-    kernel_file.cpp
-    "${IMPORT_STUBS}")
+# The retained renderer and semantic-native seams are executor-independent.
+# They remain buildable as focused libraries and offline instruments while the
+# product waits for x360port; no target here executes guest PPC.
+if(TARGET gears_guest_texture_hash)
+    add_library(gears_draw STATIC
+        frame_ab.cpp
+        frame_capture.cpp
+        frame_content.cpp
+        frame_contract.cpp
+        gpu_device_features.cpp
+        gpu_draw_ab.cpp
+        gpu_draw.cpp
+        gpu_draw_api.cpp
+        gpu_draw_arena.cpp
+        gpu_draw_census.cpp
+        gpu_draw_descriptors.cpp
+        gpu_draw_formats.cpp
+        gpu_draw_indices.cpp
+        gpu_draw_native_input.cpp
+        gpu_draw_options.cpp
+        gpu_draw_pipelines.cpp
+        gpu_draw_pixels.cpp
+        gpu_draw_probe.cpp
+        gpu_draw_reinterpret.cpp
+        gpu_draw_resolve.cpp
+        gpu_draw_resolve_decode.cpp
+        gpu_draw_resolve_plan.cpp
+        gpu_draw_shader_override.cpp
+        gpu_draw_shaders.cpp
+        gpu_draw_targets.cpp
+        gpu_draw_textures.cpp
+        gpu_draw_uniforms.cpp
+        gpu_draw_untile.cpp
+        gpu_draw_vertexfetch.cpp
+        gpu_frame_cleanup.cpp
+        gpu_frame_slots.cpp
+        gpu_frame_timing.cpp
+        gpu_instance.cpp
+        gpu_queue_family.cpp
+        gpu_retirement.cpp
+        gpu_renderer_capacity.cpp
+        gpu_renderer_lifetime.cpp
+        gpu_resolve_extent.cpp
+        gpu_scanout.cpp
+        gpu_scanout_gamma.cpp
+        gpu_shared_device.cpp
+        guest_dirty_pages.cpp
+        native_pass.cpp
+        render_ab.cpp
+        scanout_gamma.cpp
+        spirv_clamp.cpp)
+    target_include_directories(gears_draw PUBLIC . PRIVATE "${GEARS_XXHASH_ROOT}")
+    target_link_libraries(gears_draw PRIVATE lucent::lucent gears_gpu_queue_access
+                                             gears_guest_texture_hash)
 
-set(GEARS_BUILD_REVISION_HEADER
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/build_revision.h")
-add_custom_target(gears_build_revision
-    COMMAND ${GEARS_UV_RUN} python
-            "${CMAKE_SOURCE_DIR}/tools/write_build_revision.py"
-            --repository "${CMAKE_SOURCE_DIR}"
-            --output "${GEARS_BUILD_REVISION_HEADER}"
-    BYPRODUCTS "${GEARS_BUILD_REVISION_HEADER}"
-    DEPENDS "${CMAKE_SOURCE_DIR}/tools/write_build_revision.py"
-    COMMENT "Refreshing the runtime build revision"
-    VERBATIM)
-add_dependencies(gears1 gears_build_revision)
-target_include_directories(gears1 PRIVATE .
-    "${CMAKE_CURRENT_BINARY_DIR}/generated"
-    "${THIRDPARTY_ROOT}/xxHash")
-target_link_libraries(gears1 PRIVATE gears_ppc gears_generated_title_profile
-    gears_title_executable XenonUtils lucent::lucent)
+    add_library(gears1_native_pass STATIC titles/gears1/native_pass.cpp)
+    target_include_directories(gears1_native_pass PUBLIC .)
+    add_library(gears1_draw INTERFACE)
+    target_link_libraries(gears1_draw INTERFACE gears_draw gears1_native_pass)
 
-if(GEARS_HAVE_XMA_DECODER)
-    target_link_libraries(gears1 PRIVATE ffmpeg_xma)
-    target_compile_definitions(gears1 PRIVATE GEARS_HAVE_XMA_DECODER=1)
-endif()
-
-# The guest-draw renderer, in its own static library rather than compiled into
-# gears1 -- because it depends on NOTHING in the runtime (gpu_draw.cpp includes
-# only gpu_draw.h and gpu_draw_xlate.h), which is what makes an offline frame
-# replay possible. tools/frame_replay links this and renders a captured frame in
-# about a second, with no guest, no menu walk and no 200-second boot; see
-# frame_capture.h. gears1 links it exactly as before.
-add_library(gears_draw STATIC
-    frame_ab.cpp
-    frame_capture.cpp
-    frame_content.cpp
-    frame_contract.cpp
-    gpu_device_features.cpp
-    gpu_draw_ab.cpp
-    gpu_draw.cpp
-    gpu_draw_api.cpp
-    gpu_draw_arena.cpp
-    gpu_draw_census.cpp
-    gpu_draw_descriptors.cpp
-    gpu_draw_formats.cpp
-    gpu_draw_indices.cpp
-    gpu_draw_native_input.cpp
-    gpu_draw_options.cpp
-    gpu_draw_pipelines.cpp
-    gpu_draw_pixels.cpp
-    gpu_draw_probe.cpp
-    gpu_draw_reinterpret.cpp
-    gpu_draw_resolve.cpp
-    gpu_draw_resolve_decode.cpp
-    gpu_draw_resolve_plan.cpp
-    gpu_draw_shader_override.cpp
-    gpu_draw_shaders.cpp
-    gpu_draw_targets.cpp
-    gpu_draw_textures.cpp
-    gpu_draw_uniforms.cpp
-    gpu_draw_untile.cpp
-    gpu_draw_vertexfetch.cpp
-    gpu_frame_cleanup.cpp
-    gpu_frame_slots.cpp
-    gpu_frame_timing.cpp
-    gpu_instance.cpp
-    gpu_queue_family.cpp
-    gpu_retirement.cpp
-    gpu_renderer_capacity.cpp
-    gpu_renderer_lifetime.cpp
-    gpu_resolve_extent.cpp
-    gpu_scanout.cpp
-    gpu_scanout_gamma.cpp
-    gpu_shared_device.cpp
-    guest_dirty_pages.cpp
-    native_pass.cpp
-    render_ab.cpp
-    scanout_gamma.cpp
-    spirv_clamp.cpp)
-target_include_directories(gears_draw PUBLIC . PRIVATE "${THIRDPARTY_ROOT}/xxHash")
-target_link_libraries(gears_draw PRIVATE lucent::lucent)
-target_link_libraries(gears_draw PRIVATE gears_gpu_queue_access)
-target_link_libraries(gears_draw PRIVATE gears_guest_texture_hash)
-
-# Exact-title renderer composition. gears_draw remains title-neutral and leaves
-# ExactTitleRoster unresolved; every final Gears 1 consumer links this interface
-# so a future title can supply a different adapter without cloning the renderer.
-add_library(gears1_native_pass STATIC titles/gears1/native_pass.cpp)
-target_include_directories(gears1_native_pass PUBLIC .)
-add_library(gears1_draw INTERFACE)
-target_link_libraries(gears1_draw INTERFACE gears_draw gears1_native_pass)
-target_link_libraries(gears1 PRIVATE gears1_draw)
-target_link_libraries(gears1 PRIVATE gears_gpu_queue_access)
-
-# The host graphics backend. Vulkan because extern/xenia's SPIR-V shader
-# translator is the intended path for real content later, and SDL3 for the
-# window and its Vulkan surface.
-#
-# Both are optional at BUILD time as well as at run time: without them
-# gpu_present.cpp compiles to the headless stub and the runtime behaves exactly
-# as it did before. A machine that cannot present must still be able to build
-# and run the measurement harnesses.
-find_package(Vulkan QUIET)
-find_package(SDL3 QUIET CONFIG)
-if(GEARS_REQUIRE_PRODUCT_DEPS AND (NOT Vulkan_FOUND OR NOT SDL3_FOUND))
-    message(FATAL_ERROR
-        "GearsUE3 product build requires Vulkan and SDL3 development packages")
-endif()
-if(Vulkan_FOUND)
-    target_sources(gears1 PRIVATE native_rhi_vulkan_resolve.cpp)
-    target_sources(gears1 PRIVATE native_rhi_vulkan_resources.cpp)
-    target_link_libraries(gears1 PRIVATE Vulkan::Vulkan)
-endif()
-if(Vulkan_FOUND AND SDL3_FOUND)
-    target_compile_definitions(gears1 PRIVATE GEARS_HAVE_PRESENTER)
-    target_link_libraries(gears1 PRIVATE SDL3::SDL3)
-    message(STATUS "gears1: host presenter enabled (Vulkan ${Vulkan_VERSION}, SDL3)")
-else()
-    message(WARNING
-        "gears1: no host presenter -- Vulkan and SDL3 development packages are "
-        "required for a window. The runtime will build and run headless.")
-endif()
-
-# The guest-draw graphics backend (runtime/gpu_draw.cpp): the first real draw.
-# It needs Vulkan (its own headless device -- no window, so no SDL3) and Xenia's
-# Xenos->SPIR-V translator (xenia_gpu). Optional like everything else: without
-# either it compiles to a stub and RenderHotDraw reports it is unavailable.
-if(Vulkan_FOUND AND GEARS_HAVE_XENOS_TRANSLATOR)
-    # The Xenos->SPIR-V translation lives in its own static library so xenia_gpu's
-    # PUBLIC compile definitions (VK_NO_PROTOTYPES, which would strip the Vulkan
-    # function prototypes gpu_draw.cpp/gpu_present.cpp need, and its bundled
-    # Vulkan-Headers) are consumed HERE and not re-exported to gears1. Linking
-    # xenia_gpu PRIVATE means gears1 still gets its symbols at the final link but
-    # none of its header world.
-    add_library(gears_draw_xlate STATIC
-        gpu_draw_depth_bias.cpp
-        gpu_draw_point_geometry.cpp
-        gpu_draw_shader_interface.cpp
-        gpu_draw_texture_decode.cpp
-        gpu_draw_xlate.cpp)
-    target_compile_definitions(gears_draw_xlate PRIVATE GEARS_HAVE_GUEST_DRAW)
-    target_include_directories(gears_draw_xlate PRIVATE .)
-    target_link_libraries(gears_draw_xlate PRIVATE xenia_gpu lucent::lucent)
-    # Xenia's texture_info.h GetBaseFormat is an SSSE3 shuffle on x86-64; the
-    # xenia_gpu island is built with -mavx for the same reason. This TU now
-    # includes it, so it needs the same target features.
-    target_compile_options(gears_draw_xlate PRIVATE -mavx)
-    target_compile_definitions(gears_draw PRIVATE GEARS_HAVE_GUEST_DRAW)
-    target_link_libraries(gears_draw PUBLIC Vulkan::Vulkan PRIVATE gears_draw_xlate)
-    target_compile_definitions(gears1 PRIVATE GEARS_HAVE_GUEST_DRAW)
-    target_link_libraries(gears1 PRIVATE Vulkan::Vulkan)
-    message(STATUS "gears1: guest-draw backend enabled (Vulkan + Xenos translator)")
-
-    # Offline frame replay: render a captured frame with no guest running. This
-    # is the instrument the renderer is debugged with -- one capture, then every
-    # arm of a comparison renders byte-identical input in about a second.
-    add_executable(frame_replay ${CMAKE_CURRENT_SOURCE_DIR}/../tools/frame_replay/main.cpp)
-    target_link_libraries(frame_replay PRIVATE gears1_draw lucent::lucent)
-    message(STATUS "gears1: frame_replay enabled")
-else()
-    message(WARNING
-        "gears1: no guest-draw backend -- needs Vulkan and extern/xenia's "
-        "translator. The first-draw milestone will be unavailable.")
-endif()
-
-# AddressSanitizer over OUR C++ only -- gears_ppc is deliberately left
-# uninstrumented. A guest store cannot reach the host heap by construction (it
-# is a uint32 guest address added to the mapping base, so it always lands inside
-# the 4 GiB reservation), so the 49k translated functions are not a suspect for
-# a smashed host allocation; instrumenting them would only multiply the build.
-# ASan supports partial instrumentation -- its allocator replaces malloc process
-# wide once the runtime is linked in, so every allocation the runtime makes is
-# still red-zoned and quarantined even though the guest code has no checks.
-option(GEARS_ASAN "Build the runtime, but not the translated guest code, with AddressSanitizer" OFF)
-if(GEARS_ASAN)
-    set(GEARS_ASAN_FLAGS -fsanitize=address -fno-omit-frame-pointer -g)
-    foreach(asan_target gears1 gears_draw gears1_native_pass gears_draw_xlate)
-        if(TARGET ${asan_target})
-            target_compile_options(${asan_target} PRIVATE ${GEARS_ASAN_FLAGS})
+    find_package(Vulkan QUIET)
+    if(Vulkan_FOUND AND GEARS_HAVE_XENOS_TRANSLATOR)
+        add_library(gears_draw_xlate STATIC
+            gpu_draw_depth_bias.cpp
+            gpu_draw_point_geometry.cpp
+            gpu_draw_shader_interface.cpp
+            gpu_draw_texture_decode.cpp
+            gpu_draw_xlate.cpp)
+        target_compile_definitions(gears_draw_xlate PRIVATE GEARS_HAVE_GUEST_DRAW)
+        target_include_directories(gears_draw_xlate PRIVATE .)
+        target_link_libraries(gears_draw_xlate PRIVATE xenia_gpu lucent::lucent)
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64")
+            target_compile_options(gears_draw_xlate PRIVATE -mavx)
         endif()
-    endforeach()
-    # Only the executable links, and it must link WITH the sanitizer so the
-    # ASan runtime is the first thing initialised in the process.
-    target_link_options(gears1 PRIVATE -fsanitize=address)
-    message(STATUS "gears1: AddressSanitizer enabled for the runtime (gears_ppc excluded)")
+        target_compile_definitions(gears_draw PRIVATE GEARS_HAVE_GUEST_DRAW)
+        target_link_libraries(gears_draw PUBLIC Vulkan::Vulkan PRIVATE gears_draw_xlate)
+
+        add_executable(frame_replay "${CMAKE_CURRENT_SOURCE_DIR}/../tools/frame_replay/main.cpp")
+        target_link_libraries(frame_replay PRIVATE gears1_draw lucent::lucent)
+        message(STATUS "gears1: executor-independent frame_replay enabled")
+    endif()
 endif()
 
-# THE FAULT REPORT IS WORTHLESS WITHOUT THIS. backtrace_symbols_fd resolves a
-# frame through the dynamic symbol table, and without -rdynamic the recompiled
-# functions are not in it -- so the crash report degenerates into a column of
-# bare addresses, which is what a reader cannot act on. The whole value of the
-# host backtrace here is that the frames are named `sub_82xxxxxx`, which names
-# guest code directly.
-target_link_options(gears1 PRIVATE -rdynamic)
-
-# Every host target gets the optimisation the guest code has always had. Listed
-# explicitly rather than applied globally, so a target added later has to opt in
-# and nobody silently ships an -O0 renderer again.
-foreach(gears_host_target gears1 gears_title_profile gears_generated_title_profile
-                          gears_title_executable gears_gpu_queue_access
-                          gears_guest_texture_hash gears_draw gears1_native_pass
-                          gears_draw_xlate frame_replay xxhash)
+foreach(gears_host_target
+        gears_title_profile gears_gpu_queue_access gears_wait_probe gears_xxhash
+        gears_guest_texture_hash gears_draw gears1_native_pass gears_draw_xlate
+        frame_replay)
     gears_optimise_host(${gears_host_target})
 endforeach()
