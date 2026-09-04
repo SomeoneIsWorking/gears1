@@ -13,27 +13,27 @@ the architecture.
 
 ## Migration status
 
-The repository still contains the previous XenonRecomp-generated product and a
-substantial body of verified Gears 1 runtime, renderer, audio, input, storage,
-and native-override evidence. That implementation is a frozen migration
-baseline, not the target product. Do not regenerate, build, or run it during
-the migration.
+The repository still contains the previous XenonRecomp-generated product. It is
+the first break-first deletion target, not a bridge or executable oracle.
+Preserve its independent Gears 1 behavior evidence and native renderer, audio,
+input, storage, and override contracts; delete the generator, generated corpus,
+static dispatcher, function maps, static-only configuration/tests, and stale
+methodology before dynarec implementation resumes.
 
 The next executable milestone is intentionally bounded:
 
-1. create `xenonport` around Xenia `Memory`, `Processor`, `ThreadState`, and
+1. create `x360port` around Xenia `Memory`, `Processor`, `ThreadState`, and
    `RawModule`, using Xenia's x64/A64 dynarecs directly;
 2. execute the real Gears 1 leaf at `0x8222E868`;
 3. resolve and invoke `DbgPrint` as a typed import; and
 4. prove disabled, enabled, and scoped-`super` override paths through the Xenia
    dispatcher.
 
-That proves wiring, not game compatibility. The old static path remains in the
-tree, untouched, until a fresh image-only build reaches representative
+That proves wiring, not game compatibility. It runs only after the old static
+path is absent. A fresh image-only build must still reach representative
 interactive gameplay with nonzero Xenia JIT execution, no gameplay interpreter,
 working native/original calls, relevant invalidation coverage, and declared
-correctness and frame-time evidence. Only then is the old path deleted in one
-milestone; it never remains as a compatibility mode or oracle.
+correctness and frame-time evidence.
 
 ## Preserved evidence
 
@@ -42,7 +42,7 @@ Act 1 gameplay, guest threading and memory, SDL-backed input, working XMA audio,
 and a bounded Vulkan renderer driven by the title's PM4/Xenos stream. It also
 grounded a growing set of title-owned native seams, including resource lifetime
 leaf `0x8222E868`. Those observations remain useful as migration targets, but
-they are not evidence that the xenonport product exists or passes gameplay.
+they are not evidence that the x360port product exists or passes gameplay.
 
 The compatibility renderer's in-game world is still not fully faithful, saves
 do not complete, networking/user services are absent, and no title has passed a
@@ -59,18 +59,22 @@ one unambiguous ignored `roms/` drop-in remain the intended discovery order.
 
 The current `./run.sh` still implements the retired XenonRecomp pipeline and is
 therefore not a supported product route during this migration. It must be
-rewired to xenonport before the project again advertises a runnable default.
+rewired to x360port before the project again advertises a runnable default.
 
 ## Ownership
 
 | Area | Owner |
 |---|---|
-| Xenon CPU execution, typed imports, image mapping, overrides, original calls | `shared/xenonport` (to be created around the pinned Xenia fork) |
+| Xenon CPU execution, typed imports, image mapping, overrides, original calls | `shared/x360port` (to be created around the pinned Xenia fork) |
+| Reusable UE3-on-Xbox-360 ABI, RHI semantics, and engine lifetimes | `shared/x360ue3`, consuming only public `x360port` interfaces |
 | Cross-framework executable-memory helpers | `shared/jit-common`, only after two integrations prove the same missing contract |
 | Exact Gears identity, addresses, policies, navigation, and native bindings | title adapters in this repository |
-| Shared Gears engine behavior | cohesive runtime/render/audio/input/storage modules in this repository |
-| Authenticated XEX/import facts currently prototyped in `shared/xenon-host` | migrate into `xenonport`; do not retain its generated function-map contract |
+| Shared Gears-family engine behavior | `GearsUE3`: cohesive runtime/render/audio/input/storage modules in this repository |
+| Authenticated XEX/import facts currently prototyped in `shared/xenon-host` | migrate into `x360port`; do not retain its generated function-map contract |
 | Independent comparison | Xenia oracle/hardware/binary evidence, never the old generated product |
+
+The local `shared/ue3` checkout is developer reference material, not one of
+these runtime layers. No product may compile, link, package, copy, or require it.
 
 `docs/codemap.md` maps existing and target locations. `docs/re-frontier.md`
 preserves the grounded execution/rendering evidence and now names the dynamic

@@ -9,31 +9,60 @@ the same change when its answer changes.
 
 USER 2026-09-01: "there are two runtimes there, one native (WIP), one emulator, the game itself is still guest game so the wording 'recomp' just means the emulated runtime"
 
+USER 2026-09-04: "Gears still needs its own GearsUE3 or maybe we need a x360ue3 specific for UE3 games, I don't know could be both I mean all 3
+
+- x360port
+- x360ue3
+- GearsUE3
+
+3 layers? sounds right but is it? idk"
+
 GearsUE3 is one native/dynarec engine port for the Xbox 360 Gears of War UE3
 titles. The two cooperating execution paths are measured native overrides and
 an emulated path that executes every other guest instruction through Xenia's
 existing x64 or A64 Xenon dynarec. The gameplay product contains no interpreter
 and has no interpreter or generated-code fallback.
 
-The platform layer is `xenonport`, a narrow framework around Xenia `Memory`,
+The dependency direction has three deliberate layers:
+
+```text
+Gears title/revision adapters + GearsUE3
+                    |
+                    v
+        shared/x360ue3
+                    |
+                    v
+        shared/x360port -> Xenia dynarec
+```
+
+The platform layer is `x360port`, a narrow framework around Xenia `Memory`,
 `Processor`, `ThreadState`, `RawModule`, typed imports, device-memory callbacks,
 runtime overrides, and scoped original calls. Do not put Xenia behind
 `jit-common` caches and do not write another PPC interpreter, decoder, or host
-code emitter. Xenia owns Xenon translation and its code cache. `xenonport` owns
+code emitter. Xenia owns Xenon translation and its code cache. `x360port` owns
 the embedding contract and must account explicitly for Xenia's process-global
 memory, MMIO, and clock assumptions.
+
+`x360ue3` owns only reusable Xbox 360 UE3 contracts over public `x360port`
+interfaces: versioned engine ABI descriptions, UE3 RHI semantic operations,
+title-supplied binding schemas, and object/resource/thread/frame lifetime. It
+contains no Gears address, shader hash, pass roster, navigation, save policy,
+gameplay rule, or application composition. `GearsUE3` owns those Gears-family
+concerns and every exact title/revision adapter. The local `shared/ue3` checkout
+is reference material only and is never compiled, linked, packaged, copied, or
+required by this product.
 
 Gears 1 is the first conformance target. Its first implementation discriminator
 is deliberately smaller than boot: execute the real leaf at `0x8222E868`, bind
 and call `DbgPrint` through a typed import, and prove disabled, enabled, and
 `super` override paths through Xenia. Disabled and `super` both execute the
 original guest body through the dynarec; `super` suppresses only the current
-override for one call. This discriminator does not authorize deletion of the
-old path. Preserve it without regenerating, building, or running it until the
-Xenia path reaches representative interactive gameplay and passes the migration
-gate in `../../shared/jit-common/docs/migration.md`; then delete XenonRecomp,
+override for one call. Before implementing this discriminator, preserve
+independently useful evidence and native owners, then delete XenonRecomp,
 generated PPC modules, function maps, generator-only configuration/tests, and
-their documentation together.
+their methodology. The product may fail at one explicit missing `x360port`
+boundary until the replacement is wired; the static executable is never kept
+as a bridge or oracle.
 
 Guest addresses, image identity, shader hashes, menu walks, and diagnostics
 belong to a title/revision adapter. Shared engine or platform code must not
@@ -84,10 +113,11 @@ one coherent responsibility and its lifetime, and shared/title/platform policy
 crosses narrow explicit interfaces. Split a mixed or oversized owner before
 extending it; do not create forwarding fragments, catch-all helpers, or copy a
 platform implementation from another game project. Reusable cross-title Xbox
-360 execution belongs in `xenonport`; Gears-specific behavior stays here.
+360 execution belongs in `x360port`; reusable UE3-on-Xbox-360 behavior belongs
+in `x360ue3`; Gears-specific behavior stays in `GearsUE3` here.
 
 - `run.sh` remains a slim locked-environment shim. Its next shipping route must
-  provision the authenticated runtime image and launch the xenonport/Xenia
+  provision the authenticated runtime image and launch the x360port/Xenia
   product without offline translation. Until that route exists, documentation
   must not present the static launcher as the product.
 - A title adapter owns exact image identity, semantic override bindings,
