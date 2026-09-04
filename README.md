@@ -1,173 +1,86 @@
 # GearsUE3
 
 GearsUE3 is an in-progress clean-code engine port for the Xbox 360 Gears of War
-games. It combines static recompilation with shared host Xbox services and
-runtime native overrides. One exact title/revision is generated locally from a
-user-owned disc and linked against the shared engine; game-derived generated
-code and data never enter this repository.
+games. Its target product combines native subsystem overrides with Xenia's
+existing x64/A64 Xenon dynarecs for every guest path that remains emulated. It
+does not ship an interpreter, generated guest C++, or an offline translation
+step.
 
-Gears of War 1 is the first and currently only verified target. Gears 2, Gears
-3, and Gears of War: Judgment are product scope, not present compatibility
-claims. See `docs/gearsue3-engine.md` for the ownership and evidence model.
+Gears of War 1 is the active and only conformance target. Gears 2, Gears 3, and
+Judgment remain product scope, not compatibility claims. See
+`docs/project-state.md` for factual coverage and `docs/gearsue3-engine.md` for
+the architecture.
 
-**Status: it boots, it plays its own menus, and it renders.** The title runs
-from boot through its startup movies into the main menu, takes a controller into
-the Act 1 campaign, and the guest-draw backend renders the game's own frames at
-~30 fps. The in-game 3D world renders but is **not yet faithful** — see below.
-`docs/re-frontier.md` tracks what is real reverse-engineering and what is still
-approximate, `docs/codemap.md` says where each subsystem lives, and
-[`debug_journal/`](debug_journal/) carries dated, honest write-ups.
+## Migration status
 
-## What works
+The repository still contains the previous XenonRecomp-generated product and a
+substantial body of verified Gears 1 runtime, renderer, audio, input, storage,
+and native-override evidence. That implementation is a frozen migration
+baseline, not the target product. Do not regenerate, build, or run it during
+the migration.
 
-- The XEX is decrypted and decompressed to a real PE image (13.5 MB, load base
-  `0x82000000`), and XenonRecomp emits **~49,000 functions** (~176 MB of C++)
-  with **zero unimplemented instructions**.
-- **The title boots and plays.** It loads its own packages, plays the startup
-  movies, walks its menus under a scripted or real controller, and reaches Act 1
-  gameplay. ~102 of 226 kernel imports are implemented; the rest abort loudly
-  with their name and arguments rather than stubbing silently.
-- **Guest threading, heaps and timing are real.** Each guest thread gets its own
-  context, KPCR, TLS and stack. Heap use plateaus and the title has run past
-  frame 25,000 at a steady ~30 fps.
-- **Input is the console's own.** `XamInput*` fills the real `X_INPUT_STATE`
-  structures from an SDL gamepad, the keyboard, or a scripted timeline so a
-  headless run is reproducible.
-- **The renderer draws the guest's own frames.** The PM4 command processor
-  executes the ring, the title's Xenos shaders are translated to SPIR-V through
-  Xenia's translator, and every draw of a frame is issued with the guest's own
-  geometry, textures, constants, viewport and output-merger state into
-  per-EDRAM-surface render targets. Menus render correctly; the in-game HUD and
-  world both render.
-- **Audio works, end to end.** The render-driver pump asks the title for a
-  frame at the console's 187.5 Hz, the title mixes one — decoding XMA through
-  the hardware register block and context protocol to do it — and SDL plays the
-  result. The decode is verified against an independent reference decode of the
-  title's own streams at correlation 1.000000 over a full 142-second stream.
+The next executable milestone is intentionally bounded:
 
-## What does not
+1. create `xenonport` around Xenia `Memory`, `Processor`, `ThreadState`, and
+   `RawModule`, using Xenia's x64/A64 dynarecs directly;
+2. execute the real Gears 1 leaf at `0x8222E868`;
+3. resolve and invoke `DbgPrint` as a typed import; and
+4. prove disabled, enabled, and scoped-`super` override paths through the Xenia
+   dispatcher.
 
-- **The in-game world is not yet faithful.** A third of the world draws are
-  still lost at clipping, the second predicated tile (the bottom 208 rows) is
-  empty, and the HDR-to-LDR tonemap blows out. Each of these is measured and
-  tracked on `docs/re-frontier.md` rather than guessed at.
-- **Audio has unexercised paths.** Loop playback and true double-buffered
-  streaming are ported from the reference but no stream has used them yet, and
-  the pump falls behind its 187.5 Hz under a CPU-bound guest.
-- **No networking, no user/content services.** Those imports abort on first call.
-- **Saves do not complete yet.** The title now sees a storage device and creates
-  its save content, which mounts a writable directory under the user's data
-  path, but it asks for 2.6 GB on that path and is refused, and no save file
-  has appeared on disk (catalog #45). Directory enumeration is still missing.
+That proves wiring, not game compatibility. The old static path remains in the
+tree, untouched, until a fresh image-only build reaches representative
+interactive gameplay with nonzero Xenia JIT execution, no gameplay interpreter,
+working native/original calls, relevant invalidation coverage, and declared
+correctness and frame-time evidence. Only then is the old path deleted in one
+milestone; it never remains as a compatibility mode or oracle.
 
-## You must supply the game
+## Preserved evidence
 
-**No game or UE3 source is included, fetched, or accepted as a dependency.** To
-build a playable title module, supply your own legally obtained Gears of War
-disc image (or a 7z archive containing exactly one disc image). Install `uv`,
-CMake, Ninja, a C/C++ compiler, SDL3 development files, and Vulkan development
-files, then run from the repository root:
+The retired path previously demonstrated exact-revision Gears 1 boot, menus,
+Act 1 gameplay, guest threading and memory, SDL-backed input, working XMA audio,
+and a bounded Vulkan renderer driven by the title's PM4/Xenos stream. It also
+grounded a growing set of title-owned native seams, including resource lifetime
+leaf `0x8222E868`. Those observations remain useful as migration targets, but
+they are not evidence that the xenonport product exists or passes gameplay.
 
-```sh
-export GEARS_ISO="/path/to/your/Gears of War.iso"
-./run.sh
-```
+The compatibility renderer's in-game world is still not fully faithful, saves
+do not complete, networking/user services are absent, and no title has passed a
+complete exact-revision conformance report. The native RHI is partial and no
+representative gameplay run has met the native 8.33 ms / 120 fps goal.
 
-You can put `GEARS_ISO="..."` in a gitignored `.env` instead, pass
-`./run.sh --iso <path>`, or place exactly one image in gitignored `roms/`.
-For a 7z input, install 7-Zip as well; the launcher validates the archive and
-materializes its one bounded image member under ignored storage. `./run.sh
---prepare` runs the same provisioning and build path without launching.
-The initializer names missing packages and prints the exact Homebrew, APT, DNF,
-or Windows installation command; it never installs privileged packages itself.
+## User-owned game input
 
-Provisioning verifies the disc and exact retail revision, initializes pinned
-submodules, extracts a complete content-addressed title tree, analyzes switch
-tables, emits the local recomp module, and builds the current product. All
-disc-derived output remains under `scratch/titles/<disc-sha256>/`; compiler and
-dependency outputs remain under top-level `build/`. Ghidra and private source
-are not prerequisites.
+No game or UE3 source is included or fetched. The eventual product accepts a
+legally owned disc image (or one bounded nested archive), validates its exact
+revision, maps the authenticated XEX at runtime, and launches without emitting
+or compiling guest code. Explicit CLI input, `GEARS_ISO`/gitignored `.env`, and
+one unambiguous ignored `roms/` drop-in remain the intended discovery order.
 
-## Layout
+The current `./run.sh` still implements the retired XenonRecomp pipeline and is
+therefore not a supported product route during this migration. It must be
+rewired to xenonport before the project again advertises a runnable default.
 
-| Path | |
+## Ownership
+
+| Area | Owner |
 |---|---|
-| `run.sh` | Locked fresh-clone initializer and launcher; `./run.sh --help` |
-| `bootstrap.py`, `tools/gearsue3_bootstrap/` | Shipping CLI, prerequisites, exact title provisioning, build, logging, and process lifetime |
-| `config/titles/gears1.toml` | Exact revision identity and title-owned navigation schedules |
-| `config/gears.toml` | XenonRecomp configuration — section addresses, register save/restore helpers |
-| `tools/gdf_extract.py` | Confined, bounds-checked GDF/XDVDFS extractor for the Xbox 360 disc image |
-| `tools/title_identity.py` | Content-addressed disc/XEX identity through XenonRecomp's checked `xex-inspect` loader |
-| `extern/XenonRecomp` | Submodule → our fork, `gears` branch |
-| `docs/codemap.md` | Orientation map — what's where, and how far each subsystem really got |
-| `docs/issues/` | Findings registry keyed by symptom (`tools/catalog.py search "..."`) |
-| `debug_journal/` | Dated findings, including the dead ends |
-| `scratch/` | Disc-derived title data and disposable diagnostics (gitignored; never builds) |
-| `build/` | Compiler, build-system, dependency, and locally generated product builds (gitignored) |
+| Xenon CPU execution, typed imports, image mapping, overrides, original calls | `shared/xenonport` (to be created around the pinned Xenia fork) |
+| Cross-framework executable-memory helpers | `shared/jit-common`, only after two integrations prove the same missing contract |
+| Exact Gears identity, addresses, policies, navigation, and native bindings | title adapters in this repository |
+| Shared Gears engine behavior | cohesive runtime/render/audio/input/storage modules in this repository |
+| Authenticated XEX/import facts currently prototyped in `shared/xenon-host` | migrate into `xenonport`; do not retain its generated function-map contract |
+| Independent comparison | Xenia oracle/hardware/binary evidence, never the old generated product |
 
-## Launch and diagnostics
+`docs/codemap.md` maps existing and target locations. `docs/re-frontier.md`
+preserves the grounded execution/rendering evidence and now names the dynamic
+migration chain. Atomic work is in `docs/issues/`.
 
-```sh
-git clone --recursive https://github.com/SomeoneIsWorking/gears1
-export GEARS_ISO="/path/to/your/Gears of War.iso"
-./run.sh                 # configure if needed, build, and play
-./run.sh --menu-walk     # ...driving itself from the title screen into Act 1
-./run.sh --headless      # no window, for measurement
-./run.sh --prepare       # provision/build only
-```
+## Third-party code and licence
 
-The project accepts GCC, Clang, and AppleClang. Maintainer verification uses
-Clang, `clang-format`, and `clang-tidy`; that policy is not imposed on players.
-XenonRecomp exits non-zero if any instruction lacks an implementation and seals
-the exact XEX/image identity into the generated profile. Runtime startup checks
-that identity before save state, guest memory, generated mappings, or guest
-entry activates.
-
-The default run also starts the loopback interactive debug API at
-`http://127.0.0.1:32123`. It can drive the same controller state the guest reads
-and request an authoritative renderer screenshot plus live counters after the
-process has started. See [docs/interactive-debug.md](docs/interactive-debug.md).
-
-`--no-build` is the explicit maintainer path for an already prepared
-`GEARS_GAME_DIR` and `GEARS_BUILD_DIR`; it refuses missing or stale product
-inputs instead of silently configuring a reduced target. `run.sh` never runs
-tests. The standalone verifier and CTest commands are the testing interfaces.
-
-Set `GEARS_LUCENT_DEBUG=heap,loader,kernel,thread,mem` for per-subsystem
-tracing (`all` for everything).
-
-## Fork changes
-
-[`SomeoneIsWorking/XenonRecomp`, branch `gears`](https://github.com/SomeoneIsWorking/XenonRecomp/tree/gears)
-adds 36 instruction implementations Gears needs — mostly halfword and
-saturating VMX forms — and, more importantly, makes an unimplemented
-instruction emit a trap and fail the build instead of emitting a bare comment
-and letting the following code run against stale registers.
-
-## Third-party code
-
-`extern/xenia` is a fork of [Xenia](https://github.com/xenia-canary/xenia-canary),
-copyright (c) 2015 Ben Vanik and contributors, used under the BSD 3-Clause
-licence — see `extern/xenia/LICENSE`, which is preserved verbatim.
-
-Only its GPU translation subset is compiled here: the Xenos microcode front end,
-the instruction-set definitions and the texture tiling code. Its GPU
-abstraction, command processor and window system are not linked. Xenia has also
-served as the reference for several hardware contracts this port had to get
-right — the depth-sample-count record layout, and the packet predication rules
-that the command processor now implements. Nothing in this repository is
-endorsed by the Xenia project or its contributors.
-
-## Licence
-
-First-party tooling and engine code are intended to be MIT-licensed. XenonRecomp is MIT
-(see the submodule). Xenia is
-BSD 3-Clause (see above). The XMA decoder is built from a fork of FFmpeg
-(`extern/ffmpeg-xmaframes`, LGPL 2.1 or later) that adds a per-frame XMA codec;
-it is compiled from source by the build and linked statically. Gears of War is
-copyright Epic Games / Microsoft; this project ships none of it. Building the
-clean engine-owned tools does not require game material; generating and building
-a playable title module requires the user's own disc.
-
-See [`LICENSE`](LICENSE) and [`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES) for
-the complete first- and third-party notices.
+`extern/xenia` is a pinned fork of Xenia Canary, BSD 3-Clause. The migration
+reuses its Xenon CPU dynarecs as well as its separately integrated Xenos shader
+and hardware code. The XMA decoder is built from an LGPL-2.1-or-later FFmpeg
+fork. First-party code is intended to be MIT licensed. Gears of War is
+copyright Epic Games / Microsoft; this project ships none of it. See `LICENSE`
+and `THIRD_PARTY_NOTICES` for the complete notices.

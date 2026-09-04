@@ -1,4 +1,28 @@
-# Reusing Xenia's Xenos translator
+# Reusing Xenia's Xenon runtime and Xenos translator
+
+## Xenon CPU product boundary
+
+The target product embeds Xenia's existing x64 and A64 Xenon dynarecs through a
+new title-neutral `xenonport` framework. Xenia continues to own PPC decoding,
+lowering, host-code emission, executable memory, translated-block lookup, and
+cache invalidation. Do not write a PPC interpreter and do not put Xenia behind
+`jit-common` code-memory or block-cache abstractions.
+
+`xenonport` owns only the narrow embedding contract around Xenia `Memory`,
+`Processor`, `ThreadState`, and `RawModule`: authenticated runtime images, typed
+imports, device-memory callbacks, image-aware native overrides, scoped original
+calls, bounded executor exits, and explicit treatment of Xenia's process-global
+memory/MMIO/clock assumptions. Checked image and import-validation facts now in
+`shared/xenon-host` move there. The generated function map and concrete static
+PPC ABI do not.
+
+The first Gears discriminator executes real leaf `0x8222E868`, invokes
+`DbgPrint` through a typed import, and proves disabled, enabled, and scoped
+`super` override paths through Xenia. It is intentionally smaller than entry
+boot and does not authorize deleting the old path. Representative interactive
+gameplay under the full migration gate is required first.
+
+## Xenos translator evidence
 
 The reconnaissance in `d3d-seam.md` put shader translation at the hard core of
 the HLE backend: shaders reach the seam as Xenos microcode, and no amount of

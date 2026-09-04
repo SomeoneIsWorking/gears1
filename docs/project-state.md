@@ -3,9 +3,10 @@
 ## Comparison baseline
 
 The baseline is the unmodified Xbox 360 release of *Gears of War* running on original hardware or
-through Xenia, with its Xenos command stream, console services, and title-controlled 30 Hz rendering.
-GearsUE3 intends a shared native PC engine for the series, with native semantic subsystems, exact
-retained/native comparison, uncapped presentation, and user-owned-disc provisioning.
+through Xenia. GearsUE3 intends one shared native/dynarec engine for the series: selected subsystems
+run natively, every remaining guest path runs through Xenia's x64/A64 Xenon dynarecs, and the
+user-owned executable remains the runtime authority. The former XenonRecomp-generated product is a
+frozen migration baseline, not an alternative product.
 
 This ledger records independently observable capability coverage. Goals define why GearsUE3
 exists, issues record atomic work, and the codemap records ownership; neither substitutes for this
@@ -13,37 +14,40 @@ done/partial/missing inventory.
 
 | ID | Capability | State | Dependencies | Goals |
 |---|---|---|---|---|
-| S001 | Exact Gears 1 revision boots and reaches gameplay through the retained recomp path | verified | — | G001, G002 |
+| S001 | Historical exact Gears 1 static baseline reaches representative gameplay | verified | — | G002 |
 | S002 | Gears 1 compatibility renderer produces bounded, retired, headless gameplay frames | verified | S001 | G002, G003 |
 | S003 | Native RHI semantic stream represents and checks the observed Gears 1 frame boundary | partial | S001, S002 | G001, G002, G003 |
-| S004 | Grounded native RHI operations replace retained execution with same-binary controls | partial | S003 | G001, G002, G003 |
+| S004 | Grounded native operations have exact Gears 1 semantics and migration targets | partial | S003 | G001, G002, G003 |
 | S005 | Complete native RHI frontend bypasses title PM4 construction and compatibility reconstruction | missing | S003, S004 | G001, G002, G003 |
 | S006 | Every Gears UE3 title passes an exact-revision compatibility gate | missing | S001, S002 | G001, G002 |
 | S007 | Native engine sustains the 8.33 ms / 120 fps renderer budget on representative gameplay | missing | S005 | G003 |
-| S008 | Public distribution provisions from a user-owned game image through `./run.sh` | partial | — | G004 |
+| S008 | Public distribution provisions an authenticated runtime image without offline translation | partial | — | G004 |
+| S009 | `xenonport` embeds Xenia's x64/A64 dynarecs as the only gameplay executor | missing | — | G001, G002 |
+| S010 | Gears 1 leaf/import/override discriminator executes through Xenia | missing | S009 | G001, G002 |
+| S011 | Gears 1 dynarec product reaches representative gameplay and migration conformance | missing | S002, S010 | G001, G002, G003 |
+| S012 | XenonRecomp product, generated corpus, and function-map machinery are removed | missing | S011 | G001, G002, G004 |
 
 ## Current focus
 
-**Active title/revision:** Gears 1, the exact locally provisioned revision. Its remaining gates are
-the complete native RHI frontend and retained/native parity, sustained 120 FPS native rendering,
-and the semantic 60 Hz title-production enhancement. Gears 2 identity evidence is retained as a
-shared-boundary fact, not as an active title workstream.
+**Active title/revision:** Gears 1, the exact locally provisioned revision. Gears 2 identity evidence
+is retained as a shared-boundary fact, not as permission to start a second title workstream.
 
-S004 is the current focus: move measured, parity-checked RHI operations from retained bodies to
-native owners while keeping runtime retained/A/B controls. The Vulkan resource owner now provides
-explicit host buffer/colour-image allocation and fence-retainable leases, but it is not live-wired
-because no constructor producer or native draw producer has been proven. The new title-boundary timing probe
-rules out the startup Bink wait as the general gameplay 30 Hz limiter. Its post-Bink extension
-shows ring reservations continuing after the traced producer stops while semantic presents remain
-near 30 Hz; the steady gameplay producer or wait that limits those presents is still unidentified.
+S009 is the current focus: create `xenonport` around Xenia's existing x64/A64 Xenon dynarecs. The
+first Gears-owned proof is the leaf/import/override discriminator: execute real leaf `0x8222E868`,
+call typed import `DbgPrint`, and
+exercise disabled, enabled, and scoped-`super` override paths through Xenia. The old XenonRecomp
+path remains present but must not be regenerated, built, or run. That proof is only a wiring
+discriminator; representative interactive gameplay and conformance must pass before the old path
+is deleted.
 
 ## Capability details
 
-### S001 — Exact Gears 1 retained execution
+### S001 — Historical Gears 1 static baseline
 
 Evidence: The exact executable profile fails closed on container and normalized-image SHA-256,
 boots the locally generated 191-translation-unit title module, and reaches the scripted gameplay
-route headlessly. See `docs/re-frontier.md` (`title-revision-boundary`) and claim C080.
+route headlessly. See `docs/re-frontier.md` (`title-revision-boundary`) and claim C080. This is
+preserved prior evidence, not a current product route or permission to rebuild generated code.
 
 ### S002 — Bounded Gears 1 compatibility rendering
 
@@ -136,16 +140,18 @@ The compatibility renderer now consumes a single title-neutral `NativeDrawInput`
 and host viewport/scissor derivation. This is an input handoff for a future native producer, not a
 native execution claim.
 
-### S004 — Native RHI execution
+### S004 — Grounded native operation targets
 
-The shared big-endian atomic resource-reference owner now executes all observed non-boundary
+The evidence below was obtained on the frozen static path and identifies semantics and native
+implementations to preserve; it is not proof of xenonport dispatch. The shared big-endian atomic
+resource-reference owner now executes all observed non-boundary
 AddRef/Release transitions natively by default. The exact Gears 1 adapter retains runtime recomp and
 alternating A/B controls. Focused concurrent tests exercise the shipping atomic implementation; a
 live 12,000-call A/B run matched every retained arithmetic observation and measured about 51 ns
 native versus 72 ns retained mean cost (C096). The exact Gears 1 operation-kind-3 GPU ticket wait now
 uses a notified packet-memory wait by default, while retaining the generated helper for progress,
 hang, exemption, and A/B semantics; focused tests cover deadline arithmetic, address aliasing, and
-state decoding. A headless current-build control reduced sampled process user CPU from 53.44 s on
+state decoding. A historical headless control reduced sampled process user CPU from 53.44 s on
 the retained arm to 32.36 s on the native arm during 35 s runs while both stayed near 30 produced
 frames/s. The Gears 1 audio mix kernel is now an opt-in native SIMD operation with a retained-body
 super-call and 256 same-call audits; a current profile removed its former 18.59% CPU hotspot and
@@ -208,12 +214,13 @@ produces only about 30 frames/s, and the complete native frontend has not been b
 Missing capability: No complete native frontend currently consumes the semantic stream, bypasses
 title PM4 generation, and passes same-binary state plus pixel parity. A focused host-owned Vulkan
 colour-copy operation exists, but it has no native producer or live resource/lifetime owner to feed
-it. The compatibility renderer is still the shipping rendering authority.
+it. The compatibility renderer remains the only implemented rendering authority in the frozen
+static baseline; no dynarec product is wired yet.
 
 ### S006 — Multi-title compatibility
 
 Missing capability: Gears 2 now has a locally verified disc/XEX/image identity, but it has no
-title profile, provisioned module, headless gameplay evidence, or renderer compatibility/native
+title profile, runtime module integration, headless gameplay evidence, or renderer compatibility/native
 parity report. Gears 3 and Judgment have no locally proven exact revision or any of those later
 gates. The conformance reporter exists, but no title has passed its complete report.
 
@@ -225,21 +232,59 @@ the separate title-side approximately 30 Hz gameplay producer limit also remains
 
 ### S008 — Clean image-only provisioning
 
-Strict title identity, bounded GDF extraction, ignored content-addressed title storage, and clean
-distribution gates now compose through the shipping `./run.sh` path. It accepts one user-owned image
-or a 7z archive containing exactly one bounded disc-image member,
-refuses missing/unknown input before build work, generates the local title module under
-`scratch/titles/<disc-sha256>/`, and builds the product under `build/titles/`; its focused synthetic
-tests cover the complete provisioning order and a Clang combined gate passed 101/101 checks. A real
-user-owned Gears 1 XGD ISO then completed `./run.sh --headless --prepare`, verifying 1,810 extracted
-files, the generated module, and the Clang product build; a subsequent bounded headless launch
-selected the exact generated profile and produced retained-runtime frames without opening a window.
+Verified subset: strict title identity, bounded GDF extraction, ignored content-addressed title
+storage, and clean-distribution gates were proven on the former launcher. It accepted a user-owned
+image or one bounded 7z member and refused missing or unknown input before build work. A real Gears 1
+XGD ISO produced the recorded exact container and normalized-image identity and a complete extracted
+tree. These input and validation facts are reusable; generation and the resulting static build are
+not part of the target contract.
 
 Gap: Only the exact Gears 1 profile is implemented. A user-owned Gears 2 archive now passes the
 shared basic-compressed-XEX identity boundary (disc SHA-256
 `1e76f91fa3bd804381c0ce5458bdb8dd2329c783b1be03b67d111136ce337230`, XEX SHA-256
 `e98c25b4b9d173ac7ff69c84e7f1b4240c6be77c5fd7f672041a95221f68247c`, normalized image
 SHA-256 `340f71de1cfaac7d98ff0478fc8c2954967aeb449f9e9916860592f7ee0b070c`), but it has no
-supported profile or provisioned module. Gears 3 remains archive-only without a profile; Judgment
-is not present. Additional-title conformance remains outstanding. See `docs/re-frontier.md`
-(`rom-only-provisioning`).
+supported runtime profile or xenonport integration. Gears 3 remains archive-only without a profile;
+Judgment is not present. The current `./run.sh` still generates and builds the XenonRecomp product,
+so the required fresh-clone no-translation launch path is missing and must not be advertised or run.
+
+### S009 — Xenia-backed xenonport executor
+
+Missing capability: No `xenonport` repository or Gears integration currently wraps Xenia `Memory`,
+`Processor`, `ThreadState`, and `RawModule` as a narrow product executor. The target uses Xenia's
+existing x64/A64 dynarecs and code cache directly; it does not add a PPC interpreter or replace
+Xenia cache ownership with `jit-common`.
+
+Gap: Define per-instance ownership or an explicit single-instance constraint for Xenia's
+process-global memory/MMIO/clock state; expose authenticated image loading, typed imports, device
+callbacks, image-aware overrides, scoped original calls, bounded exits, and executable-state
+invalidation. See issue #170.
+
+### S010 — First real Gears 1 dynarec discriminator
+
+Missing capability: The new executor has not run Gears 1 code. The first accepted proof must execute
+real leaf `0x8222E868`, invoke `DbgPrint` through a typed import binding, and demonstrate three paths:
+disabled executes the original guest body through Xenia, enabled executes the native override, and
+`super` suppresses only that override for one call and executes the original through Xenia.
+
+Gap: Record nonzero Xenia JIT blocks and inspect the gameplay target to prove no interpreter is
+linked or selectable. This remains a wiring discriminator and does not establish boot or gameplay.
+
+### S011 — Representative Gears 1 dynarec gameplay
+
+Missing capability: No xenonport/Xenia product has reached representative interactive gameplay.
+
+Gap: A fresh user-image build must reach at least the historical gameplay frontier with the relevant
+native owners active, compare CPU/memory/import/timing/device/render/audio behavior against an
+independent oracle at declared boundaries, exercise relevant invalidation with positive and
+controlled-negative cases, and meet the declared correctness and host-architecture frame-time
+budget. Logos, menus, attract loops, FMV, and S010 are checkpoints only.
+
+### S012 — Static-product retirement
+
+Missing capability: XenonRecomp, generated PPC build inputs, precomputed function maps,
+generator-only configuration and tests, and static methodology remain in the repository.
+
+Gap: Preserve them untouched until S011 passes, then remove the old path atomically. Do not keep a
+compatibility selector, use it as a new oracle, or require a generated/persistent cache on a fresh
+installation.

@@ -293,37 +293,69 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap: Native shader/protocol provenance and third-party notices still need a complete audit before the repository can be called clean. Any newly pushed commit or ref requires the history gate again.
 - notes: The history rewrite is complete; do not carry its former pending status forward. The full-history release gate remains independent of the tracked-tip CTest.
 
-### recomp-forwarding-seam — Keep every recomp body while making all direct calls overridable
+### recomp-forwarding-seam — Historical generated override seam
 - status: re-verified
 - deps: clean-distribution-tip
 - evidence: XenonRecomp commit 884206f emits a retained implementation and weak noinline forwarder for every function. Its multi-TU regression proves a generated same-TU call reaches a strong override while the override can super-call the retained body. A fresh Gears 1 generation emitted 48,892 implementations and 48,892 forwarders with zero compiler aliases.
 - where: extern/XenonRecomp/XenonRecomp; runtime/titles/gears1/hle_d3d.cpp
-- gap: Runtime A/B selection remains per override rather than one central engine registry; build-specific bindings still need the title-revision boundary below.
-- notes: Generated output remains ignored and unmodified. The original `__imp__*` body is never removed.
+- gap: This is prior static-path evidence, not the target dispatcher. It is not regenerated or used for new comparisons.
+- notes: Preserve unchanged until representative Xenia gameplay authorizes deletion. The replacement is `gears-dynarec-discriminator`, not another generated forwarder.
 
-### recomp-disjoint-switch-cfg — Preserve computed-dispatch ownership across inline data
+### recomp-disjoint-switch-cfg — Historical generated computed-dispatch evidence
 - status: re-verified
 - deps: recomp-forwarding-seam
 - evidence: Function ownership is now a normalized set of executable blocks. Configured switch labels seed bounded CFG discovery only inside executable, non-data ranges and cannot cross an authoritative foreign function envelope. A fresh exact Gears generation reached 100% with zero `ERROR`, unreachable-switch, or unrecognized-instruction matches. Each of the eight targets beyond the two inline address tables emitted as one local label with one dispatch edge, no target emitted as a standalone function, and no table-word address emitted as a function. Focused red/green discovery and emission tests pass in the aggregate 9/9 sanitizer CTest suite.
 - where: extern/XenonRecomp/XenonAnalyse/function.*; extern/XenonRecomp/XenonRecomp/data_range.*; extern/XenonRecomp/XenonRecomp/function_scan.*; extern/XenonRecomp/XenonRecomp/switch_extent.cpp; extern/XenonRecomp/XenonRecompTests; config/gears.toml
-- gap: This verifies the exact configured Gears revision. Other titles and revisions still need their computed dispatches detected and their factual inline-data ranges supplied; an unconfigured pattern must continue to fail generation rather than being absorbed by extent.
-- notes: Case blocks are not callable functions. The retired maximum-target repair crossed data and could absorb unrelated code; do not restore it or add case labels to the manual function list.
+- gap: No target-product gap remains here because Xenia discovers and translates runtime control flow. Preserve the factual inline-data finding only if another analysis consumer needs it.
+- notes: Do not run this generator. Remove the generator, switch-target configuration, and this historical step after representative dynarec gameplay passes.
 
 ### title-revision-boundary — Separate shared engine behavior from exact title bindings
 - status: in-progress
-- deps: recomp-disjoint-switch-cfg
+- deps: clean-distribution-tip
 - evidence: runtime/title_profile.* owns the shared exact-identity schema and fail-closed resolver; the generated module supplies checked container/image hashes and layout identity before build-specific activation. Gears 1 RHI bindings own exact guest entry points and device offsets. The indirect-call split leaves generic validation/reporting in runtime/guest_indirect_call.* and exact selectors/ranges in runtime/titles/gears1/guest_indirect_call.*. The native-pass split leaves enable/find/report behavior in runtime/native_pass.* while runtime/titles/gears1/native_pass.cpp supplies all six shader identities, exact scene-composite interfaces, pass metadata, and module selection. The guest-probe split removes the 2,179-line shared-looking owner: three sub-1,000-line runtime/titles/gears1/ sources own fatal/serialization, render/lifetime, and linker/checkpoint probes behind one title-private state/report header. The HLE D3D split leaves only a complete-callback, duplicate-refusing router in runtime/hle_d3d.* while runtime/titles/gears1/hle_d3d.cpp owns all eleven exact wrappers, queue layout, addresses, replay state, and diagnostic configuration. The GPU-diagnostics split leaves profile validation and worker-event resolution in runtime/gpu_diagnostics_profile.* while runtime/titles/gears1/gpu_diagnostics_profile.cpp owns the exact worker-pool global/layout and representative shader/fetch/stride tuple; its strong linked symbol enforces one title adapter per executable. The bug-check split leaves generic KeBugCheck reporting and fatal termination in runtime/kernel_misc.cpp plus validated classification lookup in runtime/bugcheck_policy.*, while runtime/titles/gears1/bugcheck_policy.cpp alone owns the exact `_purecall` code/return-address diagnosis. Shared host strings now come from runtime/host_product_identity.h as GearsUE3, while exact title/revision/save identity remains in the validated generated profile; filesystem tests prove missing and replacement namespaces refuse, and a live HTTP check reported `gearsue3-debug` while boot still selected the exact `gears1/<revision>` profile.
 - where: runtime/title_profile.*; runtime/title_executable.*; runtime/generated_title_profile.*; runtime/host_product_identity.h; runtime/guest_filesystem.*; runtime/main.cpp; runtime/gpu_present.cpp; runtime/gpu_draw.cpp; runtime/debug_http.cpp; runtime/frame_production_timing.cpp; runtime/guest_indirect_call.*; runtime/titles/gears1/guest_indirect_call.*; runtime/titles/gears1/guest_probe_*; runtime/native_pass.*; runtime/titles/gears1/native_pass.cpp; runtime/hle_d3d.*; runtime/titles/gears1/hle_d3d.cpp; runtime/gpu_diagnostics_profile.*; runtime/titles/gears1/gpu_diagnostics_profile.cpp; runtime/bugcheck_policy.*; runtime/titles/gears1/bugcheck_policy.cpp; runtime/titles/gears1/rhi_bindings.cpp; runtime/CMakeLists.txt; tools/check_source_structure.py; tests/test_title_profile.cpp; tests/test_generated_title_profile.cpp; tests/test_title_executable.cpp; tests/test_host_product_identity.cpp; tests/test_runtime_logic.cpp; tests/test_guest_indirect_call.cpp; tests/test_gears1_native_pass.cpp; tests/test_hle_d3d.cpp; tests/test_gpu_diagnostics_profile.cpp; tests/test_bugcheck_policy.cpp; extern/XenonRecomp/XenonRecomp; extern/XenonRecomp/XenonUtils/sha256.*
 - gap: Other Gears 1 guest-address bindings and scripted policy still await factual title adapters. Exact runtime activation, indirect-call policy, RHI bindings, native-pass roster ownership, guest-probe ownership, HLE D3D diagnostic ownership, shared GPU diagnostic selection, bug-check classification ownership, and shared host product identity are closed, but the overall title/revision separation is not complete.
-- notes: One executable links one locally generated title module. Exact parsed-image identity must fail closed before any build-specific binding activates.
+- notes: Exact parsed-image identity must fail closed before any build-specific binding activates. The target binds runtime images through xenonport; generated-profile coupling is awaiting replacement.
 
-### rom-only-provisioning — Generate a playable title from one user-owned disc/image
+### rom-only-provisioning — Authenticate a runtime title from one user-owned disc/image
 - status: in-progress
 - deps: title-revision-boundary
-- evidence: `tools/title_identity.py` and its 16 synthetic tests implement strict input priority, streaming disc SHA-256, duplicate-key/schema refusal, one checked `xex-inspect` authority, independent container/normalized-image re-hashing, and path-free JSON under ignored `scratch/titles/<disc-sha256>/`. The hardened GDF extractor's 13 tests cover bounded parsing, traversal/cycle/collision refusal, symlink confinement, exact reads, verified resume, and atomic publication. `run.sh` now enters the locked Python bootstrap, validates the selected image before submodule/build work, initializes dependencies, extracts and identifies the title, generates the local module, and builds/launches the required product target. Twenty-four bootstrap tests cover the synthetic cold path and fail-before-build input refusal; the Clang combined gate compiled all 191 generated PPC units and passed 101/101 CTest checks. On 2026-08-31, a real user-owned Gears 1 XGD ISO completed `./run.sh --headless --prepare`, verifying 1,810 extracted files and the Clang product build; a bounded headless launch then selected the exact generated profile and produced retained-runtime frames without a window. The same day's Gears 2 XEX identity now passes the checked loader after the generic basic-compression zero-tail fix: disc SHA-256 `1e76f91fa3bd804381c0ce5458bdb8dd2329c783b1be03b67d111136ce337230`, title ID `4d53082d`, XEX SHA-256 `e98c25b4b9d173ac7ff69c84e7f1b4240c6be77c5fd7f672041a95221f68247c`, normalized image SHA-256 `340f71de1cfaac7d98ff0478fc8c2954967aeb449f9e9916860592f7ee0b070c`.
+- evidence: `tools/title_identity.py` and its 16 synthetic tests prove strict input priority, streaming disc SHA-256, duplicate-key/schema refusal, independent container/normalized-image re-hashing, and path-free identity records. The hardened GDF extractor's 13 tests cover bounded parsing, traversal/cycle/collision refusal, symlink confinement, exact reads, verified resume, and atomic publication. On 2026-08-31, a real user-owned Gears 1 XGD ISO verified 1,810 extracted files and the recorded exact image identity. The same day's Gears 2 XEX identity passed the checked loader after the generic basic-compression zero-tail fix: disc SHA-256 `1e76f91fa3bd804381c0ce5458bdb8dd2329c783b1be03b67d111136ce337230`, title ID `4d53082d`, XEX SHA-256 `e98c25b4b9d173ac7ff69c84e7f1b4240c6be77c5fd7f672041a95221f68247c`, normalized image SHA-256 `340f71de1cfaac7d98ff0478fc8c2954967aeb449f9e9916860592f7ee0b070c`. Static generation/build evidence is historical and is not a target capability.
 - where: bootstrap.py; tools/gearsue3_bootstrap/; tools/title_identity.py; tools/gdf_extract.py; tools/refresh_recompiler_header.py; extern/XenonRecomp/XexInspect; config/titles/gears1.toml; run.sh
-- gap: Only the exact Gears 1 profile is implemented. Gears 2 now has an exact identity but no supported profile or provisioned module; Gears 3 is present as a compressed user-owned archive without a profile, and Judgment is not present. Additional-title conformance remains outstanding.
-- notes: 7z inputs are metadata-validated and materialized by `tools/gearsue3_bootstrap/archive.py` under `scratch/archives/<archive-sha256>/disc.iso`; direct images remain the identity boundary input. The identity record is the first boundary, not a provisioner completion claim. Generate every disc-derived artifact under the content-addressed ignored directory and write a tool/input receipt. Unknown revisions refuse.
+- gap: Move checked XEX/image/import validation into xenonport and wire the fresh-clone launcher to load the runtime image without generating guest source. Only the exact Gears 1 identity is supported; additional-title conformance remains outstanding.
+- notes: 7z inputs are metadata-validated and materialized under ignored content-addressed storage; direct images remain the identity input. Do not invoke XenonRecomp or produce a generated title module.
+
+### xenonport-xenia-executor — Embed Xenia's existing Xenon dynarecs
+- status: todo
+- deps: clean-distribution-tip
+- evidence:
+- where: target shared/xenonport; extern/xenia
+- gap: Create a narrow executor around Xenia Memory, Processor, ThreadState, RawModule, typed imports, device-memory callbacks, runtime overrides, original calls, bounded exits, and invalidation. Account explicitly for process-global memory/MMIO/clock state. No PPC interpreter or jit-common replacement cache is permitted.
+- notes: Xenia owns decoding, lowering, x64/A64 emission, and its code cache. Absorb the validated image/import facts from shared/xenon-host, not its generated function map.
+
+### gears-dynarec-discriminator — Execute a real Gears leaf, typed import, and all override paths
+- status: todo
+- deps: xenonport-xenia-executor, title-revision-boundary, rom-only-provisioning
+- evidence:
+- where: shared/xenonport; runtime/titles/gears1
+- gap: Execute real leaf `0x8222E868`, invoke typed `DbgPrint`, and prove disabled, enabled, and scoped-`super` dispatch through Xenia with nonzero JIT blocks and no gameplay interpreter linked or selectable.
+- notes: Disabled and `super` execute the original guest body through Xenia. This is a wiring discriminator, not boot or gameplay conformance.
+
+### gears-dynarec-gameplay — Reach representative Gears 1 gameplay through Xenia
+- status: todo
+- deps: gears-dynarec-discriminator
+- evidence:
+- where: shared/xenonport; runtime; runtime/titles/gears1; headless conformance evidence
+- gap: From a fresh user-owned image, reach at least the historical gameplay frontier with relevant native owners active; compare CPU, memory, imports, timing, interrupts, devices, audio, rendering, and frame identity at declared boundaries; exercise relevant invalidation controls; meet the declared correctness and host-architecture frame-time budget.
+- notes: Boot, logos, menus, attract loops, and FMV do not satisfy this step.
+
+### xenonrecomp-retirement — Remove the static generated product
+- status: todo
+- deps: gears-dynarec-gameplay
+- evidence:
+- where: extern/XenonRecomp; generated title module paths; generator-only configuration/tests/docs
+- gap: After representative gameplay passes, delete XenonRecomp, generated PPC modules, precomputed function maps, seed/switch generation, generated-symbol tests, and static methodology atomically.
+- notes: Until then preserve the old path without regenerating, building, or running it. It never remains as a compatibility selector or oracle.
 
 ### frame-delivery-contract — Carry one guest frame identity through a bounded latest-frame pipeline
 - status: re-verified
@@ -341,7 +373,7 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - gap: Reach a steady gameplay-state producer beyond the Bink pump, identify the semantic limiter in each exact executable revision, then implement a runtime faithful/enhanced A/B seam. No verified limiter or 60 Hz title enhancement exists yet.
 - notes: This is the last-priority per-game enhancement after Gears 1 is stable and performant at its faithful cadence and the engine compatibility work is established. Do not speed the general guest clock, alter vblank to hide the cap, or patch an unexplained constant. Catalog #126 records two rejected shortcuts: forcing live D3D sync mode 2 to mode 1 remained near 30 presents/s, and the only exact 1/30 fixed-step branch was disabled at runtime. The semantic limiter is still behind the indirect game-thread/render-command producer chain upstream of Present. Gears 1 evidence cannot establish the Gears 2, Gears 3, or Judgment timing policy.
 
-### native-rhi-observation — Mirror semantic D3D/RHI operations while super-calling recomp bodies
+### native-rhi-observation — Historical semantic D3D/RHI observation
 - status: in-progress
 - deps: title-revision-boundary
 - evidence: Four exact Gears 1 normal draw wrappers and the texture/shader/buffer/target/resource/resolve/present operations retain and super-call their generated bodies while publishing one ordered title-neutral stream. Live runs and focused negative controls ground transient ranges, 16 vertex streams plus the direct reset at 0x82487510, index allocation/slice/width/endian, active target identity, normalized RT0/depth/surface state including post-bind 0x82229B28, logical resolve packets, resource identity and non-boundary references, terminal present identity, and the raw-disassembly-backed viewport/scissor setter at 0x8222ABF8/0x8222AB30. The compatibility renderer now publishes its actual terminal NativeDrawInput rather than the queued draw list; the bounded join correlates canonical physical packet addresses, preserves refused/dropped/unmatched outcomes, and compares draw/index/target/viewport state. Active texture-fetch parity now covers the complete 32-slot by six-dword register file. A bind-only model produced 66,429 mismatches and shader post-state reduced that to 325; corrected ET_EXEC write attribution and nested-watch pause depth then grounded filter/anisotropy owners 0x8222A150, 0x8222A2D8, 0x8222A550 and composite state block 0x8254E9E0. Their retained wrappers publish final ordered post-state. A final uninstrumented Clang headless run through frame 1607 matched 118,553 correlated semantic draws with zero missing or value-mismatched renderer inputs. Per-dword, missing, duplicate, and unsupported-slot controls prove the other answer. The PM4-independent native_rhi plan boundary accepts complete frames, the shared native resource-reference owner executes grounded non-boundary transitions, and isolated Vulkan resource/resolve owners verify real host allocation and copied pixels; no live backend consumes the plan.
@@ -363,7 +395,7 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - evidence:
 - where: runtime; tests; tools/frame_replay
 - gap: No runtime original/native toggle or state/pixel parity gate exists for a complete RHI frontend.
-- notes: Preserve the PM4/recomp arm in the same binary. One independently authored scene-composite vertex/pixel pair now has a direct host-interface bypass with a same-input pixel/interface gate, but that is a pass-local setup seam, not this complete frontend. Performance is measured only after the faithful arm passes, with a deliberately wrong control that the comparer rejects. The 8.33 ms/120 fps renderer target belongs here: native execution must remove Xenos PM4 parsing, EDRAM reconstruction, and redundant pass reconstruction rather than require the compatibility oracle to carry that architecture at native-PC cost.
+- notes: Preserve the semantic facts, not the generated execution mechanism. The replacement parity arms are Xenia-original and native. One independently authored scene-composite vertex/pixel pair has a direct host-interface bypass with a same-input pixel/interface gate, but that is a pass-local setup seam, not this complete frontend. Performance is measured only after the faithful arm passes, with a deliberately wrong control that the comparer rejects.
 
 ### renderer-60hz-budget — Render steady gameplay below 16.67 ms per produced frame
 - status: todo
@@ -371,7 +403,7 @@ Statuses: ✅ re-verified · 🟡 re-partial (honest gap) · 🔬 in-progress ·
 - evidence: Before slot integration, a 101-frame chapter-45 replay measured median 53 ms total, 36.5 ms CPU draw loop, and 14 ms submit+wait. Catalog #139 removes that unconditional wait. Catalog #140 adds per-slot full-command-buffer timestamps and proves them against a one-draw control. The captured 1,742-draw chapter-45 frame executes in 13.537 ms; live ordinary title frames execute in 7-8 ms with zero failed samples. A Release headless run after removing its unused full-frame readback uses 5-6 ms renderer CPU and drops no frames.
 - where: runtime/gpu_draw*; runtime/frame_queue.*; runtime/gpu_retirement.*; native RHI frontend; headless frame-time reports
 - gap: These bounded workloads establish a sub-16.67 ms compatibility-renderer budget, not sustained interactive gameplay or the native engine's 8.33 ms/120 fps target. Integrate the native RHI path, remove the separate title-side 30 Hz production limit, then demonstrate sustained gameplay with correct retirement and no dropped evidence frames. No title currently passes the end-to-end gate.
-- notes: A 60 Hz vblank, a repeated presentation, or an average inflated by menu frames is not a 60 fps gameplay result. Measure produced gameplay frames and preserve the compatibility arm for parity. A 7-8 ms compatibility frame is useful evidence, not an acceptable native-renderer ceiling.
+- notes: A 60 Hz vblank, a repeated presentation, or an average inflated by menu frames is not a 60 fps gameplay result. Measure produced gameplay frames and preserve the Xenia-original arm for parity. Historical 7-8 ms compatibility frames are useful evidence, not an acceptable native-renderer ceiling.
 
 ### multi-title-conformance — Verify each Gears UE3 title independently
 - status: in-progress

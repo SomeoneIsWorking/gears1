@@ -1,51 +1,39 @@
 # GearsUE3 engine-port architecture
 
-GearsUE3 is a clean-code native engine for the Gears UE3 family. Static
-recompilation is its retained compatibility, ABI, and migration-oracle substrate;
-native engine owners are the shipping architecture. It does not compile or
-redistribute Unreal Engine 3 source. The user supplies an owned Gears disc/image;
-everything derived from that image is generated locally into ignored storage.
+GearsUE3 is a clean-code native/dynarec engine for the Gears UE3 family. Native
+owners replace selected subsystems; Xenia's existing x64/A64 Xenon dynarecs
+execute every remaining guest path from the user's authenticated executable.
+The gameplay product contains no interpreter, generated guest source, offline
+translation step, or fallback to the former static product.
 
 ## Product shape
 
-One source tree produces a separate executable for each exact title revision.
-Generated images cannot be linked together safely: they export the same guest
-symbol namespace and compile against different image constants. Sharing happens
-above that generated module, not by putting several games into one process.
+One source tree hosts exact title/revision adapters over one shared engine and
+platform framework. The user executable remains runtime data; selecting a
+different revision does not compile another source corpus.
 
 ```text
 user-owned disc/image
         |
         v
-local provisioner -> exact title/revision identity
-        |             extraction, analysis, recompilation
-        v
-ignored generated title module
-        |
-        +---- factual title adapter: bindings, hashes, policies
+local provisioner -> authenticated XEX/image + exact title/revision identity
         |
         v
-shared GearsUE3 engine
-  recomp ABI | Xbox services | RHI/render | audio | input | files | diagnostics
+xenonport -> Xenia Memory / Processor / ThreadState / RawModule
+        |     typed imports / device callbacks / runtime overrides / original calls
+        v
+shared GearsUE3 engine + factual title adapter
+  native owners | RHI/render | audio | input | files | diagnostics
 ```
 
-The tracked source owns algorithms and semantic operations. The locally
-generated module owns recompiled functions, image contents, import tables, the
-exact `TitleProfile`, and other title-derived artifacts. The shared profile
-schema requires both container and parsed-image SHA-256 digests plus image base,
-size, and entry point; malformed, duplicate, unknown, or ambiguous profiles
-refuse before a title binding can activate. A tracked title adapter may contain
-factual interoperability metadata, but never copied code, assets, decoded
-instruction listings, or decompiler output.
-
-The linked executable identity is generated atomically with the PPC module.
-XenonRecomp writes the effective container digest, normalized-image digest,
-base, size, and entry point into ignored `ppc_config.h`; the runtime performs
-one checked load of the selected XEX, recomputes both digests, and resolves the
-compiled profile before selecting a save namespace or creating guest memory.
-This closes same-layout cross-revision activation without tracking a game
-digest in the public tree. It is not yet the complete content-addressed
-provisioning receipt.
+The tracked source owns algorithms, semantic operations, import declarations,
+and factual title bindings. Runtime data owns executable bytes and mutable guest
+state. The profile schema requires exact container and normalized-image identity
+plus image base, size, entry point, and import facts before title policy
+activates. Malformed, duplicate, unknown, or ambiguous profiles refuse. Useful
+checked-image and typed-import validation facts currently prototyped in
+`shared/xenon-host` move into `xenonport`; its generated function-map contract
+does not.
 
 Executable identity and save compatibility are separate policies. The current
 Gears 1 profile retains the stable `gears1` save namespace across compatible
@@ -56,11 +44,11 @@ format or title identity actually requires isolation.
 
 | Owner | Shared | Per exact title/revision |
 |---|---|---|
-| Recomp | CPU ABI, direct/indirect dispatch, override registry, super-call | generated functions, image layout, entry point, function map |
-| Xbox host | memory, kernel/XAM contracts, files, input, XMA/audio | genuinely observed title policy such as save namespace |
+| Xenon executor | Xenia x64/A64 dynarecs and code cache behind `xenonport`; typed imports, invalidation, bounded exits | exact image identity, guest address bindings, optional scope predicates |
+| Xbox host | memory/device callbacks, kernel/XAM contracts, files, input, XMA/audio | genuinely observed title policy such as save namespace |
 | Renderer | PM4/Xenos semantics, Vulkan resources, EDRAM/resolves, presentation | pass/hash bindings and title-only diagnostics |
-| Native overrides | semantic implementations and runtime original/native selection | verified address binding and optional scope predicate |
-| Tooling | disc/XEX readers, analyzers, deterministic provisioner | exact compatibility receipt and generated output |
+| Native overrides | semantic implementations and runtime original/native/`super` selection | verified address binding and optional scope predicate |
+| Tooling | disc/XEX readers, deterministic provisioner, independent comparer | exact compatibility receipt and runtime profile |
 
 Gears 1 currently supplies almost all runtime evidence. That does not make a
 behavior Gears-1-specific when it is an Xbox contract. Split policy only when a
@@ -68,11 +56,12 @@ second title provides a discriminating counterexample.
 
 ## Override contract
 
-Generated output is never edited. For every recompiled function, XenonRecomp
-keeps the original body as `__imp__<name>` and emits a weak forwarding function
-under the normal name. A strong title binding can therefore intercept direct,
-same-translation-unit, cross-translation-unit, and indirect calls while retaining
-an explicit super-call to the original body.
+The Xenia dispatcher consults an image-aware runtime override table for normal
+calls. Disabled calls execute the original guest address through Xenia. Enabled
+calls enter the native implementation. `super` suppresses only the current
+override for one scoped call and executes the original guest body through Xenia,
+then restores ordinary dispatch. Installing, removing, or changing an override
+invalidates translated call paths that captured the old decision.
 
 A production override declaration must eventually record:
 
@@ -84,8 +73,10 @@ A production override declaration must eventually record:
 - evidence and provenance.
 
 Faithful replacements stay runtime-toggleable in the same binary. The gate
-compares guest-visible state and output between original and native arms and
-contains a deliberately wrong control that the comparer must reject.
+compares guest-visible state and output between Xenia-original and native arms
+and contains a deliberately wrong control that the comparer must reject. The
+first Gears proof uses real leaf `0x8222E868`, typed `DbgPrint`, and all three
+dispatch modes; it is not a boot or gameplay completion claim.
 
 ## Frame delivery and glitch prevention
 
@@ -128,10 +119,10 @@ frame at 13.537 ms; the Release headless CPU path is 5-6 ms after removing an
 unused full-frame readback. These measurements establish useful 60 Hz renderer
 headroom for the bounded workloads, but not an 8.33 ms/120 fps budget or sustained
 interactive-gameplay proof. The 8.33 ms target belongs to the native PC engine
-path. The compatibility result is a migration baseline for Xenos PM4, EDRAM,
-and pass reconstruction, not an accepted product ceiling; the retained
-compatibility arm remains the parity oracle while the native RHI removes that
-work. Neither changing the 60 Hz vblank source nor
+path. The historical compatibility result is a migration baseline for Xenos
+PM4, EDRAM, and pass reconstruction, not an accepted product ceiling. New
+same-binary parity uses the Xenia-original guest path versus the native owner;
+the frozen generated product is not a new oracle. Neither changing the 60 Hz vblank source nor
 dropping stale presentation work proves that the title simulates and produces
 frames at 60 Hz.
 
@@ -141,7 +132,7 @@ prevention come before changing game timing. Compatibility reports still carry
 a measured 60 fps enhancement result so absence cannot be hidden, but that
 result does not block faithful compatibility readiness.
 
-Once Gears 1 runs well enough and the compatibility/native paths are established,
+Once Gears 1 runs well enough and the Xenia-original/native paths are established,
 the final per-game 60 fps enhancement has two required arms:
 
 1. identify the semantic title timing limiter for each exact revision and add a
@@ -152,9 +143,10 @@ the final per-game 60 fps enhancement has two required arms:
 
 The first native boundary broad enough to change that result is a coherent
 Xenon D3D/UE3 RHI frontend. It will mirror resource, state, shader, draw,
-resolve, presentation, and retirement operations while initially super-calling
-the recomp bodies. Only after its semantic draw stream and pixels agree with
-the PM4 path may a runtime toggle bypass guest packet emission and parsing.
+resolve, presentation, and retirement operations while initially calling the
+original guest bodies through Xenia. Only after its semantic draw stream and
+pixels agree with that Xenia path may a runtime toggle bypass guest packet
+emission and parsing.
 
 ## Clean distribution and provisioning
 
@@ -164,31 +156,26 @@ full-history distribution gates pass; those gates must be rerun after every
 public-history change. A playable title target requires only a user-owned
 disc/image.
 
-`tools/title_identity.py` implements the first provisioning boundary. It
-resolves an explicit path before `GEARS_ISO` and then an unambiguous ignored
-`roms/` drop-in, streams the disc digest, and delegates XEX parsing to
-XenonRecomp's checked `xex-inspect` authority. It strictly validates that
-schema and independently re-hashes both the selected container and emitted
-normalized image before writing path-free JSON under ignored
-`scratch/titles/<disc-sha256>/`. The inspector is selected by
-`--xex-inspect`, `XEX_INSPECT`, or the documented repo-relative build. This
-does not yet orchestrate extraction, analysis, recompilation, or a playable
-module. The complete provisioner must perform this operation in a fresh,
-content-addressed directory:
+The former provisioner proved strict input priority, bounded archive/GDF
+extraction, exact container and normalized-image hashing, and fail-closed title
+selection. Those facts are migration inputs; its XenonRecomp invocation and
+generated-module build are retired behavior and must not be run. The replacement
+provisioner must perform these operations in a fresh, content-addressed
+directory:
 
 1. resolve explicit CLI, `.env`, or a narrowly named ignored drop-in image/archive, materializing
    exactly one bounded disc-image member when the input is a supported 7z archive;
 2. safely extract and fingerprint the executable and required content;
 3. select exactly one supported revision or refuse;
-4. analyze helpers and switch tables without stale output;
-5. recompile into ignored local source and build the title module;
-6. write a receipt containing input, manifest, and tool revisions;
-7. launch through the normal headless-capable product route.
+4. load the authenticated executable through `xenonport`/Xenia without emitting
+   guest source or a precompiled title substrate;
+5. write a receipt containing input, manifest, and tool revisions; and
+6. launch through the normal headless-capable product route.
 
-Image base and size are not identity. Build selection requires exact container
-and parsed-image digests because generated addresses and code describe the
-parsed image while the container digest names the user's exact input. Unknown
-or ambiguous inputs fail closed.
+Image base and size are not identity. Runtime selection requires exact container
+and parsed-image digests because title bindings describe one parsed image while
+the container digest names the user's exact input. Unknown or ambiguous inputs
+fail closed.
 
 No UE3 source checkout, private repository, game download, pre-generated title
 module, extracted asset pack, shader cache, or binary patch is an accepted input.
@@ -197,11 +184,10 @@ the user's supplied disc, so support claims must name the exact input scope.
 
 ## Compatibility claims
 
-`tools/title_conformance.py` reports exact-build gates from local, digest-bound
-evidence. It distinguishes identity, recompilation, headless boot, content
-mount, menu, gameplay, compatibility rendering, native-renderer parity, and
-override A/B results, plus a separately reported sustained 60 fps gameplay
-enhancement gate.
+The replacement conformance report must distinguish exact identity, nonzero
+Xenia JIT execution, gameplay-product interpreter absence, typed imports,
+disabled/enabled/`super` overrides, relevant invalidation, headless boot,
+content, menu, representative gameplay, renderer/native parity, and performance.
 Recognition is never promoted to compatibility, missing evidence fails, and
 every referenced artifact must be relative, present, and digest-matched. For
 Gears 2, Gears 3, and Judgment, the reporter rejects Xenia
@@ -210,10 +196,10 @@ original/native A/B evidence, or hardware-derived evidence.
 
 | Title | Current evidence | Exact-profile/conformance gap | Oracle policy |
 |---|---|---|---|
-| Gears of War | Headless boot, menu, gameplay, compatibility renderer, narrowly scoped renderer-oracle evidence, and linked exact-XEX profile activation exist | Guest-address bindings and shader/probe policy still need to move into the factual title adapter; native-RHI parity and an exact compatibility report are absent. The 60 fps override remains a deferred enhancement. | Xenia may support only the Gears 1 behaviors for which this project has separately validated the instrument |
-| Gears of War 2 | None | No local exact revision, recompilation, content, gameplay, render, native-RHI, or 60 fps evidence | Xenia evidence is rejected |
-| Gears of War 3 | None | No local exact revision, recompilation, content, gameplay, render, native-RHI, or 60 fps evidence | Xenia evidence is rejected |
-| Gears of War: Judgment | None | No local exact revision, recompilation, content, gameplay, render, native-RHI, or 60 fps evidence | Xenia evidence is rejected |
+| Gears of War | Historical static-path headless boot, menu, gameplay, compatibility-renderer, native-seam, and narrow renderer-oracle evidence | No xenonport executor, leaf/import/override discriminator, dynarec gameplay evidence, or complete conformance report exists | Xenia may support only the Gears 1 behaviors for which this project has separately validated the instrument |
+| Gears of War 2 | Exact disc/XEX/image identity only | No runtime profile, xenonport execution, content, gameplay, render, native parity, or performance evidence | Xenia evidence is rejected |
+| Gears of War 3 | Archive input present locally only | No verified exact revision or later gate | Xenia evidence is rejected |
+| Gears of War: Judgment | None | No verified exact revision or later gate | Xenia evidence is rejected |
 
 “Uses UE3”, “is a Gears game”, and “the shared engine compiles” are not
 compatibility results. Support is claimed for one exact executable revision and

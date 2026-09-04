@@ -11,7 +11,7 @@ verified_at: 2026-08-24 22:41:03
 
 ## Claim
 
-The GearsUE3 XenonRecomp fork interposes strong native overrides on same-translation-unit generated calls while retaining an original-body super-call
+Before the dynarec migration, the GearsUE3 XenonRecomp fork interposed strong native overrides on same-translation-unit generated calls while retaining an original-body super-call. This is historical static-path evidence, not the target dispatcher and not permission to regenerate or run the old product.
 
 ## Evidence
 
@@ -19,7 +19,7 @@ XenonRecomp commit 884206f CTest XenonRecompBindingTests passed; a fresh Gears g
 
 ## What would falsify it
 
-if the linker regression fails, a generated same-TU call bypasses the strong override, a retained __imp__ body is missing, or generated output contains a compiler alias
+The recorded XenonRecomp revision or cited test result does not reproduce this behavior. The claim does not apply to xenonport; its disabled/enabled/scoped-super paths require new evidence through Xenia.
 
 ## Re-confirmed 2026-08-24
 
