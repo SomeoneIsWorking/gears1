@@ -138,8 +138,8 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate passed all four CTests locally with Clang 22.1.8
-against `x360port` revision `4e958df0df16db245580beaa6c1633b38b0eb06e` and Xenia
-revision `86cfcd1d12b0833e2a400c80dab76fb6117b16d4`, the exact inputs required by
+against `x360port` revision `4dc929a47cf462ed654e8f0384cb8edca279881f` and Xenia
+revision `f04847eb6875e72f889a9e30aac48b7fe51f5fe2`, the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
 (`ninja: no work to do`). This is synthetic native/JIT mechanism evidence, not
 Gears gameplay conformance.
