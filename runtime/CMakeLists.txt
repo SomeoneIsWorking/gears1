@@ -3,8 +3,8 @@
 # fail at the same explicit boundary as the launcher, without preserving a
 # generated-code bridge.
 add_custom_target(gears1
-    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/require_x360port.py"
-    COMMENT "Checking the GearsUE3 gameplay executor boundary"
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/require_product_composition.py"
+    COMMENT "Checking the GearsUE3 product-composition boundary"
     VERBATIM)
 
 set(GEARS_HOST_OPT "-O2" CACHE STRING "Optimisation level for host-native code")

@@ -23,7 +23,7 @@ def prepare_title(
     env_file: Path | None = None,
     runner: CommandRunner | None = None,
 ) -> None:
-    """Refuse at the one missing runtime executor boundary.
+    """Refuse at the one missing product-composition boundary.
 
     Exact disc resolution, GDF extraction, title fingerprinting, checked-XEX
     metadata parsing, and exact-revision validation remain independently tested
@@ -33,7 +33,7 @@ def prepare_title(
     del profile, image, environ, env_file, runner
     expected = (repo_root / "../../shared/x360port").resolve()
     raise ProvisionError(
-        "x360port executor boundary is missing: expected an authenticated "
-        f"Xenia dynarec integration at {expected}. The retired generated-code "
+        "Gears full-image adapter and runtime services are missing over the "
+        f"authenticated Xenia dynarec integration at {expected}. The retired generated-code "
         "product cannot be generated, built, or selected."
     )

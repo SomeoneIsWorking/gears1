@@ -55,17 +55,18 @@ concerns and every exact title/revision adapter. The local `shared/ue3` checkout
 is reference material only and is never compiled, linked, packaged, copied, or
 required by this product.
 
-Gears 1 is the first conformance target. Its first implementation discriminator
-is deliberately smaller than boot: execute the real leaf at `0x8222E868`, bind
-and call `DbgPrint` through a typed import, and prove disabled, enabled, and
-`super` override paths through Xenia. Disabled and `super` both execute the
-original guest body through the dynarec; `super` suppresses only the current
-override for one call. The independently useful evidence and native owners are
+Gears 1 is the first conformance target. Its asset-free implementation
+discriminator is deliberately smaller than boot: translate an authenticated
+synthetic module whose code and entry point use retained leaf address
+`0x8222E868`, bind and call `DbgPrint` through a typed import, and return to native code. It proves the
+Gears-to-x360port composition seam, not the original leaf. The next real-image
+discriminator must execute that original leaf and prove disabled, enabled, and
+scoped-original override paths through Xenia. The independently useful evidence and native owners are
 preserved; the retired translator, generated PPC modules, function maps, generator-only
 configuration/tests, precomputed dispatch, and their methodology are deleted and
-must not return. The product may fail at one explicit missing `x360port`
-boundary until the replacement is wired; the old executable is never kept
-as a bridge or oracle.
+must not return. The product may fail at the explicit missing authenticated
+full-image adapter and runtime-service composition until those owners are wired
+over `x360port`; the old executable is never kept as a bridge or oracle.
 
 Guest addresses, image identity, shader hashes, menu walks, and diagnostics
 belong to a title/revision adapter. Shared engine or platform code must not

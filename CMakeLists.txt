@@ -8,6 +8,8 @@ enable_testing()
 
 option(GEARS_REQUIRE_PRODUCT_DEPS
     "Refuse a reduced build that cannot run the current GearsUE3 product" OFF)
+option(GEARS_DYNAREC_CONTRACT_ONLY
+    "Build only the asset-free Gears/x360port execution discriminator" OFF)
 
 # Python tools run in one locked uv project. Never select an ambient Python:
 # that made CTest and interactive diagnostics exercise different dependencies.
@@ -44,47 +46,60 @@ if(NOT GEARS_GAME_DIR)
         CACHE PATH "Extracted Gears game directory used by required content gates" FORCE)
 endif()
 
-include(FetchContent)
-FetchContent_Declare(lucent
-    GIT_REPOSITORY https://github.com/SomeoneIsWorking/lucent.git
-    GIT_TAG main)
-FetchContent_MakeAvailable(lucent)
-
-set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port")
-set(X360PORT_REQUIRED_REVISION "1bbe9c195c39607dbdd0cb407f59d6d9c79c62f2")
-if(NOT EXISTS "${X360PORT_ROOT}/CMakeLists.txt")
-    message(FATAL_ERROR
-        "GearsUE3 requires the shared/x360port checkout at ${X360PORT_ROOT}; "
-        "no in-tree or downloaded fallback is allowed")
-endif()
-find_package(Git REQUIRED)
+set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
+    "Exact shared/x360port checkout consumed by GearsUE3")
+set(X360PORT_REQUIRED_REVISION "892321aca7c7cacd146d0c546a82a5c716ef547a")
 execute_process(
-    COMMAND "${GIT_EXECUTABLE}" -C "${X360PORT_ROOT}" rev-parse HEAD
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
+            --label shared/x360port
+            --root "${X360PORT_ROOT}"
+            --revision "${X360PORT_REQUIRED_REVISION}"
+            --required-file CMakeLists.txt
     RESULT_VARIABLE X360PORT_REVISION_RESULT
     OUTPUT_VARIABLE X360PORT_REVISION
     OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET)
-if(NOT X360PORT_REVISION_RESULT EQUAL 0 OR
-   NOT X360PORT_REVISION STREQUAL X360PORT_REQUIRED_REVISION)
+    ERROR_VARIABLE X360PORT_REVISION_ERROR
+    ERROR_STRIP_TRAILING_WHITESPACE)
+if(NOT X360PORT_REVISION_RESULT EQUAL 0)
     message(FATAL_ERROR
-        "GearsUE3 requires shared/x360port revision "
-        "${X360PORT_REQUIRED_REVISION}, observed '${X360PORT_REVISION}' at "
-        "${X360PORT_ROOT}")
+        "GearsUE3 dependency refusal: ${X360PORT_REVISION_ERROR}")
 endif()
+set(X360PORT_XENIA_SOURCE_DIR "${CMAKE_SOURCE_DIR}/extern/xenia" CACHE PATH
+    "Exact maintained Xenia checkout consumed through x360port" FORCE)
 add_subdirectory("${X360PORT_ROOT}" x360port EXCLUDE_FROM_ALL)
-if(NOT TARGET x360port_validation)
+if(NOT TARGET x360port)
     message(FATAL_ERROR
-        "shared/x360port exists but does not expose its validated "
-        "authenticated-module contract target x360port_validation")
+        "shared/x360port exists but does not expose its Xenia-backed runtime target")
 endif()
 message(STATUS
-    "gears1: shared/x360port ${X360PORT_REVISION} validation contract resolved")
-if(GEARS_REQUIRE_PRODUCT_DEPS AND NOT TARGET x360port)
-    message(FATAL_ERROR
-        "GearsUE3 has no gameplay executor: the required shared/x360port "
-        "Xenia dynarec boundary is not implemented. The retired generated-code "
-        "product cannot be generated, built, or selected.")
+    "gears1: shared/x360port ${X360PORT_REVISION} Xenia runtime resolved")
+
+add_executable(test_gears1_dynarec_boundary tests/test_gears1_dynarec_boundary.cpp)
+target_link_libraries(test_gears1_dynarec_boundary PRIVATE x360port::x360port)
+target_compile_options(test_gears1_dynarec_boundary PRIVATE
+    $<$<CXX_COMPILER_ID:Clang,GNU,AppleClang>:-Wall;-Wextra;-Wpedantic;-Werror>)
+add_test(NAME gears1_dynarec_boundary COMMAND test_gears1_dynarec_boundary)
+add_test(NAME gears_dependency_checkout_contract
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tests/test_dependency_checkout.py")
+
+if(GEARS_DYNAREC_CONTRACT_ONLY)
+    add_test(NAME gears1_dynarec_boundary_quality
+        COMMAND ${GEARS_UV_RUN} python
+                "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.py"
+                "${CMAKE_BINARY_DIR}")
+    add_test(NAME gears_bootstrap_contract
+        COMMAND ${GEARS_UV_RUN} python
+                "${CMAKE_SOURCE_DIR}/tests/test_bootstrap.py")
+    return()
 endif()
+
+include(FetchContent)
+FetchContent_Declare(lucent
+    GIT_REPOSITORY https://github.com/SomeoneIsWorking/lucent.git
+    GIT_TAG f1101923eee7451c5d5aa25a25d68bfb4ae874b1)
+FetchContent_MakeAvailable(lucent)
 
 # Renderer-only xxHash use is independent of guest CPU execution. Consume the
 # pinned Xenia copy directly until x360port owns the complete Xenia build.
