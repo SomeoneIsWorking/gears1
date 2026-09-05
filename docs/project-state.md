@@ -138,10 +138,16 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate passed all four CTests locally with Clang 22.1.8
-against `x360port` revision `4dc929a47cf462ed654e8f0384cb8edca279881f` and Xenia
-revision `f04847eb6875e72f889a9e30aac48b7fe51f5fe2`, the exact inputs required by
+against `x360port` revision `30cf7dbd29949dd333db3510f19614930e4b3a99` and Xenia
+revision `9cddd1759f96b0491bfcd933a73ca7eaab1f258b`, the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
-(`ninja: no work to do`). This is synthetic native/JIT mechanism evidence, not
-Gears gameplay conformance.
-Gap: hosted results remain unverified until the commit is pushed; Android remains
-absent because no APK/runtime owner exists.
+(`ninja: no work to do`). Gears consumes the shared driver-aware warning owner;
+production CMake selection and real Clang/clang-cl probes accept modern C++ and
+reject an unused parameter. That ownership change preserved every native compile
+command, and the focused boundary and quality CTests passed afterward. Xenia's
+standalone portability suite stays disabled in this consumer; its framework owns
+that separate gate. This is synthetic native/JIT mechanism evidence, not Gears
+gameplay conformance.
+Gap: hosted qualification remains pending, including the known Windows tabulate
+portability fix awaiting a fork-publication decision. Android remains absent
+because no APK/runtime owner exists.
