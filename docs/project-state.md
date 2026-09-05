@@ -138,7 +138,10 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate passed all four CTests locally with Clang 22.1.8
-and the exact dependency revisions required by CMake and the workflow. This is
-synthetic native/JIT mechanism evidence, not Gears gameplay conformance.
+against `x360port` revision `4e958df0df16db245580beaa6c1633b38b0eb06e` and Xenia
+revision `86cfcd1d12b0833e2a400c80dab76fb6117b16d4`, the exact inputs required by
+CMake and the workflow. The unchanged second build performed zero compilations
+(`ninja: no work to do`). This is synthetic native/JIT mechanism evidence, not
+Gears gameplay conformance.
 Gap: hosted results remain unverified until the commit is pushed; Android remains
 absent because no APK/runtime owner exists.
