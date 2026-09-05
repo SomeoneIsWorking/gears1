@@ -73,10 +73,10 @@ certify this boundary.
   rendering, and frame identity are compared against an independent oracle at
   the boundary under test, with positive and controlled-negative invalidation
   cases where executable mappings can change.
-- Before dynarec implementation resumes, the retired translator, generated guest modules,
-  function maps, generator-only seeds/tests/configuration, and their methodology
-  are deleted. The build may fail only at the explicit missing
-  `x360port` executor boundary until the replacement lands.
+- The retired translator, generated guest modules, function maps, generator-only
+  seeds/tests/configuration, and their methodology remain absent. Until the
+  complete product is composed, the build may fail only at an explicitly named
+  authenticated full-image or runtime-service boundary over `x360port`.
 
 ### Constraints
 

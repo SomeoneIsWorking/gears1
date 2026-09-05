@@ -19,21 +19,21 @@ generation surfaces have been removed. The preserved runtime source is native
 subsystem work awaiting adaptation to x360port's canonical CPU/memory/service
 interfaces; it is not a buildable compatibility CPU path.
 
-The next executable milestone is intentionally bounded:
+The first executable migration milestone is intentionally bounded:
 
-1. create `x360port` around Xenia `Memory`, `Processor`, `ThreadState`, and
-   `RawModule`, using Xenia's x64/A64 dynarecs directly;
-2. execute the real Gears 1 leaf at `0x8222E868`;
-3. resolve and invoke `DbgPrint` as a typed import; and
-4. prove disabled, enabled, and scoped-`super` override paths through the Xenia
-   dispatcher.
+1. consume the exact shared `x360port` and maintained Xenia revisions;
+2. map an aligned authenticated synthetic image whose code and entry point use
+   retained Gears leaf address `0x8222E868`;
+3. translate and execute it through Xenia; and
+4. cross a typed `DbgPrint` import into native code and return.
 
-That proves wiring, not game compatibility. It runs only after the old CPU path
-is absent. A fresh image-only build must still reach representative interactive
-gameplay with Xenia's dynarec selected by default, bounded and counted fallback,
-working native/original calls, relevant invalidation coverage, and declared
-correctness and frame-time evidence. Fallback execution and explicit diagnostic
-interpreter mode do not qualify that gameplay result.
+That asset-free discriminator now proves wiring, not game compatibility or the
+real leaf body. The next real-image milestone must add full-image adaptation,
+execute the original leaf, and prove disabled, enabled, and scoped-original
+override paths plus invalidation. A fresh image-only build must still reach
+representative interactive gameplay with Xenia's dynarec selected by default,
+bounded and counted fallback, working native/original calls, relevant
+invalidation coverage, and declared correctness and frame-time evidence.
 
 ## Preserved evidence
 
@@ -57,20 +57,21 @@ revision, maps the authenticated XEX at runtime, and launches without emitting
 or compiling guest code. Explicit CLI input, `GEARS_ISO`/gitignored `.env`, and
 one unambiguous ignored `roms/` drop-in remain the intended discovery order.
 
-The current `./run.sh` refuses explicitly because `shared/x360port` has not yet
-provided the Xenia executor boundary. It cannot generate, build, or select the
-removed product.
+The current `./run.sh` refuses explicitly because the authenticated full-image
+adapter and runtime-service composition are not yet wired over `x360port`. It
+cannot generate, build, or select the removed product.
 
 ## Ownership
 
 | Area | Owner |
 |---|---|
-| Xenon CPU execution, typed imports, image mapping, overrides, original calls | `shared/x360port`; its validator slice exists, while the pinned-Xenia executor remains missing |
+| Xenon CPU execution, typed imports, and authenticated image mapping | `shared/x360port`; the pinned-Xenia executor is consumed and synthetically exercised here |
+| Device callbacks, bounded exits, overrides, original calls, fallback accounting, invalidation | future `shared/x360port` contracts, added only with executing evidence |
 | Reusable UE3-on-Xbox-360 ABI, RHI semantics, and engine lifetimes | `shared/x360ue3`, consuming only public `x360port` interfaces |
 | Cross-framework executable-memory helpers | `shared/jit-common`, only after two integrations prove the same missing contract |
 | Exact Gears identity, addresses, policies, navigation, and native bindings | title adapters in this repository |
 | Shared Gears-family engine behavior | `GearsUE3`: cohesive runtime/render/audio/input/storage modules in this repository |
-| Authenticated image/import validation | `shared/x360port/x360port_validation`; it must next be exercised against Xenia `RawModule` |
+| Authenticated image/import validation | `shared/x360port`; exercised against Xenia `RawModule` by both its own runtime test and the Gears-addressed discriminator |
 | Independent comparison | Xenia oracle/hardware/binary evidence, never the old generated product |
 
 The local `shared/ue3` checkout is developer reference material, not one of

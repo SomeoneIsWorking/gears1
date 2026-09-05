@@ -8,24 +8,30 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
 2. **Reusable host semantics — grounded but disconnected.** Native renderer,
    kernel, audio, frame, and wait components have focused tests and retain only
    executable-address/ABI facts. They currently have no guest executor.
-3. **Typed Xenia execution boundary — missing.** `x360port` must expose owned
-   memory/module/context lifetimes, typed imports, device callbacks, bounded exits,
-   native overrides, scoped original calls, and executable-state invalidation.
-4. **First guest discriminator — next.** Execute original guest leaf `0x8222E868`,
-   route `DbgPrint`, select a native override, suppress it for one scoped original
-   call, and observe nonzero Xenia translation plus a controlled invalidation.
-5. **Fallback discriminator — required with step 4.** Force one safe unsupported
+3. **Typed Xenia execution boundary — partially grounded.** The exact shared
+   `x360port` and maintained Xenia revisions now own memory/module/context
+   lifetimes, authenticated synthetic image mapping, JIT calls, and typed imports.
+   Device callbacks, bounded exits, native overrides, scoped original calls, and
+   executable-state invalidation remain missing shared contracts.
+4. **Synthetic Gears-addressed discriminator — grounded.** An asset-free image
+   whose code and entry point use `0x8222E868` translates through Xenia, crosses
+   a typed `DbgPrint` import into native code, and returns with nonzero translation/emission counts.
+   This proves the composition seam, not the real leaf body.
+5. **First real guest discriminator — next.** Execute the authenticated original
+   leaf at `0x8222E868`, route its real imports, select a native override, suppress
+   it for one scoped original call, and observe controlled invalidation.
+6. **Fallback discriminator — required with the real discriminator.** Force one safe unsupported
    block through the bounded interpreter fallback, prove reason and counters,
    then prove ordinary execution still selects dynarec. Explicit interpreter mode
    remains diagnostic-only. Fallback results do not satisfy gameplay or performance.
-6. **Boot and subsystem restoration — missing.** Reconnect imports, scheduling,
+7. **Boot and subsystem restoration — missing.** Reconnect imports, scheduling,
    GPU, audio, input, storage, and frame identity one owned boundary at a time.
-7. **Representative interactive gameplay — missing.** Compare deterministic CPU
+8. **Representative interactive gameplay — missing.** Compare deterministic CPU
    state, relevant memory, devices, audio, rendering, and frames with the oracle.
-8. **Native renderer completion — missing.** Replace guest command construction
+9. **Native renderer completion — missing.** Replace guest command construction
    only after the semantic plan and native backend agree on same-run resources,
    lifetime, synchronization, shader state, resolves, presentation, and pixels.
-9. **Platform and performance qualification — missing.** Qualify x86-64, Apple
+10. **Platform and performance qualification — missing.** Qualify x86-64, Apple
    Silicon macOS A64, and Android arm64-v8a independently; then measure the native
    8.33 ms renderer target on named hardware.
 

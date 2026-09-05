@@ -14,7 +14,7 @@ from .provision import ProvisionError, prepare_title
 USAGE = """Usage: ./run.sh [options] [-- extra runtime arguments]
 
 Launch the GearsUE3 native/dynarec product from a user-owned Gears of War disc
-image. The product currently refuses at the missing x360port executor boundary.
+image. The product currently refuses at the missing full-image/runtime-service composition.
 
 Options:
   --headless          no window (GEARS_NO_WINDOW=1); measurement runs
@@ -74,7 +74,13 @@ def parse_arguments(
         elif argument == "--menu-walk":
             options.input_script = menu_walk
             index += 1
-        elif argument in {"--iso", "--log", "--script", "--http-port", "--present-dump"}:
+        elif argument in {
+            "--iso",
+            "--log",
+            "--script",
+            "--http-port",
+            "--present-dump",
+        }:
             selected, index = _value(arguments, index, argument)
             if argument == "--iso":
                 options.image = selected
@@ -117,7 +123,11 @@ def _launch_environment(
 
 
 def main(arguments: list[str] | None = None, repo_root: Path | None = None) -> int:
-    root = Path(__file__).resolve().parents[2] if repo_root is None else repo_root.resolve()
+    root = (
+        Path(__file__).resolve().parents[2]
+        if repo_root is None
+        else repo_root.resolve()
+    )
     profile = load_profile(root)
     selected_environment_file = environment_file(root)
     environment = load_environment(root, env_file=selected_environment_file)

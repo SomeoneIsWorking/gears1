@@ -1,0 +1,85 @@
+name: Dynarec boundary
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  X360PORT_REVISION: 892321aca7c7cacd146d0c546a82a5c716ef547a
+  XENIA_REVISION: 657d521af176e07a1290524310855c6eb966970c
+
+jobs:
+  native-jit-boundary:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64 JIT
+            os: ubuntu-24.04
+            llvm_arch: x64
+            machine: x86_64
+          - name: Windows x86-64 JIT
+            os: windows-2025
+            llvm_arch: x64
+            machine: x86_64
+          - name: macOS arm64 JIT
+            os: macos-15
+            llvm_arch: arm64
+            machine: arm64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - name: Check out GearsUE3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out pinned x360port
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: SomeoneIsWorking/x360port
+          ref: ${{ env.X360PORT_REVISION }}
+          path: build/deps/x360port
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check out pinned Xenia fork
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: SomeoneIsWorking/xenia-canary
+          ref: ${{ env.XENIA_REVISION }}
+          path: extern/xenia
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install --yes libgtk-3-dev liblz4-dev libsdl2-dev libx11-xcb-dev
+
+      - name: Install pinned LLVM
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0
+        with:
+          version: 20.1.8
+          arch: ${{ matrix.llvm_arch }}
+          env: true
+
+      - name: Install pinned uv and Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: 0.10.12
+          python-version: 3.12.13
+          enable-cache: false
+
+      - name: Verify Gears/x360port native-JIT boundary
+        run: >-
+          uv run --frozen python tools/verify_dynarec_boundary.py
+          --x360port-root build/deps/x360port
+          --build-dir build/ci-dynarec-boundary
+          --expected-machine ${{ matrix.machine }}

@@ -10,7 +10,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-
 CPP_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
 CPP_ROOTS = ("runtime", "tests", "tools", "xenia_gpu")
 EXCLUDED_PARTS = {"build", "extern", "scratch", ".git", ".venv", "__pycache__"}
@@ -65,6 +64,7 @@ MAINTAINED_FILES = tuple(
         "runtime/xma.h",
         "runtime/xma_context.cpp",
         "runtime/xnet_null.cpp",
+        "tests/test_gears1_dynarec_boundary.cpp",
         "tests/test_title_profile.cpp",
         "tools/heap_replay.cpp",
         "tools/system_constants/main.cpp",
@@ -87,7 +87,9 @@ def is_generated_source(path: Path) -> bool:
         prefix = path.read_text(encoding="utf-8")[:512]
     except (OSError, UnicodeDecodeError):
         return False
-    return "GENERATED from " in prefix or "generated file -- do not edit" in prefix.lower()
+    return (
+        "GENERATED from " in prefix or "generated file -- do not edit" in prefix.lower()
+    )
 
 
 def first_party_cpp(root: Path) -> list[Path]:
@@ -100,7 +102,11 @@ def first_party_cpp(root: Path) -> list[Path]:
             relative = path.relative_to(root)
             if any(part in EXCLUDED_PARTS for part in relative.parts):
                 continue
-            if path.is_file() and path.suffix.lower() in CPP_SUFFIXES and not is_generated_source(path):
+            if (
+                path.is_file()
+                and path.suffix.lower() in CPP_SUFFIXES
+                and not is_generated_source(path)
+            ):
                 files.append(relative)
     return sorted(files)
 
@@ -175,8 +181,10 @@ def main(argv: list[str]) -> int:
         return 2
 
     root = Path(__file__).resolve().parents[1]
-    build_dir = Path(argv[1]) if len(argv) == 2 else Path(
-        os.environ.get("GEARS_BUILD_DIR", "build/release")
+    build_dir = (
+        Path(argv[1])
+        if len(argv) == 2
+        else Path(os.environ.get("GEARS_BUILD_DIR", "build/release"))
     )
     if not build_dir.is_absolute():
         build_dir = root / build_dir

@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Shipping bootstrap CLI, prerequisite, logging, and lifecycle tests."""
 
 from __future__ import annotations
@@ -18,15 +17,16 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 
-from tools.gearsue3_bootstrap import (  # noqa: E402
+import replay_corpus
+
+from tools import clean_build
+from tools.gearsue3_bootstrap import (
     environment,
     launcher,
     paths,
     process,
     requirements,
 )
-from tools import clean_build  # noqa: E402
-import replay_corpus  # noqa: E402
 
 
 class BootstrapTests(unittest.TestCase):
@@ -89,7 +89,9 @@ class BootstrapTests(unittest.TestCase):
     def test_missing_tools_name_every_missing_command_and_package_action(self) -> None:
         available = {"git", "cc", "c++"}
         with self.assertRaises(requirements.RequirementError) as caught:
-            requirements.require_commands({}, lambda name: name if name in available else None)
+            requirements.require_commands(
+                {}, lambda name: name if name in available else None
+            )
         message = str(caught.exception)
         for name in ("cmake", "ninja", "make", "pkg-config"):
             self.assertIn(name, message)
@@ -100,7 +102,9 @@ class BootstrapTests(unittest.TestCase):
             requirements.package_command("Linux", "fedora"),
             "sudo dnf install cmake ninja-build make pkgconf-pkg-config gcc gcc-c++ SDL3-devel vulkan-loader-devel vulkan-headers",
         )
-        self.assertIn("sudo apt install", requirements.package_command("Linux", "ubuntu"))
+        self.assertIn(
+            "sudo apt install", requirements.package_command("Linux", "ubuntu")
+        )
         self.assertIn("brew install", requirements.package_command("Darwin", ""))
         self.assertIn("winget install", requirements.package_command("Windows", ""))
 
@@ -109,9 +113,7 @@ class BootstrapTests(unittest.TestCase):
             requirements.require_archive_command(
                 self.root / "disc.7z", lambda name: None
             )
-        requirements.require_archive_command(
-            self.root / "disc.iso", lambda name: None
-        )
+        requirements.require_archive_command(self.root / "disc.iso", lambda name: None)
         self.assertIn(
             "7zip",
             requirements.package_command("Linux", "fedora", include_archive_tools=True),
@@ -161,16 +163,18 @@ class BootstrapTests(unittest.TestCase):
             patch.object(
                 launcher,
                 "prepare_title",
-                side_effect=launcher.ProvisionError("missing x360port"),
+                side_effect=launcher.ProvisionError("missing product composition"),
             ) as prepare,
+            self.assertRaisesRegex(launcher.ProvisionError, "product composition"),
         ):
-            with self.assertRaisesRegex(launcher.ProvisionError, "x360port"):
-                launcher.main(["--prepare"], self.root)
+            launcher.main(["--prepare"], self.root)
         self.assertEqual(prepare.call_args.kwargs["env_file"], selected)
 
     def test_build_directory_refuses_scratch_and_external_roots(self) -> None:
         self.assertEqual(
-            paths.build_directory(self.root, "build/debug", self.root / "build/release"),
+            paths.build_directory(
+                self.root, "build/debug", self.root / "build/release"
+            ),
             self.root / "build/debug",
         )
         with self.assertRaisesRegex(paths.BuildPathError, "must be a child"):
@@ -178,7 +182,9 @@ class BootstrapTests(unittest.TestCase):
                 self.root, "scratch/build", self.root / "build/release"
             )
         with self.assertRaisesRegex(paths.BuildPathError, "must be a child"):
-            paths.build_directory(self.root, self.root.parent, self.root / "build/release")
+            paths.build_directory(
+                self.root, self.root.parent, self.root / "build/release"
+            )
 
     def test_diagnostic_integer_is_bounded_and_names_invalid_input(self) -> None:
         self.assertEqual(
@@ -193,11 +199,15 @@ class BootstrapTests(unittest.TestCase):
             )
 
     def test_build_cleanup_accepts_only_one_named_top_level_child(self) -> None:
-        self.assertEqual(clean_build.build_target("verification"), REPO_ROOT / "build/verification")
+        self.assertEqual(
+            clean_build.build_target("verification"), REPO_ROOT / "build/verification"
+        )
         for invalid in ("", ".", "../build", "nested/debug", "/absolute"):
-            with self.subTest(invalid=invalid):
-                with self.assertRaises(clean_build.CleanBuildError):
-                    clean_build.build_target(invalid)
+            with (
+                self.subTest(invalid=invalid),
+                self.assertRaises(clean_build.CleanBuildError),
+            ):
+                clean_build.build_target(invalid)
 
     def test_logged_child_tees_output_and_preserves_nonzero_status(self) -> None:
         log = self.root / "run.log"

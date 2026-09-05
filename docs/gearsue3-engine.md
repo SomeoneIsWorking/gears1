@@ -15,10 +15,11 @@ Gears title/revision adapters + native GearsUE3 systems
               shared/x360port -> Xenia
 ```
 
-`x360port` owns authenticated module loading, Xenia memory/context lifetime,
-x64/A64 translation, code-cache invalidation, typed imports, device callbacks,
-native overrides, scoped original calls, bounded exits, and selection telemetry.
-Dynarec is the default. A bounded interpreter fallback is allowed only for a
+`x360port` currently owns authenticated module loading, Xenia memory/context
+lifetime, x64/A64 backend selection, typed imports, and guest register calls.
+It will also own code-cache invalidation, device callbacks, native overrides,
+scoped original calls, bounded exits, and selection telemetry as those contracts
+gain executing evidence. Dynarec is the default. A bounded interpreter fallback is allowed only for a
 compilation failure, unsupported guest instruction, or unsafe generated host
 block. It must record its reason, transitions, and block count. Explicit
 interpreter mode is diagnostic-only; fallback execution cannot satisfy gameplay
@@ -32,11 +33,12 @@ address, hash, navigation, pass policy, or gameplay behavior. The local
 linked, packaged, or required.
 
 This repository owns Gears-family native subsystems and exact title adapters.
-Gears 1 is the active conformance target. Its first execution discriminator is
-original guest leaf `0x8222E868`, a typed `DbgPrint` import, a native override,
-and a scoped original call, followed by a controlled executable-cache
-invalidation and one forced safe fallback case. That proves wiring only, not
-boot or gameplay.
+Gears 1 is the active conformance target. Its asset-free discriminator maps an
+aligned synthetic image whose code and entry point use retained leaf address
+`0x8222E868`, translates it through Xenia, calls a typed `DbgPrint` binding, and returns to native code. The next
+real-image discriminator must execute the original body, a native override, and
+a scoped original call, followed by controlled executable-cache invalidation
+and one forced safe fallback case. Neither discriminator proves boot or gameplay.
 
 ## Runtime invariants
 
@@ -64,9 +66,10 @@ assets, derived guest source, private engine source, or maintainer-only RE tool
 is a shipped or fetched dependency. Builds live under `build/`; disposable
 evidence lives under `scratch/`.
 
-Until the pinned `x360port` revision exposes the executor target, the named
-Gears gameplay target and launcher refuse at that exact boundary. The
-executor-independent native libraries and diagnostic tools remain buildable.
+Until the authenticated full-image adapter and runtime services are composed
+over the pinned `x360port` executor, the named Gears gameplay target and launcher
+refuse at that exact boundary. The executor-independent native libraries and
+diagnostic tools remain buildable.
 
 ## Verification
 
