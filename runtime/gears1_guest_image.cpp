@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <x360port/pe_image.hpp>
+#include <x360port/xex_inspect.hpp>
 
 namespace gears
 {
@@ -52,6 +53,32 @@ bool Gears1GuestImage::Initialize(std::span<const std::byte> normalized_image,
     RebuildManifest();
     error.clear();
     return true;
+}
+
+bool Gears1GuestImage::InitializeCheckedXex(std::span<const std::byte> xex,
+                                            const XexIdentity &expected, std::string &error)
+{
+    if (x360port::HashBytes(xex) != expected.containerDigest)
+    {
+        error = "XEX container does not match the exact Gears profile";
+        return false;
+    }
+
+    const x360port::XexInspectionResult inspected = x360port::InspectXex(xex);
+    if (!inspected)
+    {
+        error = inspected.error;
+        return false;
+    }
+
+    std::vector<ImportSpec> imports;
+    imports.reserve(inspected.inspection.imports.size());
+    for (const x360port::XexImport &import : inspected.inspection.imports)
+    {
+        imports.push_back({import.kind, import.library, import.ordinal, import.name, import.address,
+                           import.record_address});
+    }
+    return Initialize(inspected.inspection.normalized_image, expected, imports, error);
 }
 
 const x360port::ModuleDescriptor &Gears1GuestImage::Descriptor() const noexcept

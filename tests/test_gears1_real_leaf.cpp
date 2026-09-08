@@ -1,0 +1,207 @@
+#include "gears1_guest_image.h"
+
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <fstream>
+#include <iostream>
+#include <iterator>
+#include <span>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include <x360port/pe_image.hpp>
+#include <x360port/runtime.hpp>
+#include <x360port/xex_inspect.hpp>
+
+namespace
+{
+
+using x360port::GuestAddress;
+
+constexpr GuestAddress kResourceAddRef = 0x82233668U;
+constexpr std::uint32_t kVariableStorageBase = 0x70000000U;
+
+constexpr std::array<std::uint8_t, 32> kContainerDigest{
+    0xdf, 0x10, 0x41, 0xda, 0x72, 0xd2, 0xb9, 0x47, 0xe3, 0xbb, 0x2f, 0x70, 0x1a, 0x19, 0xfd, 0xe9,
+    0xe8, 0x44, 0x88, 0xdc, 0x84, 0x8f, 0xea, 0x2d, 0xec, 0xd6, 0xd4, 0x34, 0x34, 0xef, 0xe2, 0xd1};
+constexpr std::array<std::uint8_t, 32> kImageDigest{
+    0xf6, 0x1c, 0xc7, 0x8e, 0x40, 0x57, 0xbc, 0x68, 0xa2, 0xc6, 0x53, 0x86, 0xa0, 0x34, 0x1f, 0x6d,
+    0x26, 0xa7, 0xad, 0xd3, 0xdf, 0xd9, 0x91, 0x80, 0x07, 0xa4, 0x55, 0x75, 0x0e, 0xc6, 0xed, 0x5c};
+
+struct Observations
+{
+    std::uint32_t function_calls = 0;
+    std::uint32_t variable_resolutions = 0;
+    std::uint32_t override_calls = 0;
+};
+
+void UnexpectedImport(void *, void *, void *context) noexcept
+{
+    ++static_cast<Observations *>(context)->function_calls;
+}
+
+GuestAddress ResolveVariable(void *context) noexcept
+{
+    auto &observations = *static_cast<Observations *>(context);
+    const GuestAddress address = kVariableStorageBase + observations.variable_resolutions * 4U;
+    ++observations.variable_resolutions;
+    return address;
+}
+
+x360port::ExecutionResult ScopedOriginal(x360port::RuntimeContext &runtime, GuestAddress address,
+                                         std::span<const std::uint64_t> arguments,
+                                         void *context) noexcept
+{
+    ++static_cast<Observations *>(context)->override_calls;
+    return runtime.CallOriginal(address, arguments);
+}
+
+[[noreturn]] void Fail(std::string_view message)
+{
+    std::cerr << "Gears real-leaf discriminator failed: " << message << '\n';
+    std::exit(1);
+}
+
+void Require(bool condition, std::string_view message)
+{
+    if (!condition)
+    {
+        Fail(message);
+    }
+}
+
+std::vector<std::byte> ReadFile(const char *path)
+{
+    std::ifstream input(path, std::ios::binary);
+    const std::vector<char> raw((std::istreambuf_iterator<char>(input)), {});
+    Require(input.good() || input.eof(), "could not read the supplied XEX");
+    std::vector<std::byte> bytes;
+    bytes.reserve(raw.size());
+    for (const char value : raw)
+    {
+        bytes.push_back(static_cast<std::byte>(static_cast<unsigned char>(value)));
+    }
+    Require(!bytes.empty(), "the supplied XEX is empty");
+    return bytes;
+}
+
+GuestAddress FindSyntheticObject(const x360port::PeImageLayout &layout)
+{
+    constexpr std::array<std::byte, 8> kObjectWords{std::byte{0}, std::byte{0}, std::byte{0},
+                                                    std::byte{0}, std::byte{0}, std::byte{0},
+                                                    std::byte{0}, std::byte{4}};
+    for (const x360port::PeSection &section : layout.sections)
+    {
+        if (section.code || section.size < kObjectWords.size())
+        {
+            continue;
+        }
+        const std::uint64_t offset = section.base - layout.identity.base;
+        for (std::uint32_t index = 0; index + kObjectWords.size() <= section.size; index += 4U)
+        {
+            const auto begin = layout.image.begin() + static_cast<std::ptrdiff_t>(offset + index);
+            if (std::equal(kObjectWords.begin(), kObjectWords.end(), begin))
+            {
+                return section.base + index;
+            }
+        }
+    }
+    return 0;
+}
+
+} // namespace
+
+int main(int argc, char **argv)
+{
+    if (argc != 2)
+    {
+        std::cerr << "usage: test_gears1_real_leaf <default.xex>\n";
+        return 2;
+    }
+
+    const std::vector<std::byte> xex = ReadFile(argv[1]);
+    const gears::XexIdentity expected{.containerDigest = kContainerDigest,
+                                      .imageDigest = kImageDigest,
+                                      .imageBase = 0x82000000U,
+                                      .imageSize = 13500416U,
+                                      .entryPoint = 0x82612BF0U};
+
+    gears::Gears1GuestImage module;
+    std::string error;
+    Require(module.InitializeCheckedXex(xex, expected, error), error);
+    Require(module.ImportManifest().size() == 236U, "the real import manifest was not retained");
+
+    const x360port::XexInspectionResult inspected = x360port::InspectXex(xex);
+    Require(static_cast<bool>(inspected), inspected.error);
+    const x360port::PeImageLayoutResult mapped =
+        x360port::MapPeImage(inspected.inspection.normalized_image);
+    Require(static_cast<bool>(mapped), mapped.error);
+    const GuestAddress object = FindSyntheticObject(mapped.layout);
+    Require(object != 0, "no non-code data cell with the controlled refcount seed was found");
+    std::vector<x360port::ImportBinding> bindings;
+    bindings.reserve(module.ImportManifest().size());
+    Observations observations;
+    for (const x360port::ImportRequirement &import : module.ImportManifest())
+    {
+        x360port::ImportBinding binding{.library = import.library,
+                                        .ordinal = import.ordinal,
+                                        .kind = import.kind,
+                                        .function_handler = UnexpectedImport,
+                                        .function_context = &observations};
+        if (import.kind == x360port::ImportKind::Variable)
+        {
+            binding.function_handler = nullptr;
+            binding.function_context = nullptr;
+            binding.variable_resolver = ResolveVariable;
+            binding.variable_resolution_context = &observations;
+        }
+        bindings.push_back(binding);
+    }
+
+    x360port::RuntimeCreateResult created = x360port::RuntimeContext::Create();
+    Require(static_cast<bool>(created), created.failure.detail);
+    const x360port::RuntimeFailure loaded = created.context->LoadModule(module, bindings);
+    Require(!loaded, loaded.detail);
+
+    const std::array<std::uint64_t, 1> arguments{object};
+    const x360port::ExecutionResult baseline = created.context->Execute(kResourceAddRef, arguments);
+    Require(static_cast<bool>(baseline), baseline.failure.detail);
+    Require(baseline.value == 5U, "real AddRef leaf returned an unexpected baseline value");
+    Require(observations.function_calls == 0U,
+            "real AddRef leaf unexpectedly called an import service");
+
+    const x360port::RuntimeFailure installed =
+        created.context->InstallOverride(kResourceAddRef, ScopedOriginal, &observations);
+    Require(!installed, installed.detail);
+    const x360port::ExecutionResult overridden =
+        created.context->Execute(kResourceAddRef, arguments);
+    Require(static_cast<bool>(overridden), overridden.failure.detail);
+    Require(overridden.value == 6U && observations.override_calls == 1U,
+            "enabled native override did not take one scoped original path");
+    Require(created.context->Statistics().original_calls == 1U,
+            "scoped original call was not counted");
+
+    const x360port::RuntimeFailure removed = created.context->RemoveOverride(kResourceAddRef);
+    Require(!removed, removed.detail);
+    const x360port::ExecutionResult disabled = created.context->Execute(kResourceAddRef, arguments);
+    Require(static_cast<bool>(disabled) && disabled.value == 7U,
+            "disabled override did not restore the original guest path");
+
+    const x360port::RuntimeFailure invalidated =
+        created.context->NotifyExecutableWrite(kResourceAddRef, 4U);
+    Require(!invalidated, invalidated.detail);
+    const x360port::ExecutionResult after_invalidation =
+        created.context->Execute(kResourceAddRef, arguments);
+    Require(static_cast<bool>(after_invalidation) && after_invalidation.value == 8U,
+            "real guest execution did not resume after explicit invalidation");
+    Require(created.context->Statistics().translation_invalidations >= 2U,
+            "override removal and executable write did not invalidate translations");
+
+    std::cout << "Gears real-image discriminator: checked XEX, 236 imports, real 0x82233668, "
+                 "scoped original, and executable invalidation passed\n";
+    return 0;
+}

@@ -89,14 +89,14 @@ guest-call invalidation, and product service composition remain missing.
 Evidence: the synthetic Gears-addressed module executes through Xenia's JIT and
 calls a typed `DbgPrint` binding; the pinned shared runtime separately proves
 the native override/original-call dispatch seam against a synthetic guest leaf.
-A headless probe mapped the profile-matching ignored image's PE sections into
-guest virtual offsets, seeded a synthetic object field, and executed the real
-`0x8222E868` body: it returned `0x5`, the native override called the real
-original once, and reported executable-write invalidation restored the original
-path. The production `Gears1GuestImage` adapter now authenticates the same
-normalized image and performs the PE-to-flat mapping; its synthetic CTest and
-real ignored-input adapter run pass. The shared checked-XEX2 inspector now provides
-the container, normalized image, 236 logical imports, and eight helper-pattern hits.
+A maintained headless discriminator authenticates the profile-matching ignored
+image, maps its PE sections into guest virtual offsets, seeds a synthetic object
+field, and executes real leaf `0x82233668`: it returns `0x5`, the native override
+calls the real original once, and reported executable-write invalidation restores
+the original path. The production `Gears1GuestImage` adapter now authenticates
+the same normalized image and import manifest; its synthetic CTest and real
+ignored-input discriminator pass. The shared checked-XEX2 inspector provides the
+container, normalized image, 236 logical imports, and eight helper-pattern hits.
 Gap: real import bindings and device services, a caller-owned object/runtime path,
 and the complete product launch path remain.
 

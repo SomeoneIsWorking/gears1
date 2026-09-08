@@ -39,6 +39,13 @@ class Gears1GuestImage final : public x360port::GuestModule
                                   const XexIdentity &expected, std::span<const ImportSpec> imports,
                                   std::string &error);
 
+    // Inspect and authenticate the user-owned XEX before adapting its
+    // normalized image. The checked inspector owns container expansion and
+    // import discovery; this title owner only verifies the exact profile and
+    // converts the discovered manifest into x360port's module contract.
+    [[nodiscard]] bool InitializeCheckedXex(std::span<const std::byte> xex,
+                                            const XexIdentity &expected, std::string &error);
+
     [[nodiscard]] const x360port::ModuleDescriptor &Descriptor() const noexcept override;
     [[nodiscard]] std::span<const std::byte> ImageBytes() const noexcept override;
     [[nodiscard]] std::span<const x360port::ImportRequirement>
