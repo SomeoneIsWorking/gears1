@@ -14,7 +14,9 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    and tested image-scoped native override/original-call and device-memory
    callback seams. Explicit and automatically observed executable-write
    invalidation are now proven for the authenticated virtual code range; bounded
-   exits and internal guest-call routing remain missing shared contracts.
+   exits and mid-call invalidation remain missing shared contracts. The shared
+   runtime test separately proves a translated guest caller reaches a second
+   guest callee through Xenia and reuses both translations.
 4. **Synthetic Gears-addressed discriminator — grounded.** An asset-free image
    whose code and entry point use `0x8222E868` translates through Xenia, crosses
    a typed `DbgPrint` import into native code, and returns with nonzero translation/emission counts.
