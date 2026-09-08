@@ -87,3 +87,11 @@ path. The probe was deleted after capture. This grounds the real leaf body and
 shared dispatch contracts, but it is not title conformance: the product still
 needs its authenticated full-image adapter, real imports/services, and
 caller-owned object path.
+
+## Shared UE3 contract — 2026-09-08
+
+The public `shared/x360ue3` repository now owns the title-neutral ABI and
+binding-schema checks, semantic RHI operation ordering, and object/resource/frame
+lifetime transitions. Gears pins and consumes that revision in an asset-free
+contract test. It does not contain Gears policy or replace the missing
+authenticated XEX/import/service composition.

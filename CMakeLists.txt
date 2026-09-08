@@ -75,6 +75,29 @@ endif()
 message(STATUS
     "gears1: shared/x360port ${X360PORT_REVISION} Xenia runtime resolved")
 
+set(X360UE3_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360ue3" CACHE PATH
+    "Exact shared/x360ue3 checkout consumed by GearsUE3")
+set(X360UE3_REQUIRED_REVISION "7bc5763b9a3acb3ea04463ef05056b222a2579be")
+execute_process(
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
+            --label shared/x360ue3
+            --root "${X360UE3_ROOT}"
+            --revision "${X360UE3_REQUIRED_REVISION}"
+            --required-file CMakeLists.txt
+    RESULT_VARIABLE X360UE3_REVISION_RESULT
+    OUTPUT_VARIABLE X360UE3_REVISION
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_VARIABLE X360UE3_REVISION_ERROR
+    ERROR_STRIP_TRAILING_WHITESPACE)
+if(NOT X360UE3_REVISION_RESULT EQUAL 0)
+    message(FATAL_ERROR
+        "GearsUE3 dependency refusal: ${X360UE3_REVISION_ERROR}")
+endif()
+add_subdirectory("${X360UE3_ROOT}" x360ue3 EXCLUDE_FROM_ALL)
+message(STATUS
+    "gears1: shared/x360ue3 ${X360UE3_REVISION} contract resolved")
+
 add_executable(test_gears1_dynarec_boundary tests/test_gears1_dynarec_boundary.cpp)
 target_link_libraries(test_gears1_dynarec_boundary PRIVATE x360port::x360port)
 x360port_enable_warnings(test_gears1_dynarec_boundary)
@@ -91,6 +114,11 @@ add_executable(test_gears1_guest_image tests/test_gears1_guest_image.cpp)
 target_link_libraries(test_gears1_guest_image PRIVATE gears1_guest_image)
 x360port_enable_warnings(test_gears1_guest_image)
 add_test(NAME gears1_guest_image COMMAND test_gears1_guest_image)
+
+add_executable(test_gears1_ue3_contract tests/test_gears1_ue3_contract.cpp)
+target_link_libraries(test_gears1_ue3_contract PRIVATE x360ue3::x360ue3)
+x360port_enable_warnings(test_gears1_ue3_contract)
+add_test(NAME gears1_ue3_contract COMMAND test_gears1_ue3_contract)
 
 if(GEARS_DYNAREC_CONTRACT_ONLY)
     add_test(NAME gears1_dynarec_boundary_quality
