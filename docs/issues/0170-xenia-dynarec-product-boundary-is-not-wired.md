@@ -6,17 +6,17 @@ symptom: GearsUE3 exercises x360port/Xenia synthetically, but the authenticated 
 tags: dynarec,xenia,x360port,x360ue3,migration
 state_items: S002,S006,S007,S008,S009,S010,S011
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-09-08
 ---
 
 ## Root cause
 
 The previous architecture made a generated C++ corpus the guest execution
 owner. The new product contract requires runtime translation from the
-authenticated user executable. The shared `x360port` embedding boundary and a
-Gears-owned synthetic discriminator now exist, but the exact-title full-image
-adapter and the device, override, invalidation, exit, and fallback contracts do
-not yet compose a product.
+authenticated user executable. The shared `x360port` embedding boundary,
+checked-XEX inspector, Gears-owned flat-image adapter, and synthetic
+discriminator now exist, but the product still lacks composition of real import
+and device services with guest-call routing, invalidation, exits, and fallback.
 
 ## Required work
 
@@ -72,9 +72,23 @@ XEX inspector's normalized PE container to the flat guest image that
 `RuntimeContext` maps. `runtime/gears1_guest_image.*` authenticates the exact
 profile image digest and geometry, then seals the flat image, executable range,
 and import manifest as one `GuestModule`. Its synthetic CTest and a local run
-against the ignored profile-matching image passed. The checked XEX inspector,
-real import/service bindings, and caller-owned object/runtime path remain open;
-this is an adapter milestone, not title conformance.
+against the ignored profile-matching image passed. The shared inspector now
+produces the exact normalized-image digest and geometry, 236 logical imports,
+and one hit for each of the eight helper patterns. Real import/service bindings
+and the caller-owned object/runtime path remain open; this is an adapter milestone,
+not title conformance.
+
+## Checked XEX inspector — 2026-09-08
+
+The shared `x360port` checked-XEX2 inspector is pinned at
+`5c3c131a619381f0e99bbeb39123711c6d983e17`, with Xenia at
+`5d14ad55e9e4a004382585b58996ffedf2f6e35e`. Against the ignored profile-matching
+Gears 1 XEX it produces the exact normalized-image digest and geometry, 236 logical
+imports, and one hit for each of the eight helper patterns. Malformed-container
+preflight cases and compressed-loader bounds are covered by the shared tests. This
+is checked loader and title-identity evidence, not product conformance: real import
+bindings, device/runtime services, the caller-owned object path, and `./run.sh`
+provisioning remain open.
 
 ## Real-leaf probe — 2026-09-08
 
@@ -85,7 +99,7 @@ dynarec. The real body returned `0x5`; its native override called the real
 original once, and reported executable-write invalidation restored the original
 path. The probe was deleted after capture. This grounds the real leaf body and
 shared dispatch contracts, but it is not title conformance: the product still
-needs its authenticated full-image adapter, real imports/services, and
+needs to wire the checked full-image path to real imports/services and a
 caller-owned object path.
 
 ## Shared UE3 contract — 2026-09-08
@@ -93,5 +107,5 @@ caller-owned object path.
 The public `shared/x360ue3` repository now owns the title-neutral ABI and
 binding-schema checks, semantic RHI operation ordering, and object/resource/frame
 lifetime transitions. Gears pins and consumes that revision in an asset-free
-contract test. It does not contain Gears policy or replace the missing
+contract test. It does not contain Gears policy or replace the missing product
 authenticated XEX/import/service composition.
