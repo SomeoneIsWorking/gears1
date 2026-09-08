@@ -12,9 +12,9 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    `x360port` and maintained Xenia revisions now own memory/module/context
    lifetimes, authenticated synthetic image mapping, JIT calls, typed imports,
    and tested image-scoped native override/original-call and device-memory
-   callback seams. Explicit executable-write invalidation is now proven for
-   title-reported ranges; automatic write observation, bounded exits, and
-   internal guest-call routing remain missing shared contracts.
+   callback seams. Explicit and automatically observed executable-write
+   invalidation are now proven for the authenticated virtual code range; bounded
+   exits and internal guest-call routing remain missing shared contracts.
 4. **Synthetic Gears-addressed discriminator — grounded.** An asset-free image
    whose code and entry point use `0x8222E868` translates through Xenia, crosses
    a typed `DbgPrint` import into native code, and returns with nonzero translation/emission counts.
@@ -29,7 +29,7 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    variable-import storage through `x360port`, invokes a retained real-image
    function-import thunk through the authenticated manifest, then executes the
    real `0x82233668` body, proving its result, native override/scoped original
-   path, and reported-write invalidation.
+   path, and both reported-write and automatic virtual-write invalidation.
    The product still needs title-specific import/device services and a complete
    launch path before this is title conformance.
 6. **Fallback discriminator — required with the real discriminator.** Force one safe unsupported
