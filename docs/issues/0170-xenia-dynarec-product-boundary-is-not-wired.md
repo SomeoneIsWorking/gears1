@@ -67,10 +67,12 @@ invalidation, device services, fallback, or gameplay.
 
 ## Real-leaf probe — 2026-09-08
 
-A temporary headless diagnostic loaded the ignored normalized image whose
-SHA-256 matches the Gears 1 profile and entered `0x8222E868` through the pinned
-Xenia dynarec. The call did not return within the five-second bound and emitted
-no result or typed failure. The probe was deleted after capture. This is direct
-evidence that the real discriminator is currently blocked by missing runtime
-services and guest-call/exit composition; the synthetic boundary is not a
-real-title conformance result.
+A temporary headless diagnostic loaded the ignored image whose SHA-256 matches
+the Gears 1 profile, mapped its PE sections into guest virtual offsets, seeded a
+synthetic object field, and entered `0x8222E868` through the pinned Xenia
+dynarec. The real body returned `0x5`; its native override called the real
+original once, and reported executable-write invalidation restored the original
+path. The probe was deleted after capture. This grounds the real leaf body and
+shared dispatch contracts, but it is not title conformance: the product still
+needs its authenticated full-image adapter, real imports/services, and
+caller-owned object path.
