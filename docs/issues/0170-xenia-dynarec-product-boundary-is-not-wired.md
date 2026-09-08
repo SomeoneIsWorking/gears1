@@ -76,32 +76,32 @@ and import manifest as one `GuestModule`. Its synthetic CTest and a local run
 against the ignored profile-matching image passed. The shared inspector now
 produces the exact normalized-image digest and geometry, 236 logical imports,
 and one hit for each of the eight helper patterns. Real import/service bindings
-and the caller-owned object/runtime path remain open; this is an adapter milestone,
+remain open; the caller-owned object path is now proven, but this is still an adapter milestone,
 not title conformance.
 
 ## Checked XEX inspector — 2026-09-08
 
-The shared `x360port` checked-XEX2 inspector is pinned at
-`5c3c131a619381f0e99bbeb39123711c6d983e17`, with Xenia at
-`5d14ad55e9e4a004382585b58996ffedf2f6e35e`. Against the ignored profile-matching
+The shared `x360port` checked-XEX2 inspector and title-owned guest allocation
+contract are pinned at `758a0ab2628c5ff101055935090ce7aa3fc1e5bb`, with Xenia at
+`b4cefff2b658062a04e0d340a2b14717c0f21416`. Against the ignored profile-matching
 Gears 1 XEX it produces the exact normalized-image digest and geometry, 236 logical
 imports, and one hit for each of the eight helper patterns. Malformed-container
 preflight cases and compressed-loader bounds are covered by the shared tests. This
 is checked loader and title-identity evidence, not product conformance: real import
-bindings, device/runtime services, the caller-owned object path, and `./run.sh`
-provisioning remain open.
+bindings, device/runtime services, and `./run.sh` provisioning remain open.
 
 ## Real-leaf discriminator — 2026-09-08
 
 A maintained headless discriminator loads the ignored image whose SHA-256 matches
-the Gears 1 profile, maps its PE sections into guest virtual offsets, seeds a
-synthetic object field, and enters `0x82233668` through the pinned Xenia
+the Gears 1 profile, maps its PE sections into guest virtual offsets, allocates
+and initializes a caller-owned guest object through `x360port`, and enters
+`0x82233668` through the pinned Xenia
 dynarec. The real body returned `0x5`; its native override called the real
 original once, and reported executable-write invalidation restored the original
 path. This grounds the real leaf body and
 shared dispatch contracts, but it is not title conformance: the product still
-needs to wire the checked full-image path to real imports/services and a
-caller-owned object path.
+needs to wire the checked full-image path to real imports/services and the
+complete product launch path.
 
 ## Shared UE3 contract — 2026-09-08
 

@@ -90,15 +90,15 @@ Evidence: the synthetic Gears-addressed module executes through Xenia's JIT and
 calls a typed `DbgPrint` binding; the pinned shared runtime separately proves
 the native override/original-call dispatch seam against a synthetic guest leaf.
 A maintained headless discriminator authenticates the profile-matching ignored
-image, maps its PE sections into guest virtual offsets, seeds a synthetic object
-field, and executes real leaf `0x82233668`: it returns `0x5`, the native override
+image, maps its PE sections into guest virtual offsets, allocates and initializes
+a caller-owned guest object through `x360port`, and executes real leaf `0x82233668`: it returns `0x5`, the native override
 calls the real original once, and reported executable-write invalidation restores
 the original path. The production `Gears1GuestImage` adapter now authenticates
 the same normalized image and import manifest; its synthetic CTest and real
 ignored-input discriminator pass. The shared checked-XEX2 inspector provides the
 container, normalized image, 236 logical imports, and eight helper-pattern hits.
-Gap: real import bindings and device services, a caller-owned object/runtime path,
-and the complete product launch path remain.
+Gap: real import bindings and device services, and the complete product launch path
+remain.
 
 ### S008 — bounded interpreter fallback
 
@@ -162,8 +162,8 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate passed all six CTests locally with Clang 22.1.8
-against `x360port` revision `5c3c131a619381f0e99bbeb39123711c6d983e17` and Xenia
-revision `5d14ad55e9e4a004382585b58996ffedf2f6e35e`, the exact inputs required by
+against `x360port` revision `758a0ab2628c5ff101055935090ce7aa3fc1e5bb` and Xenia
+revision `b4cefff2b658062a04e0d340a2b14717c0f21416`, the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
 (`ninja: no work to do`). Gears consumes the shared driver-aware warning owner;
 production CMake selection and real Clang/clang-cl probes accept modern C++ and

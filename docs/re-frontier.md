@@ -25,10 +25,11 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    guest image contract; synthetic and real ignored-input adapter runs pass. The
    shared checked-XEX2 inspector also matches the real container, normalized image,
    236 logical imports, and eight helper-pattern hits. The maintained headless
-   discriminator seeds a synthetic object field and executes the real `0x82233668` body, proving its
-   result, native override/scoped original path, and reported-write invalidation.
-   The product still needs real import/device services and a caller-owned object
-   path before this is title conformance.
+   discriminator allocates and initializes a caller-owned guest object through
+   `x360port`, then executes the real `0x82233668` body, proving its result,
+   native override/scoped original path, and reported-write invalidation. The
+   product still needs real import/device services and a complete launch path
+   before this is title conformance.
 6. **Fallback discriminator — required with the real discriminator.** Force one safe unsupported
    block through the bounded interpreter fallback, prove reason and counters,
    then prove ordinary execution still selects dynarec. Explicit interpreter mode
