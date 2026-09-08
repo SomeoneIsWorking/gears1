@@ -12,8 +12,9 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    `x360port` and maintained Xenia revisions now own memory/module/context
    lifetimes, authenticated synthetic image mapping, JIT calls, typed imports,
    and tested image-scoped native override/original-call and device-memory
-   callback seams. Bounded exits, internal guest-call routing, and
-   executable-state invalidation remain missing shared contracts.
+   callback seams. Explicit executable-write invalidation is now proven for
+   title-reported ranges; automatic write observation, bounded exits, and
+   internal guest-call routing remain missing shared contracts.
 4. **Synthetic Gears-addressed discriminator — grounded.** An asset-free image
    whose code and entry point use `0x8222E868` translates through Xenia, crosses
    a typed `DbgPrint` import into native code, and returns with nonzero translation/emission counts.

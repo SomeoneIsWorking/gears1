@@ -59,6 +59,8 @@ the override invalidates that exact Xenia entry. The shared runtime test proves
 the wrapped return value, original-call and invalidation counters, and restored
 dynarec execution. The same revision now owns validated title-neutral device
 ranges through Xenia MMIO and proves PPC load/store callbacks with telemetry.
+It also validates title-reported executable-write ranges and invalidates the
+affected cached Xenia functions while preserving unrelated entries.
 This closes only reusable entry and device seams; it does not prove the
-authenticated Gears leaf, internal guest-call invalidation, device services,
-fallback, or gameplay.
+authenticated Gears leaf, automatic write observation, internal guest-call
+invalidation, device services, fallback, or gameplay.
