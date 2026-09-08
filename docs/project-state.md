@@ -29,9 +29,10 @@ This inventory reports observable capabilities independently of the product goal
 ## Current focus
 
 S006 is the current focus. Gears 1 is the only active title. The repository now consumes
-the pinned `x360port`/Xenia execution boundary for an asset-free synthetic discriminator,
-but refuses the gameplay target until the authenticated full-image adapter and runtime
-services are composed. The executor will prefer dynarec and may use the bounded, counted
+the pinned `x360port`/Xenia execution boundary for an asset-free synthetic discriminator
+and now owns a profile-authenticated normalized-image-to-flat-guest adapter, but refuses
+the gameplay target until the remaining authenticated XEX/import and runtime services
+are composed. The executor will prefer dynarec and may use the bounded, counted
 fallback; fallback coverage cannot prove gameplay compatibility or performance.
 
 ## Capability details
@@ -44,8 +45,9 @@ title-identity tests fail closed on container and normalized-image hashes.
 ### S002 — bounded provisioning
 
 Evidence: GDF extraction, archive bounds, and identity are tested. Gap:
-`./run.sh` refuses because the authenticated full-image adapter and runtime-service
-composition are not wired.
+the shared checked-XEX inspector and runtime-service composition are not wired into
+`./run.sh`; the new adapter consumes its normalized image output but does not replace
+XEX authentication or provisioning.
 
 ### S003 — executor-independent native rendering
 
@@ -73,9 +75,10 @@ native code. The pinned shared runtime also now exposes and tests image-scoped
 native override, scoped original-call, exact-entry invalidation, and
 title-neutral device-memory callback contracts. It also validates a
 title-reported executable-write range, invalidates touched cached functions,
-and preserves unrelated translations. Gap: full-image loading, automatic
-write observation, internal guest-call invalidation, and product service
-composition remain missing.
+and preserves unrelated translations. `runtime/gears1_guest_image.*` now consumes
+the shared PE layout owner and seals a flat guest module after exact normalized-image
+profile authentication. Gap: checked XEX loading, automatic write observation,
+internal guest-call invalidation, and product service composition remain missing.
 
 ### S007 — first Gears discriminator
 
@@ -86,8 +89,10 @@ A headless probe mapped the profile-matching ignored image's PE sections into
 guest virtual offsets, seeded a synthetic object field, and executed the real
 `0x8222E868` body: it returned `0x5`, the native override called the real
 original once, and reported executable-write invalidation restored the original
-path. Gap: the product still lacks this authenticated full-image adapter,
-real import/service composition, and a caller-owned object/runtime path.
+path. The production `Gears1GuestImage` adapter now authenticates the same
+normalized image and performs the PE-to-flat mapping; its synthetic CTest and
+real ignored-input adapter run pass. Gap: checked XEX/import/service composition
+and a caller-owned object/runtime path remain.
 
 ### S008 — bounded interpreter fallback
 
@@ -148,8 +153,8 @@ discriminator for Linux x86-64, Windows x86-64, and macOS arm64. It also execute
 the exact/clean dependency and bootstrap contracts, and the canonical C++ quality
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
---expected-machine x86_64` gate passed all four CTests locally with Clang 22.1.8
-against `x360port` revision `ea22ca3ed515f0181a28ce7be6c9e1327a738e47` and Xenia
+--expected-machine x86_64` gate passed all five CTests locally with Clang 22.1.8
+against `x360port` revision `a26b0eebaaa463b1c003e4c26868a49c69d75d54` and Xenia
 revision `9cddd1759f96b0491bfcd933a73ca7eaab1f258b`, the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
 (`ninja: no work to do`). Gears consumes the shared driver-aware warning owner;

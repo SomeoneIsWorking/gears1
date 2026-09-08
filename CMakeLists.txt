@@ -48,7 +48,7 @@ endif()
 
 set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
     "Exact shared/x360port checkout consumed by GearsUE3")
-set(X360PORT_REQUIRED_REVISION "ea22ca3ed515f0181a28ce7be6c9e1327a738e47")
+set(X360PORT_REQUIRED_REVISION "a26b0eebaaa463b1c003e4c26868a49c69d75d54")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
@@ -82,6 +82,15 @@ add_test(NAME gears1_dynarec_boundary COMMAND test_gears1_dynarec_boundary)
 add_test(NAME gears_dependency_checkout_contract
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tests/test_dependency_checkout.py")
+
+add_library(gears1_guest_image STATIC runtime/gears1_guest_image.cpp)
+target_include_directories(gears1_guest_image PUBLIC runtime)
+target_link_libraries(gears1_guest_image PUBLIC x360port::x360port)
+x360port_enable_warnings(gears1_guest_image)
+add_executable(test_gears1_guest_image tests/test_gears1_guest_image.cpp)
+target_link_libraries(test_gears1_guest_image PRIVATE gears1_guest_image)
+x360port_enable_warnings(test_gears1_guest_image)
+add_test(NAME gears1_guest_image COMMAND test_gears1_guest_image)
 
 if(GEARS_DYNAREC_CONTRACT_ONLY)
     add_test(NAME gears1_dynarec_boundary_quality

@@ -19,13 +19,14 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    whose code and entry point use `0x8222E868` translates through Xenia, crosses
    a typed `DbgPrint` import into native code, and returns with nonzero translation/emission counts.
    This proves the composition seam, not the real leaf body.
-5. **First real guest discriminator — partially grounded.** A headless probe
-   mapped the profile-matching image's PE sections into guest virtual offsets,
-   seeded a synthetic object field, and executed the real `0x8222E868` body,
-   proving its result, native override/scoped original path, and reported-write
-   invalidation. The product still needs the authenticated full-image adapter,
-   real imports/services, and a caller-owned object path before this is title
-   conformance.
+5. **First real guest discriminator — partially grounded.** The shared
+   `x360port::MapPeImage` owner and `Gears1GuestImage` adapter now authenticate
+   the profile-matching normalized image and map its PE sections into the flat
+   guest image contract; synthetic and real ignored-input adapter runs pass. A
+   headless probe then seeded a synthetic object field and executed the real
+   `0x8222E868` body, proving its result, native override/scoped original path,
+   and reported-write invalidation. The product still needs checked XEX/import
+   services and a caller-owned object path before this is title conformance.
 6. **Fallback discriminator — required with the real discriminator.** Force one safe unsupported
    block through the bounded interpreter fallback, prove reason and counters,
    then prove ordinary execution still selects dynarec. Explicit interpreter mode
