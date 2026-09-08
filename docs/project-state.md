@@ -82,9 +82,11 @@ composition remain missing.
 Evidence: the synthetic Gears-addressed module executes through Xenia's JIT and
 calls a typed `DbgPrint` binding; the pinned shared runtime separately proves
 the native override/original-call dispatch seam against a synthetic guest leaf.
-Gap: the authenticated real leaf body, its title-owned override binding,
-scoped original call on that real image, and cache invalidation under real
-executable mappings remain missing.
+A headless five-second probe using the ignored normalized image reached the real
+`0x8222E868` leaf through Xenia but did not return, with no result or failure
+published. Gap: runtime services and guest-call/exit composition must make that
+real leaf return before its title-owned override and scoped-original paths can
+be qualified.
 
 ### S008 — bounded interpreter fallback
 

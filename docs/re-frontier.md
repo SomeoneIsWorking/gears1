@@ -19,9 +19,12 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    whose code and entry point use `0x8222E868` translates through Xenia, crosses
    a typed `DbgPrint` import into native code, and returns with nonzero translation/emission counts.
    This proves the composition seam, not the real leaf body.
-5. **First real guest discriminator — next.** Execute the authenticated original
-   leaf at `0x8222E868`, route its real imports, select a native override, suppress
-   it for one scoped original call, and observe controlled invalidation.
+5. **First real guest discriminator — blocked by the current runtime boundary.** A
+   headless five-second probe using the ignored normalized image entered the
+   authenticated leaf at `0x8222E868` through Xenia but did not return or publish
+   a failure. Runtime services and guest-call/exit composition must be wired
+   before real imports, native override, scoped original, and invalidation can be
+   qualified.
 6. **Fallback discriminator — required with the real discriminator.** Force one safe unsupported
    block through the bounded interpreter fallback, prove reason and counters,
    then prove ordinary execution still selects dynarec. Explicit interpreter mode
