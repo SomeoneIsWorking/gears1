@@ -71,9 +71,11 @@ revisions, maps an aligned authenticated synthetic image whose code and entry
 point use the retained Gears leaf address, and crosses JIT to typed import to
 native code. The pinned shared runtime also now exposes and tests image-scoped
 native override, scoped original-call, exact-entry invalidation, and
-title-neutral device-memory callback contracts. Gap: full-image loading,
-internal guest-call invalidation, and product service composition remain
-missing.
+title-neutral device-memory callback contracts. It also validates a
+title-reported executable-write range, invalidates touched cached functions,
+and preserves unrelated translations. Gap: full-image loading, automatic
+write observation, internal guest-call invalidation, and product service
+composition remain missing.
 
 ### S007 — first Gears discriminator
 
@@ -144,7 +146,7 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate passed all four CTests locally with Clang 22.1.8
-against `x360port` revision `fdff0a3c1338d01de8da9b7b6955ddaafffdd61e` and Xenia
+against `x360port` revision `567d4f2f165b951a7b35969c3af9bcdf1efaa68d` and Xenia
 revision `9cddd1759f96b0491bfcd933a73ca7eaab1f258b`, the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
 (`ninja: no work to do`). Gears consumes the shared driver-aware warning owner;
