@@ -62,9 +62,12 @@ dynarec execution. The same revision now owns validated title-neutral device
 ranges through Xenia MMIO and proves PPC load/store callbacks with telemetry.
 It also validates title-reported executable-write ranges and invalidates the
 affected cached Xenia functions while preserving unrelated entries.
-This closes only reusable entry and device seams; it does not prove the
-authenticated Gears leaf, automatic write observation, internal guest-call
-invalidation, device services, fallback, or gameplay.
+The shared runtime now also traps writes to the authenticated virtual code range,
+coalesces them at the next guest-call boundary, resets the affected Xenia module
+functions, and re-translates modified bytes; the synthetic self-modifying test
+proves the changed result. This closes only reusable entry, device, and automatic
+write-observation seams; it does not prove internal guest-call invalidation,
+device services, fallback, or gameplay.
 
 ## Image adapter — 2026-09-08
 
@@ -82,8 +85,8 @@ not title conformance.
 ## Checked XEX inspector — 2026-09-08
 
 The shared `x360port` checked-XEX2 inspector and title-owned guest allocation
-contract are pinned at `758a0ab2628c5ff101055935090ce7aa3fc1e5bb`, with Xenia at
-`b4cefff2b658062a04e0d340a2b14717c0f21416`. Against the ignored profile-matching
+contract are pinned at `6af2997ec8a46262fcf27430ca987820542da404`, with Xenia at
+`05367a167681e4c1b75921372ff7079e51a7b069`. Against the ignored profile-matching
 Gears 1 XEX it produces the exact normalized-image digest and geometry, 236 logical
 imports, and one hit for each of the eight helper patterns. Malformed-container
 preflight cases and compressed-loader bounds are covered by the shared tests. This
@@ -103,8 +106,9 @@ and initializes a caller-owned guest object and variable-import storage through
 authenticated manifest, and enters `0x82233668` through the pinned Xenia
 dynarec. The real body returned `0x5`; its native override called the real
 original once, and reported executable-write invalidation restored the original
-path. This grounds the real leaf body and
-shared dispatch contracts, but it is not title conformance: the product still
+path. This grounds the real leaf body and shared dispatch contracts; the shared
+synthetic runtime also proves automatic virtual executable-write observation and
+retranslation. It is not title conformance: the product still
 needs to wire the checked full-image path to real imports/services and the
 complete product launch path.
 
