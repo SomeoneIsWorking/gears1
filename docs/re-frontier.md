@@ -55,3 +55,9 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
 
 These facts must be re-observed through the authenticated Xenia context before
 they authorize dispatch or a shared `x360ue3` contract.
+
+The title-neutral UE3 contract layer is now grounded separately: Gears consumes
+the pinned `shared/x360ue3` binding-schema, frame-lifetime, and semantic-RHI
+contracts through an asset-free test. This does not advance the real-image
+frontier until those contracts are composed with authenticated XEX imports and
+the live native RHI.

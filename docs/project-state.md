@@ -23,7 +23,7 @@ This inventory reports observable capabilities independently of the product goal
 | S013 | Native 8.33 ms / 120 fps renderer budget | missing | S009, S012 | G003 |
 | S014 | Gears 2, Gears 3, and Judgment exact-revision conformance | missing | S009, S013 | G001, G002 |
 | S015 | Generated guest-source product and translator-only surfaces absent | verified | — | G001, G002, G004 |
-| S016 | Independently authored shared UE3/Xbox contract | missing | S006 | G001 |
+| S016 | Independently authored shared UE3/Xbox contract | verified | S006 | G001 |
 | S017 | Asset-free native/JIT boundary CI | partial | S006 | G001, G002, G004 |
 
 ## Current focus
@@ -142,9 +142,11 @@ The migration-boundary gate checks prospective first-party paths.
 
 ### S016 — shared UE3/Xbox contract
 
-Missing capability: create the first independently authored `shared/x360ue3`
-contract from an executing Xenia context. It must not copy or depend on
-`shared/ue3`.
+Evidence: the pinned public `shared/x360ue3` revision provides title-supplied
+ABI/binding-schema validation plus object/resource/frame lifetime and semantic
+RHI ordering contracts. Gears consumes it in `test_gears1_ue3_contract` with
+positive and controlled-negative cases. Gap: the contract is not yet composed
+with the authenticated real-image runtime and native RHI backend.
 
 ### S017 — native/JIT boundary CI
 
