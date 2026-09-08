@@ -1,6 +1,5 @@
 #include "gears1_guest_image.h"
 
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -13,9 +12,7 @@
 #include <string_view>
 #include <vector>
 
-#include <x360port/pe_image.hpp>
 #include <x360port/runtime.hpp>
-#include <x360port/xex_inspect.hpp>
 
 namespace
 {
@@ -89,30 +86,6 @@ std::vector<std::byte> ReadFile(const char *path)
     return bytes;
 }
 
-GuestAddress FindSyntheticObject(const x360port::PeImageLayout &layout)
-{
-    constexpr std::array<std::byte, 8> kObjectWords{std::byte{0}, std::byte{0}, std::byte{0},
-                                                    std::byte{0}, std::byte{0}, std::byte{0},
-                                                    std::byte{0}, std::byte{4}};
-    for (const x360port::PeSection &section : layout.sections)
-    {
-        if (section.code || section.size < kObjectWords.size())
-        {
-            continue;
-        }
-        const std::uint64_t offset = section.base - layout.identity.base;
-        for (std::uint32_t index = 0; index + kObjectWords.size() <= section.size; index += 4U)
-        {
-            const auto begin = layout.image.begin() + static_cast<std::ptrdiff_t>(offset + index);
-            if (std::equal(kObjectWords.begin(), kObjectWords.end(), begin))
-            {
-                return section.base + index;
-            }
-        }
-    }
-    return 0;
-}
-
 } // namespace
 
 int main(int argc, char **argv)
@@ -135,13 +108,6 @@ int main(int argc, char **argv)
     Require(module.InitializeCheckedXex(xex, expected, error), error);
     Require(module.ImportManifest().size() == 236U, "the real import manifest was not retained");
 
-    const x360port::XexInspectionResult inspected = x360port::InspectXex(xex);
-    Require(static_cast<bool>(inspected), inspected.error);
-    const x360port::PeImageLayoutResult mapped =
-        x360port::MapPeImage(inspected.inspection.normalized_image);
-    Require(static_cast<bool>(mapped), mapped.error);
-    const GuestAddress object = FindSyntheticObject(mapped.layout);
-    Require(object != 0, "no non-code data cell with the controlled refcount seed was found");
     std::vector<x360port::ImportBinding> bindings;
     bindings.reserve(module.ImportManifest().size());
     Observations observations;
@@ -164,6 +130,15 @@ int main(int argc, char **argv)
 
     x360port::RuntimeCreateResult created = x360port::RuntimeContext::Create();
     Require(static_cast<bool>(created), created.failure.detail);
+    const x360port::GuestMemoryAllocationResult object_memory =
+        created.context->AllocateGuestMemory(0x1CU);
+    Require(static_cast<bool>(object_memory), object_memory.failure.detail);
+    std::array<std::byte, 0x1C> object_bytes{};
+    object_bytes[7] = std::byte{4};
+    const x360port::RuntimeFailure object_written =
+        created.context->WriteGuestMemory(object_memory.allocation.address, object_bytes);
+    Require(!object_written, object_written.detail);
+    const GuestAddress object = object_memory.allocation.address;
     const x360port::RuntimeFailure loaded = created.context->LoadModule(module, bindings);
     Require(!loaded, loaded.detail);
 
@@ -200,6 +175,10 @@ int main(int argc, char **argv)
             "real guest execution did not resume after explicit invalidation");
     Require(created.context->Statistics().translation_invalidations >= 2U,
             "override removal and executable write did not invalidate translations");
+
+    const x360port::RuntimeFailure released =
+        created.context->ReleaseGuestMemory(object_memory.allocation);
+    Require(!released, released.detail);
 
     std::cout << "Gears real-image discriminator: checked XEX, 236 imports, real 0x82233668, "
                  "scoped original, and executable invalidation passed\n";
