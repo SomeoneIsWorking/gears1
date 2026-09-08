@@ -69,14 +69,19 @@ missing.
 Evidence: `test_gears1_dynarec_boundary` consumes exact shared-runtime and Xenia
 revisions, maps an aligned authenticated synthetic image whose code and entry
 point use the retained Gears leaf address, and crosses JIT to typed import to
-native code. Gap: full-image loading, device callbacks, and product service
-composition remain missing.
+native code. The pinned shared runtime also now exposes and tests image-scoped
+native override, scoped original-call, and exact-entry invalidation contracts.
+Gap: full-image loading, device callbacks, internal guest-call invalidation,
+and product service composition remain missing.
 
 ### S007 — first Gears discriminator
 
 Evidence: the synthetic Gears-addressed module executes through Xenia's JIT and
-calls a typed `DbgPrint` binding. Gap: the real authenticated leaf body, native
-override, scoped original call, and cache invalidation remain missing.
+calls a typed `DbgPrint` binding; the pinned shared runtime separately proves
+the native override/original-call dispatch seam against a synthetic guest leaf.
+Gap: the authenticated real leaf body, its title-owned override binding,
+scoped original call on that real image, and cache invalidation under real
+executable mappings remain missing.
 
 ### S008 — bounded interpreter fallback
 
@@ -138,7 +143,7 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate passed all four CTests locally with Clang 22.1.8
-against `x360port` revision `30cf7dbd29949dd333db3510f19614930e4b3a99` and Xenia
+against `x360port` revision `06ff393e89fbc13a90d0e1c08d511e4af69dfa2e` and Xenia
 revision `9cddd1759f96b0491bfcd933a73ca7eaab1f258b`, the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
 (`ninja: no work to do`). Gears consumes the shared driver-aware warning owner;

@@ -10,8 +10,9 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    executable-address/ABI facts. They currently have no guest executor.
 3. **Typed Xenia execution boundary — partially grounded.** The exact shared
    `x360port` and maintained Xenia revisions now own memory/module/context
-   lifetimes, authenticated synthetic image mapping, JIT calls, and typed imports.
-   Device callbacks, bounded exits, native overrides, scoped original calls, and
+   lifetimes, authenticated synthetic image mapping, JIT calls, typed imports,
+   and a tested image-scoped native override/original-call entry seam.
+   Device callbacks, bounded exits, internal guest-call routing, and
    executable-state invalidation remain missing shared contracts.
 4. **Synthetic Gears-addressed discriminator — grounded.** An asset-free image
    whose code and entry point use `0x8222E868` translates through Xenia, crosses
