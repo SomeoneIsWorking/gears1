@@ -91,14 +91,16 @@ calls a typed `DbgPrint` binding; the pinned shared runtime separately proves
 the native override/original-call dispatch seam against a synthetic guest leaf.
 A maintained headless discriminator authenticates the profile-matching ignored
 image, maps its PE sections into guest virtual offsets, allocates and initializes
-a caller-owned guest object through `x360port`, and executes real leaf `0x82233668`: it returns `0x5`, the native override
+a caller-owned guest object through `x360port`, invokes a retained real-image
+function-import thunk through the same manifest, and executes real leaf `0x82233668`: it returns `0x5`, the native override
 calls the real original once, and reported executable-write invalidation restores
 the original path. The production `Gears1GuestImage` adapter now authenticates
 the same normalized image and import manifest; its synthetic CTest and real
 ignored-input discriminator pass. The shared checked-XEX2 inspector provides the
 container, normalized image, 236 logical imports, and eight helper-pattern hits.
-Gap: real import bindings and device services, and the complete product launch path
-remain.
+The first real-image function-import thunk reaches its title callback. Gap:
+title-specific service semantics and device services, and the complete product
+launch path remain.
 
 ### S008 — bounded interpreter fallback
 

@@ -1,5 +1,6 @@
 #include "gears1_guest_image.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -142,12 +143,24 @@ int main(int argc, char **argv)
     const x360port::RuntimeFailure loaded = created.context->LoadModule(module, bindings);
     Require(!loaded, loaded.detail);
 
+    const auto first_function_import =
+        std::find_if(module.ImportManifest().begin(), module.ImportManifest().end(),
+                     [](const x360port::ImportRequirement &import)
+                     { return import.kind == x360port::ImportKind::Function; });
+    Require(first_function_import != module.ImportManifest().end(),
+            "the real image did not retain a function import");
+    const x360port::ExecutionResult imported_call =
+        created.context->Execute(first_function_import->address);
+    Require(static_cast<bool>(imported_call), imported_call.failure.detail);
+    Require(observations.function_calls == 1U,
+            "the real image function-import trampoline did not reach its title callback");
+
     const std::array<std::uint64_t, 1> arguments{object};
     const x360port::ExecutionResult baseline = created.context->Execute(kResourceAddRef, arguments);
     Require(static_cast<bool>(baseline), baseline.failure.detail);
     Require(baseline.value == 5U, "real AddRef leaf returned an unexpected baseline value");
-    Require(observations.function_calls == 0U,
-            "real AddRef leaf unexpectedly called an import service");
+    Require(observations.function_calls == 1U,
+            "real AddRef leaf disturbed the already-tested import callback count");
 
     const x360port::RuntimeFailure installed =
         created.context->InstallOverride(kResourceAddRef, ScopedOriginal, &observations);
@@ -180,7 +193,8 @@ int main(int argc, char **argv)
         created.context->ReleaseGuestMemory(object_memory.allocation);
     Require(!released, released.detail);
 
-    std::cout << "Gears real-image discriminator: checked XEX, 236 imports, real 0x82233668, "
-                 "scoped original, and executable invalidation passed\n";
+    std::cout << "Gears real-image discriminator: checked XEX, 236 imports, invoked a real "
+                 "function thunk, executed 0x82233668, scoped original, and executable "
+                 "invalidation passed\n";
     return 0;
 }
