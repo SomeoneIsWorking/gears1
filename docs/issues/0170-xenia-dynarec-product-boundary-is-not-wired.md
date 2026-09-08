@@ -65,6 +65,17 @@ This closes only reusable entry and device seams; it does not prove the
 authenticated Gears leaf, automatic write observation, internal guest-call
 invalidation, device services, fallback, or gameplay.
 
+## Image adapter — 2026-09-08
+
+`x360port::MapPeImage` now owns the title-neutral conversion from the checked
+XEX inspector's normalized PE container to the flat guest image that
+`RuntimeContext` maps. `runtime/gears1_guest_image.*` authenticates the exact
+profile image digest and geometry, then seals the flat image, executable range,
+and import manifest as one `GuestModule`. Its synthetic CTest and a local run
+against the ignored profile-matching image passed. The checked XEX inspector,
+real import/service bindings, and caller-owned object/runtime path remain open;
+this is an adapter milestone, not title conformance.
+
 ## Real-leaf probe — 2026-09-08
 
 A temporary headless diagnostic loaded the ignored image whose SHA-256 matches

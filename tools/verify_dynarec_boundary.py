@@ -77,6 +77,7 @@ def main() -> int:
             output,
             "--target",
             "test_gears1_dynarec_boundary",
+            "test_gears1_guest_image",
             "--parallel",
             str(selected.parallel),
         ],
