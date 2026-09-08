@@ -35,10 +35,11 @@ linked, packaged, or required.
 This repository owns Gears-family native subsystems and exact title adapters.
 Gears 1 is the active conformance target. Its asset-free discriminator maps an
 aligned synthetic image whose code and entry point use retained leaf address
-`0x8222E868`, translates it through Xenia, calls a typed `DbgPrint` binding, and returns to native code. The next
-real-image discriminator must execute the original body, a native override, and
-a scoped original call, followed by controlled executable-cache invalidation
-and one forced safe fallback case. Neither discriminator proves boot or gameplay.
+`0x8222E868`, translates it through Xenia, calls a typed `DbgPrint` binding, and returns to native code. The maintained
+real-image discriminator authenticates the supplied XEX, executes real leaf
+`0x82233668`, and proves native override, scoped-original, and reported-write
+invalidation paths. Neither discriminator proves boot or gameplay; fallback,
+services, and caller-owned runtime integration remain open.
 
 ## Runtime invariants
 

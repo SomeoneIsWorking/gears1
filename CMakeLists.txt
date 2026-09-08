@@ -48,7 +48,7 @@ endif()
 
 set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
     "Exact shared/x360port checkout consumed by GearsUE3")
-set(X360PORT_REQUIRED_REVISION "5c3c131a619381f0e99bbeb39123711c6d983e17")
+set(X360PORT_REQUIRED_REVISION "261794269664622fe922c8980359b2fa8cff0c83")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
@@ -114,6 +114,13 @@ add_executable(test_gears1_guest_image tests/test_gears1_guest_image.cpp)
 target_link_libraries(test_gears1_guest_image PRIVATE gears1_guest_image)
 x360port_enable_warnings(test_gears1_guest_image)
 add_test(NAME gears1_guest_image COMMAND test_gears1_guest_image)
+
+# This discriminator consumes an operator-supplied XEX and is intentionally
+# not a normal CTest: restricted title bytes never become a hosted-test input.
+# It is the maintained replacement for the temporary real-leaf probe.
+add_executable(test_gears1_real_leaf tests/test_gears1_real_leaf.cpp)
+target_link_libraries(test_gears1_real_leaf PRIVATE gears1_guest_image x360port::x360port)
+x360port_enable_warnings(test_gears1_real_leaf)
 
 add_executable(test_gears1_ue3_contract tests/test_gears1_ue3_contract.cpp)
 target_link_libraries(test_gears1_ue3_contract PRIVATE x360ue3::x360ue3)

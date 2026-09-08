@@ -64,7 +64,7 @@ certify this boundary.
 
 ### Success conditions
 
-- The first Gears 1 discriminator executes real leaf `0x8222E868`, a typed
+- The first Gears 1 discriminator executes real leaf `0x82233668`, a typed
   `DbgPrint` import, and disabled/enabled/`super` override paths through Xenia.
 - The authenticated dynarec product reaches representative interactive Gears 1
   gameplay at least as far as the current verified frontier with native owners

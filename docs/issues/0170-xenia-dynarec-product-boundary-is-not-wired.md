@@ -30,8 +30,9 @@ fallback and explicit diagnostic mode defined by the project goals.
 
 The asset-free Gears discriminator now translates an aligned synthetic image
 whose code and entry point use retained leaf address `0x8222E868`, calls a typed
-`DbgPrint` import, and returns to native code. The next discriminator executes the authenticated real leaf and
-disabled/enabled/scoped-original override paths through Xenia. Then expand to
+`DbgPrint` import, and returns to native code. The maintained discriminator now
+executes the authenticated real leaf and disabled/enabled/scoped-original
+override paths through Xenia. Then expand to
 representative interactive gameplay and the full migration gate.
 
 The executor must select Xenia's A64 dynarec for both Apple Silicon macOS and
@@ -90,14 +91,14 @@ is checked loader and title-identity evidence, not product conformance: real imp
 bindings, device/runtime services, the caller-owned object path, and `./run.sh`
 provisioning remain open.
 
-## Real-leaf probe — 2026-09-08
+## Real-leaf discriminator — 2026-09-08
 
-A temporary headless diagnostic loaded the ignored image whose SHA-256 matches
-the Gears 1 profile, mapped its PE sections into guest virtual offsets, seeded a
-synthetic object field, and entered `0x8222E868` through the pinned Xenia
+A maintained headless discriminator loads the ignored image whose SHA-256 matches
+the Gears 1 profile, maps its PE sections into guest virtual offsets, seeds a
+synthetic object field, and enters `0x82233668` through the pinned Xenia
 dynarec. The real body returned `0x5`; its native override called the real
 original once, and reported executable-write invalidation restored the original
-path. The probe was deleted after capture. This grounds the real leaf body and
+path. This grounds the real leaf body and
 shared dispatch contracts, but it is not title conformance: the product still
 needs to wire the checked full-image path to real imports/services and a
 caller-owned object path.

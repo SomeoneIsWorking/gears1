@@ -24,8 +24,8 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    the profile-matching normalized image and map its PE sections into the flat
    guest image contract; synthetic and real ignored-input adapter runs pass. The
    shared checked-XEX2 inspector also matches the real container, normalized image,
-   236 logical imports, and eight helper-pattern hits. A headless probe then seeded
-   a synthetic object field and executed the real `0x8222E868` body, proving its
+   236 logical imports, and eight helper-pattern hits. The maintained headless
+   discriminator seeds a synthetic object field and executes the real `0x82233668` body, proving its
    result, native override/scoped original path, and reported-write invalidation.
    The product still needs real import/device services and a caller-owned object
    path before this is title conformance.
@@ -46,7 +46,7 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
 
 ## Retained exact facts
 
-- Resource AddRef/Release entry points are `0x8222E868` and `0x8222E8E0`.
+- Resource AddRef/Release entry points are `0x82233668` and `0x822336E0`.
 - The Gears 1 audio-mix operation begins at `0x825F2D40`.
 - Normal draw entry points are `0x8222CFF8`, `0x8222D4F8`, `0x8222DA48`, and
   `0x8222DE50`; shader setters are `0x82222808` and `0x82222B98`.

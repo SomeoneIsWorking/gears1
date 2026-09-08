@@ -27,10 +27,11 @@ The first executable migration milestone is intentionally bounded:
 3. translate and execute it through Xenia; and
 4. cross a typed `DbgPrint` import into native code and return.
 
-That asset-free discriminator now proves wiring, not game compatibility or the
-real leaf body. The next real-image milestone must add full-image adaptation,
-execute the original leaf, and prove disabled, enabled, and scoped-original
-override paths plus invalidation. A fresh image-only build must still reach
+That asset-free discriminator proves wiring, not game compatibility. The
+maintained real-image discriminator now authenticates the supplied XEX, adapts
+the full flat image and import manifest, executes the original leaf, and proves
+disabled, enabled, and scoped-original override paths plus reported-write
+invalidation. A fresh image-only build must still reach
 representative interactive gameplay with Xenia's dynarec selected by default,
 bounded and counted fallback, working native/original calls, relevant
 invalidation coverage, and declared correctness and frame-time evidence.
@@ -41,7 +42,7 @@ The retired path previously demonstrated exact-revision Gears 1 boot, menus,
 Act 1 gameplay, guest threading and memory, SDL-backed input, working XMA audio,
 and a bounded Vulkan renderer driven by the title's PM4/Xenos stream. It also
 grounded a growing set of title-owned native seams, including resource lifetime
-leaf `0x8222E868`. Those observations remain useful as migration targets, but
+leaf `0x82233668`. Those observations remain useful as migration targets, but
 they are not evidence that the x360port product exists or passes gameplay.
 
 The compatibility renderer's in-game world is still not fully faithful, saves
