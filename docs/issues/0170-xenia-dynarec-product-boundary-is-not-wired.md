@@ -88,14 +88,18 @@ Gears 1 XEX it produces the exact normalized-image digest and geometry, 236 logi
 imports, and one hit for each of the eight helper patterns. Malformed-container
 preflight cases and compressed-loader bounds are covered by the shared tests. This
 is checked loader and title-identity evidence, not product conformance: real import
-bindings, device/runtime services, and `./run.sh` provisioning remain open.
+bindings, device/runtime services, and `./run.sh` provisioning remain open. The
+maintained real-image probe now also invokes the first retained function-import
+thunk and observes its title callback; that proves routing only, not service
+semantics.
 
 ## Real-leaf discriminator — 2026-09-08
 
 A maintained headless discriminator loads the ignored image whose SHA-256 matches
 the Gears 1 profile, maps its PE sections into guest virtual offsets, allocates
-and initializes a caller-owned guest object through `x360port`, and enters
-`0x82233668` through the pinned Xenia
+and initializes a caller-owned guest object through `x360port`, invokes a
+retained real-image function-import thunk through the authenticated manifest,
+and enters `0x82233668` through the pinned Xenia
 dynarec. The real body returned `0x5`; its native override called the real
 original once, and reported executable-write invalidation restored the original
 path. This grounds the real leaf body and
