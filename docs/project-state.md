@@ -155,7 +155,7 @@ discriminator for Linux x86-64, Windows x86-64, and macOS arm64. It also execute
 the exact/clean dependency and bootstrap contracts, and the canonical C++ quality
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
---expected-machine x86_64` gate passed all five CTests locally with Clang 22.1.8
+--expected-machine x86_64` gate passed all six CTests locally with Clang 22.1.8
 against `x360port` revision `a26b0eebaaa463b1c003e4c26868a49c69d75d54` and Xenia
 revision `9cddd1759f96b0491bfcd933a73ca7eaab1f258b`, the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
