@@ -30,8 +30,9 @@ This inventory reports observable capabilities independently of the product goal
 
 S006 is the current focus. Gears 1 is the only active title. The repository now consumes
 the pinned `x360port`/Xenia execution boundary for an asset-free synthetic discriminator
-and now owns a profile-authenticated normalized-image-to-flat-guest adapter, but refuses
-the gameplay target until the remaining authenticated XEX/import and runtime services
+and now owns a profile-authenticated normalized-image-to-flat-guest adapter. The shared
+checked XEX2 inspector and real ignored-image identity path are verified, but the product
+still refuses the gameplay target until the remaining import bindings and runtime services
 are composed. The executor will prefer dynarec and may use the bounded, counted
 fallback; fallback coverage cannot prove gameplay compatibility or performance.
 
@@ -44,10 +45,11 @@ title-identity tests fail closed on container and normalized-image hashes.
 
 ### S002 — bounded provisioning
 
-Evidence: GDF extraction, archive bounds, and identity are tested. Gap:
-the shared checked-XEX inspector and runtime-service composition are not wired into
-`./run.sh`; the new adapter consumes its normalized image output but does not replace
-XEX authentication or provisioning.
+Evidence: GDF extraction, archive bounds, and identity are tested. The shared checked-XEX2
+inspector now validates the real ignored Gears 1 container and produces the exact
+profile-authenticated normalized image consumed by the adapter. Gap: the inspector and
+runtime-service composition are not wired into `./run.sh`; complete install validation and
+product provisioning still refuse to launch until the full runtime path exists.
 
 ### S003 — executor-independent native rendering
 
@@ -77,8 +79,10 @@ title-neutral device-memory callback contracts. It also validates a
 title-reported executable-write range, invalidates touched cached functions,
 and preserves unrelated translations. `runtime/gears1_guest_image.*` now consumes
 the shared PE layout owner and seals a flat guest module after exact normalized-image
-profile authentication. Gap: checked XEX loading, automatic write observation,
-internal guest-call invalidation, and product service composition remain missing.
+profile authentication. The shared checked-XEX2 inspector also validates the real ignored
+container, normalized image, import manifest, and helper-pattern evidence. Gap: wiring
+authenticated full-image loading into the product, automatic write observation, internal
+guest-call invalidation, and product service composition remain missing.
 
 ### S007 — first Gears discriminator
 
@@ -91,8 +95,10 @@ guest virtual offsets, seeded a synthetic object field, and executed the real
 original once, and reported executable-write invalidation restored the original
 path. The production `Gears1GuestImage` adapter now authenticates the same
 normalized image and performs the PE-to-flat mapping; its synthetic CTest and
-real ignored-input adapter run pass. Gap: checked XEX/import/service composition
-and a caller-owned object/runtime path remain.
+real ignored-input adapter run pass. The shared checked-XEX2 inspector now provides
+the container, normalized image, 236 logical imports, and eight helper-pattern hits.
+Gap: real import bindings and device services, a caller-owned object/runtime path,
+and the complete product launch path remain.
 
 ### S008 — bounded interpreter fallback
 

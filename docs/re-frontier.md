@@ -22,11 +22,13 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
 5. **First real guest discriminator — partially grounded.** The shared
    `x360port::MapPeImage` owner and `Gears1GuestImage` adapter now authenticate
    the profile-matching normalized image and map its PE sections into the flat
-   guest image contract; synthetic and real ignored-input adapter runs pass. A
-   headless probe then seeded a synthetic object field and executed the real
-   `0x8222E868` body, proving its result, native override/scoped original path,
-   and reported-write invalidation. The product still needs checked XEX/import
-   services and a caller-owned object path before this is title conformance.
+   guest image contract; synthetic and real ignored-input adapter runs pass. The
+   shared checked-XEX2 inspector also matches the real container, normalized image,
+   236 logical imports, and eight helper-pattern hits. A headless probe then seeded
+   a synthetic object field and executed the real `0x8222E868` body, proving its
+   result, native override/scoped original path, and reported-write invalidation.
+   The product still needs real import/device services and a caller-owned object
+   path before this is title conformance.
 6. **Fallback discriminator — required with the real discriminator.** Force one safe unsupported
    block through the bounded interpreter fallback, prove reason and counters,
    then prove ordinary execution still selects dynarec. Explicit interpreter mode
