@@ -156,8 +156,8 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate passed all six CTests locally with Clang 22.1.8
-against `x360port` revision `a26b0eebaaa463b1c003e4c26868a49c69d75d54` and Xenia
-revision `9cddd1759f96b0491bfcd933a73ca7eaab1f258b`, the exact inputs required by
+against `x360port` revision `5c3c131a619381f0e99bbeb39123711c6d983e17` and Xenia
+revision `5d14ad55e9e4a004382585b58996ffedf2f6e35e`, the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
 (`ninja: no work to do`). Gears consumes the shared driver-aware warning owner;
 production CMake selection and real Clang/clang-cl probes accept modern C++ and

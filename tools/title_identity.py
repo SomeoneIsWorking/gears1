@@ -38,7 +38,7 @@ HASH_CHUNK_SIZE = 1024 * 1024
 IDENTITY_SCHEMA = 1
 XEX_INSPECT_SCHEMA = 1
 XEX_INSPECT_ENV = "XEX_INSPECT"
-XEX_INSPECT_DEFAULT = Path("build/deps/x360port/xex-inspect")
+XEX_INSPECT_DEFAULT = Path("build/deps/x360port/x360-xex-inspect")
 
 XGD_SECTOR_SIZE = 2048
 XGD_VOLUME_DESCRIPTOR_SECTOR = 32
@@ -585,7 +585,7 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "xex-inspect executable (default: XEX_INSPECT or "
-            "build/deps/x360port/xex-inspect)"
+            "build/deps/x360port/x360-xex-inspect)"
         ),
     )
     parser.add_argument(
