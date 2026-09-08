@@ -49,3 +49,14 @@ native subsystem contracts, and the reusable checked-XEX parser contract remain.
 The launcher and named product target now refuse at missing full-image and
 runtime-service composition over `x360port`; there is no compatibility CPU
 selector.
+
+## Progress note — 2026-09-08
+
+The pinned `x360port` revision now exposes a title-owned, image-scoped native
+override entry point. Its handler can call the matching original guest address
+through Xenia without recursive override dispatch, and installing or removing
+the override invalidates that exact Xenia entry. The shared runtime test proves
+the wrapped return value, original-call and invalidation counters, and restored
+dynarec execution. This closes only the reusable entry-dispatch seam; it does
+not prove the authenticated Gears leaf, internal guest-call invalidation,
+device services, fallback, or gameplay.
