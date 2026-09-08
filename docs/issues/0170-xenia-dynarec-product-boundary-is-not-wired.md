@@ -57,6 +57,8 @@ override entry point. Its handler can call the matching original guest address
 through Xenia without recursive override dispatch, and installing or removing
 the override invalidates that exact Xenia entry. The shared runtime test proves
 the wrapped return value, original-call and invalidation counters, and restored
-dynarec execution. This closes only the reusable entry-dispatch seam; it does
-not prove the authenticated Gears leaf, internal guest-call invalidation,
-device services, fallback, or gameplay.
+dynarec execution. The same revision now owns validated title-neutral device
+ranges through Xenia MMIO and proves PPC load/store callbacks with telemetry.
+This closes only reusable entry and device seams; it does not prove the
+authenticated Gears leaf, internal guest-call invalidation, device services,
+fallback, or gameplay.
