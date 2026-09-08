@@ -21,7 +21,6 @@ namespace
 using x360port::GuestAddress;
 
 constexpr GuestAddress kResourceAddRef = 0x82233668U;
-constexpr std::uint32_t kVariableStorageBase = 0x70000000U;
 
 constexpr std::array<std::uint8_t, 32> kContainerDigest{
     0xdf, 0x10, 0x41, 0xda, 0x72, 0xd2, 0xb9, 0x47, 0xe3, 0xbb, 0x2f, 0x70, 0x1a, 0x19, 0xfd, 0xe9,
@@ -35,6 +34,7 @@ struct Observations
     std::uint32_t function_calls = 0;
     std::uint32_t variable_resolutions = 0;
     std::uint32_t override_calls = 0;
+    std::vector<GuestAddress> variable_addresses;
 };
 
 void UnexpectedImport(void *, void *, void *context) noexcept
@@ -45,7 +45,11 @@ void UnexpectedImport(void *, void *, void *context) noexcept
 GuestAddress ResolveVariable(void *context) noexcept
 {
     auto &observations = *static_cast<Observations *>(context);
-    const GuestAddress address = kVariableStorageBase + observations.variable_resolutions * 4U;
+    if (observations.variable_resolutions >= observations.variable_addresses.size())
+    {
+        return 0;
+    }
+    const GuestAddress address = observations.variable_addresses[observations.variable_resolutions];
     ++observations.variable_resolutions;
     return address;
 }
@@ -109,9 +113,31 @@ int main(int argc, char **argv)
     Require(module.InitializeCheckedXex(xex, expected, error), error);
     Require(module.ImportManifest().size() == 236U, "the real import manifest was not retained");
 
+    x360port::RuntimeCreateResult created = x360port::RuntimeContext::Create();
+    Require(static_cast<bool>(created), created.failure.detail);
+
+    const std::size_t variable_count = static_cast<std::size_t>(
+        std::count_if(module.ImportManifest().begin(), module.ImportManifest().end(),
+                      [](const x360port::ImportRequirement &import)
+                      { return import.kind == x360port::ImportKind::Variable; }));
+    x360port::GuestMemoryAllocationResult variable_memory;
+    if (variable_count != 0U)
+    {
+        variable_memory = created.context->AllocateGuestMemory(
+            static_cast<std::uint32_t>(variable_count * sizeof(GuestAddress)));
+        Require(static_cast<bool>(variable_memory), variable_memory.failure.detail);
+    }
+    Observations observations;
+    observations.variable_addresses.reserve(variable_count);
+    for (std::size_t index = 0; index < variable_count; ++index)
+    {
+        observations.variable_addresses.push_back(
+            variable_memory.allocation.address +
+            static_cast<GuestAddress>(index * sizeof(GuestAddress)));
+    }
+
     std::vector<x360port::ImportBinding> bindings;
     bindings.reserve(module.ImportManifest().size());
-    Observations observations;
     for (const x360port::ImportRequirement &import : module.ImportManifest())
     {
         x360port::ImportBinding binding{.library = import.library,
@@ -129,8 +155,6 @@ int main(int argc, char **argv)
         bindings.push_back(binding);
     }
 
-    x360port::RuntimeCreateResult created = x360port::RuntimeContext::Create();
-    Require(static_cast<bool>(created), created.failure.detail);
     const x360port::GuestMemoryAllocationResult object_memory =
         created.context->AllocateGuestMemory(0x1CU);
     Require(static_cast<bool>(object_memory), object_memory.failure.detail);
@@ -142,6 +166,8 @@ int main(int argc, char **argv)
     const GuestAddress object = object_memory.allocation.address;
     const x360port::RuntimeFailure loaded = created.context->LoadModule(module, bindings);
     Require(!loaded, loaded.detail);
+    Require(observations.variable_resolutions == variable_count,
+            "the real image did not resolve every variable import into owned guest memory");
 
     const auto first_function_import =
         std::find_if(module.ImportManifest().begin(), module.ImportManifest().end(),
@@ -192,9 +218,15 @@ int main(int argc, char **argv)
     const x360port::RuntimeFailure released =
         created.context->ReleaseGuestMemory(object_memory.allocation);
     Require(!released, released.detail);
+    if (variable_memory)
+    {
+        const x360port::RuntimeFailure variables_released =
+            created.context->ReleaseGuestMemory(variable_memory.allocation);
+        Require(!variables_released, variables_released.detail);
+    }
 
-    std::cout << "Gears real-image discriminator: checked XEX, 236 imports, invoked a real "
-                 "function thunk, executed 0x82233668, scoped original, and executable "
-                 "invalidation passed\n";
+    std::cout << "Gears real-image discriminator: checked XEX, resolved 236 imports into "
+                 "owned guest storage, invoked a real function thunk, executed 0x82233668, "
+                 "scoped original, and executable invalidation passed\n";
     return 0;
 }
