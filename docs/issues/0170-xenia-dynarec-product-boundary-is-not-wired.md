@@ -6,7 +6,7 @@ symptom: GearsUE3 exercises x360port/Xenia synthetically, but the authenticated 
 tags: dynarec,xenia,x360port,x360ue3,migration
 state_items: S002,S006,S007,S008,S009,S010,S011
 created: 2026-09-04
-updated: 2026-09-08
+updated: 2026-09-12
 ---
 
 ## Root cause
@@ -16,7 +16,8 @@ owner. The new product contract requires runtime translation from the
 authenticated user executable. The shared `x360port` embedding boundary,
 checked-XEX inspector, Gears-owned flat-image adapter, and synthetic
 discriminator now exist, but the product still lacks composition of real import
-and device services with guest-call routing, invalidation, exits, and fallback.
+and device services with guest-call routing, mid-call invalidation, exits, and
+fallback.
 
 ## Required work
 
@@ -66,8 +67,8 @@ The shared runtime now also traps writes to the authenticated virtual code range
 coalesces them at the next guest-call boundary, resets the affected Xenia module
 functions, and re-translates modified bytes; the synthetic self-modifying test
 proves the changed result. This closes only reusable entry, device, and automatic
-write-observation seams; it does not prove internal guest-call invalidation,
-device services, fallback, or gameplay.
+write-observation seams; it does not prove mid-call guest invalidation, device
+services, fallback, or gameplay.
 
 ## Image adapter — 2026-09-08
 
@@ -85,8 +86,8 @@ not title conformance.
 ## Checked XEX inspector — 2026-09-08
 
 The shared `x360port` checked-XEX2 inspector and title-owned guest allocation
-contract are pinned at `847dc780bc354194f80b518439ad329b65125f85`, with Xenia at
-`05367a167681e4c1b75921372ff7079e51a7b069`. Against the ignored profile-matching
+contract are pinned at `24656a73b1355db8324e9de2c4dd3cef36539470`, with Xenia at
+`f024c152d8200bfe5a0f3db11e4fdcd4cd95cca5`. Against the ignored profile-matching
 Gears 1 XEX it produces the exact normalized-image digest and geometry, 236 logical
 imports, and one hit for each of the eight helper patterns. Malformed-container
 preflight cases and compressed-loader bounds are covered by the shared tests. This
