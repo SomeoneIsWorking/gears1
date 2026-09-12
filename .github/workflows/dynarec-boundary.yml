@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 env:
-  X360PORT_REVISION: 30cf7dbd29949dd333db3510f19614930e4b3a99
-  XENIA_REVISION: 9cddd1759f96b0491bfcd933a73ca7eaab1f258b
+  X360PORT_REVISION: e6f59f9b449459af1d12e58bd0ce9d5ec14541c1
+  XENIA_REVISION: 185b4fc4e0f8e37a40941246060ff589e8aa6db7
 
 jobs:
   native-jit-boundary:

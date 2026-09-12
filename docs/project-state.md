@@ -91,7 +91,10 @@ a cached guest caller to a native override, preserves scoped original calls
 through callee invalidation, propagates typed callback failure, and restores the
 original call after override removal. The headless real Gears-image AddRef
 discriminator now exercises the same native-override route from a nested guest
-call and verifies restoration after removal.
+call and verifies restoration after removal. The pinned shared runtime now
+also refuses an invalid PPC opcode and decoded-but-unimplemented `lswi` with
+`TranslationFailed`, without publishing host code or counting a successful
+execution; a valid cached PPC function still executes through the JIT.
 
 `runtime/gears1_guest_image.*` now consumes
 the shared PE layout owner and seals a flat guest module after exact normalized-image
@@ -146,6 +149,8 @@ transition and executed block reason-labelled and counted. Explicit interpreter
 mode remains diagnostic-only. The pinned Xenia CPU tree currently exposes x64/A64
 dynarec backends but no CPU interpreter implementation, so there is no existing
 fallback to select or account for; the proper owner is the maintained Xenia fork.
+The decoder and HIR builder now fail closed on these two refusal classes, but
+the failure is not yet a reason-labelled bounded interpreter transition.
 
 ### S009 — representative gameplay
 
@@ -203,11 +208,12 @@ owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate uses the exact `x360port` and Xenia revisions
 pinned by CMake and the workflow. It passed all seven CTests locally with Clang
-on the pinned `x360port` revision `d8749e40cef27d2b40c3d3fe905874f5f58ca42e`
-with Xenia `7730acfce1801bbe340c0ccd79d24c7252a22a98`; the headless
+on the pinned `x360port` revision `e6f59f9b449459af1d12e58bd0ce9d5ec14541c1`
+with Xenia `185b4fc4e0f8e37a40941246060ff589e8aa6db7`; the headless
 real-image import/leaf discriminator passed separately against the ignored
 user-supplied XEX, resolving 236 imports and executing the retained real leaf,
-scoped original, and executable invalidation. Gears consumes the shared
+scoped original, nested guest-call override/removal, and executable invalidation.
+Gears consumes the shared
 driver-aware warning owner;
 production CMake selection and real Clang/clang-cl probes accept modern C++ and
 reject an unused parameter. That ownership change preserved every native compile
