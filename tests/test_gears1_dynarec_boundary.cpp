@@ -78,7 +78,7 @@ struct NativeObservations
     std::uint32_t dbg_print_calls = 0;
 };
 
-void DbgPrint(void *, void *, void *context) noexcept
+void DbgPrint(x360port::GuestImportContext &, void *context) noexcept
 {
     ++static_cast<NativeObservations *>(context)->dbg_print_calls;
 }

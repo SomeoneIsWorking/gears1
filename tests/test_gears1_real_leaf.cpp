@@ -37,7 +37,7 @@ struct Observations
     std::vector<GuestAddress> variable_addresses;
 };
 
-void UnexpectedImport(void *, void *, void *context) noexcept
+void UnexpectedImport(x360port::GuestImportContext &, void *context) noexcept
 {
     ++static_cast<Observations *>(context)->function_calls;
 }

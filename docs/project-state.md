@@ -172,7 +172,7 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate passed all six CTests locally with Clang 22.1.8
-against the pinned `x360port` revision `f19702e7699666be3102755bc737f453e00be4b6`
+against the pinned `x360port` revision `8b099e53107c13a9ec7fa473e3f5fd6aff398f95`
 and Xenia revision `d77aad9116c936cf1c7a40231f210d17094bed9e`,
 the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
