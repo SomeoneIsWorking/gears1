@@ -122,3 +122,14 @@ binding-schema checks, semantic RHI operation ordering, and object/resource/fram
 lifetime transitions. Gears pins and consumes that revision in an asset-free
 contract test. It does not contain Gears policy or replace the missing product
 authenticated XEX/import/service composition.
+
+## Bounded fallback — 2026-09-12
+
+The maintained Xenia fork now owns a bounded interpreter seam selected only
+after PPC compilation refuses a block. The shared runtime maps its completed,
+unsupported-instruction, memory-fault, and instruction-budget outcomes into
+typed failures and counts fallback entries, instructions, and each refusal
+reason. The synthetic discriminator proves invalid-opcode refusal before host
+code publication and executes a decoded `lswi` leaf followed by `blr`. This is
+an S008 partial milestone: complete PPC semantics and control flow, title
+imports/devices, real-image fallback, and gameplay qualification remain open.
