@@ -78,6 +78,10 @@ The shared
    mostly unimplemented. The title-owned `XGetAVPack` ordinal 971 and shared
    `XamInputGetCapabilities`/`XamInputGetState` ordinals 400/401 bindings are
    proven through their real thunks.
+   `Gears1Runtime` now composes the authenticated adapter with a persistent
+   `x360port::RuntimeContext`, bounded variable-import storage, and the known
+   `XGetAVPack` service; an asset-free entry test executes that route through
+   Xenia and returns the configured AV pack.
    The product still needs title-specific import/device services and a complete
    launch path before this is title conformance.
 

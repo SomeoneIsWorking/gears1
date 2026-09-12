@@ -29,12 +29,14 @@ This inventory reports observable capabilities independently of the product goal
 ## Current focus
 
 S006 is the current focus. Gears 1 is the only active title. The repository now consumes
-the pinned `x360port`/Xenia execution boundary for an asset-free synthetic discriminator
-and now owns a profile-authenticated normalized-image-to-flat-guest adapter. The shared
-checked XEX2 inspector and real ignored-image identity path are verified, but the product
-still refuses the gameplay target until the remaining import bindings and runtime services
-are composed. The executor will prefer dynarec and may use the bounded, counted
-fallback; current fallback coverage cannot prove gameplay compatibility or performance.
+the pinned `x360port`/Xenia execution boundary for an asset-free synthetic discriminator,
+owns a profile-authenticated normalized-image-to-flat-guest adapter, and composes that
+adapter with one persistent runtime context, bounded variable-import storage, and the
+title-owned `XGetAVPack` binding. The shared checked XEX2 inspector and real ignored-image
+identity path are verified, but the product still refuses the gameplay target until the
+remaining import bindings and runtime services are composed. The executor will prefer
+dynarec and may use the bounded, counted fallback; current fallback coverage cannot prove
+gameplay compatibility or performance.
 
 ## Capability details
 
@@ -100,16 +102,23 @@ exhaustion; the valid cached PPC function still executes through the JIT.
 
 `runtime/gears1_guest_image.*` now consumes
 the shared PE layout owner and seals a flat guest module after exact normalized-image
-profile authentication. The shared checked-XEX2 inspector also validates the real ignored
-container, normalized image, import manifest, and helper-pattern evidence. Gap: wiring
-authenticated full-image loading into the product, complete fallback ISA/control-flow coverage,
-title-specific write/cache-control semantics, and product service composition remain missing.
+profile authentication. `runtime/gears1_runtime.*` composes that sealed module with a
+single Xenia runtime context, persistent variable-import storage, the title-owned
+`XGetAVPack` service, and fail-closed unknown function imports; its synthetic entry test
+executes the authenticated adapter through Xenia's JIT and returns the configured AV pack.
+The shared checked-XEX2 inspector also validates the real ignored container, normalized
+image, import manifest, and helper-pattern evidence. Gap: wiring authenticated full-image
+loading into the product, complete fallback ISA/control-flow coverage, title-specific
+write/cache-control semantics, and complete product service composition remain missing.
 
 ### S007 — first Gears discriminator
 
 Evidence: the synthetic Gears-addressed module executes through Xenia's JIT and
 calls a typed `DbgPrint` binding; the pinned shared runtime separately proves
 cached guest-to-native override/original-call routing against a synthetic guest leaf.
+The runtime-composition test authenticates the synthetic profile image through the Gears
+adapter, binds title-owned `XGetAVPack` ordinal 971, and returns its configured value through
+Xenia's translated entry path.
 A maintained headless discriminator authenticates the profile-matching ignored
 image, maps its PE sections into guest virtual offsets, allocates and initializes
 a caller-owned guest object and variable-import storage through `x360port`,
@@ -208,7 +217,7 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate uses the exact `x360port` and Xenia revisions
-pinned by CMake and the workflow. It passed all seven CTests locally with Clang
+pinned by CMake and the workflow. It passed all eight CTests locally with Clang
 on the pinned `x360port` revision `677f376fd18e9d59ff9d4a79a29f79d654e667d9`
 with Xenia `b7b471a66120932ef3f738e004233061db6127a5`; the headless
 real-image import/leaf discriminator passed separately against the ignored
