@@ -83,7 +83,12 @@ preserves unrelated translations. The shared runtime also bounds translated
 basic-block execution across nested guest calls and returns typed exhaustion and
 invalidation results. A host import can refuse explicitly; the translated call
 exits with its library, ordinal, and reason while incrementing a refusal count,
-rather than continuing with an invented return value.
+rather than continuing with an invented return value. The pinned Xenia fork now
+routes compiled direct and indirect guest calls through invalidatable entries;
+the shared synthetic regression modifies a leaf and observes its new result
+through a previously translated caller. This does not yet route those calls to
+title-owned native overrides.
+
 `runtime/gears1_guest_image.*` now consumes
 the shared PE layout owner and seals a flat guest module after exact normalized-image
 profile authentication. The shared checked-XEX2 inspector also validates the real ignored
@@ -191,9 +196,12 @@ owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate uses the exact `x360port` and Xenia revisions
 pinned by CMake and the workflow. It passed all seven CTests locally with Clang
-on the pinned `x360port` revision `6a4b975116123d34fbaec97b4c647587a360e936`;
-the real-image import/leaf discriminator passed separately against the ignored
-user-supplied XEX. Gears consumes the shared driver-aware warning owner;
+on the pinned `x360port` revision `6b1682121143961fb12e9ea057dea2a6128cf78b`
+with Xenia `7d99c864c939c09eb43ed32e763087a73875bd40`; the headless
+real-image import/leaf discriminator passed separately against the ignored
+user-supplied XEX, resolving 236 imports and executing the retained real leaf,
+scoped original, and executable invalidation. Gears consumes the shared
+driver-aware warning owner;
 production CMake selection and real Clang/clang-cl probes accept modern C++ and
 reject an unused parameter. That ownership change preserved every native compile
 command, and the focused boundary and quality CTests passed afterward. Xenia's
