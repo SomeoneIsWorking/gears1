@@ -93,9 +93,10 @@ original call after override removal. The headless real Gears-image AddRef
 discriminator now exercises the same native-override route from a nested guest
 call and verifies restoration after removal. The pinned shared runtime now
 refuses an invalid PPC opcode before host-code publication and routes
-decoded-but-unimplemented `lswi` through a bounded Xenia-owned interpreter. The fallback records
-entries, executed instructions, unsupported instructions, memory failures, and budget exhaustion;
-the valid cached PPC function still executes through the JIT.
+decoded-but-unimplemented fixtures through a bounded Xenia-owned interpreter. The fallback covers
+`lswi`, integer immediates, big-endian scalar loads/stores, comparisons, and conditional branches,
+and records entries, executed instructions, unsupported instructions, memory failures, and budget
+exhaustion; the valid cached PPC function still executes through the JIT.
 
 `runtime/gears1_guest_image.*` now consumes
 the shared PE layout owner and seals a flat guest module after exact normalized-image
@@ -146,10 +147,11 @@ the complete product launch path, remain unimplemented.
 Partial capability: after Xenia compilation refusal, `x360port` now selects the Xenia-owned
 bounded interpreter and reports typed unsupported-instruction, memory, and instruction-budget
 refusals. The synthetic runtime discriminator proves an invalid opcode is refused without host
-code, and proves `lswi` plus `blr` executes with counted fallback entries/instructions. Explicit
-interpreter mode remains diagnostic-only and fallback is not gameplay or performance evidence.
-Gap: the interpreter currently covers only this narrow leaf subset; complete PPC ISA semantics,
-safe guest control flow, imports/devices, real-image fallback, and title gameplay remain open.
+code, and proves `lswi`, integer immediates, big-endian scalar loads/stores, comparisons, and
+conditional branches execute with counted fallback entries/instructions. Explicit interpreter mode
+remains diagnostic-only and fallback is not gameplay or performance evidence. Gap: the interpreter
+currently covers only this narrow subset; complete PPC ISA semantics, safe guest control flow,
+imports/devices, real-image fallback, and title gameplay remain open.
 
 ### S009 — representative gameplay
 
