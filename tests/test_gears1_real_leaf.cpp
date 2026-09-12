@@ -39,9 +39,10 @@ struct Observations
     std::vector<GuestAddress> variable_addresses;
 };
 
-void UnexpectedImport(x360port::GuestImportContext &, void *context) noexcept
+void RefuseUnsupportedImport(x360port::GuestImportContext &call, void *context) noexcept
 {
     ++static_cast<Observations *>(context)->function_calls;
+    call.refuse(x360port::ImportRefusalReason::UnsupportedService);
 }
 
 GuestAddress ResolveVariable(void *context) noexcept
@@ -155,7 +156,7 @@ int main(int argc, char **argv)
         x360port::ImportBinding binding{.library = import.library,
                                         .ordinal = import.ordinal,
                                         .kind = import.kind,
-                                        .function_handler = UnexpectedImport,
+                                        .function_handler = RefuseUnsupportedImport,
                                         .function_context = &observations};
         if (import.kind == x360port::ImportKind::Variable)
         {
@@ -205,9 +206,12 @@ int main(int argc, char **argv)
             "the real image did not retain a function import");
     const x360port::ExecutionResult imported_call =
         created.context->Execute(first_function_import->address);
-    Require(static_cast<bool>(imported_call), imported_call.failure.detail);
+    Require(imported_call.failure.error == x360port::RuntimeError::ImportServiceRefused,
+            "an unimplemented real-image import silently returned into guest code");
     Require(observations.function_calls == 1U,
             "the real image function-import trampoline did not reach its title callback");
+    Require(created.context->Statistics().import_service_refusals == 1U,
+            "the real-image import refusal was not accounted for");
 
     const std::array<std::uint64_t, 1> arguments{object};
     const x360port::ExecutionResult baseline = created.context->Execute(kResourceAddRef, arguments);
@@ -254,7 +258,7 @@ int main(int argc, char **argv)
     }
 
     std::cout << "Gears real-image discriminator: checked XEX, resolved 236 imports into "
-                 "owned guest storage, invoked a real function thunk, executed 0x82233668, "
+                 "owned guest storage, refused an unsupported real import, executed 0x82233668, "
                  "scoped original, and executable invalidation passed\n";
     return 0;
 }
