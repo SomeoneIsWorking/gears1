@@ -26,6 +26,7 @@ namespace
 using x360port::GuestAddress;
 
 constexpr GuestAddress kResourceAddRef = 0x82233668U;
+constexpr std::size_t kResourceObjectSize = 0x1CU;
 
 constexpr std::array<std::uint8_t, 32> kContainerDigest{
     0xdf, 0x10, 0x41, 0xda, 0x72, 0xd2, 0xb9, 0x47, 0xe3, 0xbb, 0x2f, 0x70, 0x1a, 0x19, 0xfd, 0xe9,
@@ -388,6 +389,55 @@ int main(int argc, char **argv)
                 invalidations_before_removal + 1U,
             "the executable write did not invalidate the real guest translation exactly once");
 
+    const x360port::GuestMemoryAllocationResult recursive_memory =
+        created.context->AllocateGuestMemory(2U * kResourceObjectSize);
+    Require(static_cast<bool>(recursive_memory), recursive_memory.failure.detail);
+    const GuestAddress outer_resource = recursive_memory.allocation.address;
+    const GuestAddress inner_resource = outer_resource + kResourceObjectSize;
+    // The real leaf calls AddRef at 0x822336C0 for a first reference to this linked resource kind.
+    std::array<std::byte, 2U * kResourceObjectSize> recursive_bytes{};
+    recursive_bytes[0] = std::byte{0x40};
+    recursive_bytes[3] = std::byte{0x04};
+    recursive_bytes[24] = static_cast<std::byte>(inner_resource >> 24U);
+    recursive_bytes[25] = static_cast<std::byte>(inner_resource >> 16U);
+    recursive_bytes[26] = static_cast<std::byte>(inner_resource >> 8U);
+    recursive_bytes[27] = static_cast<std::byte>(inner_resource);
+    recursive_bytes[kResourceObjectSize + 7U] = std::byte{0x03};
+    const x360port::RuntimeFailure recursive_written =
+        created.context->WriteGuestMemory(outer_resource, recursive_bytes);
+    Require(!recursive_written, recursive_written.detail);
+
+    const std::uint32_t overrides_before_recursive_call = observations.override_calls;
+    const x360port::RuntimeFailure recursive_installed =
+        created.context->InstallOverride(kResourceAddRef, ScopedOriginal, &observations);
+    Require(!recursive_installed, recursive_installed.detail);
+    const std::array<std::uint64_t, 1> outer_arguments{outer_resource};
+    const x360port::ExecutionResult recursive_override =
+        created.context->Execute(kResourceAddRef, outer_arguments);
+    Require(static_cast<bool>(recursive_override) && recursive_override.value == 1U &&
+                observations.override_calls == overrides_before_recursive_call + 2U,
+            "real AddRef's nested guest call did not enter the native override");
+    const x360port::RuntimeFailure recursive_removed =
+        created.context->RemoveOverride(kResourceAddRef);
+    Require(!recursive_removed, recursive_removed.detail);
+
+    const x360port::RuntimeFailure recursive_reset =
+        created.context->WriteGuestMemory(outer_resource, recursive_bytes);
+    Require(!recursive_reset, recursive_reset.detail);
+    const x360port::ExecutionResult recursive_original =
+        created.context->Execute(kResourceAddRef, outer_arguments);
+    Require(static_cast<bool>(recursive_original) && recursive_original.value == 1U &&
+                observations.override_calls == overrides_before_recursive_call + 2U,
+            "removing the override did not restore the nested original guest call");
+    const std::array<std::uint64_t, 1> inner_arguments{inner_resource};
+    const x360port::ExecutionResult inner_after_original =
+        created.context->Execute(kResourceAddRef, inner_arguments);
+    Require(static_cast<bool>(inner_after_original) && inner_after_original.value == 5U,
+            "the restored nested guest call did not increment the referenced resource");
+    const x360port::RuntimeFailure recursive_released =
+        created.context->ReleaseGuestMemory(recursive_memory.allocation);
+    Require(!recursive_released, recursive_released.detail);
+
     const x360port::RuntimeFailure released =
         created.context->ReleaseGuestMemory(object_memory.allocation);
     Require(!released, released.detail);
@@ -404,6 +454,7 @@ int main(int argc, char **argv)
     std::cout << "Gears real-image discriminator: checked XEX, resolved 236 imports into "
                  "owned guest storage, polled retained pad state/capabilities through 401/400, "
                  "executed 0x82233668, "
-                 "scoped original, and executable invalidation passed\n";
+                 "scoped original, nested guest-call override/removal, and executable invalidation "
+                 "passed\n";
     return 0;
 }
