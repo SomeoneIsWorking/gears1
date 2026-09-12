@@ -50,6 +50,13 @@ struct PadState
     bool operator==(const PadState &) const = default;
 };
 
+struct PadSnapshot
+{
+    bool connected = false;
+    uint32_t packet = 0;
+    PadState state;
+};
+
 enum class InputSource
 {
     kNone,
@@ -64,6 +71,9 @@ void InitialiseInput(bool haveWindow);
 
 // True when a pad should be reported to the guest as connected.
 bool PadConnected();
+
+// Reads connection, packet, and pad from one arbitration state under one lock.
+PadSnapshot ReadPadSnapshot();
 
 // The current state, and the packet number that increments whenever it changes
 // (the console's contract: an unchanged packet number means nothing happened).

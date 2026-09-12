@@ -85,7 +85,6 @@ void StoreGamepad(uint8_t *base, uint32_t address, const gears::PadState &pad)
     Store16(base, address + 10, uint16_t(pad.thumbRY));
 }
 
-constexpr uint32_t kInputStateBytes = 16;        // packet number + gamepad
 constexpr uint32_t kInputCapabilitiesBytes = 20; // type/sub_type/flags + gamepad + vibration
 
 // XamInput's user index carries a "any user" marker in its high bits, which
@@ -317,45 +316,6 @@ void __imp__XamUserCreateStatsEnumerator(PPCContext &__restrict ctx, uint8_t *)
 // player who never presses anything, which leaves a title waiting at its
 // "press start" prompt for ever; reporting disconnected is a state hardware
 // really produces and every title handles.
-
-// DWORD XamInputGetState(DWORD UserIndex, DWORD Flags, PXINPUT_STATE State)
-void __imp__XamInputGetState(PPCContext &__restrict ctx, uint8_t *base)
-{
-    // A scripted run has no event loop of its own; the guest's own poll is what
-    // advances it, which is also what makes the timings line up with the frames
-    // the guest is actually producing.
-    gears::UpdateScriptedInput();
-
-    const uint32_t userIndex = ctx.r3.u32;
-    const uint32_t stateAddress = ctx.r5.u32;
-
-    // The console zeroes the structure before anything else, so a title that
-    // ignores the return code still reads a defined state.
-    if (stateAddress != 0)
-        std::memset(base + stateAddress, 0, kInputStateBytes);
-
-    if ((userIndex & kUserIndexAny) != kUserIndexAny && userIndex >= kMaxUsers)
-    {
-        ctx.r3.u64 = gears::kErrorDeviceNotConnected;
-        return;
-    }
-    const uint32_t slot = (userIndex & kUserIndexAny) == kUserIndexAny ? kLocalUser : userIndex;
-    if (!IsLocalUser(slot) || !gears::PadConnected())
-    {
-        ctx.r3.u64 = gears::kErrorDeviceNotConnected;
-        return;
-    }
-
-    // Titles call this with a null pointer as a "is anything plugged in" query.
-    if (stateAddress != 0)
-    {
-        uint32_t packet = 0;
-        const gears::PadState pad = gears::CurrentPad(packet);
-        Store32(base, stateAddress, packet);
-        StoreGamepad(base, stateAddress + 4, pad);
-    }
-    ctx.r3.u64 = gears::kErrorSuccess;
-}
 
 // DWORD XamInputGetCapabilities(DWORD UserIndex, DWORD Flags, PXINPUT_CAPABILITIES Caps)
 void __imp__XamInputGetCapabilities(PPCContext &__restrict ctx, uint8_t *base)

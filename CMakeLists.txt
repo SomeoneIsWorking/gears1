@@ -48,7 +48,7 @@ endif()
 
 set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
     "Exact shared/x360port checkout consumed by GearsUE3")
-set(X360PORT_REQUIRED_REVISION "2be0130e97e19d779b4622f69c7d48ef539fe52c")
+set(X360PORT_REQUIRED_REVISION "c3fb94e24e1526d9021e074ebb61b60392751b66")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
@@ -114,6 +114,21 @@ add_library(gears1_xam_services STATIC runtime/titles/gears1/xam_video_services.
 target_include_directories(gears1_xam_services PUBLIC runtime)
 target_link_libraries(gears1_xam_services PUBLIC x360port::x360port)
 x360port_enable_warnings(gears1_xam_services)
+
+include(FetchContent)
+FetchContent_Declare(lucent
+    GIT_REPOSITORY https://github.com/SomeoneIsWorking/lucent.git
+    GIT_TAG f1101923eee7451c5d5aa25a25d68bfb4ae874b1)
+FetchContent_MakeAvailable(lucent)
+add_library(gears_input STATIC runtime/input.cpp runtime/titles/gears1/xam_input_provider.cpp)
+target_include_directories(gears_input PUBLIC runtime)
+target_link_libraries(gears_input PUBLIC lucent::lucent x360port::x360port)
+x360port_enable_warnings(gears_input)
+add_executable(test_remote_input tests/test_remote_input.cpp)
+target_link_libraries(test_remote_input PRIVATE gears_input)
+x360port_enable_warnings(test_remote_input)
+add_test(NAME gears_remote_input COMMAND test_remote_input)
+
 add_executable(test_gears1_guest_image tests/test_gears1_guest_image.cpp)
 target_link_libraries(test_gears1_guest_image PRIVATE gears1_guest_image)
 x360port_enable_warnings(test_gears1_guest_image)
@@ -124,7 +139,7 @@ add_test(NAME gears1_guest_image COMMAND test_gears1_guest_image)
 # It is the maintained replacement for the temporary real-leaf probe.
 add_executable(test_gears1_real_leaf tests/test_gears1_real_leaf.cpp)
 target_link_libraries(test_gears1_real_leaf PRIVATE gears1_guest_image gears1_xam_services
-                                                    x360port::x360port)
+                                                    gears_input x360port::x360port)
 x360port_enable_warnings(test_gears1_real_leaf)
 
 add_executable(test_gears1_ue3_contract tests/test_gears1_ue3_contract.cpp)
@@ -142,12 +157,6 @@ if(GEARS_DYNAREC_CONTRACT_ONLY)
                 "${CMAKE_SOURCE_DIR}/tests/test_bootstrap.py")
     return()
 endif()
-
-include(FetchContent)
-FetchContent_Declare(lucent
-    GIT_REPOSITORY https://github.com/SomeoneIsWorking/lucent.git
-    GIT_TAG f1101923eee7451c5d5aa25a25d68bfb4ae874b1)
-FetchContent_MakeAvailable(lucent)
 
 # Renderer-only xxHash use is independent of guest CPU execution. Consume the
 # pinned Xenia copy directly until x360port owns the complete Xenia build.
