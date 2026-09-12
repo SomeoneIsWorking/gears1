@@ -15,8 +15,8 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    callback seams. Explicit and automatically observed executable-write
    invalidation are now proven for the authenticated virtual code range. The
    shared runtime now also bounds translated basic-block entries across nested
-   guest calls and reports typed exhaustion; mid-call invalidation and fallback
-   remain missing shared contracts. The shared runtime test separately proves a
+    guest calls and reports typed exhaustion and mid-call invalidation; fallback
+    remains a missing shared contract. The shared runtime test separately proves a
    translated guest caller reaches a second guest callee through Xenia and
    reuses both translations.
 4. **Synthetic Gears-addressed discriminator — grounded.** An asset-free image

@@ -77,15 +77,18 @@ native code. The pinned shared runtime also now exposes and tests image-scoped
 native override, scoped original-call, exact-entry invalidation, and
 title-neutral device-memory callback contracts. It validates title-reported
 executable-write ranges and now automatically observes virtual writes to the
-authenticated code range, invalidates touched cached functions, and preserves
-unrelated translations. The shared runtime also bounds translated basic-block
-execution across nested guest calls and returns a typed exhaustion result.
+authenticated code range, exits an active translated call after a watched guest
+store, invalidates touched cached functions before the next guest entry, and
+preserves unrelated translations. The shared runtime also bounds translated
+basic-block execution across nested guest calls and returns typed exhaustion and
+invalidation results.
 `runtime/gears1_guest_image.*` now consumes
 the shared PE layout owner and seals a flat guest module after exact normalized-image
 profile authentication. The shared checked-XEX2 inspector also validates the real ignored
 container, normalized image, import manifest, and helper-pattern evidence. Gap: wiring
-authenticated full-image loading into the product, mid-call guest invalidation,
-reason-labelled interpreter fallback, and product service composition remain missing.
+authenticated full-image loading into the product, reason-labelled interpreter
+fallback, title-specific write/cache-control semantics, and product service
+composition remain missing.
 
 ### S007 — first Gears discriminator
 
@@ -169,8 +172,9 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate passed all six CTests locally with Clang 22.1.8
-against `x360port` revision `24656a73b1355db8324e9de2c4dd3cef36539470` and Xenia
-revision `f024c152d8200bfe5a0f3db11e4fdcd4cd95cca5`, the exact inputs required by
+against the pinned `x360port` revision `f19702e7699666be3102755bc737f453e00be4b6`
+and Xenia revision `d77aad9116c936cf1c7a40231f210d17094bed9e`,
+the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
 (`ninja: no work to do`). Gears consumes the shared driver-aware warning owner;
 production CMake selection and real Clang/clang-cl probes accept modern C++ and

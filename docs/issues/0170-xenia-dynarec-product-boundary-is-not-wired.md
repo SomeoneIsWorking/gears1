@@ -64,11 +64,12 @@ ranges through Xenia MMIO and proves PPC load/store callbacks with telemetry.
 It also validates title-reported executable-write ranges and invalidates the
 affected cached Xenia functions while preserving unrelated entries.
 The shared runtime now also traps writes to the authenticated virtual code range,
-coalesces them at the next guest-call boundary, resets the affected Xenia module
+exits an active translated call after the watched guest store, coalesces the
+write before the next guest-call boundary, resets affected Xenia module
 functions, and re-translates modified bytes; the synthetic self-modifying test
-proves the changed result. This closes only reusable entry, device, and automatic
-write-observation seams; it does not prove mid-call guest invalidation, device
-services, fallback, or gameplay.
+proves the typed invalidation result and changed target result. This closes only
+reusable entry, device, automatic write-observation, and mid-call invalidation
+seams; it does not prove device services, fallback, or gameplay.
 
 ## Image adapter — 2026-09-08
 
@@ -86,8 +87,8 @@ not title conformance.
 ## Checked XEX inspector — 2026-09-08
 
 The shared `x360port` checked-XEX2 inspector and title-owned guest allocation
-contract are pinned at `24656a73b1355db8324e9de2c4dd3cef36539470`, with Xenia at
-`f024c152d8200bfe5a0f3db11e4fdcd4cd95cca5`. Against the ignored profile-matching
+contract are pinned at `f19702e7699666be3102755bc737f453e00be4b6`, with Xenia at
+`d77aad9116c936cf1c7a40231f210d17094bed9e`. Against the ignored profile-matching
 Gears 1 XEX it produces the exact normalized-image digest and geometry, 236 logical
 imports, and one hit for each of the eight helper patterns. Malformed-container
 preflight cases and compressed-loader bounds are covered by the shared tests. This
