@@ -81,8 +81,9 @@ and import manifest as one `GuestModule`. Its synthetic CTest and a local run
 against the ignored profile-matching image passed. The shared inspector now
 produces the exact normalized-image digest and geometry, 236 logical imports,
 and one hit for each of the eight helper patterns. Real import/service bindings
-remain open; the caller-owned object path is now proven, but this is still an adapter milestone,
-not title conformance.
+remain open; the caller-owned object path is now proven, and the title-owned
+`XGetAVPack` binding is exercised through its real thunk, but this is still an
+adapter milestone, not title conformance.
 
 ## Checked XEX inspector — 2026-09-08
 

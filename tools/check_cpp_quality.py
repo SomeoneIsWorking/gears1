@@ -53,6 +53,8 @@ MAINTAINED_FILES = tuple(
         "runtime/title_profile.cpp",
         "runtime/title_profile.h",
         "runtime/titles/gears1/audio_mix.cpp",
+        "runtime/titles/gears1/xam_video_services.cpp",
+        "runtime/titles/gears1/xam_video_services.h",
         "runtime/vd_null_gpu.cpp",
         "runtime/wait_probe.cpp",
         "runtime/wait_probe.h",

@@ -108,8 +108,10 @@ container, normalized image, 236 logical imports under the correctly indexed
 `xam.xex` and `xboxkrnl.exe` entries, and eight helper-pattern hits.
 The first real-image function-import thunk reaches its title callback, and all
 real-image variable imports resolve into bounded caller-owned guest storage.
-Gap: title-specific service semantics and device services, and the complete
-product launch path remain.
+The title-owned `XGetAVPack` binding for `xam.xex` ordinal 971 executes through
+its real thunk and returns the configured AV-pack value. Gap: the remaining
+title-specific service semantics and device services, and the complete product
+launch path remain.
 
 ### S008 — bounded interpreter fallback
 
