@@ -34,6 +34,9 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    function-import thunk through the authenticated manifest, then executes the
    real `0x82233668` body, proving its result, native override/scoped original
    path, and both reported-write and automatic virtual-write invalidation.
+   The inspector resolves the two XEX library-table entries by index, retaining
+   `xam.xex` and `xboxkrnl.exe` as distinct bindings; service semantics are still
+   unimplemented.
    The product still needs title-specific import/device services and a complete
    launch path before this is title conformance.
 6. **Fallback discriminator — required with the real discriminator.** Force one safe unsupported

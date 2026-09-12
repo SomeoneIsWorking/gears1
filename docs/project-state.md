@@ -104,7 +104,8 @@ calls the real original once, and reported executable-write invalidation restore
 the original path. The production `Gears1GuestImage` adapter now authenticates
 the same normalized image and import manifest; its synthetic CTest and real
 ignored-input discriminator pass. The shared checked-XEX2 inspector provides the
-container, normalized image, 236 logical imports, and eight helper-pattern hits.
+container, normalized image, 236 logical imports under the correctly indexed
+`xam.xex` and `xboxkrnl.exe` entries, and eight helper-pattern hits.
 The first real-image function-import thunk reaches its title callback, and all
 real-image variable imports resolve into bounded caller-owned guest storage.
 Gap: title-specific service semantics and device services, and the complete
@@ -172,7 +173,7 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate passed all six CTests locally with Clang 22.1.8
-against the pinned `x360port` revision `bb8a69fc97759acabadf4c95a5376534d89995cd`
+against the pinned `x360port` revision `782a7d446979109574645ebec3eaacd57944d0ba`
 and Xenia revision `d77aad9116c936cf1c7a40231f210d17094bed9e`,
 the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
