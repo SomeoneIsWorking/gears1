@@ -36,7 +36,8 @@ what must be proven next; capability status belongs in `docs/project-state.md`.
    path, and both reported-write and automatic virtual-write invalidation.
    The inspector resolves the two XEX library-table entries by index, retaining
    `xam.xex` and `xboxkrnl.exe` as distinct bindings; service semantics are still
-   unimplemented.
+   mostly unimplemented, with the title-owned `XGetAVPack` ordinal 971 binding
+   now proven through its real thunk.
    The product still needs title-specific import/device services and a complete
    launch path before this is title conformance.
 6. **Fallback discriminator — required with the real discriminator.** Force one safe unsupported

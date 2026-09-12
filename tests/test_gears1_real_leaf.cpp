@@ -15,6 +15,8 @@
 
 #include <x360port/runtime.hpp>
 
+#include "titles/gears1/xam_video_services.h"
+
 namespace
 {
 
@@ -147,6 +149,7 @@ int main(int argc, char **argv)
 
     std::vector<x360port::ImportBinding> bindings;
     bindings.reserve(module.ImportManifest().size());
+    gears::titles::gears1::XamVideoServices video_services(8U);
     for (const x360port::ImportRequirement &import : module.ImportManifest())
     {
         x360port::ImportBinding binding{.library = import.library,
@@ -161,6 +164,7 @@ int main(int argc, char **argv)
             binding.variable_resolver = ResolveVariable;
             binding.variable_resolution_context = &observations;
         }
+        video_services.Bind(import, binding);
         bindings.push_back(binding);
     }
     std::vector<x360port::ImportBinding> mismatched_bindings = bindings;
@@ -168,6 +172,13 @@ int main(int argc, char **argv)
     const x360port::RuntimeFailure mismatch =
         created.context->LoadModule(module, mismatched_bindings);
     Require(static_cast<bool>(mismatch), "a mismatched import-library binding was accepted");
+
+    const auto av_pack_import =
+        std::find_if(module.ImportManifest().begin(), module.ImportManifest().end(),
+                     [](const x360port::ImportRequirement &import)
+                     { return import.library == "xam.xex" && import.ordinal == 971U; });
+    Require(av_pack_import != module.ImportManifest().end(),
+            "the real image did not retain the XGetAVPack import");
 
     const x360port::GuestMemoryAllocationResult object_memory =
         created.context->AllocateGuestMemory(0x1CU);
@@ -182,6 +193,9 @@ int main(int argc, char **argv)
     Require(!loaded, loaded.detail);
     Require(observations.variable_resolutions == variable_count,
             "the real image did not resolve every variable import into owned guest memory");
+    const x360port::ExecutionResult av_pack = created.context->Execute(av_pack_import->address);
+    Require(static_cast<bool>(av_pack) && av_pack.value == 8U && video_services.call_count() == 1U,
+            "the title-owned XGetAVPack service did not execute through its import thunk");
 
     const auto first_function_import =
         std::find_if(module.ImportManifest().begin(), module.ImportManifest().end(),
