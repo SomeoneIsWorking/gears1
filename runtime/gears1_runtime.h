@@ -39,6 +39,9 @@ class Gears1Runtime final
     ExecuteEntry(std::span<const std::uint64_t> arguments = {},
                  x360port::ExecutionLimits limits = {});
 
+    [[nodiscard]] std::span<const x360port::ImportRequirement>
+    ImportManifest() const noexcept;
+    [[nodiscard]] x360port::RuntimeContext *Context() noexcept;
     [[nodiscard]] const x360port::JitStatistics *Statistics() const noexcept;
 
   private:
