@@ -147,3 +147,8 @@ the import thunk and returns the configured AV pack through Xenia's JIT.
 This closes only the adapter-to-runtime composition seam; checked full-image
 launch, the remaining title services/devices, gameplay, and platform gates
 remain open.
+
+The real-image discriminator was then migrated onto this owner. Its existing
+236-import, XAM input, guest allocation, leaf override, scoped-original, and
+invalidation checks pass without a test-local module or import-binding stack;
+guest-state assertions use the shared bounded `ReadGuestMemory` contract.

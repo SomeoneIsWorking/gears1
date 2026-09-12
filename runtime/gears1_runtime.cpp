@@ -96,6 +96,16 @@ x360port::ExecutionResult Gears1Runtime::ExecuteEntry(std::span<const std::uint6
     return context_->Execute(module_.Descriptor().image.entry_point, arguments, limits);
 }
 
+std::span<const x360port::ImportRequirement> Gears1Runtime::ImportManifest() const noexcept
+{
+    return module_.ImportManifest();
+}
+
+x360port::RuntimeContext *Gears1Runtime::Context() noexcept
+{
+    return context_.get();
+}
+
 const x360port::JitStatistics *Gears1Runtime::Statistics() const noexcept
 {
     return context_ == nullptr ? nullptr : &context_->Statistics();
