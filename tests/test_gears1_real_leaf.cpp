@@ -367,11 +367,15 @@ int main(int argc, char **argv)
     Require(created.context->Statistics().original_calls == 1U,
             "scoped original call was not counted");
 
+    const std::uint64_t invalidations_before_removal =
+        created.context->Statistics().translation_invalidations;
     const x360port::RuntimeFailure removed = created.context->RemoveOverride(kResourceAddRef);
     Require(!removed, removed.detail);
     const x360port::ExecutionResult disabled = created.context->Execute(kResourceAddRef, arguments);
     Require(static_cast<bool>(disabled) && disabled.value == 7U,
             "disabled override did not restore the original guest path");
+    Require(created.context->Statistics().translation_invalidations == invalidations_before_removal,
+            "override removal unnecessarily retranslated the original guest function");
 
     const x360port::RuntimeFailure invalidated =
         created.context->NotifyExecutableWrite(kResourceAddRef, 4U);
@@ -380,8 +384,9 @@ int main(int argc, char **argv)
         created.context->Execute(kResourceAddRef, arguments);
     Require(static_cast<bool>(after_invalidation) && after_invalidation.value == 8U,
             "real guest execution did not resume after explicit invalidation");
-    Require(created.context->Statistics().translation_invalidations >= 2U,
-            "override removal and executable write did not invalidate translations");
+    Require(created.context->Statistics().translation_invalidations ==
+                invalidations_before_removal + 1U,
+            "the executable write did not invalidate the real guest translation exactly once");
 
     const x360port::RuntimeFailure released =
         created.context->ReleaseGuestMemory(object_memory.allocation);
