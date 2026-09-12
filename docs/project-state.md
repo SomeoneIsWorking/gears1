@@ -89,8 +89,9 @@ the shared synthetic regression modifies a leaf and observes its new result
 through a previously translated caller. The updated shared contract also routes
 a cached guest caller to a native override, preserves scoped original calls
 through callee invalidation, propagates typed callback failure, and restores the
-original call after override removal. Real Gears-image guest-call routing still
-needs its own discriminator.
+original call after override removal. The headless real Gears-image AddRef
+discriminator now exercises the same native-override route from a nested guest
+call and verifies restoration after removal.
 
 `runtime/gears1_guest_image.*` now consumes
 the shared PE layout owner and seals a flat guest module after exact normalized-image
@@ -111,7 +112,10 @@ a caller-owned guest object and variable-import storage through `x360port`,
 invokes a retained real-image function-import thunk through the same manifest,
 and executes real leaf `0x82233668`: it returns `0x5`, the native override
 calls the real original once, and reported executable-write invalidation restores
-the original path. The production `Gears1GuestImage` adapter now authenticates
+the original path. A second real-image fixture activates the leaf's own nested
+guest call at `0x822336C0`: outer and inner calls both enter the native override,
+then removal restores the nested original call and its inner refcount effect.
+The production `Gears1GuestImage` adapter now authenticates
 the same normalized image and import manifest; its synthetic CTest and real
 ignored-input discriminator pass. The shared checked-XEX2 inspector provides the
 container, normalized image, 236 logical imports under the correctly indexed

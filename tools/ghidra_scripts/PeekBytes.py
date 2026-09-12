@@ -1,9 +1,24 @@
 #@runtime Jython
 import os
-af = currentProgram.getAddressFactory().getDefaultAddressSpace()
-mem = currentProgram.getMemory()
-for t in [x.strip() for x in os.environ.get("GEARS_PEEK","").split(",") if x.strip()]:
+
+from jarray import zeros
+
+program = globals().get("currentProgram")
+if program is None:
+    raise RuntimeError("PeekBytes requires an open Ghidra program")
+af = program.getAddressFactory().getDefaultAddressSpace()
+mem = program.getMemory()
+targets = [x.strip() for x in os.environ.get("GEARS_PEEK", "").split(",") if x.strip()]
+if not targets:
+    raise ValueError("GEARS_PEEK must name at least one guest address")
+
+for t in targets:
     a = af.getAddress(t)
-    b = bytearray(4)
-    mem.getBytes(a, b)
-    print("%s: %02x%02x%02x%02x" % (t, b[0]&0xff, b[1]&0xff, b[2]&0xff, b[3]&0xff))
+    if a is None or not mem.contains(a):
+        raise ValueError("unmapped guest address: " + t)
+    # Jython bytearray does not receive Memory.getBytes writes; use Java byte[].
+    b = zeros(4, "b")
+    if mem.getBytes(a, b) != 4:
+        raise ValueError("could not read four guest bytes at " + t)
+    print(t + ": " + "".join(format(byte & 0xFF, "02x") for byte in b))
+print("scanned " + str(len(targets)) + " requested guest addresses")

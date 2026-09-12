@@ -51,8 +51,8 @@ synthetic module whose code and entry point use retained leaf address
 `0x8222E868`, bind and call `DbgPrint` through a typed import, and return to native code. It proves the
 Gears-to-x360port composition seam, not the original leaf. The headless real-image
 discriminator now executes retained leaf `0x82233668` with disabled, enabled,
-and scoped-original override paths through Xenia. The next boundary is real-image
-guest-to-guest override routing and complete title-service composition. The independently useful evidence and native owners are
+and scoped-original override paths through Xenia, including a nested guest call.
+The next boundary is complete title-service composition. The independently useful evidence and native owners are
 preserved; the retired translator, generated PPC modules, function maps, generator-only
 configuration/tests, precomputed dispatch, and their methodology are deleted and
 must not return. The product may fail at the explicit missing
