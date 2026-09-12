@@ -207,8 +207,8 @@ owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate uses the exact `x360port` and Xenia revisions
 pinned by CMake and the workflow. It passed all seven CTests locally with Clang
-on the pinned `x360port` revision `d5389c79f8ebcf1d90ff81029820c5967f9ca34d`
-with Xenia `271535bdb35c8ecdb09cd70c3717617971fbfd1e`; the headless
+on the pinned `x360port` revision `677f376fd18e9d59ff9d4a79a29f79d654e667d9`
+with Xenia `b7b471a66120932ef3f738e004233061db6127a5`; the headless
 real-image import/leaf discriminator passed separately against the ignored
 user-supplied XEX, resolving 236 imports and executing the retained real leaf,
 scoped original, nested guest-call override/removal, and executable invalidation.
