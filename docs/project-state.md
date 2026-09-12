@@ -119,10 +119,10 @@ cached guest-to-native override/original-call routing against a synthetic guest 
 The runtime-composition test authenticates the synthetic profile image through the Gears
 adapter, binds title-owned `XGetAVPack` ordinal 971, and returns its configured value through
 Xenia's translated entry path.
-A maintained headless discriminator authenticates the profile-matching ignored
-image, maps its PE sections into guest virtual offsets, allocates and initializes
-a caller-owned guest object and variable-import storage through `x360port`,
-invokes a retained real-image function-import thunk through the same manifest,
+The maintained headless discriminator now initializes `Gears1Runtime` from the
+profile-matching ignored image; that owner maps its PE sections, allocates and
+initializes the caller-owned guest object and variable-import storage, and
+invokes a retained real-image function-import thunk through its composed manifest,
 and executes real leaf `0x82233668`: it returns `0x5`, the native override
 calls the real original once, and reported executable-write invalidation restores
 the original path. A second real-image fixture activates the leaf's own nested
@@ -218,10 +218,10 @@ owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate uses the exact `x360port` and Xenia revisions
 pinned by CMake and the workflow. It passed all eight CTests locally with Clang
-on the pinned `x360port` revision `677f376fd18e9d59ff9d4a79a29f79d654e667d9`
+on the pinned `x360port` revision `d976b6355829c398aa701e54c515a6bc770b9d13`
 with Xenia `b7b471a66120932ef3f738e004233061db6127a5`; the headless
 real-image import/leaf discriminator passed separately against the ignored
-user-supplied XEX, resolving 236 imports and executing the retained real leaf,
+user-supplied XEX through `Gears1Runtime`, resolving 236 imports and executing the retained real leaf,
 scoped original, nested guest-call override/removal, and executable invalidation.
 Gears consumes the shared
 driver-aware warning owner;
