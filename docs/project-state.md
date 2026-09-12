@@ -118,16 +118,22 @@ coherent remote-pad snapshot through shared `x360port` XAM serialization. The
 headless ignored-XEX discriminator verifies all 16 guest bytes, a connected
 null-pointer query, the one-local-user policy, disconnection clearing stale
 state, and typed refusal of an unmapped state pointer. The asset-free remote
-input test preserves packet and source-arbitration behavior. Gap: the remaining
-title-specific service semantics and device services, and the complete product
-launch path remain.
+input test preserves packet and source-arbitration behavior. The real
+`XamInputGetCapabilities` ordinal 400 thunk now reports the title's virtual-pad
+capability policy as a checked 20-byte guest record; the headless discriminator
+also proves disconnected zeroing, null-pointer bad arguments, and typed refusal
+of unmapped memory. The superseded direct-memory handlers were removed. Gap:
+vibration output and the remaining title-specific service/device semantics, plus
+the complete product launch path, remain unimplemented.
 
 ### S008 — bounded interpreter fallback
 
 Missing capability: permit fallback only after compilation failure, an
 unsupported guest instruction, or unsafe generated host code, with every
 transition and executed block reason-labelled and counted. Explicit interpreter
-mode remains diagnostic-only.
+mode remains diagnostic-only. The pinned Xenia CPU tree currently exposes x64/A64
+dynarec backends but no CPU interpreter implementation, so there is no existing
+fallback to select or account for; the proper owner is the maintained Xenia fork.
 
 ### S009 — representative gameplay
 
@@ -185,7 +191,7 @@ owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate uses the exact `x360port` and Xenia revisions
 pinned by CMake and the workflow. It passed all seven CTests locally with Clang
-on the pinned `x360port` revision `c3fb94e24e1526d9021e074ebb61b60392751b66`;
+on the pinned `x360port` revision `6a4b975116123d34fbaec97b4c647587a360e936`;
 the real-image import/leaf discriminator passed separately against the ignored
 user-supplied XEX. Gears consumes the shared driver-aware warning owner;
 production CMake selection and real Clang/clang-cl probes accept modern C++ and

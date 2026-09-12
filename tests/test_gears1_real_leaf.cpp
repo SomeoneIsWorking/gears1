@@ -42,7 +42,7 @@ struct Observations
     std::vector<GuestAddress> variable_addresses;
     GuestAddress capture_address = 0;
     bool capture_read = false;
-    std::array<std::byte, 16> captured_state{};
+    std::array<std::byte, 20> captured_state{};
 };
 
 void RefuseUnsupportedImport(x360port::GuestImportContext &call, void *context) noexcept
@@ -139,7 +139,8 @@ int main(int argc, char **argv)
 
     Observations observations;
     gears::titles::gears1::XamVideoServices video_services(8U);
-    x360port::XamInputService input_service(gears::titles::gears1::ReadXamPad, nullptr);
+    x360port::XamInputService input_service(gears::titles::gears1::ReadXamPad,
+                                            gears::titles::gears1::ReadXamCapabilities, nullptr);
     x360port::RuntimeCreateResult created = x360port::RuntimeContext::Create();
     Require(static_cast<bool>(created), created.failure.detail);
 
@@ -203,6 +204,15 @@ int main(int argc, char **argv)
                      });
     Require(input_import != module.ImportManifest().end(),
             "the real image did not retain the XamInputGetState import");
+    const auto capabilities_import =
+        std::find_if(module.ImportManifest().begin(), module.ImportManifest().end(),
+                     [](const x360port::ImportRequirement &import)
+                     {
+                         return import.library == "xam.xex" &&
+                                import.ordinal == x360port::kXamInputGetCapabilitiesOrdinal;
+                     });
+    Require(capabilities_import != module.ImportManifest().end(),
+            "the real image did not retain the XamInputGetCapabilities import");
 
     const x360port::GuestMemoryAllocationResult object_memory =
         created.context->AllocateGuestMemory(0x1CU);
@@ -237,8 +247,12 @@ int main(int argc, char **argv)
             "the real-image import refusal was not accounted for");
 
     const x360port::GuestMemoryAllocationResult state_memory =
-        created.context->AllocateGuestMemory(16U);
+        created.context->AllocateGuestMemory(20U);
     Require(static_cast<bool>(state_memory), state_memory.failure.detail);
+    constexpr std::array<std::byte, 20> empty_input_record{};
+    const x360port::RuntimeFailure input_record_initialized =
+        created.context->WriteGuestMemory(state_memory.allocation.address, empty_input_record);
+    Require(!input_record_initialized, input_record_initialized.detail);
     const gears::PadState commanded{.buttons = gears::kPadA | gears::kPadStart,
                                     .leftTrigger = 0x12U,
                                     .rightTrigger = 0x34U,
@@ -256,14 +270,36 @@ int main(int argc, char **argv)
     observations.capture_read = false;
     const x360port::ExecutionResult capture =
         created.context->Execute(first_function_import->address);
-    constexpr std::array<std::byte, 16> expected_state{
-        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
-        std::byte{0x10}, std::byte{0x10}, std::byte{0x12}, std::byte{0x34},
-        std::byte{0xFB}, std::byte{0x2E}, std::byte{0x23}, std::byte{0x45},
-        std::byte{0x45}, std::byte{0x67}, std::byte{0xF6}, std::byte{0xD7}};
+    constexpr std::array<std::byte, 20> expected_state{
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01}, std::byte{0x10},
+        std::byte{0x10}, std::byte{0x12}, std::byte{0x34}, std::byte{0xFB}, std::byte{0x2E},
+        std::byte{0x23}, std::byte{0x45}, std::byte{0x45}, std::byte{0x67}, std::byte{0xF6},
+        std::byte{0xD7}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}};
     Require(capture.failure.error == x360port::RuntimeError::ImportServiceRefused &&
                 observations.capture_read && observations.captured_state == expected_state,
             "the real input thunk did not publish the retained pad state in guest memory");
+
+    const x360port::ExecutionResult capabilities =
+        created.context->Execute(capabilities_import->address, state_arguments);
+    Require(static_cast<bool>(capabilities) && capabilities.value == 0U,
+            "the real XamInputGetCapabilities thunk did not report the connected virtual pad");
+    observations.capture_read = false;
+    const x360port::ExecutionResult capabilities_capture =
+        created.context->Execute(first_function_import->address);
+    constexpr std::array<std::byte, 20> expected_capabilities{
+        std::byte{0x01}, std::byte{0x01}, std::byte{0x00}, std::byte{0x00}, std::byte{0xFF},
+        std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF},
+        std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF}, std::byte{0xFF},
+        std::byte{0xFF}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}};
+    Require(capabilities_capture.failure.error == x360port::RuntimeError::ImportServiceRefused &&
+                observations.capture_read && observations.captured_state == expected_capabilities,
+            "the real capabilities thunk did not publish the virtual pad's 20-byte guest record");
+    const std::array<std::uint64_t, 3> null_capabilities_arguments{0U, 0U, 0U};
+    const x360port::ExecutionResult null_capabilities =
+        created.context->Execute(capabilities_import->address, null_capabilities_arguments);
+    Require(static_cast<bool>(null_capabilities) &&
+                null_capabilities.value == x360port::kXamInputBadArguments,
+            "the real capabilities thunk accepted a null guest pointer");
 
     const std::array<std::uint64_t, 3> query_arguments{0U, 0U, 0U};
     const x360port::ExecutionResult query =
@@ -287,14 +323,29 @@ int main(int argc, char **argv)
     const x360port::ExecutionResult cleared_capture =
         created.context->Execute(first_function_import->address);
     Require(cleared_capture.failure.error == x360port::RuntimeError::ImportServiceRefused &&
-                observations.capture_read &&
-                observations.captured_state == std::array<std::byte, 16>{},
+                observations.capture_read && observations.captured_state == empty_input_record,
             "the disconnected input service left stale guest controller state");
+    const x360port::ExecutionResult disconnected_capabilities =
+        created.context->Execute(capabilities_import->address, state_arguments);
+    Require(static_cast<bool>(disconnected_capabilities) &&
+                disconnected_capabilities.value == x360port::kXamInputDeviceNotConnected,
+            "the real capabilities thunk reported a disconnected controller");
+    observations.capture_read = false;
+    const x360port::ExecutionResult disconnected_capabilities_capture =
+        created.context->Execute(first_function_import->address);
+    Require(disconnected_capabilities_capture.failure.error ==
+                    x360port::RuntimeError::ImportServiceRefused &&
+                observations.capture_read && observations.captured_state == empty_input_record,
+            "the disconnected capabilities thunk left stale guest bytes");
     const std::array<std::uint64_t, 3> invalid_state_arguments{0U, 0U, UINT32_MAX};
     const x360port::ExecutionResult invalid_state =
         created.context->Execute(input_import->address, invalid_state_arguments);
     Require(invalid_state.failure.error == x360port::RuntimeError::ImportServiceRefused,
             "the real input thunk accepted an unmapped state pointer");
+    const x360port::ExecutionResult invalid_capabilities =
+        created.context->Execute(capabilities_import->address, invalid_state_arguments);
+    Require(invalid_capabilities.failure.error == x360port::RuntimeError::ImportServiceRefused,
+            "the real capabilities thunk accepted an unmapped guest pointer");
     observations.capture_address = 0U;
 
     const std::uint32_t function_calls_before_leaf = observations.function_calls;
@@ -346,7 +397,7 @@ int main(int argc, char **argv)
     }
 
     std::cout << "Gears real-image discriminator: checked XEX, resolved 236 imports into "
-                 "owned guest storage, polled the retained pad through ordinal 401, "
+                 "owned guest storage, polled retained pad state/capabilities through 401/400, "
                  "executed 0x82233668, "
                  "scoped original, and executable invalidation passed\n";
     return 0;
