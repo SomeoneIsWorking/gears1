@@ -86,8 +86,11 @@ exits with its library, ordinal, and reason while incrementing a refusal count,
 rather than continuing with an invented return value. The pinned Xenia fork now
 routes compiled direct and indirect guest calls through invalidatable entries;
 the shared synthetic regression modifies a leaf and observes its new result
-through a previously translated caller. This does not yet route those calls to
-title-owned native overrides.
+through a previously translated caller. The updated shared contract also routes
+a cached guest caller to a native override, preserves scoped original calls
+through callee invalidation, propagates typed callback failure, and restores the
+original call after override removal. Real Gears-image guest-call routing still
+needs its own discriminator.
 
 `runtime/gears1_guest_image.*` now consumes
 the shared PE layout owner and seals a flat guest module after exact normalized-image
@@ -101,7 +104,7 @@ composition remain missing.
 
 Evidence: the synthetic Gears-addressed module executes through Xenia's JIT and
 calls a typed `DbgPrint` binding; the pinned shared runtime separately proves
-the native override/original-call dispatch seam against a synthetic guest leaf.
+cached guest-to-native override/original-call routing against a synthetic guest leaf.
 A maintained headless discriminator authenticates the profile-matching ignored
 image, maps its PE sections into guest virtual offsets, allocates and initializes
 a caller-owned guest object and variable-import storage through `x360port`,
@@ -196,8 +199,8 @@ owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate uses the exact `x360port` and Xenia revisions
 pinned by CMake and the workflow. It passed all seven CTests locally with Clang
-on the pinned `x360port` revision `6b1682121143961fb12e9ea057dea2a6128cf78b`
-with Xenia `7d99c864c939c09eb43ed32e763087a73875bd40`; the headless
+on the pinned `x360port` revision `d8749e40cef27d2b40c3d3fe905874f5f58ca42e`
+with Xenia `7730acfce1801bbe340c0ccd79d24c7252a22a98`; the headless
 real-image import/leaf discriminator passed separately against the ignored
 user-supplied XEX, resolving 236 imports and executing the retained real leaf,
 scoped original, and executable invalidation. Gears consumes the shared

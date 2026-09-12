@@ -49,13 +49,14 @@ Gears 1 is the first conformance target. Its asset-free implementation
 discriminator is deliberately smaller than boot: translate an authenticated
 synthetic module whose code and entry point use retained leaf address
 `0x8222E868`, bind and call `DbgPrint` through a typed import, and return to native code. It proves the
-Gears-to-x360port composition seam, not the original leaf. The next real-image
-discriminator must execute that original leaf and prove disabled, enabled, and
-scoped-original override paths through Xenia. The independently useful evidence and native owners are
+Gears-to-x360port composition seam, not the original leaf. The headless real-image
+discriminator now executes retained leaf `0x82233668` with disabled, enabled,
+and scoped-original override paths through Xenia. The next boundary is real-image
+guest-to-guest override routing and complete title-service composition. The independently useful evidence and native owners are
 preserved; the retired translator, generated PPC modules, function maps, generator-only
 configuration/tests, precomputed dispatch, and their methodology are deleted and
-must not return. The product may fail at the explicit missing authenticated
-full-image adapter and runtime-service composition until those owners are wired
+must not return. The product may fail at the explicit missing
+runtime-service composition until those owners are wired
 over `x360port`; the old executable is never kept as a bridge or oracle.
 
 Guest addresses, image identity, shader hashes, menu walks, and diagnostics
