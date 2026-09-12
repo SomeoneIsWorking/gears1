@@ -90,6 +90,11 @@ Force one safe unsupported
    block through the bounded interpreter fallback, prove reason and counters,
    then prove ordinary execution still selects dynarec. Explicit interpreter mode
    remains diagnostic-only. Fallback results do not satisfy gameplay or performance.
+   The pinned Xenia decoder and HIR builder now refuse invalid and
+   decoded-but-unimplemented instructions instead of asserting or emitting a
+   partial no-op function; a synthetic runtime test proves both refusals. The
+   remaining boundary is structured refusal context and actual bounded
+   interpreter execution before returning to JIT dispatch.
 
 ### RE-07 — Boot and subsystem restoration
 - status: todo
