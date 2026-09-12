@@ -15,7 +15,7 @@ This inventory reports observable capabilities independently of the product goal
 | S005 | Native notified operation-kind-3 GPU ticket wait | partial | S006 | G001, G002 |
 | S006 | Xenia-backed `x360port` execution boundary | partial | S001 | G001, G002 |
 | S007 | Gears 1 leaf/import/override discriminator | partial | S001, S006 | G001, G002 |
-| S008 | Bounded runtime interpreter fallback | missing | S006 | G001, G002 |
+| S008 | Bounded runtime interpreter fallback | partial | S006 | G001, G002 |
 | S009 | Representative interactive Gears 1 gameplay | missing | S002, S003, S004, S005, S006, S007, S008 | G001, G002 |
 | S010 | Apple Silicon macOS A64 execution | missing | S006 | G001, G004 |
 | S011 | Android arm64-v8a A64 execution | missing | S006 | G001, G004 |
@@ -34,7 +34,7 @@ and now owns a profile-authenticated normalized-image-to-flat-guest adapter. The
 checked XEX2 inspector and real ignored-image identity path are verified, but the product
 still refuses the gameplay target until the remaining import bindings and runtime services
 are composed. The executor will prefer dynarec and may use the bounded, counted
-fallback; fallback coverage cannot prove gameplay compatibility or performance.
+fallback; current fallback coverage cannot prove gameplay compatibility or performance.
 
 ## Capability details
 
@@ -92,17 +92,17 @@ through callee invalidation, propagates typed callback failure, and restores the
 original call after override removal. The headless real Gears-image AddRef
 discriminator now exercises the same native-override route from a nested guest
 call and verifies restoration after removal. The pinned shared runtime now
-also refuses an invalid PPC opcode and decoded-but-unimplemented `lswi` with
-`TranslationFailed`, without publishing host code or counting a successful
-execution; a valid cached PPC function still executes through the JIT.
+refuses an invalid PPC opcode before host-code publication and routes
+decoded-but-unimplemented `lswi` through a bounded Xenia-owned interpreter. The fallback records
+entries, executed instructions, unsupported instructions, memory failures, and budget exhaustion;
+the valid cached PPC function still executes through the JIT.
 
 `runtime/gears1_guest_image.*` now consumes
 the shared PE layout owner and seals a flat guest module after exact normalized-image
 profile authentication. The shared checked-XEX2 inspector also validates the real ignored
 container, normalized image, import manifest, and helper-pattern evidence. Gap: wiring
-authenticated full-image loading into the product, reason-labelled interpreter
-fallback, title-specific write/cache-control semantics, and product service
-composition remain missing.
+authenticated full-image loading into the product, complete fallback ISA/control-flow coverage,
+title-specific write/cache-control semantics, and product service composition remain missing.
 
 ### S007 — first Gears discriminator
 
@@ -143,14 +143,13 @@ the complete product launch path, remain unimplemented.
 
 ### S008 — bounded interpreter fallback
 
-Missing capability: permit fallback only after compilation failure, an
-unsupported guest instruction, or unsafe generated host code, with every
-transition and executed block reason-labelled and counted. Explicit interpreter
-mode remains diagnostic-only. The pinned Xenia CPU tree currently exposes x64/A64
-dynarec backends but no CPU interpreter implementation, so there is no existing
-fallback to select or account for; the proper owner is the maintained Xenia fork.
-The decoder and HIR builder now fail closed on these two refusal classes, but
-the failure is not yet a reason-labelled bounded interpreter transition.
+Partial capability: after Xenia compilation refusal, `x360port` now selects the Xenia-owned
+bounded interpreter and reports typed unsupported-instruction, memory, and instruction-budget
+refusals. The synthetic runtime discriminator proves an invalid opcode is refused without host
+code, and proves `lswi` plus `blr` executes with counted fallback entries/instructions. Explicit
+interpreter mode remains diagnostic-only and fallback is not gameplay or performance evidence.
+Gap: the interpreter currently covers only this narrow leaf subset; complete PPC ISA semantics,
+safe guest control flow, imports/devices, real-image fallback, and title gameplay remain open.
 
 ### S009 — representative gameplay
 
@@ -208,8 +207,8 @@ owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate uses the exact `x360port` and Xenia revisions
 pinned by CMake and the workflow. It passed all seven CTests locally with Clang
-on the pinned `x360port` revision `e6f59f9b449459af1d12e58bd0ce9d5ec14541c1`
-with Xenia `185b4fc4e0f8e37a40941246060ff589e8aa6db7`; the headless
+on the pinned `x360port` revision `d5389c79f8ebcf1d90ff81029820c5967f9ca34d`
+with Xenia `271535bdb35c8ecdb09cd70c3717617971fbfd1e`; the headless
 real-image import/leaf discriminator passed separately against the ignored
 user-supplied XEX, resolving 236 imports and executing the retained real leaf,
 scoped original, nested guest-call override/removal, and executable invalidation.
