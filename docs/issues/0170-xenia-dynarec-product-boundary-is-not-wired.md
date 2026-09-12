@@ -87,7 +87,7 @@ not title conformance.
 ## Checked XEX inspector — 2026-09-08
 
 The shared `x360port` checked-XEX2 inspector and title-owned guest allocation
-contract are pinned at `f19702e7699666be3102755bc737f453e00be4b6`, with Xenia at
+contract are pinned at `8b099e53107c13a9ec7fa473e3f5fd6aff398f95`, with Xenia at
 `d77aad9116c936cf1c7a40231f210d17094bed9e`. Against the ignored profile-matching
 Gears 1 XEX it produces the exact normalized-image digest and geometry, 236 logical
 imports, and one hit for each of the eight helper patterns. Malformed-container
