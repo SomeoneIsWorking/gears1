@@ -82,6 +82,11 @@ The shared
    `x360port::RuntimeContext`, bounded variable-import storage, and the known
    `XGetAVPack` service; an asset-free entry test executes that route through
    Xenia and returns the configured AV pack.
+   The maintained real-image discriminator now consumes this same owner for
+   checked-XEX initialization, all 236 import bindings, guest allocations,
+   input service calls, and native override/original execution; its readback
+   assertions use the bounded `ReadGuestMemory` operation rather than a second
+   import-binding implementation.
    The product still needs title-specific import/device services and a complete
    launch path before this is title conformance.
 

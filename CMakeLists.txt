@@ -48,7 +48,7 @@ endif()
 
 set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
     "Exact shared/x360port checkout consumed by GearsUE3")
-set(X360PORT_REQUIRED_REVISION "677f376fd18e9d59ff9d4a79a29f79d654e667d9")
+set(X360PORT_REQUIRED_REVISION "d976b6355829c398aa701e54c515a6bc770b9d13")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
@@ -148,8 +148,7 @@ add_test(NAME gears1_guest_image COMMAND test_gears1_guest_image)
 # not a normal CTest: restricted title bytes never become a hosted-test input.
 # It is the maintained replacement for the temporary real-leaf probe.
 add_executable(test_gears1_real_leaf tests/test_gears1_real_leaf.cpp)
-target_link_libraries(test_gears1_real_leaf PRIVATE gears1_guest_image gears1_xam_services
-                                                    gears_input x360port::x360port)
+target_link_libraries(test_gears1_real_leaf PRIVATE gears1_runtime)
 x360port_enable_warnings(test_gears1_real_leaf)
 
 add_executable(test_gears1_ue3_contract tests/test_gears1_ue3_contract.cpp)
