@@ -67,7 +67,7 @@ cannot generate, build, or select the removed product.
 | Area | Owner |
 |---|---|
 | Xenon CPU execution, typed imports, and authenticated image mapping | `shared/x360port`; the pinned-Xenia executor is consumed and synthetically exercised here |
-| Device callbacks, overrides, original calls, and executable-write invalidation | `shared/x360port`; synthetic runtime evidence covers title-reported and automatic virtual-write paths |
+| Device callbacks, overrides, original calls, and executable-write invalidation | `shared/x360port`; synthetic runtime evidence covers title-reported, automatic virtual-write, and mid-call invalidation paths |
 | Bounded exits and fallback accounting | future `shared/x360port` contracts, added only with executing evidence |
 | Reusable UE3-on-Xbox-360 ABI, RHI semantics, and engine lifetimes | `shared/x360ue3`, consuming only public `x360port` interfaces |
 | Cross-framework executable-memory helpers | `shared/jit-common`, only after two integrations prove the same missing contract |
