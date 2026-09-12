@@ -84,14 +84,15 @@ The shared
 ### RE-06 — Fallback discriminator
 - status: re-partial
 - deps: RE-03, RE-05
-- gap: The shipping fallback is bounded and reason-labelled, but only covers `lswi` and `blr`.
+- gap: The shipping fallback is bounded and reason-labelled, but only covers a small PPC subset.
 
 The shared runtime test forces an invalid opcode through the bounded fallback and proves the
-typed unsupported refusal without host-code publication. It then executes a decoded-but-uncompiled
-`lswi` leaf through Xenia's bounded interpreter, verifies the return value, and checks entry,
-instruction, unsupported, memory, and budget counters. Explicit interpreter mode remains
-diagnostic-only. Fallback results do not satisfy gameplay or performance. The remaining gap is
-complete PPC semantics and safe guest control flow/import/device behavior on real title code.
+typed unsupported refusal without host-code publication. It then executes decoded-but-uncompiled
+fixtures through Xenia's bounded interpreter, verifying `lswi`, integer immediates, big-endian
+loads/stores, comparisons, and conditional branches, plus entry, instruction, unsupported,
+memory, and budget counters. Explicit interpreter mode remains diagnostic-only. Fallback results
+do not satisfy gameplay or performance. The remaining gap is complete PPC semantics and safe
+guest control flow/import/device behavior on real title code.
 
 ### RE-07 — Boot and subsystem restoration
 - status: todo

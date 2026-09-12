@@ -130,6 +130,7 @@ after PPC compilation refuses a block. The shared runtime maps its completed,
 unsupported-instruction, memory-fault, and instruction-budget outcomes into
 typed failures and counts fallback entries, instructions, and each refusal
 reason. The synthetic discriminator proves invalid-opcode refusal before host
-code publication and executes a decoded `lswi` leaf followed by `blr`. This is
-an S008 partial milestone: complete PPC semantics and control flow, title
+code publication and executes decoded `lswi` leaves followed by `blr`, with
+integer immediates, big-endian scalar loads/stores, comparisons, and conditional
+branches covered by the fixtures. This is an S008 partial milestone: complete PPC semantics and control flow, title
 imports/devices, real-image fallback, and gameplay qualification remain open.
