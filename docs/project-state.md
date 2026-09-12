@@ -112,7 +112,13 @@ The first real-image function-import thunk reaches its title callback and now
 returns `ImportServiceRefused` for an unsupported service; all
 real-image variable imports resolve into bounded caller-owned guest storage.
 The title-owned `XGetAVPack` binding for `xam.xex` ordinal 971 executes through
-its real thunk and returns the configured AV-pack value. Gap: the remaining
+its real thunk and returns the configured AV-pack value. The real
+`XamInputGetState` ordinal 401 thunk consumes the retained Gears input owner's
+coherent remote-pad snapshot through shared `x360port` XAM serialization. The
+headless ignored-XEX discriminator verifies all 16 guest bytes, a connected
+null-pointer query, the one-local-user policy, disconnection clearing stale
+state, and typed refusal of an unmapped state pointer. The asset-free remote
+input test preserves packet and source-arbitration behavior. Gap: the remaining
 title-specific service semantics and device services, and the complete product
 launch path remain.
 
@@ -177,12 +183,11 @@ discriminator for Linux x86-64, Windows x86-64, and macOS arm64. It also execute
 the exact/clean dependency and bootstrap contracts, and the canonical C++ quality
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
---expected-machine x86_64` gate passed all six CTests locally with Clang 22.1.8
-against the pinned `x360port` revision `782a7d446979109574645ebec3eaacd57944d0ba`
-and Xenia revision `d77aad9116c936cf1c7a40231f210d17094bed9e`,
-the exact inputs required by
-CMake and the workflow. The unchanged second build performed zero compilations
-(`ninja: no work to do`). Gears consumes the shared driver-aware warning owner;
+--expected-machine x86_64` gate uses the exact `x360port` and Xenia revisions
+pinned by CMake and the workflow. It passed all seven CTests locally with Clang
+on the pinned `x360port` revision `c3fb94e24e1526d9021e074ebb61b60392751b66`;
+the real-image import/leaf discriminator passed separately against the ignored
+user-supplied XEX. Gears consumes the shared driver-aware warning owner;
 production CMake selection and real Clang/clang-cl probes accept modern C++ and
 reject an unused parameter. That ownership change preserved every native compile
 command, and the focused boundary and quality CTests passed afterward. Xenia's

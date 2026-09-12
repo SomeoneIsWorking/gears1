@@ -67,6 +67,7 @@ void Publish(const PadState &next)
     PublishLocked(next);
 }
 
+#ifdef GEARS_HAVE_PRESENTER
 void PublishHost(const PadState &next)
 {
     std::lock_guard<std::mutex> guard(g_mutex);
@@ -75,6 +76,7 @@ void PublishHost(const PadState &next)
     if (!g_remoteActive)
         PublishLocked(next);
 }
+#endif
 
 // A stick deflection named in a script step, e.g. "LY+" or "RX-". Returns false
 // if the name is not a stick, so the caller can try it as a button.
@@ -254,15 +256,20 @@ void InitialiseInput(bool haveWindow)
 
 bool PadConnected()
 {
+    return ReadPadSnapshot().connected;
+}
+
+PadSnapshot ReadPadSnapshot()
+{
     std::lock_guard<std::mutex> guard(g_mutex);
-    return g_remoteActive || g_haveWindow || !g_script.empty();
+    return {g_remoteActive || g_haveWindow || !g_script.empty(), g_packet, g_pad};
 }
 
 PadState CurrentPad(uint32_t &packetNumber)
 {
-    std::lock_guard<std::mutex> guard(g_mutex);
-    packetNumber = g_packet;
-    return g_pad;
+    const PadSnapshot snapshot = ReadPadSnapshot();
+    packetNumber = snapshot.packet;
+    return snapshot.state;
 }
 
 bool PadButtonByName(std::string_view name, uint16_t &button)

@@ -38,6 +38,9 @@ int main()
     uint32_t packet = 0;
     Check(gears::CurrentPad(packet) == commanded && packet == 1,
           "remote input publishes one atomic packet");
+    const gears::PadSnapshot snapshot = gears::ReadPadSnapshot();
+    Check(snapshot.connected && snapshot.packet == 1 && snapshot.state == commanded,
+          "remote input exposes one coherent controller snapshot");
     Check(gears::SetRemotePad(commanded), "repeating a remote state succeeds");
     gears::CurrentPad(packet);
     Check(packet == 1, "an unchanged state does not invent a packet edge");

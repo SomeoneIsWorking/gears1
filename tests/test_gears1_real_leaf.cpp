@@ -1,4 +1,5 @@
 #include "gears1_guest_image.h"
+#include "input.h"
 
 #include <algorithm>
 #include <array>
@@ -14,7 +15,9 @@
 #include <vector>
 
 #include <x360port/runtime.hpp>
+#include <x360port/xam_input.hpp>
 
+#include "titles/gears1/xam_input_provider.h"
 #include "titles/gears1/xam_video_services.h"
 
 namespace
@@ -37,11 +40,20 @@ struct Observations
     std::uint32_t variable_resolutions = 0;
     std::uint32_t override_calls = 0;
     std::vector<GuestAddress> variable_addresses;
+    GuestAddress capture_address = 0;
+    bool capture_read = false;
+    std::array<std::byte, 16> captured_state{};
 };
 
 void RefuseUnsupportedImport(x360port::GuestImportContext &call, void *context) noexcept
 {
-    ++static_cast<Observations *>(context)->function_calls;
+    auto &observations = *static_cast<Observations *>(context);
+    ++observations.function_calls;
+    if (observations.capture_address != 0U)
+    {
+        observations.capture_read =
+            call.read_memory(observations.capture_address, observations.captured_state);
+    }
     call.refuse(x360port::ImportRefusalReason::UnsupportedService);
 }
 
@@ -125,6 +137,9 @@ int main(int argc, char **argv)
     Require(xam_imports == 92U && xboxkrnl_imports == 144U,
             "the real import manifest did not resolve its two XEX library-table entries");
 
+    Observations observations;
+    gears::titles::gears1::XamVideoServices video_services(8U);
+    x360port::XamInputService input_service(gears::titles::gears1::ReadXamPad, nullptr);
     x360port::RuntimeCreateResult created = x360port::RuntimeContext::Create();
     Require(static_cast<bool>(created), created.failure.detail);
 
@@ -139,7 +154,6 @@ int main(int argc, char **argv)
             static_cast<std::uint32_t>(variable_count * sizeof(GuestAddress)));
         Require(static_cast<bool>(variable_memory), variable_memory.failure.detail);
     }
-    Observations observations;
     observations.variable_addresses.reserve(variable_count);
     for (std::size_t index = 0; index < variable_count; ++index)
     {
@@ -150,7 +164,6 @@ int main(int argc, char **argv)
 
     std::vector<x360port::ImportBinding> bindings;
     bindings.reserve(module.ImportManifest().size());
-    gears::titles::gears1::XamVideoServices video_services(8U);
     for (const x360port::ImportRequirement &import : module.ImportManifest())
     {
         x360port::ImportBinding binding{.library = import.library,
@@ -166,6 +179,7 @@ int main(int argc, char **argv)
             binding.variable_resolution_context = &observations;
         }
         video_services.Bind(import, binding);
+        input_service.Bind(import, binding);
         bindings.push_back(binding);
     }
     std::vector<x360port::ImportBinding> mismatched_bindings = bindings;
@@ -180,6 +194,15 @@ int main(int argc, char **argv)
                      { return import.library == "xam.xex" && import.ordinal == 971U; });
     Require(av_pack_import != module.ImportManifest().end(),
             "the real image did not retain the XGetAVPack import");
+    const auto input_import =
+        std::find_if(module.ImportManifest().begin(), module.ImportManifest().end(),
+                     [](const x360port::ImportRequirement &import)
+                     {
+                         return import.library == "xam.xex" &&
+                                import.ordinal == x360port::kXamInputGetStateOrdinal;
+                     });
+    Require(input_import != module.ImportManifest().end(),
+            "the real image did not retain the XamInputGetState import");
 
     const x360port::GuestMemoryAllocationResult object_memory =
         created.context->AllocateGuestMemory(0x1CU);
@@ -213,11 +236,73 @@ int main(int argc, char **argv)
     Require(created.context->Statistics().import_service_refusals == 1U,
             "the real-image import refusal was not accounted for");
 
+    const x360port::GuestMemoryAllocationResult state_memory =
+        created.context->AllocateGuestMemory(16U);
+    Require(static_cast<bool>(state_memory), state_memory.failure.detail);
+    const gears::PadState commanded{.buttons = gears::kPadA | gears::kPadStart,
+                                    .leftTrigger = 0x12U,
+                                    .rightTrigger = 0x34U,
+                                    .thumbLX = -1234,
+                                    .thumbLY = 0x2345,
+                                    .thumbRX = 0x4567,
+                                    .thumbRY = -2345};
+    Require(gears::SetRemotePad(commanded), "the retained input owner rejected a remote pad");
+    const std::array<std::uint64_t, 3> state_arguments{0U, 0U, state_memory.allocation.address};
+    const x360port::ExecutionResult connected =
+        created.context->Execute(input_import->address, state_arguments);
+    Require(static_cast<bool>(connected) && connected.value == 0U,
+            "the real XamInputGetState thunk did not poll the connected pad");
+    observations.capture_address = state_memory.allocation.address;
+    observations.capture_read = false;
+    const x360port::ExecutionResult capture =
+        created.context->Execute(first_function_import->address);
+    constexpr std::array<std::byte, 16> expected_state{
+        std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01},
+        std::byte{0x10}, std::byte{0x10}, std::byte{0x12}, std::byte{0x34},
+        std::byte{0xFB}, std::byte{0x2E}, std::byte{0x23}, std::byte{0x45},
+        std::byte{0x45}, std::byte{0x67}, std::byte{0xF6}, std::byte{0xD7}};
+    Require(capture.failure.error == x360port::RuntimeError::ImportServiceRefused &&
+                observations.capture_read && observations.captured_state == expected_state,
+            "the real input thunk did not publish the retained pad state in guest memory");
+
+    const std::array<std::uint64_t, 3> query_arguments{0U, 0U, 0U};
+    const x360port::ExecutionResult query =
+        created.context->Execute(input_import->address, query_arguments);
+    Require(static_cast<bool>(query) && query.value == 0U,
+            "the real input thunk refused a connected-pad query");
+    const std::array<std::uint64_t, 3> other_user_arguments{1U, 0U,
+                                                            state_memory.allocation.address};
+    const x360port::ExecutionResult other_user =
+        created.context->Execute(input_import->address, other_user_arguments);
+    Require(static_cast<bool>(other_user) &&
+                other_user.value == x360port::kXamInputDeviceNotConnected,
+            "the Gears one-local-user policy exposed a second controller slot");
+    gears::DisconnectRemotePad();
+    const x360port::ExecutionResult disconnected =
+        created.context->Execute(input_import->address, state_arguments);
+    Require(static_cast<bool>(disconnected) &&
+                disconnected.value == x360port::kXamInputDeviceNotConnected,
+            "the real input thunk reported a controller after its source disconnected");
+    observations.capture_read = false;
+    const x360port::ExecutionResult cleared_capture =
+        created.context->Execute(first_function_import->address);
+    Require(cleared_capture.failure.error == x360port::RuntimeError::ImportServiceRefused &&
+                observations.capture_read &&
+                observations.captured_state == std::array<std::byte, 16>{},
+            "the disconnected input service left stale guest controller state");
+    const std::array<std::uint64_t, 3> invalid_state_arguments{0U, 0U, UINT32_MAX};
+    const x360port::ExecutionResult invalid_state =
+        created.context->Execute(input_import->address, invalid_state_arguments);
+    Require(invalid_state.failure.error == x360port::RuntimeError::ImportServiceRefused,
+            "the real input thunk accepted an unmapped state pointer");
+    observations.capture_address = 0U;
+
+    const std::uint32_t function_calls_before_leaf = observations.function_calls;
     const std::array<std::uint64_t, 1> arguments{object};
     const x360port::ExecutionResult baseline = created.context->Execute(kResourceAddRef, arguments);
     Require(static_cast<bool>(baseline), baseline.failure.detail);
     Require(baseline.value == 5U, "real AddRef leaf returned an unexpected baseline value");
-    Require(observations.function_calls == 1U,
+    Require(observations.function_calls == function_calls_before_leaf,
             "real AddRef leaf disturbed the already-tested import callback count");
 
     const x360port::RuntimeFailure installed =
@@ -250,6 +335,9 @@ int main(int argc, char **argv)
     const x360port::RuntimeFailure released =
         created.context->ReleaseGuestMemory(object_memory.allocation);
     Require(!released, released.detail);
+    const x360port::RuntimeFailure state_released =
+        created.context->ReleaseGuestMemory(state_memory.allocation);
+    Require(!state_released, state_released.detail);
     if (variable_memory)
     {
         const x360port::RuntimeFailure variables_released =
@@ -258,7 +346,8 @@ int main(int argc, char **argv)
     }
 
     std::cout << "Gears real-image discriminator: checked XEX, resolved 236 imports into "
-                 "owned guest storage, refused an unsupported real import, executed 0x82233668, "
+                 "owned guest storage, polled the retained pad through ordinal 401, "
+                 "executed 0x82233668, "
                  "scoped original, and executable invalidation passed\n";
     return 0;
 }
