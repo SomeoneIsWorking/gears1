@@ -7,16 +7,6 @@ answer changes.
 
 ## Product target
 
-USER 2026-09-01: "there are two runtimes there, one native (WIP), one emulator, the game itself is still guest game so the wording 'recomp' just means the emulated runtime"
-
-USER 2026-09-04: "Gears still needs its own GearsUE3 or maybe we need a x360ue3 specific for UE3 games, I don't know could be both I mean all 3
-
-- x360port
-- x360ue3
-- GearsUE3
-
-3 layers? sounds right but is it? idk"
-
 GearsUE3 is one native/dynarec engine port for the Xbox 360 Gears of War UE3
 titles. The two cooperating execution paths are measured native overrides and
 an emulated path that executes every other guest instruction through Xenia's
@@ -76,8 +66,6 @@ work for another Gears game.
 
 ## Clean distribution boundary
 
-USER 2026-08-22: "I don't want to provide copyrighted material in anyway either from a private repo or a download link, I only want to provide absolute clean code and others should only provide the ROMs"
-
 The public repository contains independently authored source, compatible
 open-source dependencies with their required notices, and factual
 interoperability metadata only. It must not contain or fetch UE3 source, game
@@ -92,8 +80,6 @@ translation, or generated artifact from it may enter this repository.
 
 ## Verification runs
 
-USER 2026-08-22: "don't do windowed runs please always run headless"
-
 Every run started by an agent for verification, profiling, capture, or diagnosis
 must be headless. Do not open a game window for a smoke test. During the
 migration, do not invoke any path that builds, generates, or launches the
@@ -101,8 +87,6 @@ retired generated-code product. New comparison evidence comes from the independe
 oracle, hardware, binary analysis, or a separately built diagnostic target.
 
 ## Python tooling
-
-USER 2026-08-24: "all python should run through uv projects"
 
 The repository root `pyproject.toml` and `uv.lock` are the only Python
 dependency authority. Run project tools as `uv run --locked python <tool>`;
