@@ -134,3 +134,16 @@ code publication and executes decoded `lswi` leaves followed by `blr`, with
 integer immediates, big-endian scalar loads/stores, comparisons, and conditional
 branches covered by the fixtures. This is an S008 partial milestone: complete PPC semantics and control flow, title
 imports/devices, real-image fallback, and gameplay qualification remain open.
+
+## Runtime composition — 2026-09-12
+
+`runtime/gears1_runtime.*` now owns the first Gears-side composition boundary:
+it authenticates the normalized image through `Gears1GuestImage`, creates one
+Xenia-backed `x360port::RuntimeContext`, allocates bounded persistent storage
+for variable imports, binds `XGetAVPack` ordinal 971, and routes unknown
+function imports to a typed unsupported-service refusal. The asset-free
+`gears1_runtime_composition` test executes a caller that preserves LR around
+the import thunk and returns the configured AV pack through Xenia's JIT.
+This closes only the adapter-to-runtime composition seam; checked full-image
+launch, the remaining title services/devices, gameplay, and platform gates
+remain open.
