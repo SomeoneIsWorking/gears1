@@ -78,12 +78,14 @@ native override, scoped original-call, exact-entry invalidation, and
 title-neutral device-memory callback contracts. It validates title-reported
 executable-write ranges and now automatically observes virtual writes to the
 authenticated code range, invalidates touched cached functions, and preserves
-unrelated translations. `runtime/gears1_guest_image.*` now consumes
+unrelated translations. The shared runtime also bounds translated basic-block
+execution across nested guest calls and returns a typed exhaustion result.
+`runtime/gears1_guest_image.*` now consumes
 the shared PE layout owner and seals a flat guest module after exact normalized-image
 profile authentication. The shared checked-XEX2 inspector also validates the real ignored
 container, normalized image, import manifest, and helper-pattern evidence. Gap: wiring
-authenticated full-image loading into the product, internal guest-call invalidation,
-and product service composition remain missing.
+authenticated full-image loading into the product, mid-call guest invalidation,
+reason-labelled interpreter fallback, and product service composition remain missing.
 
 ### S007 — first Gears discriminator
 
@@ -167,8 +169,8 @@ the exact/clean dependency and bootstrap contracts, and the canonical C++ qualit
 owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate passed all six CTests locally with Clang 22.1.8
-against `x360port` revision `847dc780bc354194f80b518439ad329b65125f85` and Xenia
-revision `05367a167681e4c1b75921372ff7079e51a7b069`, the exact inputs required by
+against `x360port` revision `24656a73b1355db8324e9de2c4dd3cef36539470` and Xenia
+revision `f024c152d8200bfe5a0f3db11e4fdcd4cd95cca5`, the exact inputs required by
 CMake and the workflow. The unchanged second build performed zero compilations
 (`ninja: no work to do`). Gears consumes the shared driver-aware warning owner;
 production CMake selection and real Clang/clang-cl probes accept modern C++ and
