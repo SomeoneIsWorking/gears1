@@ -81,7 +81,9 @@ authenticated code range, exits an active translated call after a watched guest
 store, invalidates touched cached functions before the next guest entry, and
 preserves unrelated translations. The shared runtime also bounds translated
 basic-block execution across nested guest calls and returns typed exhaustion and
-invalidation results.
+invalidation results. A host import can refuse explicitly; the translated call
+exits with its library, ordinal, and reason while incrementing a refusal count,
+rather than continuing with an invented return value.
 `runtime/gears1_guest_image.*` now consumes
 the shared PE layout owner and seals a flat guest module after exact normalized-image
 profile authentication. The shared checked-XEX2 inspector also validates the real ignored
@@ -106,7 +108,8 @@ the same normalized image and import manifest; its synthetic CTest and real
 ignored-input discriminator pass. The shared checked-XEX2 inspector provides the
 container, normalized image, 236 logical imports under the correctly indexed
 `xam.xex` and `xboxkrnl.exe` entries, and eight helper-pattern hits.
-The first real-image function-import thunk reaches its title callback, and all
+The first real-image function-import thunk reaches its title callback and now
+returns `ImportServiceRefused` for an unsupported service; all
 real-image variable imports resolve into bounded caller-owned guest storage.
 The title-owned `XGetAVPack` binding for `xam.xex` ordinal 971 executes through
 its real thunk and returns the configured AV-pack value. Gap: the remaining
