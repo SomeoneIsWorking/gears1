@@ -112,6 +112,15 @@ int main(int argc, char **argv)
     std::string error;
     Require(module.InitializeCheckedXex(xex, expected, error), error);
     Require(module.ImportManifest().size() == 236U, "the real import manifest was not retained");
+    const std::size_t xam_imports = static_cast<std::size_t>(std::count_if(
+        module.ImportManifest().begin(), module.ImportManifest().end(),
+        [](const x360port::ImportRequirement &import) { return import.library == "xam.xex"; }));
+    const std::size_t xboxkrnl_imports = static_cast<std::size_t>(
+        std::count_if(module.ImportManifest().begin(), module.ImportManifest().end(),
+                      [](const x360port::ImportRequirement &import)
+                      { return import.library == "xboxkrnl.exe"; }));
+    Require(xam_imports == 92U && xboxkrnl_imports == 144U,
+            "the real import manifest did not resolve its two XEX library-table entries");
 
     x360port::RuntimeCreateResult created = x360port::RuntimeContext::Create();
     Require(static_cast<bool>(created), created.failure.detail);
@@ -154,6 +163,11 @@ int main(int argc, char **argv)
         }
         bindings.push_back(binding);
     }
+    std::vector<x360port::ImportBinding> mismatched_bindings = bindings;
+    mismatched_bindings.front().library = "am.xex";
+    const x360port::RuntimeFailure mismatch =
+        created.context->LoadModule(module, mismatched_bindings);
+    Require(static_cast<bool>(mismatch), "a mismatched import-library binding was accepted");
 
     const x360port::GuestMemoryAllocationResult object_memory =
         created.context->AllocateGuestMemory(0x1CU);
