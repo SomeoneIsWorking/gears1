@@ -16,7 +16,6 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
-#include <cstring>
 #include <filesystem>
 #include <iterator>
 #include <vector>
@@ -31,7 +30,6 @@
 #include <lucent/log.h>
 
 #include "guest_filesystem.h"
-#include "input.h"
 #include "guest_stack_argument.h"
 #include "user_profile.h"
 
@@ -66,30 +64,6 @@ uint32_t Load32(const uint8_t *base, uint32_t address)
     return ByteSwap(*reinterpret_cast<const uint32_t *>(base + address));
 }
 
-void Store16(uint8_t *base, uint32_t address, uint16_t value)
-{
-    if (address != 0)
-        *reinterpret_cast<uint16_t *>(base + address) = ByteSwap(value);
-}
-
-// X_INPUT_GAMEPAD, 12 bytes: buttons (BE u16), the two triggers as bytes, then
-// four big-endian signed thumb axes.
-void StoreGamepad(uint8_t *base, uint32_t address, const gears::PadState &pad)
-{
-    Store16(base, address + 0, pad.buttons);
-    base[address + 2] = pad.leftTrigger;
-    base[address + 3] = pad.rightTrigger;
-    Store16(base, address + 4, uint16_t(pad.thumbLX));
-    Store16(base, address + 6, uint16_t(pad.thumbLY));
-    Store16(base, address + 8, uint16_t(pad.thumbRX));
-    Store16(base, address + 10, uint16_t(pad.thumbRY));
-}
-
-constexpr uint32_t kInputCapabilitiesBytes = 20; // type/sub_type/flags + gamepad + vibration
-
-// XamInput's user index carries a "any user" marker in its high bits, which
-// pins to slot 0 -- one local profile is the only user this runtime has.
-constexpr uint32_t kUserIndexAny = 0x000000FF;
 constexpr uint32_t kMaxUsers = 4;
 
 bool IsLocalUser(uint32_t index)
@@ -308,52 +282,6 @@ void __imp__XamUserWriteProfileSettings(PPCContext &__restrict ctx, uint8_t *bas
 void __imp__XamUserCreateStatsEnumerator(PPCContext &__restrict ctx, uint8_t *)
 {
     ctx.r3.u64 = gears::kErrorNotFound; // leaderboards are a Live service
-}
-
-// Controllers. The pad is reported CONNECTED only when a host input source
-// actually exists -- a gamepad or keyboard behind the window, or a scripted
-// run. Reporting a connected pad with no source behind it would read as a
-// player who never presses anything, which leaves a title waiting at its
-// "press start" prompt for ever; reporting disconnected is a state hardware
-// really produces and every title handles.
-
-// DWORD XamInputGetCapabilities(DWORD UserIndex, DWORD Flags, PXINPUT_CAPABILITIES Caps)
-void __imp__XamInputGetCapabilities(PPCContext &__restrict ctx, uint8_t *base)
-{
-    const uint32_t userIndex = ctx.r3.u32;
-    const uint32_t capsAddress = ctx.r5.u32;
-    const uint32_t slot = (userIndex & kUserIndexAny) == kUserIndexAny ? kLocalUser : userIndex;
-    if (!IsLocalUser(slot) || !gears::PadConnected())
-    {
-        ctx.r3.u64 = gears::kErrorDeviceNotConnected;
-        return;
-    }
-    if (capsAddress != 0)
-    {
-        std::memset(base + capsAddress, 0, kInputCapabilitiesBytes);
-        base[capsAddress + 0] = 1; // XINPUT_DEVTYPE_GAMEPAD
-        base[capsAddress + 1] = 1; // XINPUT_DEVSUBTYPE_GAMEPAD
-        // The gamepad field of the capabilities is a MASK of what the device
-        // can report, not a reading: every button, both triggers, both sticks.
-        gears::PadState mask;
-        mask.buttons = 0xFFFF;
-        mask.leftTrigger = mask.rightTrigger = 0xFF;
-        mask.thumbLX = mask.thumbLY = mask.thumbRX = mask.thumbRY = int16_t(0xFFC0);
-        StoreGamepad(base, capsAddress + 4, mask);
-        Store16(base, capsAddress + 16, 0xFFFF); // left motor range
-        Store16(base, capsAddress + 18, 0xFFFF); // right motor range
-    }
-    ctx.r3.u64 = gears::kErrorSuccess;
-}
-
-// DWORD XamInputSetState(DWORD UserIndex, DWORD Unknown, PXINPUT_VIBRATION Vibration)
-// Accepted and dropped: there is no motor to drive, and failing the call would
-// be a lie about a pad we have just reported as connected and capable.
-void __imp__XamInputSetState(PPCContext &__restrict ctx, uint8_t *)
-{
-    const uint32_t slot = (ctx.r3.u32 & kUserIndexAny) == kUserIndexAny ? kLocalUser : ctx.r3.u32;
-    ctx.r3.u64 = (IsLocalUser(slot) && gears::PadConnected()) ? gears::kErrorSuccess
-                                                              : gears::kErrorDeviceNotConnected;
 }
 
 // The console's storage device, which on a PC is a directory.
