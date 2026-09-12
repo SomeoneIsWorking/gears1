@@ -27,7 +27,7 @@ Native renderer,
 - status: re-partial
 - deps: RE-01
 - evidence: pinned x360port synthetic runtime gate; headless real-image leaf discriminator
-- gap: Complete title services and bounded interpreter fallback are missing.
+- gap: Complete title services and complete interpreter fallback coverage are missing.
 
 The exact shared
    `x360port` and maintained Xenia revisions now own memory/module/context
@@ -36,8 +36,8 @@ The exact shared
    callback seams. Explicit and automatically observed executable-write
    invalidation are now proven for the authenticated virtual code range. The
    shared runtime now also bounds translated basic-block entries across nested
-    guest calls and reports typed exhaustion and mid-call invalidation; fallback
-    remains a missing shared contract. The shared runtime test separately proves a
+    guest calls and reports typed exhaustion and mid-call invalidation; the bounded
+    fallback remains a partial shared contract. The shared runtime test separately proves a
    translated guest caller reaches a second guest callee through Xenia and
    reuses both translations.
 
@@ -82,19 +82,16 @@ The shared
    launch path before this is title conformance.
 
 ### RE-06 — Fallback discriminator
-- status: todo
+- status: re-partial
 - deps: RE-03, RE-05
-- gap: No bounded, reason-labelled shipping interpreter fallback exists.
+- gap: The shipping fallback is bounded and reason-labelled, but only covers `lswi` and `blr`.
 
-Force one safe unsupported
-   block through the bounded interpreter fallback, prove reason and counters,
-   then prove ordinary execution still selects dynarec. Explicit interpreter mode
-   remains diagnostic-only. Fallback results do not satisfy gameplay or performance.
-   The pinned Xenia decoder and HIR builder now refuse invalid and
-   decoded-but-unimplemented instructions instead of asserting or emitting a
-   partial no-op function; a synthetic runtime test proves both refusals. The
-   remaining boundary is structured refusal context and actual bounded
-   interpreter execution before returning to JIT dispatch.
+The shared runtime test forces an invalid opcode through the bounded fallback and proves the
+typed unsupported refusal without host-code publication. It then executes a decoded-but-uncompiled
+`lswi` leaf through Xenia's bounded interpreter, verifies the return value, and checks entry,
+instruction, unsupported, memory, and budget counters. Explicit interpreter mode remains
+diagnostic-only. Fallback results do not satisfy gameplay or performance. The remaining gap is
+complete PPC semantics and safe guest control flow/import/device behavior on real title code.
 
 ### RE-07 — Boot and subsystem restoration
 - status: todo
