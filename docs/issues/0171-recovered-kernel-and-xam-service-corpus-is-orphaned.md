@@ -2,7 +2,7 @@
 id: 171
 title: Recovered kernel and XAM service corpus is orphaned from the build
 status: open
-symptom: 171 recovered `__imp__` service handlers across 21 files compile into no target and reference a header the migration deleted, while the authenticated image imports 236 services and three are bound
+symptom: 171 recovered `__imp__` service handlers across 21 files compile into no target and reference a header the migration deleted; the authenticated image imports 236 services, 168 of its 226 function imports have a recovered handler, and three are bound
 tags: dynarec,x360port,imports,migration
 state_items: S006,S007,S009
 created: 2026-09-22
@@ -24,6 +24,27 @@ The authenticated Gears 1 image declares 236 logical imports. Three are bound:
 import routes to the typed unsupported-service refusal, so the title cannot
 execute past its first unbound service. This gap, not the dynarec, is what
 stands between the current discriminator and S009 gameplay.
+
+## Measured work list — 2026-09-22
+
+`tools/import_inventory.py` joins the image's manifest to Xenia's ordinal
+tables and to the recovered corpus. Against the ignored user XEX:
+
+- 236 imports: 226 function, 10 variable.
+- 0 unresolved ordinals. Every ordinal the image imports is declared by the
+  vendored tables, which independently confirms the resolver the runtime
+  compiles in against bytes it has never seen.
+- 168 of the 226 function imports already have a recovered handler.
+- 58 have none: 44 `xam.xex` and 14 `xboxkrnl.exe`. The XAM remainder is
+  dominated by `NetDll_*` sockets, `XamShow*UI` blades, and voice/session
+  services; the kernel remainder includes `NtQueryVirtualMemory`,
+  `XexGetProcedureAddress`, `RtlUnwind`, and `__C_specific_handler`.
+- 3 recovered handlers correspond to no import of this image, so the corpus was
+  built for this title and is close to the right shape for it.
+
+A recovered handler is preserved source, not a binding. `XamInputGetState` and
+`XamInputGetCapabilities` are implemented in `x360port` and therefore appear as
+uncovered in that count while being bound; the tool says so in its report.
 
 ## Required work
 
