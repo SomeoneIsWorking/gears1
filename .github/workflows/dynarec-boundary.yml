@@ -9,9 +9,8 @@ permissions:
   contents: read
 
 env:
-  X360PORT_REVISION: 7c9652d34237e5a18b4e0963b7f9d87aa4ab7985
+  X360PORT_REVISION: ef3fa40d4979ff905f4ab047924627e31023b050
   X360UE3_REVISION: 7bc5763b9a3acb3ea04463ef05056b222a2579be
-  XENIA_REVISION: b7b471a66120932ef3f738e004233061db6127a5
 
 jobs:
   native-jit-boundary:
@@ -40,6 +39,9 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+          # The extern/xenia submodule pointer is the only authority for the
+          # fork revision; a separate pin here would drift from it.
+          submodules: recursive
 
       - name: Check out pinned x360port
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -58,16 +60,6 @@ jobs:
           path: build/deps/x360ue3
           fetch-depth: 0
           persist-credentials: false
-
-      - name: Check out pinned Xenia fork
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: SomeoneIsWorking/xenia-canary
-          ref: ${{ env.XENIA_REVISION }}
-          path: extern/xenia
-          fetch-depth: 0
-          persist-credentials: false
-          submodules: recursive
 
       - name: Install Linux native dependencies
         if: runner.os == 'Linux'
