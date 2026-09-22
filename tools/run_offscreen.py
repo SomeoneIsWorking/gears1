@@ -77,7 +77,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--iso", help="disc image or 7z archive (default: as ./run.sh)")
     parser.add_argument("--seconds", type=int, default=120)
     parser.add_argument("--capture-every", type=int, default=15)
-    parser.add_argument("--walk", default="menu", help="none, start, menu, or checkpoint")
+    route = parser.add_mutually_exclusive_group()
+    route.add_argument("--walk", default="menu", help="none, start, menu, or checkpoint")
+    route.add_argument(
+        "--script", help="an explicit input script in the runtime's step grammar, e.g. 9000:LY+"
+    )
     return parser
 
 
@@ -98,7 +102,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     for stale in captured_frames(frames):
         stale.unlink()
     child_environment = dict(environment)
-    child_environment["GEARS_INPUT_SCRIPT"] = walk_script(profile.navigation, arguments.walk)
+    child_environment["GEARS_INPUT_SCRIPT"] = (
+        arguments.script
+        if arguments.script is not None
+        else walk_script(profile.navigation, arguments.walk)
+    )
     command = prepared.command() + [
         "--offscreen",
         "--storage-root",
