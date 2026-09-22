@@ -122,3 +122,22 @@ corresponding recovered handlers from `runtime/kernel_memory.cpp` in the same
 change. `NtQueryVirtualMemory` has no recovered handler at all — it is one of
 the 14 uncovered kernel imports — so it is written from Xenia's
 `HeapAllocationInfo` contract rather than migrated.
+
+One more owner is missing before the handlers can be written. Every guest
+structure crossing the import boundary is big-endian, and `src/xam_input.cpp`
+carries file-local `Store16`/`Store32` helpers with no matching loads. The
+virtual-memory handlers read and write guest `u32` in/out parameters, so the
+byte-order helpers become one `x360port` owner with loads and stores, and
+`xam_input.cpp` moves onto it in the same change rather than a second copy
+appearing beside it.
+
+The recovered `NtFreeVirtualMemory` comments carry two measured facts the new
+handler must keep, and they are the reason the group is not a mechanical
+rewrite. A free of address 0 is normal traffic, not a bug: the title's own
+`VirtualFree` wrapper at `sub_82612658` forwards its argument unchecked, and the
+D3D resource destructor at `sub_82214C70` calls it on a resource whose data
+pointer was never filled in. And the owning heap is decided by the address, not
+by the export the guest called, because that same destructor picks between the
+physical and virtual free wrappers from a flag on the resource. Both agree with
+what Xenia does, which is the expected convergence now that the service runs
+over Xenia's heaps.
