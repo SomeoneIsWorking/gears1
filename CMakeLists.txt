@@ -127,7 +127,7 @@ x360port_enable_warnings(gears1_xam_services)
 include(FetchContent)
 FetchContent_Declare(lucent
     GIT_REPOSITORY https://github.com/SomeoneIsWorking/lucent.git
-    GIT_TAG f1101923eee7451c5d5aa25a25d68bfb4ae874b1)
+    GIT_TAG f1494ccb06804ac0c85a6876e5a72bc54d88837e)
 FetchContent_MakeAvailable(lucent)
 add_library(gears_input STATIC runtime/input.cpp runtime/titles/gears1/xam_input_provider.cpp)
 target_include_directories(gears_input PUBLIC runtime)
