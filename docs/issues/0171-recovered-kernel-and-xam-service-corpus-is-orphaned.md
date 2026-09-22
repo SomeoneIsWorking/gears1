@@ -9,6 +9,16 @@ created: 2026-09-22
 updated: 2026-09-22
 ---
 
+## Direction change — 2026-09-22
+
+The product no longer binds imports through a title-local claim table.
+`x360port::SystemSession` hosts the image on Xenia's kernel, and every import
+reaches that kernel's implementation. Re-owning the recovered corpus handler by
+handler is therefore no longer the route to S009. The remaining work is to
+retire the orphaned corpus and the flat-image claim-table services the product
+does not use, keeping any measured behaviour the Xenia kernel gets wrong as a
+native override or an `x360port` fix.
+
 ## Finding
 
 `runtime/kernel_*.cpp`, `runtime/xam_*.cpp`, `runtime/xnet_null.cpp`,

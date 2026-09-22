@@ -1,12 +1,3 @@
-# The gameplay target is intentionally absent until shared/x360port embeds
-# Xenia's Xenon dynarec. Keeping this named target makes direct build attempts
-# fail at the same explicit boundary as the launcher, without preserving a
-# generated-code bridge.
-add_custom_target(gears1
-    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/require_product_composition.py"
-    COMMENT "Checking the GearsUE3 product-composition boundary"
-    VERBATIM)
-
 set(GEARS_HOST_OPT "-O2" CACHE STRING "Optimisation level for host-native code")
 function(gears_optimise_host target)
     if(TARGET ${target})

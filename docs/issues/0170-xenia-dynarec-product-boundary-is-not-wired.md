@@ -1,7 +1,7 @@
 ---
 id: 170
 title: Xenia dynarec product boundary is not wired
-status: open
+status: resolved
 symptom: GearsUE3 exercises x360port/Xenia synthetically, but the authenticated full-image product and runtime services are not composed
 tags: dynarec,xenia,x360port,x360ue3,migration
 state_items: S002,S006,S007,S008,S009,S010,S011
@@ -176,3 +176,13 @@ discriminator for this change; the synthetic gate cannot prove it.
 This is binding mechanism only. It does not implement any additional service,
 and `docs/issues/0171` records what does: 171 recovered handlers that compile
 into no target, against 236 imports of which three are bound.
+
+## Resolution
+
+### Resolution (2026-09-22)
+The product boundary is wired. `runtime/product/` composes the authenticated disc
+with `x360port::SystemSession`, which hosts it on Xenia's full system and x64
+dynarec with native overrides dispatched from the guest call slots. `./run.sh`
+builds and launches it, and a headless run reaches Act 1's opening scene. The
+A64 hosts (S010, S011), fallback coverage (S008), and dynarec accounting in the
+session (S009) remain open under their own state items.

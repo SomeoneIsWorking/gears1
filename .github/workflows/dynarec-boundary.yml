@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  X360PORT_REVISION: 38f7ca42edfe6faa85fd2547b2ad8fa0b969b478
+  X360PORT_REVISION: 5ebdf104ab495cfba5c102ddba4cb95ef4305554
   X360UE3_REVISION: 7bc5763b9a3acb3ea04463ef05056b222a2579be
 
 jobs:
@@ -63,7 +63,7 @@ jobs:
 
       - name: Install Linux native dependencies
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes libgtk-3-dev liblz4-dev libsdl2-dev libx11-xcb-dev
+        run: sudo apt-get update && sudo apt-get install --yes libfontconfig-dev libgtk-3-dev liblz4-dev libsdl2-dev libx11-xcb-dev
 
       - name: Install pinned LLVM
         uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0

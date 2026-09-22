@@ -52,12 +52,12 @@ struct Observations
     std::uint32_t override_calls = 0;
 };
 
-x360port::ExecutionResult ScopedOriginal(x360port::RuntimeContext &runtime, GuestAddress address,
+x360port::ExecutionResult ScopedOriginal(x360port::GuestCallContext &call, GuestAddress address,
                                          std::span<const std::uint64_t> arguments,
                                          void *context) noexcept
 {
     ++static_cast<Observations *>(context)->override_calls;
-    return runtime.CallOriginal(address, arguments);
+    return call.CallOriginalBody(address, arguments);
 }
 
 [[noreturn]] void Fail(std::string_view message)
