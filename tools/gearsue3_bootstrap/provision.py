@@ -28,6 +28,7 @@ from .requirements import (
     require_archive_command,
     require_commands,
     require_pkg_config_modules,
+    require_supported_host,
 )
 
 PRODUCT_BUILD = Path("build/product")
@@ -152,6 +153,7 @@ def prepare_title(
 ) -> PreparedTitle:
     """Resolve and authenticate the user's disc, then build the product for it."""
 
+    require_supported_host()
     environment = dict(os.environ if environ is None else environ)
     commands = CommandRunner() if runner is None else runner
     resolved = resolve_image(image, repo_root, environment, env_file).path
