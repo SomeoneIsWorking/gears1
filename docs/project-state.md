@@ -207,6 +207,22 @@ Missing capability: qualify A64 code emission, executable memory,
 instruction-cache coherence, host ABI, exceptions, and packaging on Apple
 Silicon macOS.
 
+The macOS CI job fails at link with 63 undefined `xe::` symbols, and the cause is
+measured rather than assumed: `xe_platform_sources` in the fork's
+`cmake/XeniaHelpers.cmake` excludes every platform suffix and then restores them
+only under `WIN32` and `CMAKE_SYSTEM_NAME STREQUAL "Linux"`. On Apple no platform
+source is compiled at all — not the `_posix` files and not the two `_mac` ones.
+
+An Apple branch is not a one-line addition. `threading_posix.cc` is already
+partly Darwin-aware (its `NanoSleepPrecise` has a `mach_wait_until` path and its
+`ticks()` is commented out beside a mach note) while still calling
+`syscall(SYS_gettid)`, which Darwin does not provide; and `threading_mac.cc` and
+`debugging_mac.cc` redefine functions their `_posix` counterparts also define.
+Compiling both sets duplicates symbols and superseding by file stem would drop
+the thread, event, semaphore, and timer implementations that exist only in the
+posix file. The work is per-function guards in the fork, not a CMake branch
+alone.
+
 ### S011 — Android A64
 
 Missing capability: qualify A64 code emission, executable memory,
