@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _HEX32 = re.compile(r"[0-9a-f]{8}")
-_TIMED_STEP = re.compile(r"(?:0|[1-9][0-9]*):(?:START|[ABXY]|L[XY][+-]?|R[XY][+-]?)?")
+_STEP_INPUT = r"(?:START|[ABXY]|L[XY][+-]?|R[XY][+-]?)"
+# "ms:" releases everything; "ms:LY+&RX-" holds a chord, as the runtime parses it.
+_TIMED_STEP = re.compile(rf"(?:0|[1-9][0-9]*):(?:{_STEP_INPUT}(?:&{_STEP_INPUT})*)?")
 _FRAME_ACTION = re.compile(r"(?:START|[ABXY])(?:~[1-9][0-9]*)?|[LR][XY](?:[+-]|0)")
 
 
@@ -33,6 +35,7 @@ class Navigation:
     menu_walk_min_seconds: int
     start_walk: str
     checkpoint_walk: str
+    gameplay_walk: str
     repro_rate_walk: str
     camera_pair_frame_walk: str
     oracle_compare_input: str
@@ -142,6 +145,7 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
     menu_walk = _string(navigation_table, "menu_walk", "navigation")
     start_walk = _string(navigation_table, "start_walk", "navigation")
     checkpoint_walk = _string(navigation_table, "checkpoint_walk", "navigation")
+    gameplay_walk = _string(navigation_table, "gameplay_walk", "navigation")
     repro_rate_walk = _string(navigation_table, "repro_rate_walk", "navigation")
     camera_pair_frame_walk = _string(
         navigation_table, "camera_pair_frame_walk", "navigation"
@@ -150,6 +154,7 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
     _validate_menu_walk(menu_walk)
     _validate_menu_walk(start_walk)
     _validate_menu_walk(checkpoint_walk)
+    _validate_menu_walk(gameplay_walk)
     _validate_menu_walk(repro_rate_walk)
     parse_frame_walk(camera_pair_frame_walk)
     parse_frame_walk(frame_walk)
@@ -174,6 +179,7 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
             ),
             start_walk=start_walk,
             checkpoint_walk=checkpoint_walk,
+            gameplay_walk=gameplay_walk,
             repro_rate_walk=repro_rate_walk,
             camera_pair_frame_walk=camera_pair_frame_walk,
             oracle_compare_input=_string(

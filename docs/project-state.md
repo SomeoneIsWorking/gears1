@@ -38,8 +38,8 @@ Act 1, and plays its opening scene at a steady 29-30 presents/s.
 
 The service-binding frontier recorded by `docs/issues/0171` is superseded for the
 product: the system session answers every import with Xenia's kernel instead of a
-title-local claim table. What remains for S009 is interactive play past the opening
-scene and a comparison against the oracle, keyboard and mouse input on Linux,
+title-local claim table. The profile's gameplay walk now plays past the opening scene to Act 1's first
+path choice. What remains for S009 is combat, a comparison against the oracle, keyboard and mouse input on Linux,
 and the native audio mix, which the product binds but the
 title never reaches on this path (`docs/issues/0172`). The title's 30 Hz
 presentation cap is the first S013 boundary.
@@ -200,9 +200,13 @@ single-player, and difficulty menus; the unsigned-profile prompt; and Act 1's op
 scene with its subtitles. The run fails unless the dynarec translated guest code and
 no function failed to translate: over 60 s it translated 10,996 guest functions to
 24.8 MB of host code with 0 failures. The system session has no interpreter fallback.
+`--walk gameplay` continues past that scene under scripted stick and button input:
+Marcus walks out of the cell block to the "Choose path: Combat / Training" prompt
+with Dom ahead of him. The run has 8989 presents in 305 s and 13,988 translated
+functions with 0 failures.
 A control override on the draw entry counted 211 guest
 calls in 8 s, so dispatch and original-body calls work on real guest threads.
-Gap: nothing yet drives or compares play past the opening scene. Linux has gamepad input only. The product's
+Gap: no route yet reaches combat, and no play is compared against the oracle. Linux has gamepad input only. The product's
 single native override is unreached (`docs/issues/0172`). Two startup failures seen during a
 concurrent heavy build are unexplained (`docs/issues/0173`).
 

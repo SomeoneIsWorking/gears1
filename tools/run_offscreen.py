@@ -7,7 +7,7 @@ It provisions exactly as ``./run.sh`` does, then runs the same executable with
 root (never the player's saves), the run log, per-interval guest-output
 captures, and a contact sheet of them.
 
-    uv run --locked python tools/run_offscreen.py --seconds 180 --walk menu
+    uv run --locked python tools/run_offscreen.py --seconds 305 --walk gameplay
 
 The run observes; it does not gate. Its exit status is the product's: nonzero
 when the title never presented a frame.
@@ -45,6 +45,7 @@ def walk_script(navigation: Navigation, walk: str) -> str:
         "start": navigation.start_walk,
         "menu": navigation.menu_walk,
         "checkpoint": navigation.checkpoint_walk,
+        "gameplay": navigation.gameplay_walk,
     }
     if walk not in routes:
         raise ValueError(f"unknown walk {walk!r}; choose one of {', '.join(routes)}")
@@ -78,7 +79,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--seconds", type=int, default=120)
     parser.add_argument("--capture-every", type=int, default=15)
     route = parser.add_mutually_exclusive_group()
-    route.add_argument("--walk", default="menu", help="none, start, menu, or checkpoint")
+    route.add_argument("--walk", default="menu", help="none, start, menu, checkpoint, or gameplay")
     route.add_argument(
         "--script", help="an explicit input script in the runtime's step grammar, e.g. 9000:LY+"
     )
