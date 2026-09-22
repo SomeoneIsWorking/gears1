@@ -25,6 +25,7 @@ This inventory reports observable capabilities independently of the product goal
 | S015 | Generated guest-source product and translator-only surfaces absent | verified | — | G001, G002, G004 |
 | S016 | Independently authored shared UE3/Xbox contract | verified | S006 | G001 |
 | S017 | Asset-free native/JIT boundary CI | partial | S006 | G001, G002, G004 |
+| S018 | PC keyboard and mouse controls beside host gamepads | partial | S009 | G001 |
 
 ## Current focus
 
@@ -39,7 +40,7 @@ Act 1, and plays its opening scene at a steady 29-30 presents/s.
 The service-binding frontier recorded by `docs/issues/0171` is superseded for the
 product: the system session answers every import with Xenia's kernel instead of a
 title-local claim table. The profile's gameplay walk now plays past the opening scene to Act 1's first
-path choice. What remains for S009 is combat, a comparison against the oracle, keyboard and mouse input on Linux,
+path choice. What remains for S009 is combat, a comparison against the oracle,
 and the native audio mix, which the product binds but the
 title never reaches on this path (`docs/issues/0172`). The title's 30 Hz
 presentation cap is the first S013 boundary.
@@ -303,3 +304,17 @@ gameplay conformance.
 Gap: hosted qualification remains pending, including the known Windows tabulate
 portability fix awaiting a fork-publication decision. Android remains absent
 because no APK/runtime owner exists.
+
+### S018 — PC keyboard and mouse controls
+
+The emulator baseline plays only with a gamepad. The windowed product also plays with
+the keyboard and mouse: W/A/S/D move, the pointer aims, left and right click fire and
+aim, and the remaining actions sit on Space, E, F, R, Q, Tab, 1-4, Escape, and
+Backspace (`runtime/titles/gears1/desktop_controls.h`). The first click captures the
+pointer; losing focus releases it and every held key. Host gamepads stay live and are
+merged with the keyboard's pad by `x360port`, so neither device disconnects the other.
+Evidence: `gears1_desktop_controls` covers the bindings, opposing-key cancellation, the
+mouse's dead-zone offset, Y inversion and clamp, and the arbitration that lets a remote
+pad take the controller and the window's input resume after it. Gaps: no agent run
+exercises the GTK capture, which needs a person at the window; bindings are fixed; the
+Windows and macOS hosts do not exist yet.

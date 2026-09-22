@@ -48,7 +48,7 @@ endif()
 
 set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
     "Exact shared/x360port checkout consumed by GearsUE3")
-set(X360PORT_REQUIRED_REVISION "3d4d44325c1cb6bc4ad6ba084333f1a222606a5f")
+set(X360PORT_REQUIRED_REVISION "652f38e72b6cbfd8a7e7e496e152bf95b1a0126a")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
@@ -132,7 +132,8 @@ FetchContent_Declare(lucent
     GIT_REPOSITORY https://github.com/SomeoneIsWorking/lucent.git
     GIT_TAG f1494ccb06804ac0c85a6876e5a72bc54d88837e)
 FetchContent_MakeAvailable(lucent)
-add_library(gears_input STATIC runtime/input.cpp runtime/titles/gears1/xam_input_provider.cpp)
+add_library(gears_input STATIC runtime/input.cpp runtime/titles/gears1/xam_input_provider.cpp
+                            runtime/titles/gears1/desktop_controls.cpp)
 target_include_directories(gears_input PUBLIC runtime)
 target_link_libraries(gears_input PUBLIC lucent::lucent x360port::x360port)
 x360port_enable_warnings(gears_input)
@@ -140,6 +141,10 @@ add_executable(test_remote_input tests/test_remote_input.cpp)
 target_link_libraries(test_remote_input PRIVATE gears_input)
 x360port_enable_warnings(test_remote_input)
 gears_add_binary_test(gears_remote_input test_remote_input)
+add_executable(test_gears1_desktop_controls tests/test_gears1_desktop_controls.cpp)
+target_link_libraries(test_gears1_desktop_controls PRIVATE gears_input)
+x360port_enable_warnings(test_gears1_desktop_controls)
+gears_add_binary_test(gears1_desktop_controls test_gears1_desktop_controls)
 
 add_library(gears1_audio_mix STATIC runtime/titles/gears1/audio_mix.cpp)
 target_include_directories(gears1_audio_mix PUBLIC runtime)

@@ -12,10 +12,6 @@
 #include <lucent/config.h>
 #include <lucent/log.h>
 
-#ifdef GEARS_HAVE_PRESENTER
-#include <SDL3/SDL.h>
-#endif
-
 namespace gears
 {
 namespace
@@ -26,6 +22,8 @@ PadState g_pad;
 uint32_t g_packet = 0;
 bool g_haveWindow = false;
 bool g_remoteActive = false;
+HostPadSampler g_hostSampler = nullptr;
+void *g_hostContext = nullptr;
 
 // One entry of GEARS_INPUT_SCRIPT: hold `buttons` from `atMs` until the next
 // entry's time.
@@ -56,9 +54,9 @@ void PublishLocked(const PadState &next)
     // The console's contract: the packet number changes only when the state
     // does, so a title that compares packet numbers sees real edges.
     ++g_packet;
-    lucent::info("input", "pad state {}: buttons {:#06x} triggers {},{} stick L({},{}) R({},{})",
-                 g_packet, next.buttons, next.leftTrigger, next.rightTrigger, next.thumbLX,
-                 next.thumbLY, next.thumbRX, next.thumbRY);
+    lucent::debug("input", "pad state {}: buttons {:#06x} triggers {},{} stick L({},{}) R({},{})",
+                  g_packet, next.buttons, next.leftTrigger, next.rightTrigger, next.thumbLX,
+                  next.thumbLY, next.thumbRX, next.thumbRY);
 }
 
 void Publish(const PadState &next)
@@ -67,16 +65,14 @@ void Publish(const PadState &next)
     PublishLocked(next);
 }
 
-#ifdef GEARS_HAVE_PRESENTER
 void PublishHost(const PadState &next)
 {
     std::lock_guard<std::mutex> guard(g_mutex);
-    // Recheck under the same lock SetRemotePad uses. A check before SDL polling
+    // Recheck under the same lock SetRemotePad uses. A check before sampling
     // leaves a race where the final host sample overwrites a remote command.
     if (!g_remoteActive)
         PublishLocked(next);
 }
-#endif
 
 // A stick deflection named in a script step, e.g. "LY+" or "RX-". Returns false
 // if the name is not a stick, so the caller can try it as a button.
@@ -178,60 +174,6 @@ void ParseScript(std::string_view text)
     std::stable_sort(g_script.begin(), g_script.end(),
                      [](const ScriptStep &a, const ScriptStep &b) { return a.atMs < b.atMs; });
 }
-
-#ifdef GEARS_HAVE_PRESENTER
-SDL_Gamepad *g_gamepad = nullptr;
-
-// The keyboard fallback, so the title is playable without a pad attached. The
-// layout is the conventional one for Xbox-style controls on a keyboard.
-struct KeyBinding
-{
-    SDL_Scancode key;
-    uint16_t button;
-};
-constexpr KeyBinding kKeyBindings[] = {
-    {SDL_SCANCODE_RETURN, kPadStart},
-    {SDL_SCANCODE_ESCAPE, kPadBack},
-    {SDL_SCANCODE_SPACE, kPadA},
-    {SDL_SCANCODE_LSHIFT, kPadB},
-    {SDL_SCANCODE_E, kPadX},
-    {SDL_SCANCODE_Q, kPadY},
-    {SDL_SCANCODE_UP, kPadDpadUp},
-    {SDL_SCANCODE_DOWN, kPadDpadDown},
-    {SDL_SCANCODE_LEFT, kPadDpadLeft},
-    {SDL_SCANCODE_RIGHT, kPadDpadRight},
-    {SDL_SCANCODE_1, kPadLeftShoulder},
-    {SDL_SCANCODE_3, kPadRightShoulder},
-};
-
-struct PadAxisBinding
-{
-    SDL_GamepadButton button;
-    uint16_t bit;
-};
-constexpr PadAxisBinding kPadBindings[] = {
-    {SDL_GAMEPAD_BUTTON_SOUTH, kPadA},
-    {SDL_GAMEPAD_BUTTON_EAST, kPadB},
-    {SDL_GAMEPAD_BUTTON_WEST, kPadX},
-    {SDL_GAMEPAD_BUTTON_NORTH, kPadY},
-    {SDL_GAMEPAD_BUTTON_START, kPadStart},
-    {SDL_GAMEPAD_BUTTON_BACK, kPadBack},
-    {SDL_GAMEPAD_BUTTON_GUIDE, kPadGuide},
-    {SDL_GAMEPAD_BUTTON_LEFT_STICK, kPadLeftThumb},
-    {SDL_GAMEPAD_BUTTON_RIGHT_STICK, kPadRightThumb},
-    {SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, kPadLeftShoulder},
-    {SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, kPadRightShoulder},
-    {SDL_GAMEPAD_BUTTON_DPAD_UP, kPadDpadUp},
-    {SDL_GAMEPAD_BUTTON_DPAD_DOWN, kPadDpadDown},
-    {SDL_GAMEPAD_BUTTON_DPAD_LEFT, kPadDpadLeft},
-    {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, kPadDpadRight},
-};
-
-// The keyboard has no analogue stick, so W/A/S/D drives the left one and the
-// arrow keys already serve the d-pad. Full deflection, because a keyboard has
-// nothing in between.
-constexpr int16_t kFullDeflection = 32767;
-#endif
 
 } // namespace
 
@@ -458,98 +400,29 @@ void UpdateScriptedInput()
                  current.thumbRY);
 }
 
-#ifdef GEARS_HAVE_PRESENTER
+void SetHostPadSource(HostPadSampler sampler, void *context)
+{
+    std::lock_guard<std::mutex> guard(g_mutex);
+    g_hostSampler = sampler;
+    g_hostContext = context;
+}
 
 void PollHostInput()
 {
     UpdateScriptedInput();
-    if (!g_haveWindow)
-        return;
-
-    // A scripted run drives the pad itself; mixing the two would make the
-    // script non-reproducible.
-    if (!g_script.empty() || CurrentInputSource() == InputSource::kRemote)
-        return;
-
-    if (!g_gamepad)
+    HostPadSampler sampler = nullptr;
+    void *context = nullptr;
     {
-        int count = 0;
-        SDL_JoystickID *ids = SDL_GetGamepads(&count);
-        if (ids)
-        {
-            if (count > 0)
-            {
-                g_gamepad = SDL_OpenGamepad(ids[0]);
-                if (g_gamepad)
-                    lucent::info("input", "gamepad \"{}\" opened", SDL_GetGamepadName(g_gamepad));
-            }
-            SDL_free(ids);
-        }
+        std::lock_guard<std::mutex> guard(g_mutex);
+        // A scripted run drives the pad itself; mixing the two would make the
+        // script non-reproducible. A remote pad owns it until disconnected.
+        if (!g_haveWindow || !g_script.empty() || g_remoteActive)
+            return;
+        sampler = g_hostSampler;
+        context = g_hostContext;
     }
-
-    PadState next;
-
-    if (g_gamepad)
-    {
-        for (const PadAxisBinding &b : kPadBindings)
-            if (SDL_GetGamepadButton(g_gamepad, b.button))
-                next.buttons |= b.bit;
-        // SDL reports triggers on the same 0..32767 axis range as the sticks;
-        // the console's are a byte.
-        auto trigger = [&](SDL_GamepadAxis axis)
-        {
-            const int value = SDL_GetGamepadAxis(g_gamepad, axis);
-            return uint8_t(std::clamp(value, 0, 32767) * 255 / 32767);
-        };
-        next.leftTrigger = trigger(SDL_GAMEPAD_AXIS_LEFT_TRIGGER);
-        next.rightTrigger = trigger(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER);
-        next.thumbLX = int16_t(SDL_GetGamepadAxis(g_gamepad, SDL_GAMEPAD_AXIS_LEFTX));
-        // SDL's Y axis points down, the console's up.
-        next.thumbLY = int16_t(
-            -std::clamp<int>(SDL_GetGamepadAxis(g_gamepad, SDL_GAMEPAD_AXIS_LEFTY), -32767, 32767));
-        next.thumbRX = int16_t(SDL_GetGamepadAxis(g_gamepad, SDL_GAMEPAD_AXIS_RIGHTX));
-        next.thumbRY = int16_t(-std::clamp<int>(
-            SDL_GetGamepadAxis(g_gamepad, SDL_GAMEPAD_AXIS_RIGHTY), -32767, 32767));
-    }
-
-    const bool *keys = SDL_GetKeyboardState(nullptr);
-    if (keys)
-    {
-        for (const KeyBinding &b : kKeyBindings)
-            if (keys[b.key])
-                next.buttons |= b.button;
-        if (keys[SDL_SCANCODE_W])
-            next.thumbLY = kFullDeflection;
-        if (keys[SDL_SCANCODE_S])
-            next.thumbLY = -kFullDeflection;
-        if (keys[SDL_SCANCODE_A])
-            next.thumbLX = -kFullDeflection;
-        if (keys[SDL_SCANCODE_D])
-            next.thumbLX = kFullDeflection;
-        if (keys[SDL_SCANCODE_I])
-            next.thumbRY = kFullDeflection;
-        if (keys[SDL_SCANCODE_K])
-            next.thumbRY = -kFullDeflection;
-        if (keys[SDL_SCANCODE_J])
-            next.thumbRX = -kFullDeflection;
-        if (keys[SDL_SCANCODE_L])
-            next.thumbRX = kFullDeflection;
-        if (keys[SDL_SCANCODE_2])
-            next.leftTrigger = 255;
-        if (keys[SDL_SCANCODE_4])
-            next.rightTrigger = 255;
-    }
-
-    PublishHost(next);
+    if (sampler != nullptr)
+        PublishHost(sampler(context));
 }
-
-#else
-
-void PollHostInput()
-{
-    UpdateScriptedInput();
-}
-
-#endif
 
 } // namespace gears
