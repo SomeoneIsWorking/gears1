@@ -83,10 +83,9 @@ def main() -> int:
             "--build",
             output,
             "--target",
-            "test_gears1_dynarec_boundary",
-            "test_gears1_guest_image",
-            "test_gears1_runtime",
-            "test_gears1_ue3_contract",
+            # CMake owns the binary CTest set; building the aggregate target
+            # keeps the built binaries and the registered tests in step.
+            "gears1_ctest_binaries",
             "--parallel",
             str(selected.parallel),
         ],

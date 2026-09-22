@@ -48,7 +48,7 @@ endif()
 
 set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
     "Exact shared/x360port checkout consumed by GearsUE3")
-set(X360PORT_REQUIRED_REVISION "ed95c0d4dad416f89c8528806935532ad015566c")
+set(X360PORT_REQUIRED_REVISION "7c9652d34237e5a18b4e0963b7f9d87aa4ab7985")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
@@ -98,10 +98,19 @@ add_subdirectory("${X360UE3_ROOT}" x360ue3 EXCLUDE_FROM_ALL)
 message(STATUS
     "gears1: shared/x360ue3 ${X360UE3_REVISION} contract resolved")
 
+# One source of truth for the binary CTest set. Registering a test also makes
+# its executable a dependency of gears1_ctest_binaries, so a verifier that
+# builds that target can never run ctest against a binary it did not build.
+add_custom_target(gears1_ctest_binaries)
+function(gears_add_binary_test test_name executable)
+    add_test(NAME ${test_name} COMMAND ${executable})
+    add_dependencies(gears1_ctest_binaries ${executable})
+endfunction()
+
 add_executable(test_gears1_dynarec_boundary tests/test_gears1_dynarec_boundary.cpp)
 target_link_libraries(test_gears1_dynarec_boundary PRIVATE x360port::x360port)
 x360port_enable_warnings(test_gears1_dynarec_boundary)
-add_test(NAME gears1_dynarec_boundary COMMAND test_gears1_dynarec_boundary)
+gears_add_binary_test(gears1_dynarec_boundary test_gears1_dynarec_boundary)
 add_test(NAME gears_dependency_checkout_contract
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tests/test_dependency_checkout.py")
@@ -127,7 +136,7 @@ x360port_enable_warnings(gears_input)
 add_executable(test_remote_input tests/test_remote_input.cpp)
 target_link_libraries(test_remote_input PRIVATE gears_input)
 x360port_enable_warnings(test_remote_input)
-add_test(NAME gears_remote_input COMMAND test_remote_input)
+gears_add_binary_test(gears_remote_input test_remote_input)
 
 add_library(gears1_audio_mix STATIC runtime/titles/gears1/audio_mix.cpp)
 target_include_directories(gears1_audio_mix PUBLIC runtime)
@@ -142,12 +151,12 @@ x360port_enable_warnings(gears1_runtime)
 add_executable(test_gears1_runtime tests/test_gears1_runtime.cpp)
 target_link_libraries(test_gears1_runtime PRIVATE gears1_runtime)
 x360port_enable_warnings(test_gears1_runtime)
-add_test(NAME gears1_runtime_composition COMMAND test_gears1_runtime)
+gears_add_binary_test(gears1_runtime_composition test_gears1_runtime)
 
 add_executable(test_gears1_guest_image tests/test_gears1_guest_image.cpp)
 target_link_libraries(test_gears1_guest_image PRIVATE gears1_guest_image)
 x360port_enable_warnings(test_gears1_guest_image)
-add_test(NAME gears1_guest_image COMMAND test_gears1_guest_image)
+gears_add_binary_test(gears1_guest_image test_gears1_guest_image)
 
 # This discriminator consumes an operator-supplied XEX and is intentionally
 # not a normal CTest: restricted title bytes never become a hosted-test input.
@@ -159,7 +168,7 @@ x360port_enable_warnings(test_gears1_real_leaf)
 add_executable(test_gears1_ue3_contract tests/test_gears1_ue3_contract.cpp)
 target_link_libraries(test_gears1_ue3_contract PRIVATE x360ue3::x360ue3)
 x360port_enable_warnings(test_gears1_ue3_contract)
-add_test(NAME gears1_ue3_contract COMMAND test_gears1_ue3_contract)
+gears_add_binary_test(gears1_ue3_contract test_gears1_ue3_contract)
 
 if(GEARS_DYNAREC_CONTRACT_ONLY)
     add_test(NAME gears1_dynarec_boundary_quality
