@@ -114,6 +114,9 @@ gears_add_binary_test(gears1_dynarec_boundary test_gears1_dynarec_boundary)
 add_test(NAME gears_dependency_checkout_contract
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tests/test_dependency_checkout.py")
+add_test(NAME gears_import_inventory_contract
+    COMMAND ${GEARS_UV_RUN} python
+            "${CMAKE_SOURCE_DIR}/tests/test_import_inventory.py")
 
 add_library(gears1_guest_image STATIC runtime/gears1_guest_image.cpp)
 target_include_directories(gears1_guest_image PUBLIC runtime)
