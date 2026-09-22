@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -16,6 +17,7 @@
 
 #include <x360port/runtime.hpp>
 
+#include "titles/gears1/audio_mix.h"
 #include "titles/gears1/xam_input_provider.h"
 
 namespace
@@ -73,6 +75,33 @@ std::vector<std::byte> ReadFile(const char *path)
     }
     Require(!bytes.empty(), "the supplied XEX is empty");
     return bytes;
+}
+
+void PutBigEndianFloat(std::span<std::byte> bytes, std::size_t offset, float value)
+{
+    const std::uint32_t bits = std::bit_cast<std::uint32_t>(value);
+    bytes[offset] = static_cast<std::byte>(bits >> 24U);
+    bytes[offset + 1U] = static_cast<std::byte>(bits >> 16U);
+    bytes[offset + 2U] = static_cast<std::byte>(bits >> 8U);
+    bytes[offset + 3U] = static_cast<std::byte>(bits);
+}
+
+void FillAudioFixture(std::span<std::byte> input, std::span<std::byte> output,
+                      std::span<std::byte> coefficient0, std::span<std::byte> coefficient1)
+{
+    for (std::size_t offset = 0; offset < input.size(); offset += 4U)
+    {
+        PutBigEndianFloat(input, offset, 0.125F + static_cast<float>(offset) * 0.0001F);
+        PutBigEndianFloat(output, offset, -0.25F + static_cast<float>(offset) * 0.0002F);
+    }
+    PutBigEndianFloat(coefficient0, 0U, 0.125F);
+    PutBigEndianFloat(coefficient0, 4U, -0.25F);
+    PutBigEndianFloat(coefficient0, 8U, 0.5F);
+    PutBigEndianFloat(coefficient0, 12U, -0.75F);
+    PutBigEndianFloat(coefficient1, 0U, -0.0625F);
+    PutBigEndianFloat(coefficient1, 4U, 0.1875F);
+    PutBigEndianFloat(coefficient1, 8U, -0.3125F);
+    PutBigEndianFloat(coefficient1, 12U, 0.4375F);
 }
 
 } // namespace
@@ -276,6 +305,94 @@ int main(int argc, char **argv)
     Require(context->Statistics().translation_invalidations == invalidations_before_removal,
             "override removal unnecessarily retranslated the original guest function");
 
+    const x360port::GuestMemoryAllocationResult audio_input = context->AllocateGuestMemory(0x500U);
+    const x360port::GuestMemoryAllocationResult audio_output = context->AllocateGuestMemory(0x500U);
+    const x360port::GuestMemoryAllocationResult audio_coefficient0 =
+        context->AllocateGuestMemory(16U);
+    const x360port::GuestMemoryAllocationResult audio_coefficient1 =
+        context->AllocateGuestMemory(16U);
+    Require(static_cast<bool>(audio_input) && static_cast<bool>(audio_output) &&
+                static_cast<bool>(audio_coefficient0) && static_cast<bool>(audio_coefficient1),
+            "the runtime could not allocate the audio differential fixture");
+    std::array<std::byte, 0x500> audio_input_bytes{};
+    std::array<std::byte, 0x500> audio_output_bytes{};
+    std::array<std::byte, 16> audio_coefficient0_bytes{};
+    std::array<std::byte, 16> audio_coefficient1_bytes{};
+    FillAudioFixture(audio_input_bytes, audio_output_bytes, audio_coefficient0_bytes,
+                     audio_coefficient1_bytes);
+    const auto write_audio_fixture = [&]
+    {
+        Require(!context->WriteGuestMemory(audio_input.allocation.address, audio_input_bytes),
+                "could not write the audio input fixture");
+        Require(!context->WriteGuestMemory(audio_output.allocation.address, audio_output_bytes),
+                "could not write the audio output fixture");
+        Require(!context->WriteGuestMemory(audio_coefficient0.allocation.address,
+                                           audio_coefficient0_bytes),
+                "could not write the first audio coefficient fixture");
+        Require(!context->WriteGuestMemory(audio_coefficient1.allocation.address,
+                                           audio_coefficient1_bytes),
+                "could not write the second audio coefficient fixture");
+    };
+    write_audio_fixture();
+    const std::array<std::uint64_t, 4> audio_arguments{
+        audio_output.allocation.address, audio_input.allocation.address,
+        audio_coefficient0.allocation.address, audio_coefficient1.allocation.address};
+    constexpr x360port::ExecutionLimits audio_limits{.max_guest_blocks = 1000U,
+                                                     .max_interpreter_instructions = 100'000U};
+    const x360port::ExecutionResult audio_original = context->CallOriginal(
+        gears::titles::gears1::kAudioMixAddress, audio_arguments, audio_limits);
+    Require(static_cast<bool>(audio_original), audio_original.failure.detail);
+    std::array<std::byte, 0x500> original_audio_output{};
+    const x360port::RuntimeFailure original_audio_read =
+        context->ReadGuestMemory(audio_output.allocation.address, original_audio_output);
+    Require(!original_audio_read, original_audio_read.detail);
+    write_audio_fixture();
+    const std::uint64_t native_override_calls_before_audio =
+        context->Statistics().native_override_calls;
+    const x360port::ExecutionResult audio_native =
+        context->Execute(gears::titles::gears1::kAudioMixAddress, audio_arguments);
+    Require(static_cast<bool>(audio_native) && audio_native.value == audio_original.value,
+            "the native audio override returned a different guest result");
+    Require(context->Statistics().native_override_calls == native_override_calls_before_audio + 1U,
+            "the authenticated audio address did not dispatch through the native override");
+    std::array<std::byte, 0x500> native_audio_output{};
+    const x360port::RuntimeFailure native_audio_read =
+        context->ReadGuestMemory(audio_output.allocation.address, native_audio_output);
+    if (native_audio_output != original_audio_output)
+    {
+        std::size_t differing = 0;
+        for (std::size_t offset = 0; offset + 4U <= original_audio_output.size(); offset += 4U)
+        {
+            const auto word = [](std::span<const std::byte> bytes, std::size_t at)
+            {
+                return (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at]))
+                        << 24U) |
+                       (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at + 1U]))
+                        << 16U) |
+                       (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at + 2U]))
+                        << 8U) |
+                       static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at + 3U]));
+            };
+            const std::uint32_t expected_word = word(original_audio_output, offset);
+            const std::uint32_t actual_word = word(native_audio_output, offset);
+            if (expected_word == actual_word)
+            {
+                continue;
+            }
+            if (differing < 8U)
+            {
+                std::cerr << "audio divergence at +0x" << std::hex << offset
+                          << ": original=" << expected_word << " native=" << actual_word << std::dec
+                          << "\n";
+            }
+            ++differing;
+        }
+        std::cerr << "audio divergence: " << differing << " of "
+                  << original_audio_output.size() / 4U << " output words differ\n";
+    }
+    Require(!native_audio_read && native_audio_output == original_audio_output,
+            "the native audio override diverged from the Xenia original output");
+
     const x360port::RuntimeFailure invalidated =
         context->NotifyExecutableWrite(kResourceAddRef, 4U);
     Require(!invalidated, invalidated.detail);
@@ -343,7 +460,8 @@ int main(int argc, char **argv)
     std::cout << "Gears real-image discriminator: checked XEX, resolved 236 imports into "
                  "owned guest storage, polled retained pad state/capabilities through 401/400, "
                  "executed 0x82233668, "
-                 "scoped original, nested guest-call override/removal, and executable invalidation "
-                 "passed\n";
+                 "scoped original, nested guest-call override/removal, executable invalidation, "
+                 "and the native audio mix at 0x825F7B40 matching the original guest body on "
+                 "its return value and all 320 output words, passed\n";
     return 0;
 }

@@ -21,19 +21,23 @@ object's vptr is offset -- multiple inheritance, or a corrupt pointer -- and tha
 is itself the finding, so partial matches are reported rather than dropped.
 """
 import argparse
-import pathlib
 import struct
 import sys
 
+from guest_image import DEFAULT_BASE, DEFAULT_IMAGE, GuestImageError, load_mapped_image
+
 PURE = 0x828D0790
-BASE = 0x82000000
-LIMIT = 0x82CE0000
+BASE = DEFAULT_BASE
 
 
 def build(image):
-    d = pathlib.Path(image).read_bytes()
+    d = load_mapped_image(image)
+    # The mapped image spans the whole guest image, so its length is the
+    # authoritative upper bound; a hardcoded limit silently drops every
+    # address above whichever image layout it was measured from.
+    limit = BASE + len(d)
     words = struct.unpack(f'>{len(d)//4}I', d[:len(d)//4*4])
-    is_code = lambda w: BASE <= w < LIMIT
+    is_code = lambda w: BASE <= w < limit
     table = {}
     for i, w in enumerate(words):
         if w != PURE:
@@ -52,15 +56,16 @@ def build(image):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("address", nargs="?", help="a vtable address to resolve")
-    ap.add_argument("--image", default="scratch/raw/gears_image.bin")
+    ap.add_argument("--image", default=str(DEFAULT_IMAGE))
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
 
-    if not pathlib.Path(a.image).exists():
-        print(f"REFUSING: no image at {a.image}. Nothing was searched -- this is "
-              f"not an empty result.", file=sys.stderr)
+    try:
+        table = build(a.image)
+    except GuestImageError as error:
+        print(f"REFUSING: {error}. Nothing was searched -- this is not an empty "
+              f"result.", file=sys.stderr)
         return 2
-    table = build(a.image)
     if a.selftest:
         # A case that MUST resolve, and one that MUST NOT, so a table that
         # matched everything or nothing would fail here rather than look clean.

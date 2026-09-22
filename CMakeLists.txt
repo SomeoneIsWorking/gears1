@@ -48,7 +48,7 @@ endif()
 
 set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
     "Exact shared/x360port checkout consumed by GearsUE3")
-set(X360PORT_REQUIRED_REVISION "d976b6355829c398aa701e54c515a6bc770b9d13")
+set(X360PORT_REQUIRED_REVISION "ed95c0d4dad416f89c8528806935532ad015566c")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
@@ -129,10 +129,15 @@ target_link_libraries(test_remote_input PRIVATE gears_input)
 x360port_enable_warnings(test_remote_input)
 add_test(NAME gears_remote_input COMMAND test_remote_input)
 
+add_library(gears1_audio_mix STATIC runtime/titles/gears1/audio_mix.cpp)
+target_include_directories(gears1_audio_mix PUBLIC runtime)
+target_link_libraries(gears1_audio_mix PUBLIC x360port::x360port)
+x360port_enable_warnings(gears1_audio_mix)
+
 add_library(gears1_runtime STATIC runtime/gears1_runtime.cpp)
 target_include_directories(gears1_runtime PUBLIC runtime)
 target_link_libraries(gears1_runtime PUBLIC gears1_guest_image gears1_xam_services gears_input
-                                              x360port::x360port)
+                                              gears1_audio_mix x360port::x360port)
 x360port_enable_warnings(gears1_runtime)
 add_executable(test_gears1_runtime tests/test_gears1_runtime.cpp)
 target_link_libraries(test_gears1_runtime PRIVATE gears1_runtime)

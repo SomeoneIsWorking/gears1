@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 env:
-  X360PORT_REVISION: d976b6355829c398aa701e54c515a6bc770b9d13
+  X360PORT_REVISION: ed95c0d4dad416f89c8528806935532ad015566c
+  X360UE3_REVISION: 7bc5763b9a3acb3ea04463ef05056b222a2579be
   XENIA_REVISION: b7b471a66120932ef3f738e004233061db6127a5
 
 jobs:
@@ -49,6 +50,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Check out pinned x360ue3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: SomeoneIsWorking/x360ue3
+          ref: ${{ env.X360UE3_REVISION }}
+          path: build/deps/x360ue3
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Check out pinned Xenia fork
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -81,5 +91,6 @@ jobs:
         run: >-
           uv run --frozen python tools/verify_dynarec_boundary.py
           --x360port-root build/deps/x360port
+          --x360ue3-root build/deps/x360ue3
           --build-dir build/ci-dynarec-boundary
           --expected-machine ${{ matrix.machine }}

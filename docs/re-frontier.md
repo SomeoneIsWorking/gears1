@@ -140,7 +140,13 @@ Qualify x86-64, Apple
 ## Retained exact facts
 
 - Resource AddRef/Release entry points are `0x82233668` and `0x822336E0`.
-- The Gears 1 audio-mix operation begins at `0x825F2D40`.
+- The Gears 1 audio-mix operation begins at `0x825F7B40`.
+- Guest addresses are virtual addresses. The normalized XEX image lays sections
+  out by raw offset, and Gears 1 has a 0x4E00 alignment gap in front of `.text`,
+  so reading the normalized image as virtual-address-indexed silently yields a
+  different, still-plausible function for every address at or above `.text`.
+  Reverse-engineering reads the mapped image via `tools/guest_image.py`, which
+  refuses the normalized layout; `x360-xex-inspect --mapped-image-out` writes it.
 - Normal draw entry points are `0x8222CFF8`, `0x8222D4F8`, `0x8222DA48`, and
   `0x8222DE50`; shader setters are `0x82222808` and `0x82222B98`.
 - Shader-state flush `0x822346A8` emits ordered Xenos `IM_LOAD` packets and may

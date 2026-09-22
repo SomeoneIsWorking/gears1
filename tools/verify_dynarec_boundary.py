@@ -17,6 +17,9 @@ def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--x360port-root", required=True, type=Path)
     parser.add_argument(
+        "--x360ue3-root", default=ROOT / "../../shared/x360ue3", type=Path
+    )
+    parser.add_argument(
         "--build-dir", default=Path("build/dynarec-boundary"), type=Path
     )
     parser.add_argument("--expected-machine", choices=("x86_64", "arm64"))
@@ -31,6 +34,9 @@ def main() -> int:
     x360port_root = selected.x360port_root.resolve()
     if not (x360port_root / "CMakeLists.txt").is_file():
         raise ValueError(f"x360port root is not a source checkout: {x360port_root}")
+    x360ue3_root = selected.x360ue3_root.resolve()
+    if not (x360ue3_root / "CMakeLists.txt").is_file():
+        raise ValueError(f"x360ue3 root is not a source checkout: {x360ue3_root}")
     output = build_directory(
         ROOT, str(selected.build_dir), ROOT / "build/dynarec-boundary"
     )
@@ -65,6 +71,7 @@ def main() -> int:
             f"-DPython3_EXECUTABLE={Path(sys.executable).absolute()}",
             "-DGEARS_DYNAREC_CONTRACT_ONLY=ON",
             f"-DX360PORT_ROOT={x360port_root}",
+            f"-DX360UE3_ROOT={x360ue3_root}",
             *dependency_options,
         ],
         cwd=ROOT,

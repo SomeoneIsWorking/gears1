@@ -4,6 +4,7 @@
 #include <string>
 #include <utility>
 
+#include "titles/gears1/audio_mix.h"
 #include "titles/gears1/xam_input_provider.h"
 
 namespace gears
@@ -153,7 +154,30 @@ x360port::RuntimeFailure Gears1Runtime::ComposeBindings()
         bindings_.push_back(binding);
     }
     next_variable_ = 0;
-    return context_->LoadModule(module_, bindings_);
+    if (const x360port::RuntimeFailure loaded = context_->LoadModule(module_, bindings_))
+    {
+        return loaded;
+    }
+    return InstallNativeOverrides();
+}
+
+bool Gears1Runtime::ImageContains(x360port::GuestAddress address) const noexcept
+{
+    const x360port::CodeRange code = module_.Descriptor().code;
+    return address >= code.base &&
+           static_cast<std::uint64_t>(address) < static_cast<std::uint64_t>(code.base) + code.size;
+}
+
+x360port::RuntimeFailure Gears1Runtime::InstallNativeOverrides()
+{
+    // Synthetic discriminator images carry only the addresses they declare, so
+    // an override is bound only when this image actually contains its address.
+    if (!ImageContains(titles::gears1::kAudioMixAddress))
+    {
+        return {};
+    }
+    return context_->InstallOverride(titles::gears1::kAudioMixAddress,
+                                     titles::gears1::ApplyNativeAudioMix);
 }
 
 } // namespace gears

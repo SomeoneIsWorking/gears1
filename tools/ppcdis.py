@@ -8,25 +8,28 @@ make the decompiler's view of such a function pure fiction). This tool reads the
 image bytes directly and decodes them with capstone, so it is independent of any
 Ghidra state.
 
+Addresses are guest virtual addresses, so this reads the virtual-address-indexed
+mapped image through tools/guest_image.py, which refuses the normalized layout
+rather than decoding the wrong bytes.
+
 Usage:
     tools/ppcdis.py 0x8223B8A0 0x8223B940
     tools/ppcdis.py 0x8223B8A0 +0x80
-    tools/ppcdis.py --image scratch/raw/gears_image.bin --base 0x82000000 0x8223B8A0 +0x40
+    tools/ppcdis.py --image scratch/raw/gears_mapped.bin --base 0x82000000 0x8223B8A0 +0x40
 """
 import argparse
 import sys
 
 import capstone
 
-DEFAULT_IMAGE = "scratch/raw/gears_image.bin"
-DEFAULT_BASE = 0x82000000
+from guest_image import DEFAULT_BASE, DEFAULT_IMAGE, GuestImageError, load_mapped_image, read_range
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("start")
     ap.add_argument("end", help="end VA (exclusive) or +LEN")
-    ap.add_argument("--image", default=DEFAULT_IMAGE)
+    ap.add_argument("--image", default=str(DEFAULT_IMAGE))
     ap.add_argument("--base", default=hex(DEFAULT_BASE))
     args = ap.parse_args()
 
@@ -34,9 +37,11 @@ def main() -> int:
     start = int(args.start, 0)
     end = start + int(args.end[1:], 0) if args.end.startswith("+") else int(args.end, 0)
 
-    with open(args.image, "rb") as f:
-        f.seek(start - base)
-        data = f.read(end - start)
+    try:
+        data = read_range(load_mapped_image(args.image), base, start, end)
+    except GuestImageError as error:
+        print(f"ppcdis: refusing: {error}", file=sys.stderr)
+        return 2
 
     md = capstone.Cs(capstone.CS_ARCH_PPC, capstone.CS_MODE_32 | capstone.CS_MODE_BIG_ENDIAN)
     md.detail = False
