@@ -55,11 +55,13 @@ int main()
     ProductOptionsResult offscreen =
         Parse({"--offscreen", "--image", "/games/gears.iso", "--title-id", "4D5307D5",
                "--storage-root", storage.c_str(), "--seconds", "90", "--capture-dir",
-               frames.c_str(), "--capture-every", "15"});
+               frames.c_str(), "--capture-every", "15", "--perf-map"});
     Require(static_cast<bool>(offscreen), offscreen.error);
     Require(offscreen.options.mode == ProductMode::Offscreen, "--offscreen was not selected");
     Require(offscreen.options.run_seconds == 90U, "--seconds was not read");
     Require(offscreen.options.capture_interval_seconds == 15U, "--capture-every was not read");
+    Require(offscreen.options.perf_map, "--perf-map was not read");
+    Require(!window.options.perf_map, "a perf map was requested without --perf-map");
 
     RequireRefused({"--title-id", "4d5307d5"}, "--image is required");
     RequireRefused({"--image", "/games/gears.iso"}, "--title-id is required");
@@ -69,6 +71,8 @@ int main()
     RequireRefused({"--image", "/games/gears.iso", "--title-id", "4d5307d5", "--wide"},
                    "unknown option");
     RequireRefused({"--image", "/games/gears.iso", "--title-id", "4d5307d5", "--seconds", "5"},
+                   "only with --offscreen");
+    RequireRefused({"--image", "/games/gears.iso", "--title-id", "4d5307d5", "--perf-map"},
                    "only with --offscreen");
     RequireRefused(
         {"--offscreen", "--image", "/games/gears.iso", "--title-id", "4d5307d5", "--seconds", "5"},
@@ -82,6 +86,6 @@ int main()
     RequireRefused({"--offscreen", "--image", "/games/gears.iso", "--title-id", "4d5307d5",
                     "--storage-root", storage.c_str(), "--seconds", "5", "--capture-every", "1"},
                    "given together");
-    std::cout << "product options: 2 accepted, 11 refused\n";
+    std::cout << "product options: 2 accepted, 12 refused\n";
     return EXIT_SUCCESS;
 }

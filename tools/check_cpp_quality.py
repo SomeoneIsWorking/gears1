@@ -65,6 +65,7 @@ MAINTAINED_FILES = tuple(
         "runtime/titles/gears1/audio_mix.h",
         "runtime/titles/gears1/desktop_controls.cpp",
         "runtime/titles/gears1/desktop_controls.h",
+        "runtime/titles/gears1/presentation.h",
         "runtime/titles/gears1/xam_input_provider.cpp",
         "runtime/titles/gears1/xam_input_provider.h",
         "runtime/titles/gears1/xam_video_services.cpp",
