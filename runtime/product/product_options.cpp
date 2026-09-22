@@ -67,10 +67,11 @@ constexpr std::array<std::string_view, 6> kValueOptions = {
     if (options.mode == ProductMode::Window)
     {
         if (!options.storage_root.empty() || options.run_seconds != 0 ||
-            !options.capture_directory.empty() || options.capture_interval_seconds != 0)
+            !options.capture_directory.empty() || options.capture_interval_seconds != 0 ||
+            options.perf_map)
         {
-            return "--storage-root, --seconds, --capture-dir, and --capture-every apply only "
-                   "with --offscreen";
+            return "--storage-root, --seconds, --capture-dir, --capture-every, and --perf-map "
+                   "apply only with --offscreen";
         }
         return {};
     }
@@ -102,6 +103,11 @@ ProductOptionsResult ParseProductOptions(std::span<const char *const> arguments)
         if (option == "--offscreen")
         {
             options.mode = ProductMode::Offscreen;
+            continue;
+        }
+        if (option == "--perf-map")
+        {
+            options.perf_map = true;
             continue;
         }
         if (!TakesValue(option))

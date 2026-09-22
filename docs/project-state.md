@@ -20,7 +20,7 @@ This inventory reports observable capabilities independently of the product goal
 | S010 | Apple Silicon macOS A64 execution | missing | S006 | G001, G004 |
 | S011 | Android arm64-v8a A64 execution | missing | S006 | G001, G004 |
 | S012 | Complete native RHI frontend | missing | S003, S006 | G001, G002, G003 |
-| S013 | Native 8.33 ms / 120 fps renderer budget | missing | S009, S012 | G003 |
+| S013 | Native 8.33 ms / 120 fps renderer budget | partial | S009, S012 | G003 |
 | S014 | Gears 2, Gears 3, and Judgment exact-revision conformance | missing | S009, S013 | G001, G002 |
 | S015 | Generated guest-source product and translator-only surfaces absent | verified | — | G001, G002, G004 |
 | S016 | Independently authored shared UE3/Xbox contract | verified | S006 | G001 |
@@ -35,15 +35,15 @@ through `x360port::SystemSession`: Xenia's kernel, file system, GPU, audio, and 
 services host the authenticated executable, the guest CPU runs on Xenia's x64 dynarec,
 and title-owned native overrides are dispatched from the guest's call slots. A headless
 150 s run under the profile's menu walk passes the logos and every front-end menu, loads
-Act 1, and plays its opening scene at a steady 29-30 presents/s.
+Act 1, and plays its opening scene at 118-119 presents/s.
 
 The service-binding frontier recorded by `docs/issues/0171` is superseded for the
 product: the system session answers every import with Xenia's kernel instead of a
 title-local claim table. The profile's gameplay walk now plays past the opening scene to Act 1's first
 path choice. What remains for S009 is combat, a comparison against the oracle,
 and the native audio mix, which the product binds but the
-title never reaches on this path (`docs/issues/0172`). The title's 30 Hz
-presentation cap is the first S013 boundary.
+title never reaches on this path (`docs/issues/0172`). Presentation now runs
+up to 120 presents/s; S013 records the gameplay rate and its next costs.
 
 Two facts from an earlier qualification constrain further native-override work. Recovered guest
 addresses must come from the virtual-address-indexed mapped image, because the normalized
@@ -246,8 +246,23 @@ and prove frame parity. Existing native pieces do not establish that result.
 
 ### S013 — native renderer budget
 
-Missing capability: sustain and document an 8.33 ms / 120 fps native-renderer
-budget during representative gameplay on named hardware.
+The console presents Gears 1 every second vblank, and the title's game clock is the
+host clock (`runtime/titles/gears1/presentation.h` records the evidence), so the product
+runs the console's vblank at 240 Hz for a 120 presents/s ceiling instead of the
+console's 30. Measured headless on an AMD Radeon RX 6700 XT (RADV) with the profile's
+gameplay walk, 305 s: the menus and Act 1's opening hold 118-119 presents/s; play in the
+first corridor runs at about 58-63.
+
+Play is bound by Xenia's GPU command thread, not the host GPU (40-80% busy). Three
+costs on that thread were removed in the pinned fork: a `gettid` syscall on every
+global-mutex acquire (34 to 49 presents/s), a scan of every live occlusion report on
+each BEGIN (49 to 63), and oracle shader hashing on each unarmed draw. The next cost is
+the per-register virtual `WriteRegister` path (18% of the thread), then the guest render
+thread's spin on GPU progress (`sub_8222F460`, S005). `tools/run_offscreen.py
+--perf-map` names translated guest functions in `perf report`.
+
+Gap: gameplay does not yet hold 120 presents/s, and no frame-time percentiles or
+windowed measurement exist.
 
 ### S014 — later Gears titles
 

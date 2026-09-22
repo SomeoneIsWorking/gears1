@@ -1,6 +1,7 @@
 #include "gears1_session.h"
 
 #include "titles/gears1/audio_mix.h"
+#include "titles/gears1/presentation.h"
 #include "titles/gears1/xam_input_provider.h"
 
 namespace gears::product
@@ -23,6 +24,8 @@ x360port::SystemSessionConfig Gears1SessionConfig(const ProductOptions &options,
     config.host_input =
         offscreen ? x360port::SystemHostInput::None : x360port::SystemHostInput::Gamepads;
     config.desktop_input = desktop;
+    config.display_refresh_hz = titles::gears1::kDisplayRefreshHz;
+    config.write_perf_map = options.perf_map;
     config.overrides.push_back({.address = titles::gears1::kAudioMixAddress,
                                 .handler = titles::gears1::ApplyNativeAudioMix,
                                 .context = nullptr});

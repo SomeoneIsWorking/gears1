@@ -121,10 +121,10 @@ class BootstrapTests(unittest.TestCase):
             requirements.require_pkg_config_modules(
                 ("gtk+-3.0", "sdl2", "liblz4"), lambda module: module == "sdl2"
             )
-        message = str(caught.exception)
-        self.assertIn("gtk+-3.0", message)
-        self.assertIn("liblz4", message)
-        self.assertNotIn("sdl2,", message)
+        # The refusal names exactly the missing modules; the install hint that
+        # follows may name every product module on a host with no known distribution.
+        refusal = str(caught.exception).splitlines()[0]
+        self.assertEqual(refusal, "missing development files for: gtk+-3.0, liblz4")
         requirements.require_pkg_config_modules(("sdl2",), lambda module: True)
 
     def test_timed_walks_accept_chords_and_refuse_malformed_steps(self) -> None:

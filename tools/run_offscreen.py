@@ -78,6 +78,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--iso", help="disc image or 7z archive (default: as ./run.sh)")
     parser.add_argument("--seconds", type=int, default=120)
     parser.add_argument("--capture-every", type=int, default=15)
+    parser.add_argument(
+        "--perf-map",
+        action="store_true",
+        help="write /tmp/perf-<pid>.map so `perf report` names translated guest functions",
+    )
     route = parser.add_mutually_exclusive_group()
     route.add_argument("--walk", default="menu", help="none, start, menu, checkpoint, or gameplay")
     route.add_argument(
@@ -119,6 +124,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--capture-every",
         str(arguments.capture_every),
     ]
+    if arguments.perf_map:
+        command.append("--perf-map")
     status = run_logged_child(
         command, cwd=REPO_ROOT, environ=child_environment, log_path=run_root / "run.log"
     )
