@@ -40,12 +40,9 @@ def package_command(
     include_archive_tools: bool = False,
 ) -> str:
     host = platform.system() if system is None else system
-    distro = _linux_distribution() if distribution is None else distribution.lower()
-    if host != "Linux":
-        raise RequirementError(
-            f"the Gears of War product has no {host} host yet: x360port provides its "
-            "full console only on Linux"
-        )
+    distro = "" if host != "Linux" else (
+        _linux_distribution() if distribution is None else distribution.lower()
+    )
     if "fedora" in distro or "rhel" in distro or "centos" in distro:
         packages = (
             "sudo dnf install cmake ninja-build pkgconf-pkg-config gcc gcc-c++ "
@@ -60,6 +57,17 @@ def package_command(
         "install CMake, Ninja, pkg-config, a C++20 compiler, and the development files for "
         f"{', '.join(PRODUCT_PKG_CONFIG_MODULES)}{archive_hint} using your package manager"
     )
+
+
+def require_supported_host(system: str | None = None) -> None:
+    """Refuse a host the product cannot run on before checking anything else."""
+
+    host = platform.system() if system is None else system
+    if host != "Linux":
+        raise RequirementError(
+            f"the Gears of War product has no {host} host yet: x360port provides its "
+            "full console only on Linux"
+        )
 
 
 def require_commands(

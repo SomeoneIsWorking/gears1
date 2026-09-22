@@ -172,12 +172,14 @@ class BootstrapTests(unittest.TestCase):
             "sudo apt install cmake ninja-build pkg-config g++ libgtk-3-dev libsdl2-dev "
             "liblz4-dev libx11-xcb-dev libfontconfig-dev",
         )
+        self.assertIn("using your package manager", requirements.package_command("Darwin"))
+        requirements.require_supported_host("Linux")
         for host in ("Darwin", "Windows"):
             with (
                 self.subTest(host=host),
-                self.assertRaisesRegex(requirements.RequirementError, "no .* host yet"),
+                self.assertRaisesRegex(requirements.RequirementError, f"no {host} host yet"),
             ):
-                requirements.package_command(host, "")
+                requirements.require_supported_host(host)
 
     def test_archive_tool_is_required_only_for_7z_inputs(self) -> None:
         with self.assertRaisesRegex(requirements.RequirementError, "7z"):
@@ -264,6 +266,10 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(returncode, 7)
         self.assertEqual(log.read_text(encoding="utf-8"), "child-output\n")
 
+    @unittest.skipUnless(
+        os.name == "posix",
+        "forwarding a termination signal is a POSIX contract; the product refuses other hosts",
+    )
     def test_terminating_launcher_terminates_its_direct_child(self) -> None:
         child_pid = self.root / "child.pid"
         log = self.root / "child.log"

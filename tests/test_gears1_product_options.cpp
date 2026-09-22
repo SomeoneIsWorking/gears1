@@ -1,6 +1,7 @@
 #include "product_options.h"
 
 #include <cstdlib>
+#include <filesystem>
 #include <initializer_list>
 #include <iostream>
 #include <span>
@@ -42,6 +43,9 @@ void RequireRefused(std::initializer_list<const char *> arguments, std::string_v
 
 int main()
 {
+    // Absolute on every host: "/tmp/..." is not absolute on Windows.
+    std::string storage = (std::filesystem::temp_directory_path() / "gears-run").string();
+    std::string frames = (std::filesystem::temp_directory_path() / "gears-run" / "frames").string();
     ProductOptionsResult window = Parse({"--image", "/games/gears.iso", "--title-id", "4d5307d5"});
     Require(static_cast<bool>(window), window.error);
     Require(window.options.mode == ProductMode::Window, "the default mode is not the window");
@@ -50,8 +54,8 @@ int main()
 
     ProductOptionsResult offscreen =
         Parse({"--offscreen", "--image", "/games/gears.iso", "--title-id", "4D5307D5",
-               "--storage-root", "/tmp/gears-run", "--seconds", "90", "--capture-dir",
-               "/tmp/gears-run/frames", "--capture-every", "15"});
+               "--storage-root", storage.c_str(), "--seconds", "90", "--capture-dir",
+               frames.c_str(), "--capture-every", "15"});
     Require(static_cast<bool>(offscreen), offscreen.error);
     Require(offscreen.options.mode == ProductMode::Offscreen, "--offscreen was not selected");
     Require(offscreen.options.run_seconds == 90U, "--seconds was not read");
@@ -73,10 +77,10 @@ int main()
                     "--storage-root", "relative", "--seconds", "5"},
                    "absolute --storage-root");
     RequireRefused({"--offscreen", "--image", "/games/gears.iso", "--title-id", "4d5307d5",
-                    "--storage-root", "/tmp/gears-run"},
+                    "--storage-root", storage.c_str()},
                    "positive --seconds");
     RequireRefused({"--offscreen", "--image", "/games/gears.iso", "--title-id", "4d5307d5",
-                    "--storage-root", "/tmp/gears-run", "--seconds", "5", "--capture-every", "1"},
+                    "--storage-root", storage.c_str(), "--seconds", "5", "--capture-every", "1"},
                    "given together");
     std::cout << "product options: 2 accepted, 11 refused\n";
     return EXIT_SUCCESS;

@@ -140,7 +140,12 @@ def run_logged_child(
         if process is not None and process.poll() is None:
             process.send_signal(signum)
 
-    handled = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    # SIGHUP exists only on POSIX hosts.
+    handled = tuple(
+        getattr(signal, name)
+        for name in ("SIGINT", "SIGTERM", "SIGHUP")
+        if hasattr(signal, name)
+    )
     try:
         for signum in handled:
             previous_handlers[signum] = signal.signal(signum, forward)
