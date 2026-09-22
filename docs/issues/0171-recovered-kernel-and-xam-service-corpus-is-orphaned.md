@@ -86,3 +86,39 @@ encoding, virtual-memory status codes, synchronisation objects — belong in
 `x360port`, not in `runtime/titles/gears1/`. Only bindings that encode a Gears
 policy decision stay here. Splitting the corpus by that line is part of the
 migration, not cleanup to do afterwards.
+
+## Virtual-memory group: settled by inspection — 2026-09-22
+
+The first group to migrate is guest virtual memory, because a title calls it
+before anything else. Three questions had to be answered before writing it, and
+all three were answered in the pinned Xenia fork rather than assumed.
+
+**No `KernelState` is required.** Xenia's own `NtAllocateVirtualMemory` reaches
+memory through `kernel_memory()`, which is `kernel_state()->memory()` and
+nothing more (`src/xenia/kernel/util/shim_utils.h:381`). The whole policy —
+page-size selection, base rounding, `AllocFixed` versus `Alloc`, the
+zero-on-commit path — needs only an `xe::Memory&`, which `x360port` already
+embeds. The service can therefore be a normal `x360port` owner over Xenia's
+heaps without embedding Xenia's kernel HLE, which the product contract excludes.
+
+**The guest-facing constants are includable.** `X_MEM_COMMIT`, `X_MEM_RESERVE`,
+`X_MEM_RESET`, `X_MEM_LARGE_PAGES`, `X_PAGE_READWRITE` and the rest are in
+`src/xenia/kernel/kernel.h`, which pulls in no kernel state.
+
+**The protect-flag translation must be shared, not copied.**
+`FromXdkProtectFlags` and `ToXdkProtectFlags` in
+`src/xenia/kernel/xboxkrnl/xboxkrnl_memory.cc` already own the mapping between
+the guest's `X_PAGE_*` bits and Xenia's `kMemoryProtect*` bits. They are
+non-static but are not declared in `xboxkrnl_memory.h`, so they are linkable and
+unreachable at the same time. The fix belongs in the fork: declare both in that
+header, which is an upstreamable change to Xenia's own file. Do not re-derive
+the mapping in `x360port`, and do not declare a third-party symbol `extern` at
+the consumer.
+
+With those settled, the group is: a title-neutral `x360port` owner over Xenia's
+heaps exposing allocate, free, and query; claims for `NtAllocateVirtualMemory`,
+`NtFreeVirtualMemory`, and `NtQueryVirtualMemory`; and deletion of the
+corresponding recovered handlers from `runtime/kernel_memory.cpp` in the same
+change. `NtQueryVirtualMemory` has no recovered handler at all — it is one of
+the 14 uncovered kernel imports — so it is written from Xenia's
+`HeapAllocationInfo` contract rather than migrated.
