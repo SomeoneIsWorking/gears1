@@ -34,17 +34,20 @@ tables and to the recovered corpus. Against the ignored user XEX:
 - 0 unresolved ordinals. Every ordinal the image imports is declared by the
   vendored tables, which independently confirms the resolver the runtime
   compiles in against bytes it has never seen.
-- 168 of the 226 function imports already have a recovered handler.
-- 58 have none: 44 `xam.xex` and 14 `xboxkrnl.exe`. The XAM remainder is
+- 166 of the 226 function imports have a recovered handler (168 before the
+  virtual-memory pair was migrated and deleted).
+- 60 have none: 44 `xam.xex` and 16 `xboxkrnl.exe`. The XAM remainder is
   dominated by `NetDll_*` sockets, `XamShow*UI` blades, and voice/session
   services; the kernel remainder includes `NtQueryVirtualMemory`,
   `XexGetProcedureAddress`, `RtlUnwind`, and `__C_specific_handler`.
 - 3 recovered handlers correspond to no import of this image, so the corpus was
   built for this title and is close to the right shape for it.
 
-A recovered handler is preserved source, not a binding. `XamInputGetState` and
-`XamInputGetCapabilities` are implemented in `x360port` and therefore appear as
-uncovered in that count while being bound; the tool says so in its report.
+A recovered handler is preserved source, not a binding. The tool now reports the
+two separately: six function imports reach a host service — `XGetAVPack`, the two
+XAM controller exports, and the three kernel virtual-memory exports — while 220
+still take the typed refusal. A service implemented in `x360port` is bound and
+carries no recovered handler, so neither count can be read off the other.
 
 ## Required work
 
@@ -141,3 +144,33 @@ by the export the guest called, because that same destructor picks between the
 physical and virtual free wrappers from a flag on the resource. Both agree with
 what Xenia does, which is the expected convergence now that the service runs
 over Xenia's heaps.
+
+## Virtual-memory group: landed — 2026-09-22
+
+`x360port` `src/guest_virtual_memory.{hpp,cpp}` now implements
+`NtAllocateVirtualMemory`, `NtFreeVirtualMemory`, and `NtQueryVirtualMemory`
+over the embedded Xenia heaps and publishes them through
+`RuntimeContext::KernelServiceClaims`, which `Gears1Runtime` resolves in the same
+claim table as its own title services. The migrated handlers are deleted from
+`runtime/kernel_memory.cpp`; its physical-memory and address-query handlers
+remain orphaned.
+
+The three questions above held. The fork declares `From/ToXdkProtectFlags` in
+`xboxkrnl_memory.h` rather than the consumer re-deriving or `extern`-declaring
+them, and the byte-order owner landed as `src/guest_endian.hpp` with
+`src/xam_input.cpp` migrated onto it in the same change.
+
+Recovered semantics that survived, each now covered by a negative: a free of
+address zero answers `X_STATUS_MEMORY_NOT_ALLOCATED` without consulting a heap,
+`MEM_DECOMMIT` keeps the reservation, a `FreeType` of zero is treated as a
+release, and a failed release is reported rather than swallowed. `MEM_RESET`
+refuses by name instead of reporting a success the guest's pages would not
+reflect.
+
+Evidence: `x360port_kernel_memory_tests` (synthetic, in the x360port gate) and
+`test_gears1_real_leaf`, which now commits and releases a range through the
+ordinals Epic's own manifest carries and requires the zero-base answer there
+too.
+
+The next group is chosen the same way: read the uncovered list, pick the one the
+title reaches first, and settle its questions in the fork before writing it.

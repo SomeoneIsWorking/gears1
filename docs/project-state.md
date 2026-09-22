@@ -40,14 +40,17 @@ executor will prefer dynarec and may use the bounded, counted fallback; current 
 coverage cannot prove gameplay compatibility or performance.
 
 Binding is the frontier, not the dynarec. `docs/issues/0171` records the finding:
-171 recovered `__imp__` service handlers across 21 files compile into no target and
-include a header the break-first deletion removed, while the authenticated image
-declares 236 imports and three are bound. Every other import takes the typed
-unsupported-service refusal, so the title stops at its first unbound service.
-Re-owning that corpus over `x360port`'s typed import contract, claimed by exported
-name, is the next work toward S009. `runtime/guest_heap.*` must not be revived with
-it: Xenia's `Memory`/`BaseHeap` already own guest allocation, and a second allocator
-would disagree with it about which pages are committed.
+the authenticated image declares 236 imports, of which six now reach a host service —
+`XGetAVPack`, the two XAM controller exports, and the kernel's three virtual-memory
+exports, which run in `x360port` over Xenia's own heaps. The remaining 220 function
+imports take the typed unsupported-service refusal, so the title still stops at its
+first unbound service. 166 of them have a recovered `__imp__` handler that compiles
+into no target and includes a header the break-first deletion removed; re-owning that
+corpus over `x360port`'s typed import contract, claimed by exported name, is the next
+work toward S009. `runtime/guest_heap.*` must not be revived with it: Xenia's
+`Memory`/`BaseHeap` already own guest allocation, and a second allocator would
+disagree with it about which pages are committed — the virtual-memory group proved
+that route works without one.
 
 Two facts from an earlier qualification constrain further native-override work. Recovered guest
 addresses must come from the virtual-address-indexed mapped image, because the normalized
