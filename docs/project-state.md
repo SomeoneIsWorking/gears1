@@ -33,10 +33,19 @@ the pinned `x360port`/Xenia execution boundary for an asset-free synthetic discr
 owns a profile-authenticated normalized-image-to-flat-guest adapter, and composes that
 adapter with one persistent runtime context, bounded variable-import storage, and the
 title-owned `XGetAVPack` binding. The shared checked XEX2 inspector and real ignored-image
-identity path are verified, but the product still refuses the gameplay target until the
-remaining import bindings and runtime services are composed. The executor will prefer
-dynarec and may use the bounded, counted fallback; current fallback coverage cannot prove
-gameplay compatibility or performance.
+identity path are verified, and the first native override is now qualified differentially
+against its original guest body on the real image (S004). The product still refuses the
+gameplay target until the remaining import bindings and runtime services are composed. The
+executor will prefer dynarec and may use the bounded, counted fallback; current fallback
+coverage cannot prove gameplay compatibility or performance.
+
+Two facts from that qualification constrain further native-override work. Recovered guest
+addresses must come from the virtual-address-indexed mapped image, because the normalized
+image displaces everything past the 0x4E00 `.text` alignment gap; `tools/guest_image.py`
+refuses the wrong layout. And a guest fault inside a translated block strands the calling
+thread: the translated-block budget is checked at block entry, so it cannot interrupt an
+instruction that faults repeatedly. Entering a wrong address is therefore a hang, not a
+typed failure.
 
 ## Capability details
 
@@ -217,6 +226,17 @@ with the authenticated real-image runtime and native RHI backend.
 
 ### S017 — native/JIT boundary CI
 
+All three hosted jobs failed on 2026-09-22 for three unrelated causes, each
+fixed at its cause rather than by relaxing a check: the verifier built a
+hand-maintained target list that had drifted from the registered CTest set, so
+`gears_remote_input` was reported "Not Run" (CMake now owns the set through
+`gears_add_binary_test`); Xenia's `emulator.cc` reached vendored `tabulate`
+through a non-SYSTEM include path, so clang 22's
+`-Wdeprecated-literal-operator` became an error under `-Werror`; and FFmpeg's
+platform ladder had no Apple branch, so macOS inherited `CONFIG_ICONV` and
+failed to link `iconv`. A local pass does not establish the hosted matrix:
+Windows and macOS remain proven only by CI.
+
 Evidence: the immutable workflow defines the Gears-owned production-boundary
 discriminator for Linux x86-64, Windows x86-64, and macOS arm64. It also executes
 the exact/clean dependency and bootstrap contracts, and the canonical C++ quality
@@ -224,8 +244,8 @@ owner formats maintained source and lints the built first-party discriminator.
 The canonical `tools/verify_dynarec_boundary.py --x360port-root ../../shared/x360port
 --expected-machine x86_64` gate uses the exact `x360port` and Xenia revisions
 pinned by CMake and the workflow. It passed all eight CTests locally with Clang
-on the pinned `x360port` revision `d976b6355829c398aa701e54c515a6bc770b9d13`
-with Xenia `b7b471a66120932ef3f738e004233061db6127a5`; the headless
+on the pinned `x360port` revision `7c9652d34237e5a18b4e0963b7f9d87aa4ab7985`
+with Xenia `7aa5aec030c56abf551a8e2038096de7fe476235`; the headless
 real-image import/leaf discriminator passed separately against the ignored
 user-supplied XEX through `Gears1Runtime`, resolving 236 imports and executing the retained real leaf,
 scoped original, nested guest-call override/removal, and executable invalidation.
