@@ -64,6 +64,34 @@ void CaptureSecond(const x360port::SystemSession &session, const ProductOptions 
                  path.string());
 }
 
+bool ReportRun(std::uint32_t seconds, std::uint64_t presents,
+               const x360port::SystemExecutionCounts &counts)
+{
+    lucent::info("product",
+                 "offscreen run ended after {} s: {} presents; {} guest functions translated to "
+                 "{} host bytes, {} translation failures; {} native-override calls",
+                 seconds, presents, counts.translated_functions, counts.host_code_bytes,
+                 counts.translation_failures, counts.native_override_calls);
+    bool healthy = true;
+    if (presents == 0)
+    {
+        lucent::error("product", "the title never presented a frame");
+        healthy = false;
+    }
+    if (counts.translated_functions == 0)
+    {
+        lucent::error("product", "the dynarec translated no guest function");
+        healthy = false;
+    }
+    if (counts.translation_failures != 0)
+    {
+        lucent::error("product", "{} guest functions failed to translate; their calls failed",
+                      counts.translation_failures);
+        healthy = false;
+    }
+    return healthy;
+}
+
 } // namespace
 
 bool RunOffscreen(x360port::SystemSession &session, const ProductOptions &options)
@@ -85,23 +113,19 @@ bool RunOffscreen(x360port::SystemSession &session, const ProductOptions &option
     {
         std::this_thread::sleep_until(start + std::chrono::seconds(second));
         std::uint64_t presents = session.PresentedFrameCount();
-        lucent::info("product", "second {}: {} presents/s, {} presents, {} native-override calls",
-                     second, presents - previous_presents, presents, session.NativeOverrideCalls());
+        x360port::SystemExecutionCounts counts = session.ExecutionCounts();
+        lucent::info("product",
+                     "second {}: {} presents/s, {} presents, {} translated functions, {} "
+                     "native-override calls",
+                     second, presents - previous_presents, presents, counts.translated_functions,
+                     counts.native_override_calls);
         previous_presents = presents;
         if (options.capture_interval_seconds != 0 && second % options.capture_interval_seconds == 0)
         {
             CaptureSecond(session, options, second);
         }
     }
-    std::uint64_t presents = session.PresentedFrameCount();
-    std::uint64_t override_calls = session.NativeOverrideCalls();
-    lucent::info("product", "offscreen run ended after {} s: {} presents, {} native-override calls",
-                 options.run_seconds, presents, override_calls);
-    if (presents == 0)
-    {
-        lucent::error("product", "the title never presented a frame");
-    }
-    return presents != 0;
+    return ReportRun(options.run_seconds, session.PresentedFrameCount(), session.ExecutionCounts());
 }
 
 } // namespace gears::product

@@ -40,8 +40,7 @@ The service-binding frontier recorded by `docs/issues/0171` is superseded for th
 product: the system session answers every import with Xenia's kernel instead of a
 title-local claim table. What remains for S009 is interactive play past the opening
 scene and a comparison against the oracle, keyboard and mouse input on Linux,
-translated-block and fallback counters from the session (the run cannot yet show
-its dynarec denominator), and the native audio mix, which the product binds but the
+and the native audio mix, which the product binds but the
 title never reaches on this path (`docs/issues/0172`). The title's 30 Hz
 presentation cap is the first S013 boundary.
 
@@ -133,8 +132,8 @@ executes the authenticated adapter through Xenia's JIT and returns the configure
 The shared checked-XEX2 inspector also validates the real ignored container, normalized
 image, import manifest, and helper-pattern evidence. The product now hosts the
 authenticated disc on `x360port::SystemSession` (S009). Gap: complete fallback
-ISA/control-flow coverage, title-specific write/cache-control semantics, and translation
-and fallback accounting in the system session remain missing.
+ISA/control-flow coverage and title-specific write/cache-control semantics remain
+missing.
 
 ### S007 — first Gears discriminator
 
@@ -198,12 +197,14 @@ Evidence: `tools/run_offscreen.py --seconds 150 --walk menu` runs the shipping
 executable headless and silent on the supported disc. It presents 4445 frames in
 150 s, 29-30 each second. Its captures show the logos; the main, campaign,
 single-player, and difficulty menus; the unsigned-profile prompt; and Act 1's opening
-scene with its subtitles. A control override on the draw entry counted 211 guest
+scene with its subtitles. The run fails unless the dynarec translated guest code and
+no function failed to translate: over 60 s it translated 10,996 guest functions to
+24.8 MB of host code with 0 failures. The system session has no interpreter fallback.
+A control override on the draw entry counted 211 guest
 calls in 8 s, so dispatch and original-body calls work on real guest threads.
-Gap: nothing yet drives or compares play past the opening scene. The session reports
-no translated-block or fallback counters, so no run can yet show that gameplay ran
-on the dynarec rather than a fallback. Linux has gamepad input only. The product's
-single native override is unreached (`docs/issues/0172`).
+Gap: nothing yet drives or compares play past the opening scene. Linux has gamepad input only. The product's
+single native override is unreached (`docs/issues/0172`). Two startup failures seen during a
+concurrent heavy build are unexplained (`docs/issues/0173`).
 
 ### S010 — Apple Silicon A64
 
