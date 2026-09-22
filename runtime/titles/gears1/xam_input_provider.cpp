@@ -13,7 +13,7 @@ constexpr std::uint32_t kAnyUserMask = 0xFFU;
 
 x360port::XamPadSnapshot ReadXamPad(x360port::XamInputRequest request, void *) noexcept
 {
-    UpdateScriptedInput();
+    PollHostInput();
     if (request.user_index != 0U && (request.user_index & kAnyUserMask) != kAnyUserMask)
     {
         return {};

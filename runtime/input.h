@@ -6,12 +6,15 @@
 // Controller input, from the host to the guest's XamInput* imports.
 //
 // The console's XInput state is a small fixed structure; everything here exists
-// to fill it honestly. Two host sources feed it:
+// to fill it honestly. Three sources feed it:
 //
-//  - a real gamepad or the keyboard, polled by the presenter thread (which owns
-//    SDL and its event queue);
+//  - the game window's host device (the desktop keyboard and mouse), sampled
+//    on each guest poll through a registered HostPadSampler;
 //  - GEARS_INPUT_SCRIPT, a timed list of button states, which is how a headless
-//    run drives the title reproducibly.
+//    run drives the title reproducibly;
+//  - the remote control plane, which replaces the pad atomically.
+//
+// Host gamepads are not read here: the console merges them with this pad.
 //
 // When neither source is available the pad reports DISCONNECTED rather than
 // connected-and-idle. That distinction matters: a title handles an absent
@@ -94,8 +97,15 @@ void DisconnectRemotePad();
 InputSource CurrentInputSource();
 const char *InputSourceName(InputSource source);
 
-// Called from the presenter thread on every event pump: reads SDL's gamepad and
-// keyboard. A no-op in a headless run.
+// A host device's current pad, read on the polling guest thread. Must be
+// thread-safe; the context outlives every poll.
+using HostPadSampler = PadState (*)(void *context);
+
+// Registers the window's host device. It answers only in a windowed run, and
+// only while neither a script nor a remote pad owns the controller.
+void SetHostPadSource(HostPadSampler sampler, void *context);
+
+// Advances the script and samples the host device. Called on every guest poll.
 void PollHostInput();
 
 // Advances the scripted source to `elapsedMs` since start. Called from

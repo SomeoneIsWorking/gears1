@@ -14,6 +14,7 @@
 #include "input.h"
 #include "offscreen_run.h"
 #include "product_options.h"
+#include "titles/gears1/desktop_controls.h"
 
 namespace
 {
@@ -45,7 +46,7 @@ constexpr std::string_view kSaveNamespace = "gears1";
                                       const std::filesystem::path &storage_root)
 {
     x360port::SystemSessionCreateResult created = x360port::SystemSession::CreateOffscreen(
-        gears::product::Gears1SessionConfig(options, storage_root));
+        gears::product::Gears1SessionConfig(options, storage_root, nullptr));
     if (!created)
     {
         lucent::error("product", "the console could not be composed: {}", created.failure.detail);
@@ -79,15 +80,18 @@ int main(int argc, char **argv)
         lucent::error("product", "no per-user data directory is available for saves");
         return EXIT_FAILURE;
     }
-    // Scripted and remote input are the title's source; host controllers are
-    // the console's, read through the session's host input.
-    gears::InitialiseInput(false);
+    // The title's pad carries scripted, remote, and keyboard-and-mouse input;
+    // host gamepads are the console's, merged with it by the session.
     if (options.mode == ProductMode::Offscreen)
     {
+        gears::InitialiseInput(false);
         return RunOffscreenProduct(options, *storage_root);
     }
-    x360port::RuntimeFailure failure =
-        x360port::RunWindowedSystem(gears::product::Gears1SessionConfig(options, *storage_root));
+    x360port::DesktopInputState desktop;
+    gears::InitialiseInput(true);
+    gears::SetHostPadSource(gears::titles::gears1::SampleDesktopControls, &desktop);
+    x360port::RuntimeFailure failure = x360port::RunWindowedSystem(
+        gears::product::Gears1SessionConfig(options, *storage_root, &desktop));
     lucent::error("product", "Gears of War could not start: {}", failure.detail);
     return EXIT_FAILURE;
 }

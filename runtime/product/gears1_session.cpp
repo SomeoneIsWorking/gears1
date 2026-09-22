@@ -7,7 +7,8 @@ namespace gears::product
 {
 
 x360port::SystemSessionConfig Gears1SessionConfig(const ProductOptions &options,
-                                                  const std::filesystem::path &storage_root)
+                                                  const std::filesystem::path &storage_root,
+                                                  x360port::DesktopInputState *desktop)
 {
     bool offscreen = options.mode == ProductMode::Offscreen;
     x360port::SystemSessionConfig config;
@@ -21,6 +22,7 @@ x360port::SystemSessionConfig Gears1SessionConfig(const ProductOptions &options,
                     .context = nullptr};
     config.host_input =
         offscreen ? x360port::SystemHostInput::None : x360port::SystemHostInput::Gamepads;
+    config.desktop_input = desktop;
     config.overrides.push_back({.address = titles::gears1::kAudioMixAddress,
                                 .handler = titles::gears1::ApplyNativeAudioMix,
                                 .context = nullptr});
