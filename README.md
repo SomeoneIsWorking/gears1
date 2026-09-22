@@ -12,29 +12,29 @@ Judgment remain product scope, not compatibility claims. See
 `docs/project-state.md` for factual coverage and `docs/gearsue3-engine.md` for
 the architecture.
 
-## Migration status
+## Running
 
-The previous generated-code product and its build, dispatch, configuration, and
-generation surfaces have been removed. The preserved runtime source is native
-subsystem work awaiting adaptation to x360port's canonical CPU/memory/service
-interfaces; it is not a buildable compatibility CPU path.
+```sh
+./run.sh [--iso <path>]
+```
 
-The first executable migration milestone is intentionally bounded:
+The launcher finds your disc (`--iso`, then `GEARS_ISO` in the environment or a
+gitignored `.env`, then the one image or 7z archive in `roms/`), refuses any
+disc whose `default.xex` is not the supported retail revision, builds
+`build/product/gears1`, and starts it. Missing build tools or libraries are
+refused by name with the exact install command. `--prepare` checks and builds
+without starting.
 
-1. consume the exact shared `x360port` and maintained Xenia revisions;
-2. map an aligned authenticated synthetic image whose code and entry point use
-   retained Gears leaf address `0x8222E868`;
-3. translate and execute it through Xenia; and
-4. cross a typed `DbgPrint` import into native code and return.
+The product hosts the authenticated executable on `x360port`'s system session:
+Xenia's kernel, file system, GPU, audio, and input services, with the guest CPU
+on Xenia's x64 dynarec and title-owned native overrides called from the guest's
+own call slots. It currently reaches Act 1 at the title's 30 Hz cap; gamepads are
+the only Linux input. `docs/project-state.md` lists what is verified and what is
+not.
 
-That asset-free discriminator proves wiring, not game compatibility. The
-maintained real-image discriminator now authenticates the supplied XEX, adapts
-the full flat image and import manifest, executes the original leaf, and proves
-disabled, enabled, and scoped-original override paths plus reported-write
-invalidation. A fresh image-only build must still reach
-representative interactive gameplay with Xenia's dynarec selected by default,
-bounded and counted fallback, working native/original calls, relevant
-invalidation coverage, and declared correctness and frame-time evidence.
+Maintainers observe the product headless and silent with
+`uv run --locked python tools/run_offscreen.py --seconds 150 --walk menu`, which
+writes a log, captures, and a contact sheet under `scratch/offscreen/`.
 
 ## Preserved evidence
 

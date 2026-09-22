@@ -69,11 +69,11 @@ void StoreBigEndian(std::span<std::byte> bytes, std::size_t offset, std::uint32_
     return result;
 }
 
-[[nodiscard]] bool LoadGuestVector(x360port::RuntimeContext &runtime, std::uint32_t address,
+[[nodiscard]] bool LoadGuestVector(x360port::GuestCallContext &call, std::uint32_t address,
                                    GuestVector &value, x360port::RuntimeFailure &failure) noexcept
 {
     std::array<std::byte, kGuestVectorSize> bytes{};
-    failure = runtime.ReadMappedGuestMemory(address & kGuestVectorMask, bytes);
+    failure = call.ReadMappedGuestMemory(address & kGuestVectorMask, bytes);
     if (failure)
     {
         return false;
@@ -86,12 +86,12 @@ void StoreBigEndian(std::span<std::byte> bytes, std::size_t offset, std::uint32_
     return true;
 }
 
-[[nodiscard]] bool StoreGuestVector(x360port::RuntimeContext &runtime, std::uint32_t address,
+[[nodiscard]] bool StoreGuestVector(x360port::GuestCallContext &call, std::uint32_t address,
                                     const GuestVector &value,
                                     x360port::RuntimeFailure &failure) noexcept
 {
     std::array<std::byte, kGuestVectorSize> bytes{};
-    failure = runtime.ReadMappedGuestMemory(address & kGuestVectorMask, bytes);
+    failure = call.ReadMappedGuestMemory(address & kGuestVectorMask, bytes);
     if (failure)
     {
         return false;
@@ -101,7 +101,7 @@ void StoreBigEndian(std::span<std::byte> bytes, std::size_t offset, std::uint32_
         const std::size_t guestLane = value.size() - lane - 1U;
         StoreBigEndian(bytes, guestLane * 4U, std::bit_cast<std::uint32_t>(value[lane]));
     }
-    failure = runtime.WriteMappedGuestMemory(address & kGuestVectorMask, bytes);
+    failure = call.WriteMappedGuestMemory(address & kGuestVectorMask, bytes);
     return !failure;
 }
 
@@ -112,7 +112,7 @@ void StoreBigEndian(std::span<std::byte> bytes, std::size_t offset, std::uint32_
 
 } // namespace
 
-x360port::ExecutionResult ApplyNativeAudioMix(x360port::RuntimeContext &runtime,
+x360port::ExecutionResult ApplyNativeAudioMix(x360port::GuestCallContext &call,
                                               x360port::GuestAddress,
                                               std::span<const std::uint64_t> arguments,
                                               void *) noexcept
@@ -137,13 +137,13 @@ x360port::ExecutionResult ApplyNativeAudioMix(x360port::RuntimeContext &runtime,
 
     x360port::RuntimeFailure failure;
     GuestVector v0{};
-    if (!LoadGuestVector(runtime, coefficient1, v0, failure))
+    if (!LoadGuestVector(call, coefficient1, v0, failure))
     {
         return Failed(std::move(failure));
     }
     GuestVector v11 = Add(v0, v0);
     GuestVector v13{};
-    if (!LoadGuestVector(runtime, coefficient0, v13, failure))
+    if (!LoadGuestVector(call, coefficient0, v13, failure))
     {
         return Failed(std::move(failure));
     }
@@ -165,50 +165,50 @@ x360port::ExecutionResult ApplyNativeAudioMix(x360port::RuntimeContext &runtime,
         const std::uint32_t input3 = cursor - 16U;
 
         GuestVector v9{};
-        if (!LoadGuestVector(runtime, output0, v9, failure))
+        if (!LoadGuestVector(call, output0, v9, failure))
         {
             return Failed(std::move(failure));
         }
         GuestVector v7{};
-        if (!LoadGuestVector(runtime, input0, v7, failure))
+        if (!LoadGuestVector(call, input0, v7, failure))
         {
             return Failed(std::move(failure));
         }
         GuestVector v4{};
-        if (!LoadGuestVector(runtime, output1, v4, failure))
+        if (!LoadGuestVector(call, output1, v4, failure))
         {
             return Failed(std::move(failure));
         }
         v9 = MultiplyAdd(v7, v10, v9);
 
         GuestVector v6{};
-        if (!LoadGuestVector(runtime, input1, v6, failure))
+        if (!LoadGuestVector(call, input1, v6, failure))
         {
             return Failed(std::move(failure));
         }
         GuestVector v8{};
-        if (!LoadGuestVector(runtime, cursor, v8, failure))
+        if (!LoadGuestVector(call, cursor, v8, failure))
         {
             return Failed(std::move(failure));
         }
         v7 = MultiplyAdd(v6, v13, v4);
 
         GuestVector v3{};
-        if (!LoadGuestVector(runtime, output2, v3, failure))
+        if (!LoadGuestVector(call, output2, v3, failure))
         {
             return Failed(std::move(failure));
         }
         cursor += 64U;
 
         GuestVector v2{};
-        if (!LoadGuestVector(runtime, input2, v2, failure))
+        if (!LoadGuestVector(call, input2, v2, failure))
         {
             return Failed(std::move(failure));
         }
         v13 = Add(v13, v0);
 
         GuestVector v5{};
-        if (!LoadGuestVector(runtime, input3, v5, failure))
+        if (!LoadGuestVector(call, input3, v5, failure))
         {
             return Failed(std::move(failure));
         }
@@ -218,10 +218,10 @@ x360port::ExecutionResult ApplyNativeAudioMix(x360port::RuntimeContext &runtime,
         v11 = Add(v11, v0);
         v10 = Add(v10, v0);
 
-        if (!StoreGuestVector(runtime, output0, v9, failure) ||
-            !StoreGuestVector(runtime, output1, v7, failure) ||
-            !StoreGuestVector(runtime, input2, v8, failure) ||
-            !StoreGuestVector(runtime, output2, v6, failure))
+        if (!StoreGuestVector(call, output0, v9, failure) ||
+            !StoreGuestVector(call, output1, v7, failure) ||
+            !StoreGuestVector(call, input2, v8, failure) ||
+            !StoreGuestVector(call, output2, v6, failure))
         {
             return Failed(std::move(failure));
         }

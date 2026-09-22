@@ -48,7 +48,7 @@ endif()
 
 set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
     "Exact shared/x360port checkout consumed by GearsUE3")
-set(X360PORT_REQUIRED_REVISION "38f7ca42edfe6faa85fd2547b2ad8fa0b969b478")
+set(X360PORT_REQUIRED_REVISION "5ebdf104ab495cfba5c102ddba4cb95ef4305554")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
@@ -167,6 +167,30 @@ gears_add_binary_test(gears1_guest_image test_gears1_guest_image)
 add_executable(test_gears1_real_leaf tests/test_gears1_real_leaf.cpp)
 target_link_libraries(test_gears1_real_leaf PRIVATE gears1_runtime)
 x360port_enable_warnings(test_gears1_real_leaf)
+
+# The product: the authenticated Gears 1 image on x360port's full console,
+# with the title's native overrides and controller arbitration.
+add_library(gears1_product_options STATIC runtime/product/product_options.cpp)
+target_include_directories(gears1_product_options PUBLIC runtime/product)
+x360port_enable_warnings(gears1_product_options)
+add_executable(test_gears1_product_options tests/test_gears1_product_options.cpp)
+target_link_libraries(test_gears1_product_options PRIVATE gears1_product_options)
+x360port_enable_warnings(test_gears1_product_options)
+gears_add_binary_test(gears1_product_options test_gears1_product_options)
+# x360port provides the full console only where it has a windowed host (GTK on
+# Linux today). Elsewhere the product target is absent by name, and the
+# launcher refuses with the same reason; the execution contracts still build.
+if(TARGET x360port::system)
+    add_executable(gears1
+        runtime/product/gears1_main.cpp
+        runtime/product/gears1_session.cpp
+        runtime/product/offscreen_run.cpp)
+    target_link_libraries(gears1 PRIVATE gears1_product_options gears1_audio_mix gears_input
+                                         x360port::system lucent::lucent)
+    x360port_enable_warnings(gears1)
+else()
+    message(STATUS "gears1: x360port has no full-console host here; the product is not built")
+endif()
 
 add_executable(test_gears1_ue3_contract tests/test_gears1_ue3_contract.cpp)
 target_link_libraries(test_gears1_ue3_contract PRIVATE x360ue3::x360ue3)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 import shutil
+import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -26,6 +27,13 @@ def _linux_distribution(os_release: Path = Path("/etc/os-release")) -> str:
     return f"{values.get('ID', '')} {values.get('ID_LIKE', '')}".lower()
 
 
+# The pkg-config modules the product links, each with the package that
+# provides it on the supported Linux families.
+PRODUCT_PKG_CONFIG_MODULES = ("gtk+-3.0", "sdl2", "liblz4", "x11-xcb", "fontconfig")
+FEDORA_PRODUCT_PACKAGES = "gtk3-devel SDL2-devel lz4-devel libX11-devel fontconfig-devel"
+DEBIAN_PRODUCT_PACKAGES = "libgtk-3-dev libsdl2-dev liblz4-dev libx11-xcb-dev libfontconfig-dev"
+
+
 def package_command(
     system: str | None = None,
     distribution: str | None = None,
@@ -33,28 +41,24 @@ def package_command(
 ) -> str:
     host = platform.system() if system is None else system
     distro = _linux_distribution() if distribution is None else distribution.lower()
-    if host == "Darwin":
-        packages = "cmake ninja pkg-config sdl3 molten-vk"
-        return f"brew install {packages}{' sevenzip' if include_archive_tools else ''}"
-    if host == "Windows":
-        command = (
-            "winget install Kitware.CMake Ninja-build.Ninja; then install the "
-            "Desktop development with C++ workload, SDL3, and the Vulkan SDK"
+    if host != "Linux":
+        raise RequirementError(
+            f"the Gears of War product has no {host} host yet: x360port provides its "
+            "full console only on Linux"
         )
-        return f"{command}; also install 7-Zip (7zip.7zip)" if include_archive_tools else command
     if "fedora" in distro or "rhel" in distro or "centos" in distro:
         packages = (
-            "sudo dnf install cmake ninja-build make pkgconf-pkg-config gcc gcc-c++ SDL3-devel "
-            "vulkan-loader-devel vulkan-headers"
+            "sudo dnf install cmake ninja-build pkgconf-pkg-config gcc gcc-c++ "
+            f"{FEDORA_PRODUCT_PACKAGES}"
         )
         return f"{packages} 7zip" if include_archive_tools else packages
     if "ubuntu" in distro or "debian" in distro:
-        packages = "sudo apt install cmake ninja-build make pkg-config gcc g++ libsdl3-dev libvulkan-dev"
+        packages = f"sudo apt install cmake ninja-build pkg-config g++ {DEBIAN_PRODUCT_PACKAGES}"
         return f"{packages} 7zip" if include_archive_tools else packages
     archive_hint = ", and 7-Zip" if include_archive_tools else ""
     return (
-        "install CMake, Ninja, a C++20 compiler, SDL3 development files, and "
-        f"Vulkan headers/loader{archive_hint} using your platform package manager"
+        "install CMake, Ninja, pkg-config, a C++20 compiler, and the development files for "
+        f"{', '.join(PRODUCT_PKG_CONFIG_MODULES)}{archive_hint} using your package manager"
     )
 
 
@@ -63,7 +67,7 @@ def require_commands(
     which: Callable[[str], str | None] = shutil.which,
 ) -> None:
     environment = os.environ if environ is None else environ
-    required = ["git", "cmake", "ninja", "make", "pkg-config"]
+    required = ["git", "cmake", "ninja", "pkg-config"]
     configured_c_compiler = environment.get("CC")
     configured_compiler = environment.get("CXX")
     c_compiler_candidates = (
@@ -94,5 +98,21 @@ def require_archive_command(
     )
 
 
-def product_dependency_hint() -> str:
-    return f"Install the required product dependencies with:\n  {package_command()}"
+def require_pkg_config_modules(
+    modules: tuple[str, ...] = PRODUCT_PKG_CONFIG_MODULES,
+    exists: Callable[[str], bool] | None = None,
+) -> None:
+    """Refuse by exact module name before CMake reports the first one it misses."""
+
+    probe = exists or (
+        lambda module: subprocess.run(
+            ["pkg-config", "--exists", module], check=False
+        ).returncode
+        == 0
+    )
+    missing = [module for module in modules if not probe(module)]
+    if missing:
+        raise RequirementError(
+            f"missing development files for: {', '.join(missing)}\n"
+            f"Install them with:\n  {package_command()}"
+        )

@@ -16,7 +16,7 @@ This inventory reports observable capabilities independently of the product goal
 | S006 | Xenia-backed `x360port` execution boundary | partial | S001 | G001, G002 |
 | S007 | Gears 1 leaf/import/override discriminator | partial | S001, S006 | G001, G002 |
 | S008 | Bounded runtime interpreter fallback | partial | S006 | G001, G002 |
-| S009 | Representative interactive Gears 1 gameplay | missing | S002, S003, S004, S005, S006, S007, S008 | G001, G002 |
+| S009 | Representative interactive Gears 1 gameplay | partial | S002, S003, S004, S005, S006, S007, S008 | G001, G002 |
 | S010 | Apple Silicon macOS A64 execution | missing | S006 | G001, G004 |
 | S011 | Android arm64-v8a A64 execution | missing | S006 | G001, G004 |
 | S012 | Complete native RHI frontend | missing | S003, S006 | G001, G002, G003 |
@@ -28,29 +28,22 @@ This inventory reports observable capabilities independently of the product goal
 
 ## Current focus
 
-S006 is the current focus. Gears 1 is the only active title. The repository now consumes
-the pinned `x360port`/Xenia execution boundary for an asset-free synthetic discriminator,
-owns a profile-authenticated normalized-image-to-flat-guest adapter, and composes that
-adapter with one persistent runtime context, bounded variable-import storage, and the
-title-owned `XGetAVPack` binding. The shared checked XEX2 inspector and real ignored-image
-identity path are verified, and the first native override is now qualified differentially
-against its original guest body on the real image (S004). The product still refuses the
-gameplay target until the remaining import bindings and runtime services are composed. The
-executor will prefer dynarec and may use the bounded, counted fallback; current fallback
-coverage cannot prove gameplay compatibility or performance.
+S009 is the current focus. Gears 1 is the only active title. `./run.sh` now authenticates
+the user's disc by its `default.xex` digest, builds the `gears1` product, and runs it
+through `x360port::SystemSession`: Xenia's kernel, file system, GPU, audio, and input
+services host the authenticated executable, the guest CPU runs on Xenia's x64 dynarec,
+and title-owned native overrides are dispatched from the guest's call slots. A headless
+150 s run under the profile's menu walk passes the logos and every front-end menu, loads
+Act 1, and plays its opening scene at a steady 29-30 presents/s.
 
-Binding is the frontier, not the dynarec. `docs/issues/0171` records the finding:
-the authenticated image declares 236 imports, of which six now reach a host service —
-`XGetAVPack`, the two XAM controller exports, and the kernel's three virtual-memory
-exports, which run in `x360port` over Xenia's own heaps. The remaining 220 function
-imports take the typed unsupported-service refusal, so the title still stops at its
-first unbound service. 166 of them have a recovered `__imp__` handler that compiles
-into no target and includes a header the break-first deletion removed; re-owning that
-corpus over `x360port`'s typed import contract, claimed by exported name, is the next
-work toward S009. `runtime/guest_heap.*` must not be revived with it: Xenia's
-`Memory`/`BaseHeap` already own guest allocation, and a second allocator would
-disagree with it about which pages are committed — the virtual-memory group proved
-that route works without one.
+The service-binding frontier recorded by `docs/issues/0171` is superseded for the
+product: the system session answers every import with Xenia's kernel instead of a
+title-local claim table. What remains for S009 is interactive play past the opening
+scene and a comparison against the oracle, keyboard and mouse input on Linux,
+translated-block and fallback counters from the session (the run cannot yet show
+its dynarec denominator), and the native audio mix, which the product binds but the
+title never reaches on this path (`docs/issues/0172`). The title's 30 Hz
+presentation cap is the first S013 boundary.
 
 Two facts from an earlier qualification constrain further native-override work. Recovered guest
 addresses must come from the virtual-address-indexed mapped image, because the normalized
@@ -69,11 +62,14 @@ title-identity tests fail closed on container and normalized-image hashes.
 
 ### S002 — bounded provisioning
 
-Evidence: GDF extraction, archive bounds, and identity are tested. The shared checked-XEX2
-inspector now validates the real ignored Gears 1 container and produces the exact
-profile-authenticated normalized image consumed by the adapter. Gap: the inspector and
-runtime-service composition are not wired into `./run.sh`; complete install validation and
-product provisioning still refuse to launch until the full runtime path exists.
+Evidence: GDF extraction, archive bounds, and identity are tested. `./run.sh`
+resolves the disc from `--iso`, `GEARS_ISO`/`.env`, or one `roms/` drop-in,
+materializes a 7z archive under `scratch/titles/archives/`, and refuses every disc
+whose `default.xex` SHA-256, read in place from its GDF volume, is not the profile's
+`xex_sha256` (`tests/test_bootstrap.py` covers the matching, wrong, missing-executable,
+and unreadable-disc cases). It refuses missing build tools and pkg-config modules by
+name with the exact Fedora or Debian install command. Gap: there is no no-terminal
+first-run setup screen, and no packaged (AppImage/APK) delivery.
 
 ### S003 — executor-independent native rendering
 
@@ -135,9 +131,10 @@ single Xenia runtime context, persistent variable-import storage, the title-owne
 `XGetAVPack` service, and fail-closed unknown function imports; its synthetic entry test
 executes the authenticated adapter through Xenia's JIT and returns the configured AV pack.
 The shared checked-XEX2 inspector also validates the real ignored container, normalized
-image, import manifest, and helper-pattern evidence. Gap: wiring authenticated full-image
-loading into the product, complete fallback ISA/control-flow coverage, title-specific
-write/cache-control semantics, and complete product service composition remain missing.
+image, import manifest, and helper-pattern evidence. The product now hosts the
+authenticated disc on `x360port::SystemSession` (S009). Gap: complete fallback
+ISA/control-flow coverage, title-specific write/cache-control semantics, and translation
+and fallback accounting in the system session remain missing.
 
 ### S007 — first Gears discriminator
 
@@ -197,9 +194,16 @@ imports/devices, real-image fallback, and title gameplay remain open.
 
 ### S009 — representative gameplay
 
-Missing capability: reach and independently compare representative interactive
-Gears 1 gameplay through the current product. Prior title evidence is migration
-input, not a current gameplay result.
+Evidence: `tools/run_offscreen.py --seconds 150 --walk menu` runs the shipping
+executable headless and silent on the supported disc. It presents 4445 frames in
+150 s, 29-30 each second. Its captures show the logos; the main, campaign,
+single-player, and difficulty menus; the unsigned-profile prompt; and Act 1's opening
+scene with its subtitles. A control override on the draw entry counted 211 guest
+calls in 8 s, so dispatch and original-body calls work on real guest threads.
+Gap: nothing yet drives or compares play past the opening scene. The session reports
+no translated-block or fallback counters, so no run can yet show that gameplay ran
+on the dynarec rather than a fallback. Linux has gamepad input only. The product's
+single native override is unreached (`docs/issues/0172`).
 
 ### S010 — Apple Silicon A64
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import signal
 import subprocess
@@ -16,15 +17,18 @@ from unittest.mock import patch
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "tools"))
+sys.path.insert(0, str(REPO_ROOT / "tests"))
 
 import replay_corpus
+import test_gdf_extract as gdf_fixture
 
-from tools import clean_build
+from tools import clean_build, run_offscreen
 from tools.gearsue3_bootstrap import (
     environment,
     launcher,
     paths,
     process,
+    provision,
     requirements,
 )
 
@@ -40,73 +44,128 @@ class BootstrapTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def test_shipping_arguments_preserve_order_and_runtime_tail(self) -> None:
-        options = launcher.parse_arguments(
-            [
-                "--menu-walk",
-                "--script",
-                "custom",
-                "--headless",
-                "--http-port",
-                "0",
-                "--",
-                "--runtime-option",
-                "value",
-            ],
-            "maintained-walk",
-        )
-        self.assertEqual(options.input_script, "custom")
-        self.assertTrue(options.headless)
-        self.assertEqual(options.http_port, "0")
-        self.assertEqual(options.runtime_arguments, ["--runtime-option", "value"])
+    def test_shipping_arguments_select_only_the_disc_and_preparation(self) -> None:
+        options = launcher.parse_arguments(["--iso", "disc.iso", "--prepare"])
+        self.assertEqual(options.image, "disc.iso")
+        self.assertTrue(options.prepare_only)
+        self.assertEqual(launcher.parse_arguments([]), launcher.LaunchOptions())
 
-    def test_shipping_arguments_refuse_missing_and_invalid_values(self) -> None:
+    def test_shipping_arguments_refuse_maintainer_options_and_missing_values(self) -> None:
         with self.assertRaisesRegex(launcher.CliError, "requires a value"):
-            launcher.parse_arguments(["--log"], "walk")
-        with self.assertRaisesRegex(launcher.CliError, "integer from 0"):
-            launcher.parse_arguments(["--http-port", "70000"], "walk")
-        with self.assertRaisesRegex(launcher.CliError, "unknown option"):
-            launcher.parse_arguments(["--no-build"], "walk")
-        with self.assertRaisesRegex(launcher.CliError, "unknown option"):
-            launcher.parse_arguments(["--typo"], "walk")
+            launcher.parse_arguments(["--iso"])
+        for maintainer_only in ("--headless", "--script", "--menu-walk", "--http-port"):
+            with (
+                self.subTest(option=maintainer_only),
+                self.assertRaisesRegex(launcher.CliError, "unknown option"),
+            ):
+                launcher.parse_arguments([maintainer_only])
 
-    def test_launch_environment_propagates_existing_and_explicit_values(self) -> None:
-        base = {"KEPT": "yes", "GEARS_PRESENT_DUMP_AT": "42"}
-        options = launcher.LaunchOptions(
-            headless=True,
-            input_script="f10:A",
-            http_port="1234",
-            present_dump="2",
+    def test_launcher_executes_the_prepared_product_command(self) -> None:
+        prepared = provision.PreparedTitle(
+            self.root / "gears1", self.root / "disc.iso", "4d5307d5"
         )
-        environment = launcher._launch_environment(base, options, self.root)
-        self.assertEqual(environment["KEPT"], "yes")
-        self.assertEqual(environment["GEARS_NO_WINDOW"], "1")
-        self.assertEqual(environment["GEARS_INPUT_SCRIPT"], "f10:A")
-        self.assertEqual(environment["GEARS_DEBUG_HTTP_PORT"], "1234")
-        self.assertEqual(environment["GEARS_PRESENT_DUMP"], "2")
-        self.assertEqual(environment["GEARS_PRESENT_DUMP_AT"], "42")
+        executed: list[list[str]] = []
+
+        def execute(command: list[str]) -> None:
+            executed.append(command)
+            raise SystemExit(0)
+
+        with (
+            patch.object(launcher, "load_profile"),
+            patch.object(launcher, "load_environment", return_value={}),
+            patch.object(launcher, "prepare_title", return_value=prepared),
+            self.assertRaises(SystemExit),
+        ):
+            launcher.main([], self.root, execute)
+        self.assertEqual(
+            executed,
+            [[str(self.root / "gears1"), "--image", str(self.root / "disc.iso"),
+              "--title-id", "4d5307d5"]],
+        )
+
+    def test_disc_is_identified_by_its_default_xex(self) -> None:
+        executable = b"XEX2" + bytes(range(256)) * 20
+        disc = gdf_fixture.image(
+            gdf_fixture.table({0: gdf_fixture.entry("default.xex", start=48, size=len(executable))}),
+            {48: executable},
+        )
+        expected = hashlib.sha256(executable).hexdigest()
+        self.assertEqual(provision.disc_executable_digest(disc), expected)
+        image = self.root / "disc.iso"
+        image.write_bytes(disc.getvalue())
+        provision.authenticate_image(image, self._profile(expected))
+        with self.assertRaisesRegex(provision.ProvisionError, "not the supported"):
+            provision.authenticate_image(image, self._profile("0" * 64))
+
+    def test_disc_without_one_default_xex_is_refused(self) -> None:
+        disc = gdf_fixture.image(
+            gdf_fixture.table({0: gdf_fixture.entry("other.xex", start=48, size=4)}),
+            {48: b"XEX2"},
+        )
+        with self.assertRaisesRegex(provision.ProvisionError, "0 root default.xex"):
+            provision.disc_executable_digest(disc)
+        image = self.root / "not-a-disc.iso"
+        image.write_bytes(bytes(4096))
+        with self.assertRaisesRegex(provision.ProvisionError, "not a readable"):
+            provision.authenticate_image(image, self._profile("0" * 64))
+
+    @staticmethod
+    def _profile(xex_sha256: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            display_name="Gears of War", identity=SimpleNamespace(xex_sha256=xex_sha256)
+        )
+
+    def test_missing_pkg_config_modules_are_refused_by_name(self) -> None:
+        with self.assertRaises(requirements.RequirementError) as caught:
+            requirements.require_pkg_config_modules(
+                ("gtk+-3.0", "sdl2", "liblz4"), lambda module: module == "sdl2"
+            )
+        message = str(caught.exception)
+        self.assertIn("gtk+-3.0", message)
+        self.assertIn("liblz4", message)
+        self.assertNotIn("sdl2,", message)
+        requirements.require_pkg_config_modules(("sdl2",), lambda module: True)
+
+    def test_offscreen_walks_come_from_the_profile(self) -> None:
+        navigation = SimpleNamespace(
+            start_walk="start", menu_walk="menu", checkpoint_walk="checkpoint"
+        )
+        self.assertEqual(run_offscreen.walk_script(navigation, "menu"), "menu")
+        self.assertEqual(run_offscreen.walk_script(navigation, "none"), "")
+        with self.assertRaisesRegex(ValueError, "unknown walk"):
+            run_offscreen.walk_script(navigation, "gameplay")
 
     def test_missing_tools_name_every_missing_command_and_package_action(self) -> None:
         available = {"git", "cc", "c++"}
-        with self.assertRaises(requirements.RequirementError) as caught:
+        with (
+            patch.object(requirements.platform, "system", return_value="Linux"),
+            self.assertRaises(requirements.RequirementError) as caught,
+        ):
             requirements.require_commands(
                 {}, lambda name: name if name in available else None
             )
         message = str(caught.exception)
-        for name in ("cmake", "ninja", "make", "pkg-config"):
+        for name in ("cmake", "ninja", "pkg-config"):
             self.assertIn(name, message)
         self.assertIn("Install them with", message)
 
     def test_platform_package_commands_are_exact(self) -> None:
         self.assertEqual(
             requirements.package_command("Linux", "fedora"),
-            "sudo dnf install cmake ninja-build make pkgconf-pkg-config gcc gcc-c++ SDL3-devel vulkan-loader-devel vulkan-headers",
+            "sudo dnf install cmake ninja-build pkgconf-pkg-config gcc gcc-c++ "
+            "gtk3-devel SDL2-devel lz4-devel libX11-devel fontconfig-devel",
         )
-        self.assertIn(
-            "sudo apt install", requirements.package_command("Linux", "ubuntu")
+        self.assertEqual(
+            requirements.package_command("Linux", "ubuntu"),
+            "sudo apt install cmake ninja-build pkg-config g++ libgtk-3-dev libsdl2-dev "
+            "liblz4-dev libx11-xcb-dev libfontconfig-dev",
         )
-        self.assertIn("brew install", requirements.package_command("Darwin", ""))
-        self.assertIn("winget install", requirements.package_command("Windows", ""))
+        for host in ("Darwin", "Windows"):
+            with (
+                self.subTest(host=host),
+                self.assertRaisesRegex(requirements.RequirementError, "no .* host yet"),
+            ):
+                requirements.package_command(host, "")
 
     def test_archive_tool_is_required_only_for_7z_inputs(self) -> None:
         with self.assertRaisesRegex(requirements.RequirementError, "7z"):
@@ -142,33 +201,6 @@ class BootstrapTests(unittest.TestCase):
             self.root, {"GEARS_ENV_FILE": "chosen.env"}
         )
         self.assertEqual(selected, self.root / "chosen.env")
-
-    def test_launcher_uses_selected_environment_file_for_preparation(self) -> None:
-        selected = self.root / "selected.env"
-        with (
-            patch.object(launcher, "environment_file", return_value=selected),
-            patch.object(
-                launcher,
-                "load_profile",
-                return_value=SimpleNamespace(
-                    display_name="test", navigation=SimpleNamespace(menu_walk="walk")
-                ),
-            ),
-            patch.object(launcher, "load_environment", return_value={}),
-            patch.object(
-                launcher,
-                "parse_arguments",
-                return_value=launcher.LaunchOptions(prepare_only=True),
-            ),
-            patch.object(
-                launcher,
-                "prepare_title",
-                side_effect=launcher.ProvisionError("missing product composition"),
-            ) as prepare,
-            self.assertRaisesRegex(launcher.ProvisionError, "product composition"),
-        ):
-            launcher.main(["--prepare"], self.root)
-        self.assertEqual(prepare.call_args.kwargs["env_file"], selected)
 
     def test_build_directory_refuses_scratch_and_external_roots(self) -> None:
         self.assertEqual(
