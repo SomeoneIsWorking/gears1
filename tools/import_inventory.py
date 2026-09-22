@@ -29,8 +29,14 @@ def arguments() -> argparse.Namespace:
     parser.add_argument("--xenia-root", type=Path, default=ROOT / "extern/xenia")
     parser.add_argument("--runtime-root", type=Path, default=ROOT / "runtime")
     parser.add_argument(
+        "--x360port-root",
+        type=Path,
+        default=ROOT.parents[1] / "shared/x360port",
+        help="checkout whose host services claim kernel/XAM exports by name",
+    )
+    parser.add_argument(
         "--list",
-        choices=("uncovered", "covered", "unresolved", "unused"),
+        choices=("uncovered", "covered", "unresolved", "unused", "bound", "unbound"),
         help="print one name per line instead of the summary",
     )
     return parser.parse_args()
@@ -57,10 +63,18 @@ def report(inventory: Inventory) -> None:
         f"recovered handlers this image never imports: {len(inventory.unused_handlers)} "
         f"of {len(inventory.recovered_handlers)}"
     )
+    bound = Counter(entry.library for entry in inventory.bound)
+    print(
+        f"function imports a host service binds: {len(inventory.bound)} of {len(functions)} "
+        f"({', '.join(f'{count} {library}' for library, count in sorted(bound.items())) or 'none'})"
+    )
+    print(
+        f"function imports that still take the typed refusal: {len(inventory.unbound)}"
+    )
     print(
         "note: a recovered handler is source the migration preserved, not a binding; "
-        "services implemented in x360port carry no recovered handler and still count "
-        "as uncovered here"
+        "a service implemented in x360port carries no recovered handler and is counted "
+        "as bound, not covered"
     )
 
 
@@ -71,6 +85,8 @@ def names(inventory: Inventory, selection: str) -> list[str]:
         "uncovered": inventory.uncovered,
         "covered": inventory.covered,
         "unresolved": inventory.unresolved,
+        "bound": inventory.bound,
+        "unbound": inventory.unbound,
     }[selection]
     return sorted(
         f"{entry.library} {entry.ordinal} {entry.name or '<unresolved>'}"
@@ -85,6 +101,7 @@ def main() -> int:
             selected.manifest.resolve(),
             selected.xenia_root.resolve(),
             selected.runtime_root.resolve(),
+            (selected.x360port_root.resolve() / "src", ROOT / "runtime/titles"),
         )
     except InventoryError as error:
         print(f"import inventory refusing: {error}", file=sys.stderr)

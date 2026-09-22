@@ -2,6 +2,8 @@
 
 #include <array>
 #include <limits>
+#include <span>
+#include <vector>
 #include <string>
 #include <utility>
 
@@ -139,9 +141,16 @@ x360port::RuntimeFailure Gears1Runtime::ResolveServiceClaims()
     // Every host service this title composes declares the exports it implements
     // by name, so a service that names an export the library does not declare
     // refuses here rather than presenting as an import the title never reaches.
+    // The runtime's own kernel services are resolved in the same table as the
+    // title's, so one decision owns which handler each ordinal reaches.
+    const std::span<const x360port::ImportClaim> kernel_claims = context_->KernelServiceClaims();
     const std::array<x360port::ImportClaim, 2> input_claims = input_service_.Claims();
-    const std::array<x360port::ImportClaim, 3> claims{video_services_.Claim(), input_claims[0],
-                                                      input_claims[1]};
+    std::vector<x360port::ImportClaim> claims;
+    claims.reserve(kernel_claims.size() + 3U);
+    claims.insert(claims.end(), kernel_claims.begin(), kernel_claims.end());
+    claims.push_back(video_services_.Claim());
+    claims.push_back(input_claims[0]);
+    claims.push_back(input_claims[1]);
     return claims_.Resolve(claims);
 }
 

@@ -29,6 +29,17 @@ using x360port::GuestAddress;
 constexpr GuestAddress kResourceAddRef = 0x82233668U;
 constexpr std::size_t kResourceObjectSize = 0x1CU;
 
+// Guest ABI values the kernel's virtual-memory exports take and answer with,
+// restated from the console's documented constants so a wrong value in the
+// service fails here instead of agreeing with itself.
+constexpr std::uint32_t kMemCommit = 0x00001000U;
+constexpr std::uint32_t kMemReserve = 0x00002000U;
+constexpr std::uint32_t kMemRelease = 0x00008000U;
+constexpr std::uint32_t kPageReadWrite = 0x00000004U;
+constexpr std::uint32_t kAllocationGranularity = 64U * 1024U;
+constexpr std::uint64_t kStatusSuccess = 0x00000000U;
+constexpr std::uint64_t kStatusMemoryNotAllocated = 0xC00000A0U;
+
 constexpr std::array<std::uint8_t, 32> kContainerDigest{
     0xdf, 0x10, 0x41, 0xda, 0x72, 0xd2, 0xb9, 0x47, 0xe3, 0xbb, 0x2f, 0x70, 0x1a, 0x19, 0xfd, 0xe9,
     0xe8, 0x44, 0x88, 0xdc, 0x84, 0x8f, 0xea, 0x2d, 0xec, 0xd6, 0xd4, 0x34, 0x34, 0xef, 0xe2, 0xd1};
@@ -63,23 +74,84 @@ void Require(bool condition, std::string_view message)
     }
 }
 
-// Locates the manifest entry for a named XAM export. The export table owns the
+// Locates the manifest entry for a named export. The export table owns the
 // ordinal, so the discriminator names the service the real image must retain
 // instead of repeating its number.
 [[nodiscard]] const x360port::ImportRequirement *
-FindXamImport(std::span<const x360port::ImportRequirement> imports, std::string_view export_name)
+FindImport(std::span<const x360port::ImportRequirement> imports,
+           x360port::ExportNames::Library library, std::string_view export_name)
 {
-    const auto exported =
-        x360port::ExportNames::Find(x360port::ExportNames::Library::Xam, export_name);
+    const auto exported = x360port::ExportNames::Find(library, export_name);
     if (!exported.has_value())
     {
-        Fail("xam.xex does not declare a service this title requires");
+        Fail("that library does not declare a service this title requires");
     }
+    const std::string_view library_name = library == x360port::ExportNames::Library::Kernel
+                                              ? x360port::ExportNames::kernel_library_name
+                                              : x360port::ExportNames::xam_library_name;
     const auto found = std::ranges::find_if(
-        imports, [&exported](const x360port::ImportRequirement &import)
-        { return import.library == "xam.xex" && import.ordinal == exported->ordinal; });
+        imports, [&exported, library_name](const x360port::ImportRequirement &import)
+        { return import.library == library_name && import.ordinal == exported->ordinal; });
     return found == imports.end() ? nullptr : &*found;
 }
+
+[[nodiscard]] const x360port::ImportRequirement *
+FindXamImport(std::span<const x360port::ImportRequirement> imports, std::string_view export_name)
+{
+    return FindImport(imports, x360port::ExportNames::Library::Xam, export_name);
+}
+
+[[nodiscard]] const x360port::ImportRequirement *
+FindKernelImport(std::span<const x360port::ImportRequirement> imports, std::string_view export_name)
+{
+    return FindImport(imports, x360port::ExportNames::Library::Kernel, export_name);
+}
+
+// One in/out guest word pair, which is how the kernel's virtual-memory exports
+// take their base address and region size.
+class MemoryArguments final
+{
+  public:
+    MemoryArguments(x360port::RuntimeContext &context, x360port::GuestAddress address) noexcept
+        : context_(&context), address_(address)
+    {
+    }
+
+    [[nodiscard]] x360port::GuestAddress base_pointer() const noexcept { return address_; }
+    [[nodiscard]] x360port::GuestAddress size_pointer() const noexcept { return address_ + 4U; }
+
+    void Set(std::uint32_t base, std::uint32_t size) const
+    {
+        Store(address_, base);
+        Store(address_ + 4U, size);
+    }
+
+    [[nodiscard]] std::uint32_t base() const { return Load(address_); }
+    [[nodiscard]] std::uint32_t size() const { return Load(address_ + 4U); }
+
+  private:
+    void Store(x360port::GuestAddress address, std::uint32_t value) const
+    {
+        const std::array<std::byte, 4> bytes{
+            static_cast<std::byte>(value >> 24U), static_cast<std::byte>(value >> 16U),
+            static_cast<std::byte>(value >> 8U), static_cast<std::byte>(value)};
+        const x360port::RuntimeFailure failure = context_->WriteGuestMemory(address, bytes);
+        Require(!failure, failure.detail);
+    }
+
+    [[nodiscard]] std::uint32_t Load(x360port::GuestAddress address) const
+    {
+        std::array<std::byte, 4> bytes{};
+        const x360port::RuntimeFailure failure = context_->ReadGuestMemory(address, bytes);
+        Require(!failure, failure.detail);
+        return (static_cast<std::uint32_t>(bytes[0]) << 24U) |
+               (static_cast<std::uint32_t>(bytes[1]) << 16U) |
+               (static_cast<std::uint32_t>(bytes[2]) << 8U) | static_cast<std::uint32_t>(bytes[3]);
+    }
+
+    x360port::RuntimeContext *context_;
+    x360port::GuestAddress address_;
+};
 
 std::vector<std::byte> ReadFile(const char *path)
 {
@@ -286,6 +358,47 @@ int main(int argc, char **argv)
         context->Execute(capabilities_import->address, invalid_state_arguments);
     Require(invalid_capabilities.failure.error == x360port::RuntimeError::ImportServiceRefused,
             "the real capabilities thunk accepted an unmapped guest pointer");
+    // The image's own virtual-memory imports reach the runtime's kernel
+    // services. Nothing about these ordinals is synthetic: they are the entries
+    // Epic shipped, resolved by name through the export table.
+    const x360port::ImportRequirement *allocate_import =
+        FindKernelImport(imports, "NtAllocateVirtualMemory");
+    Require(allocate_import != nullptr,
+            "the real image did not retain the NtAllocateVirtualMemory import");
+    const x360port::ImportRequirement *free_import =
+        FindKernelImport(imports, "NtFreeVirtualMemory");
+    Require(free_import != nullptr, "the real image did not retain the NtFreeVirtualMemory import");
+
+    const x360port::GuestMemoryAllocationResult memory_arguments = context->AllocateGuestMemory(8U);
+    Require(static_cast<bool>(memory_arguments), memory_arguments.failure.detail);
+    const MemoryArguments virtual_memory(*context, memory_arguments.allocation.address);
+    virtual_memory.Set(0U, 0x1000U);
+    const std::array<std::uint64_t, 5> allocate_arguments{
+        virtual_memory.base_pointer(), virtual_memory.size_pointer(), kMemCommit | kMemReserve,
+        kPageReadWrite, 0U};
+    const x360port::ExecutionResult allocated =
+        context->Execute(allocate_import->address, allocate_arguments);
+    Require(static_cast<bool>(allocated), allocated.failure.detail);
+    Require(allocated.value == kStatusSuccess,
+            "the real NtAllocateVirtualMemory import did not commit a range");
+    const std::uint32_t allocated_address = virtual_memory.base();
+    Require(allocated_address != 0U && virtual_memory.size() == kAllocationGranularity,
+            "the real allocation import did not report its address and rounded size");
+
+    const std::array<std::uint64_t, 4> release_arguments{
+        virtual_memory.base_pointer(), virtual_memory.size_pointer(), kMemRelease, 0U};
+    const x360port::ExecutionResult range_released =
+        context->Execute(free_import->address, release_arguments);
+    Require(static_cast<bool>(range_released) && range_released.value == kStatusSuccess,
+            "the real NtFreeVirtualMemory import did not release the range it allocated");
+
+    // A free of address zero is ordinary traffic from this title's own wrapper.
+    virtual_memory.Set(0U, 0U);
+    const x360port::ExecutionResult free_of_zero =
+        context->Execute(free_import->address, release_arguments);
+    Require(static_cast<bool>(free_of_zero) && free_of_zero.value == kStatusMemoryNotAllocated,
+            "the real free import did not answer a zero base as an unallocated address");
+
     const std::array<std::uint64_t, 1> arguments{object};
     const x360port::ExecutionResult baseline = context->Execute(kResourceAddRef, arguments);
     Require(static_cast<bool>(baseline), baseline.failure.detail);
@@ -464,8 +577,9 @@ int main(int argc, char **argv)
 
     std::cout << "Gears real-image discriminator: checked XEX, resolved 236 imports into "
                  "owned guest storage, polled retained pad state/capabilities through the "
-                 "XamInputGetState and XamInputGetCapabilities claims, "
-                 "executed 0x82233668, "
+                 "XamInputGetState and XamInputGetCapabilities claims, committed and released "
+                 "a range through the retained NtAllocateVirtualMemory and "
+                 "NtFreeVirtualMemory imports, executed 0x82233668, "
                  "scoped original, nested guest-call override/removal, executable invalidation, "
                  "and the native audio mix at 0x825F7B40 matching the original guest body on "
                  "its return value and all 320 output words, passed\n";
