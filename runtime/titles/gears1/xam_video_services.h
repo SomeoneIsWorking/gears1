@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include <x360port/import_claims.hpp>
 #include <x360port/runtime.hpp>
 
 namespace gears::titles::gears1
@@ -17,11 +18,9 @@ class XamVideoServices final
     XamVideoServices(XamVideoServices &&) = delete;
     XamVideoServices &operator=(XamVideoServices &&) = delete;
 
-    // Binds only the exact XGetAVPack export used by this title revision.
-    // Unknown imports remain the caller's responsibility and must not acquire
-    // a guessed service implementation.
-    void Bind(const x360port::ImportRequirement &requirement,
-              x360port::ImportBinding &binding) noexcept;
+    // The only export this service implements. Unknown imports remain the
+    // caller's responsibility and must not acquire a guessed implementation.
+    [[nodiscard]] x360port::ImportClaim Claim() noexcept;
 
     [[nodiscard]] std::uint32_t call_count() const noexcept { return call_count_; }
 

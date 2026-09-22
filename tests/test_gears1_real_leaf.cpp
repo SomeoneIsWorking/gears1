@@ -15,6 +15,7 @@
 #include <string_view>
 #include <vector>
 
+#include <x360port/export_names.hpp>
 #include <x360port/runtime.hpp>
 
 #include "titles/gears1/audio_mix.h"
@@ -60,6 +61,24 @@ void Require(bool condition, std::string_view message)
     {
         Fail(message);
     }
+}
+
+// Locates the manifest entry for a named XAM export. The export table owns the
+// ordinal, so the discriminator names the service the real image must retain
+// instead of repeating its number.
+[[nodiscard]] const x360port::ImportRequirement *
+FindXamImport(std::span<const x360port::ImportRequirement> imports, std::string_view export_name)
+{
+    const auto exported =
+        x360port::ExportNames::Find(x360port::ExportNames::Library::Xam, export_name);
+    if (!exported.has_value())
+    {
+        Fail("xam.xex does not declare a service this title requires");
+    }
+    const auto found = std::ranges::find_if(
+        imports, [&exported](const x360port::ImportRequirement &import)
+        { return import.library == "xam.xex" && import.ordinal == exported->ordinal; });
+    return found == imports.end() ? nullptr : &*found;
 }
 
 std::vector<std::byte> ReadFile(const char *path)
@@ -138,27 +157,13 @@ int main(int argc, char **argv)
 
     Observations observations;
 
-    const auto av_pack_import =
-        std::find_if(imports.begin(), imports.end(), [](const x360port::ImportRequirement &import)
-                     { return import.library == "xam.xex" && import.ordinal == 971U; });
-    Require(av_pack_import != imports.end(), "the real image did not retain the XGetAVPack import");
-    const auto input_import =
-        std::find_if(imports.begin(), imports.end(),
-                     [](const x360port::ImportRequirement &import)
-                     {
-                         return import.library == "xam.xex" &&
-                                import.ordinal == x360port::kXamInputGetStateOrdinal;
-                     });
-    Require(input_import != imports.end(),
-            "the real image did not retain the XamInputGetState import");
-    const auto capabilities_import =
-        std::find_if(imports.begin(), imports.end(),
-                     [](const x360port::ImportRequirement &import)
-                     {
-                         return import.library == "xam.xex" &&
-                                import.ordinal == x360port::kXamInputGetCapabilitiesOrdinal;
-                     });
-    Require(capabilities_import != imports.end(),
+    const x360port::ImportRequirement *av_pack_import = FindXamImport(imports, "XGetAVPack");
+    Require(av_pack_import != nullptr, "the real image did not retain the XGetAVPack import");
+    const x360port::ImportRequirement *input_import = FindXamImport(imports, "XamInputGetState");
+    Require(input_import != nullptr, "the real image did not retain the XamInputGetState import");
+    const x360port::ImportRequirement *capabilities_import =
+        FindXamImport(imports, "XamInputGetCapabilities");
+    Require(capabilities_import != nullptr,
             "the real image did not retain the XamInputGetCapabilities import");
 
     x360port::RuntimeContext *context = runtime.Context();
@@ -458,7 +463,8 @@ int main(int argc, char **argv)
     Require(!state_released, state_released.detail);
 
     std::cout << "Gears real-image discriminator: checked XEX, resolved 236 imports into "
-                 "owned guest storage, polled retained pad state/capabilities through 401/400, "
+                 "owned guest storage, polled retained pad state/capabilities through the "
+                 "XamInputGetState and XamInputGetCapabilities claims, "
                  "executed 0x82233668, "
                  "scoped original, nested guest-call override/removal, executable invalidation, "
                  "and the native audio mix at 0x825F7B40 matching the original guest body on "
