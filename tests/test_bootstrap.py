@@ -28,6 +28,7 @@ from tools.gearsue3_bootstrap import (
     launcher,
     paths,
     process,
+    profile,
     provision,
     requirements,
 )
@@ -126,14 +127,25 @@ class BootstrapTests(unittest.TestCase):
         self.assertNotIn("sdl2,", message)
         requirements.require_pkg_config_modules(("sdl2",), lambda module: True)
 
+    def test_timed_walks_accept_chords_and_refuse_malformed_steps(self) -> None:
+        profile._validate_menu_walk("1000:START,1300:,2000:LY+&RX-,2500:")
+        for invalid in ("1000:LY+&", "1000:ZZ", "2000:A,1000:", "1000:A,1000:"):
+            with self.subTest(invalid=invalid), self.assertRaises(profile.ProfileError):
+                profile._validate_menu_walk(invalid)
+        self.assertIn("&", profile.load_profile(REPO_ROOT).navigation.gameplay_walk)
+
     def test_offscreen_walks_come_from_the_profile(self) -> None:
         navigation = SimpleNamespace(
-            start_walk="start", menu_walk="menu", checkpoint_walk="checkpoint"
+            start_walk="start",
+            menu_walk="menu",
+            checkpoint_walk="checkpoint",
+            gameplay_walk="gameplay",
         )
         self.assertEqual(run_offscreen.walk_script(navigation, "menu"), "menu")
+        self.assertEqual(run_offscreen.walk_script(navigation, "gameplay"), "gameplay")
         self.assertEqual(run_offscreen.walk_script(navigation, "none"), "")
         with self.assertRaisesRegex(ValueError, "unknown walk"):
-            run_offscreen.walk_script(navigation, "gameplay")
+            run_offscreen.walk_script(navigation, "boss-fight")
 
     def test_missing_tools_name_every_missing_command_and_package_action(self) -> None:
         available = {"git", "cc", "c++"}
