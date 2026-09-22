@@ -1,106 +1,234 @@
 #include "audio_mix.h"
 
-#include "import_stub.h"
-
+#include <array>
+#include <bit>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <utility>
 
 namespace gears::titles::gears1
 {
 namespace
 {
 
-// Xenos vectors load and store guest words in big-endian lane order. The
-// original guest vector loads/stores perform this byte reversal for aligned lvx/stvx;
-// keeping the same operation here makes the native path independent of host
-// endianness and preserves the guest's memory representation.
-alignas(16) constexpr std::uint8_t kReverseGuestVector[16] = {
-    0x0F, 0x0E, 0x0D, 0x0C, 0x0B, 0x0A, 0x09, 0x08, 0x07, 0x06, 0x05, 0x04, 0x03, 0x02, 0x01, 0x00,
-};
+using GuestVector = std::array<float, 4>;
 
-[[nodiscard]] simde__m128i ReverseGuestVector(simde__m128i value)
+constexpr std::size_t kGuestVectorSize = 16U;
+constexpr std::uint32_t kGuestVectorMask = ~std::uint32_t{0x0FU};
+
+[[nodiscard]] std::uint32_t LoadBigEndian(std::span<const std::byte> bytes,
+                                          std::size_t offset) noexcept
 {
-    const simde__m128i mask =
-        simde_mm_load_si128(reinterpret_cast<const simde__m128i *>(kReverseGuestVector));
-    return simde_mm_shuffle_epi8(value, mask);
+    return (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset])) << 24U) |
+           (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset + 1U])) << 16U) |
+           (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset + 2U])) << 8U) |
+           static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset + 3U]));
 }
 
-[[nodiscard]] simde__m128 LoadGuestVector(const std::uint8_t *base, std::uint32_t address)
+void StoreBigEndian(std::span<std::byte> bytes, std::size_t offset, std::uint32_t value) noexcept
 {
-    const auto *source = reinterpret_cast<const simde__m128i *>(base + (address & ~0xFu));
-    return simde_mm_castsi128_ps(ReverseGuestVector(simde_mm_load_si128(source)));
+    bytes[offset] = static_cast<std::byte>(value >> 24U);
+    bytes[offset + 1U] = static_cast<std::byte>(value >> 16U);
+    bytes[offset + 2U] = static_cast<std::byte>(value >> 8U);
+    bytes[offset + 3U] = static_cast<std::byte>(value);
 }
 
-void StoreGuestVector(std::uint8_t *base, std::uint32_t address, simde__m128 value)
+[[nodiscard]] GuestVector Add(const GuestVector &left, const GuestVector &right) noexcept
 {
-    auto *destination = reinterpret_cast<simde__m128i *>(base + (address & ~0xFu));
-    simde_mm_store_si128(destination, ReverseGuestVector(simde_mm_castps_si128(value)));
+    GuestVector result{};
+    for (std::size_t lane = 0; lane < result.size(); ++lane)
+    {
+        result[lane] = left[lane] + right[lane];
+    }
+    return result;
+}
+
+// The guest VMX `vmaddfp` flushes denormal inputs to zero with their sign
+// preserved, regardless of the non-Java mode bit, and rounds the product and
+// sum only once.
+[[nodiscard]] float FlushDenormal(float value) noexcept
+{
+    if (std::fpclassify(value) == FP_SUBNORMAL)
+    {
+        return std::copysign(0.0F, value);
+    }
+    return value;
+}
+
+// (VD) <- ((VA) * (VC)) + (VB), as one fused operation per lane.
+[[nodiscard]] GuestVector MultiplyAdd(const GuestVector &va, const GuestVector &vc,
+                                      const GuestVector &vb) noexcept
+{
+    GuestVector result{};
+    for (std::size_t lane = 0; lane < result.size(); ++lane)
+    {
+        result[lane] =
+            std::fma(FlushDenormal(va[lane]), FlushDenormal(vc[lane]), FlushDenormal(vb[lane]));
+    }
+    return result;
+}
+
+[[nodiscard]] bool LoadGuestVector(x360port::RuntimeContext &runtime, std::uint32_t address,
+                                   GuestVector &value, x360port::RuntimeFailure &failure) noexcept
+{
+    std::array<std::byte, kGuestVectorSize> bytes{};
+    failure = runtime.ReadMappedGuestMemory(address & kGuestVectorMask, bytes);
+    if (failure)
+    {
+        return false;
+    }
+    for (std::size_t lane = 0; lane < value.size(); ++lane)
+    {
+        const std::size_t guestLane = value.size() - lane - 1U;
+        value[lane] = std::bit_cast<float>(LoadBigEndian(bytes, guestLane * 4U));
+    }
+    return true;
+}
+
+[[nodiscard]] bool StoreGuestVector(x360port::RuntimeContext &runtime, std::uint32_t address,
+                                    const GuestVector &value,
+                                    x360port::RuntimeFailure &failure) noexcept
+{
+    std::array<std::byte, kGuestVectorSize> bytes{};
+    failure = runtime.ReadMappedGuestMemory(address & kGuestVectorMask, bytes);
+    if (failure)
+    {
+        return false;
+    }
+    for (std::size_t lane = 0; lane < value.size(); ++lane)
+    {
+        const std::size_t guestLane = value.size() - lane - 1U;
+        StoreBigEndian(bytes, guestLane * 4U, std::bit_cast<std::uint32_t>(value[lane]));
+    }
+    failure = runtime.WriteMappedGuestMemory(address & kGuestVectorMask, bytes);
+    return !failure;
+}
+
+[[nodiscard]] x360port::ExecutionResult Failed(x360port::RuntimeFailure failure) noexcept
+{
+    return {std::move(failure), 0};
 }
 
 } // namespace
 
-void ApplyNativeAudioMix(PPCContext &ctx, unsigned char *base)
+x360port::ExecutionResult ApplyNativeAudioMix(x360port::RuntimeContext &runtime,
+                                              x360port::GuestAddress,
+                                              std::span<const std::uint64_t> arguments,
+                                              void *) noexcept
 {
-    std::uint32_t output = ctx.r3.u32;
-    const std::uint32_t input = ctx.r4.u32;
-    const std::uint32_t coefficient0 = ctx.r5.u32;
-    const std::uint32_t coefficient1 = ctx.r6.u32;
-    const std::uint64_t savedR31 = ctx.r31.u64;
-
-    PPC_STORE_U64(ctx.r1.u32 - 8, savedR31);
-    PPC_STORE_U32(ctx.r1.u32 + 52, ctx.r7.u32);
-
-    ctx.fpscr.enableFlushMode();
-    simde__m128 v0 = LoadGuestVector(base, coefficient1);
-    simde__m128 v11 = simde_mm_add_ps(v0, v0);
-    simde__m128 v13 = LoadGuestVector(base, coefficient0);
-    simde__m128 v12 = simde_mm_add_ps(v13, v0);
-    simde__m128 v10 = simde_mm_add_ps(v11, v0);
-    v0 = simde_mm_add_ps(v11, v11);
-    v11 = simde_mm_add_ps(v13, v11);
-    v10 = simde_mm_add_ps(v13, v10);
-
-    std::uint32_t cursor = input + 32;
-    const std::uint32_t outputInputDelta = output - input;
-    std::uint32_t remaining = 16;
-    ctx.fpscr.enableFlushModeUnconditional();
-    do
+    if (arguments.size() < 4U)
     {
-        const std::uint32_t output0 = output + 48;
-        const std::uint32_t output1 = output0 - 48;
-        const std::uint32_t output2 = output0 - 32;
-        const std::uint32_t input0 = cursor + 16;
-        const std::uint32_t input1 = cursor - 32;
-        const std::uint32_t input2 = outputInputDelta + cursor;
-        const std::uint32_t input3 = cursor - 16;
+        return {{x360port::RuntimeError::ExecutionFailed,
+                 "Gears audio mix override requires four guest pointer arguments"},
+                0};
+    }
 
-        const simde__m128 v1 = v10;
-        const simde__m128 v31 = v13;
-        const simde__m128 v30 = v12;
-        const simde__m128 v29 = v11;
-        simde__m128 v9 = LoadGuestVector(base, output0);
-        simde__m128 v7 = LoadGuestVector(base, input0);
-        const simde__m128 v4 = LoadGuestVector(base, output1);
-        v9 = simde_mm_add_ps(simde_mm_mul_ps(v7, v1), v9);
-        simde__m128 v6 = LoadGuestVector(base, input1);
-        simde__m128 v8 = LoadGuestVector(base, cursor);
-        v7 = simde_mm_add_ps(simde_mm_mul_ps(v6, v31), v4);
-        const simde__m128 v3 = LoadGuestVector(base, output2);
-        cursor += 64;
-        const simde__m128 v2 = LoadGuestVector(base, input2);
-        v13 = simde_mm_add_ps(v13, v0);
-        const simde__m128 v5 = LoadGuestVector(base, input3);
-        v8 = simde_mm_add_ps(simde_mm_mul_ps(v8, v29), v2);
-        v6 = simde_mm_add_ps(simde_mm_mul_ps(v5, v30), v3);
-        --remaining;
-        v12 = simde_mm_add_ps(v12, v0);
-        v11 = simde_mm_add_ps(v11, v0);
-        v10 = simde_mm_add_ps(v10, v0);
-        StoreGuestVector(base, output0, v9);
-        output += 64;
-        StoreGuestVector(base, output1, v7);
-        StoreGuestVector(base, input2, v8);
-        StoreGuestVector(base, output2, v6);
-    } while (remaining != 0);
+    std::uint32_t output = static_cast<std::uint32_t>(arguments[0]);
+    const std::uint32_t input = static_cast<std::uint32_t>(arguments[1]);
+    const std::uint32_t coefficient0 = static_cast<std::uint32_t>(arguments[2]);
+    const std::uint32_t coefficient1 = static_cast<std::uint32_t>(arguments[3]);
+    const std::uint32_t outputInputDelta = output - input;
+    std::uint32_t cursor = input + 32U;
+
+    // The guest leaves the last processed input block in r3 and returns it
+    // without setting a result, so the override reproduces that exact value.
+    std::uint32_t lastInputBlock = input;
+
+    x360port::RuntimeFailure failure;
+    GuestVector v0{};
+    if (!LoadGuestVector(runtime, coefficient1, v0, failure))
+    {
+        return Failed(std::move(failure));
+    }
+    GuestVector v11 = Add(v0, v0);
+    GuestVector v13{};
+    if (!LoadGuestVector(runtime, coefficient0, v13, failure))
+    {
+        return Failed(std::move(failure));
+    }
+    GuestVector v12 = Add(v13, v0);
+    GuestVector v10 = Add(v11, v0);
+    v0 = Add(v11, v11);
+    v11 = Add(v13, v11);
+    v10 = Add(v13, v10);
+
+    for (std::uint32_t iteration = 0; iteration < 16U; ++iteration)
+    {
+        const std::uint32_t output0 = output + 48U;
+        const std::uint32_t output1 = output;
+        const std::uint32_t output2 = output + 16U;
+        const std::uint32_t input0 = cursor + 16U;
+        const std::uint32_t input1 = cursor - 32U;
+        lastInputBlock = input1;
+        const std::uint32_t input2 = outputInputDelta + cursor;
+        const std::uint32_t input3 = cursor - 16U;
+
+        GuestVector v9{};
+        if (!LoadGuestVector(runtime, output0, v9, failure))
+        {
+            return Failed(std::move(failure));
+        }
+        GuestVector v7{};
+        if (!LoadGuestVector(runtime, input0, v7, failure))
+        {
+            return Failed(std::move(failure));
+        }
+        GuestVector v4{};
+        if (!LoadGuestVector(runtime, output1, v4, failure))
+        {
+            return Failed(std::move(failure));
+        }
+        v9 = MultiplyAdd(v7, v10, v9);
+
+        GuestVector v6{};
+        if (!LoadGuestVector(runtime, input1, v6, failure))
+        {
+            return Failed(std::move(failure));
+        }
+        GuestVector v8{};
+        if (!LoadGuestVector(runtime, cursor, v8, failure))
+        {
+            return Failed(std::move(failure));
+        }
+        v7 = MultiplyAdd(v6, v13, v4);
+
+        GuestVector v3{};
+        if (!LoadGuestVector(runtime, output2, v3, failure))
+        {
+            return Failed(std::move(failure));
+        }
+        cursor += 64U;
+
+        GuestVector v2{};
+        if (!LoadGuestVector(runtime, input2, v2, failure))
+        {
+            return Failed(std::move(failure));
+        }
+        v13 = Add(v13, v0);
+
+        GuestVector v5{};
+        if (!LoadGuestVector(runtime, input3, v5, failure))
+        {
+            return Failed(std::move(failure));
+        }
+        v8 = MultiplyAdd(v8, v11, v2);
+        v6 = MultiplyAdd(v5, v12, v3);
+        v12 = Add(v12, v0);
+        v11 = Add(v11, v0);
+        v10 = Add(v10, v0);
+
+        if (!StoreGuestVector(runtime, output0, v9, failure) ||
+            !StoreGuestVector(runtime, output1, v7, failure) ||
+            !StoreGuestVector(runtime, input2, v8, failure) ||
+            !StoreGuestVector(runtime, output2, v6, failure))
+        {
+            return Failed(std::move(failure));
+        }
+        output += 64U;
+    }
+
+    return {{}, lastInputBlock};
 }
 
 } // namespace gears::titles::gears1

@@ -1,13 +1,21 @@
 #pragma once
 
-struct PPCContext;
+#include <cstdint>
+#include <span>
+
+#include <x360port/runtime.hpp>
 
 namespace gears::titles::gears1
 {
 
+inline constexpr x360port::GuestAddress kAudioMixAddress = 0x825F7B40U;
+
 // Independently authored implementation of the exact-revision 256-sample
-// mixer contract at 0x825F2D40. Future dispatch must enter through x360port;
+// mixer contract at guest address 0x825F7B40. Dispatch enters through x360port;
 // this declaration does not provide a guest executor.
-void ApplyNativeAudioMix(PPCContext &ctx, unsigned char *base);
+x360port::ExecutionResult ApplyNativeAudioMix(x360port::RuntimeContext &runtime,
+                                              x360port::GuestAddress address,
+                                              std::span<const std::uint64_t> arguments,
+                                              void *context) noexcept;
 
 } // namespace gears::titles::gears1

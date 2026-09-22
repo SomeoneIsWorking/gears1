@@ -39,8 +39,7 @@ class Gears1Runtime final
     ExecuteEntry(std::span<const std::uint64_t> arguments = {},
                  x360port::ExecutionLimits limits = {});
 
-    [[nodiscard]] std::span<const x360port::ImportRequirement>
-    ImportManifest() const noexcept;
+    [[nodiscard]] std::span<const x360port::ImportRequirement> ImportManifest() const noexcept;
     [[nodiscard]] x360port::RuntimeContext *Context() noexcept;
     [[nodiscard]] const x360port::JitStatistics *Statistics() const noexcept;
 
@@ -51,6 +50,8 @@ class Gears1Runtime final
     void Reset();
     [[nodiscard]] x360port::RuntimeFailure InitializeContext();
     [[nodiscard]] x360port::RuntimeFailure ComposeBindings();
+    [[nodiscard]] x360port::RuntimeFailure InstallNativeOverrides();
+    [[nodiscard]] bool ImageContains(x360port::GuestAddress address) const noexcept;
 
     Gears1GuestImage module_;
     std::unique_ptr<x360port::RuntimeContext> context_;

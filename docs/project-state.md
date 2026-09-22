@@ -11,7 +11,7 @@ This inventory reports observable capabilities independently of the product goal
 | S001 | Exact Gears 1 executable identity and normalized image validation | verified | — | G002, G004 |
 | S002 | Bounded user-image/archive provisioning without derived guest source | partial | S001 | G001, G004 |
 | S003 | Executor-independent native renderer and RHI contracts | partial | — | G001, G002, G003 |
-| S004 | Native Gears 1 audio-mix operation | partial | S006 | G001, G002 |
+| S004 | Native Gears 1 audio-mix operation | verified | S006 | G001, G002 |
 | S005 | Native notified operation-kind-3 GPU ticket wait | partial | S006 | G001, G002 |
 | S006 | Xenia-backed `x360port` execution boundary | partial | S001 | G001, G002 |
 | S007 | Gears 1 leaf/import/override discriminator | partial | S001, S006 | G001, G002 |
@@ -61,8 +61,14 @@ without a CPU executor. Gap: no live Xenia-fed native frame exists.
 ### S004 — native audio mix
 
 Evidence: `runtime/titles/gears1/audio_mix.*` owns the independently authored
-kernel and known address `0x825F2D40`. Gap: dispatch and differential
-qualification through `x360port` are missing.
+kernel at guest address `0x825F7B40`. The runtime owner installs the override
+only when the authenticated image contains that exact address, and the handler
+uses x360port's validated mapped-memory contract.
+`tests/test_gears1_real_leaf.cpp` qualifies it differentially on the real image:
+the native override and `CallOriginal` on the original guest body agree on the
+return value and on all 320 output words. Faithfulness required reproducing the
+guest's r3 result and `vmaddfp`'s fused multiply-add with denormal-input
+flushing. Claim C099 records the falsifier.
 
 ### S005 — native GPU ticket wait
 
