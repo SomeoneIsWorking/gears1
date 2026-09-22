@@ -6,7 +6,7 @@ symptom: GearsUE3 exercises x360port/Xenia synthetically, but the authenticated 
 tags: dynarec,xenia,x360port,x360ue3,migration
 state_items: S002,S006,S007,S008,S009,S010,S011
 created: 2026-09-04
-updated: 2026-09-12
+updated: 2026-09-22
 ---
 
 ## Root cause
@@ -152,3 +152,27 @@ The real-image discriminator was then migrated onto this owner. Its existing
 236-import, XAM input, guest allocation, leaf override, scoped-original, and
 invalidation checks pass without a test-local module or import-binding stack;
 guest-state assertions use the shared bounded `ReadGuestMemory` contract.
+
+## Named import claiming — 2026-09-22
+
+Bindings no longer carry ordinal literals. The pinned shared runtime resolves an
+`xboxkrnl.exe`/`xam.xex` ordinal to its exported name and kind from Xenia's
+ordinal tables, and a host service declares the exports it implements by name
+through `x360port::ImportClaimTable`. `Gears1Runtime` gathers the claims its
+services contribute, resolves them once, and applies them while walking the
+manifest; a name the library does not declare, an export two services both
+claim, a handler on a variable export, and a claim with no handler each refuse
+at composition rather than presenting as an import the title never reaches.
+
+The real-image discriminator passed against the ignored user XEX with this
+composition: 236 imports resolved into owned guest storage, the pad state and
+capabilities services reached through their named claims, real leaf `0x82233668`
+executed with scoped original, nested guest-call override and removal,
+executable invalidation, and the native audio mix at `0x825F7B40` matching the
+original guest body on its return value and all 320 output words. That the real
+manifest's ordinals match the names resolved from the export table is the
+discriminator for this change; the synthetic gate cannot prove it.
+
+This is binding mechanism only. It does not implement any additional service,
+and `docs/issues/0171` records what does: 171 recovered handlers that compile
+into no target, against 236 imports of which three are bound.

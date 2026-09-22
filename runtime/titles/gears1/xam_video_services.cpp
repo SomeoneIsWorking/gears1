@@ -2,23 +2,12 @@
 
 namespace gears::titles::gears1
 {
-namespace
+x360port::ImportClaim XamVideoServices::Claim() noexcept
 {
-
-constexpr std::uint32_t kXGetAVPackOrdinal = 971U;
-
-} // namespace
-
-void XamVideoServices::Bind(const x360port::ImportRequirement &requirement,
-                            x360port::ImportBinding &binding) noexcept
-{
-    if (requirement.kind != x360port::ImportKind::Function || requirement.library != "xam.xex" ||
-        requirement.ordinal != kXGetAVPackOrdinal)
-    {
-        return;
-    }
-    binding.function_handler = GetAVPack;
-    binding.function_context = this;
+    return {.library = x360port::ExportNames::Library::Xam,
+            .export_name = "XGetAVPack",
+            .handler = GetAVPack,
+            .context = this};
 }
 
 void XamVideoServices::GetAVPack(x360port::GuestImportContext &context, void *service) noexcept

@@ -39,7 +39,17 @@ gameplay target until the remaining import bindings and runtime services are com
 executor will prefer dynarec and may use the bounded, counted fallback; current fallback
 coverage cannot prove gameplay compatibility or performance.
 
-Two facts from that qualification constrain further native-override work. Recovered guest
+Binding is the frontier, not the dynarec. `docs/issues/0171` records the finding:
+171 recovered `__imp__` service handlers across 21 files compile into no target and
+include a header the break-first deletion removed, while the authenticated image
+declares 236 imports and three are bound. Every other import takes the typed
+unsupported-service refusal, so the title stops at its first unbound service.
+Re-owning that corpus over `x360port`'s typed import contract, claimed by exported
+name, is the next work toward S009. `runtime/guest_heap.*` must not be revived with
+it: Xenia's `Memory`/`BaseHeap` already own guest allocation, and a second allocator
+would disagree with it about which pages are committed.
+
+Two facts from an earlier qualification constrain further native-override work. Recovered guest
 addresses must come from the virtual-address-indexed mapped image, because the normalized
 image displaces everything past the 0x4E00 `.text` alignment gap; `tools/guest_image.py`
 refuses the wrong layout. And a guest fault inside a translated block strands the calling
@@ -151,8 +161,13 @@ container, normalized image, 236 logical imports under the correctly indexed
 The first real-image function-import thunk reaches its title callback and now
 returns `ImportServiceRefused` for an unsupported service; all
 real-image variable imports resolve into bounded caller-owned guest storage.
-The title-owned `XGetAVPack` binding for `xam.xex` ordinal 971 executes through
-its real thunk and returns the configured AV-pack value. The real
+The title-owned `XGetAVPack` binding executes through its real thunk and returns
+the configured AV-pack value. Every host service now claims the exports it
+implements by name through the pinned shared claim table, which resolves those
+names against Xenia's ordinal tables and refuses a name the library does not
+declare, an export two services both claim, a handler on a variable export, and
+a claim with no handler. No ordinal literal remains in this title's bindings or
+in the real-image discriminator's manifest assertions. The real
 `XamInputGetState` ordinal 401 thunk consumes the retained Gears input owner's
 coherent remote-pad snapshot through shared `x360port` XAM serialization. The
 headless ignored-XEX discriminator verifies all 16 guest bytes, a connected

@@ -6,6 +6,7 @@
 #include <span>
 #include <vector>
 
+#include <x360port/import_claims.hpp>
 #include <x360port/runtime.hpp>
 #include <x360port/xam_input.hpp>
 
@@ -49,6 +50,7 @@ class Gears1Runtime final
 
     void Reset();
     [[nodiscard]] x360port::RuntimeFailure InitializeContext();
+    [[nodiscard]] x360port::RuntimeFailure ResolveServiceClaims();
     [[nodiscard]] x360port::RuntimeFailure ComposeBindings();
     [[nodiscard]] x360port::RuntimeFailure InstallNativeOverrides();
     [[nodiscard]] bool ImageContains(x360port::GuestAddress address) const noexcept;
@@ -57,6 +59,7 @@ class Gears1Runtime final
     std::unique_ptr<x360port::RuntimeContext> context_;
     titles::gears1::XamVideoServices video_services_;
     x360port::XamInputService input_service_;
+    x360port::ImportClaimTable claims_;
     x360port::GuestMemoryAllocation variable_storage_{};
     std::size_t variable_count_ = 0;
     std::size_t next_variable_ = 0;

@@ -1,5 +1,6 @@
 #include "gears1_runtime.h"
 
+#include <array>
 #include <limits>
 #include <string>
 #include <utility>
@@ -51,6 +52,7 @@ void Gears1Runtime::Reset()
     variable_count_ = 0;
     next_variable_ = 0;
     bindings_.clear();
+    claims_.Clear();
 }
 
 x360port::RuntimeFailure Gears1Runtime::InitializeContext()
@@ -132,8 +134,23 @@ x360port::GuestAddress Gears1Runtime::ResolveVariable(void *context) noexcept
     return address;
 }
 
+x360port::RuntimeFailure Gears1Runtime::ResolveServiceClaims()
+{
+    // Every host service this title composes declares the exports it implements
+    // by name, so a service that names an export the library does not declare
+    // refuses here rather than presenting as an import the title never reaches.
+    const std::array<x360port::ImportClaim, 2> input_claims = input_service_.Claims();
+    const std::array<x360port::ImportClaim, 3> claims{video_services_.Claim(), input_claims[0],
+                                                      input_claims[1]};
+    return claims_.Resolve(claims);
+}
+
 x360port::RuntimeFailure Gears1Runtime::ComposeBindings()
 {
+    if (const x360port::RuntimeFailure resolved = ResolveServiceClaims())
+    {
+        return resolved;
+    }
     bindings_.reserve(module_.ImportManifest().size());
     for (const x360port::ImportRequirement &import : module_.ImportManifest())
     {
@@ -149,8 +166,7 @@ x360port::RuntimeFailure Gears1Runtime::ComposeBindings()
             binding.variable_resolver = ResolveVariable;
             binding.variable_resolution_context = this;
         }
-        video_services_.Bind(import, binding);
-        input_service_.Bind(import, binding);
+        claims_.Apply(import, binding);
         bindings_.push_back(binding);
     }
     next_variable_ = 0;
