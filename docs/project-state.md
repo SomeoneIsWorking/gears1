@@ -270,8 +270,16 @@ are now written in bulk rather than through a virtual call per register, and swa
 resolve diagnostics no longer log every frame. The next cost is the guest render thread's
 spin on GPU progress (`sub_8222F460`, S005; a third of that thread's stack samples at the
 junction), while the game thread yields waiting on the render thread. The GPU command
-thread is busy about 0.8 of a core with a flat per-draw profile led by descriptor-set
-updates. Its `WAIT_REG_MEM` on guest word physical `0x1F99E004` is the per-present
+thread is busy about 0.8 of a core with a flat per-draw profile. Descriptor sets are no
+longer rewritten for every draw: a stage's texture set is kept while its bindings are
+unchanged, and the constants are dynamic uniform buffers rebound with new offsets.
+Frame times are too noisy on this shared host to show that (junction p50 spread
+10.6-12.8 ms for identical code), so it was measured as the command thread's retired
+user instructions per present over 15 s at the junction: 99.2M and 99.2M per present
+before, 96.8M and 90.7M with texture set reuse, then 97.2M and 96.9M against 94.5M and
+94.8M for the dynamic constants. The remaining profile has no dominant cost: the global
+mutex is 7% of the thread's instructions, constant setup 11%, and RADV's dynamic buffer
+descriptors 6.5%. Its `WAIT_REG_MEM` on guest word physical `0x1F99E004` is the per-present
 vblank wait above: once per frame, and woken by the vblank thread after the title's
 vblank handler runs rather than after Xenia's `wait / 0x100` ms poll interval (junction
 p50 12.7 to 11.7 ms). Skipping the global mutex for already-valid vertex ranges did not
