@@ -257,10 +257,11 @@ vblank at 1000 Hz and caps presents at 120/s on the host (`max_presents_per_seco
 which holds a present only when it arrives early. Measured headless on an AMD Radeon RX
 6700 XT (RADV) with the profile's gameplay walk, 300 s (2026-09-23), from the offscreen
 run's per-10 s frame-time percentiles (host time between guest presents, 0.1 ms buckets):
-the menus, Act 1's opening scene, the cell block and first corridor hold 120 presents/s
-at p50 8.4 ms, p99 8.7-10.4 ms; the last 30 s, at the "Choose path" junction, run at
-77-96 presents/s, p50 10.6-11.7 ms (240 Hz vblank pacing: about 59, p50 16.8 ms, in the
-same session).
+the menus, Act 1's opening scene and the cell block hold 120 presents/s at p50 8.4 ms,
+p99 8.6-9.3 ms; the first corridor fell to 76-107 presents/s (p50 12.8 ms) in seconds
+241-260 of the latest run, while the host's load average rose from 3.7 to 9, where it
+had held 120 before; the last 30 s, at the "Choose path" junction, run at 81-114
+presents/s, p50 8.6-9.6 ms (240 Hz vblank pacing: about 59, p50 16.8 ms).
 
 Play was bound by Xenia's GPU command thread, not the host GPU (40-80% busy). Three
 costs on that thread were removed in the pinned fork: a `gettid` syscall on every
@@ -277,9 +278,12 @@ Frame times are too noisy on this shared host to show that (junction p50 spread
 10.6-12.8 ms for identical code), so it was measured as the command thread's retired
 user instructions per present over 15 s at the junction: 99.2M and 99.2M per present
 before, 96.8M and 90.7M with texture set reuse, then 97.2M and 96.9M against 94.5M and
-94.8M for the dynamic constants. The remaining profile has no dominant cost: the global
-mutex is 7% of the thread's instructions, constant setup 11%, and RADV's dynamic buffer
-descriptors 6.5%. Its `WAIT_REG_MEM` on guest word physical `0x1F99E004` is the per-present
+94.8M for the dynamic constants. The driver's recording of the deferred command buffer,
+a fifth of the thread's time when it ran at the end of each submission, now runs on a
+recording thread as the commands fill 32 KiB: 94.7M instructions per present to 77.3M,
+junction p50 8.5-9.5 ms against 9.7-14.4 ms for the previous build in alternating runs.
+The rest of the profile has no dominant cost: the global mutex is 7% of the thread's
+instructions and constant setup 11%. Its `WAIT_REG_MEM` on guest word physical `0x1F99E004` is the per-present
 vblank wait above: once per frame, and woken by the vblank thread after the title's
 vblank handler runs rather than after Xenia's `wait / 0x100` ms poll interval (junction
 p50 12.7 to 11.7 ms). Skipping the global mutex for already-valid vertex ranges did not
@@ -289,7 +293,7 @@ batch, and the native audio mix, whose per-vector guest-memory validation had ta
 all process samples at the junction, now takes 8%. `tools/run_offscreen.py
 --perf-map` names translated guest functions in `perf report`.
 
-Gap: gameplay does not yet hold 120 presents/s at the path junction (p50 11.7 ms there).
+Gap: gameplay does not yet hold 120 presents/s at the path junction (p50 8.5-9.5 ms there).
 
 ### S014 — later Gears titles
 
