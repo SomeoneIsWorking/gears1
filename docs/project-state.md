@@ -279,9 +279,9 @@ costs on that thread were removed in the pinned fork: a `gettid` syscall on ever
 global-mutex acquire (34 to 49 presents/s), a scan of every live occlusion report on
 each BEGIN (49 to 63), and oracle shader hashing on each unarmed draw; PM4 register ranges
 are now written in bulk rather than through a virtual call per register, and swap and
-resolve diagnostics no longer log every frame. The next cost is the guest render thread's
-spin on GPU progress (`sub_8222F460`, S005; a third of that thread's stack samples at the
-junction), while the game thread yields waiting on the render thread. The GPU command
+resolve diagnostics no longer log every frame. The guest render thread spins on GPU
+progress (`sub_8222F460`, S005), but slowing that spin cut the thread's CPU without
+changing presents per second (issue 0152), so it costs power, not frame rate. The GPU command
 thread is busy about 0.8 of a core with a flat per-draw profile. Descriptor sets are no
 longer rewritten for every draw: a stage's texture set is kept while its bindings are
 unchanged, and the constants are dynamic uniform buffers rebound with new offsets.
