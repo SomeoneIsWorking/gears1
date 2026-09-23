@@ -177,14 +177,37 @@ void PutBigEndianFloat(std::span<std::byte> bytes, std::size_t offset, float val
     bytes[offset + 3U] = static_cast<std::byte>(bits);
 }
 
-void FillAudioFixture(std::span<std::byte> input, std::span<std::byte> output,
-                      std::span<std::byte> coefficient0, std::span<std::byte> coefficient1)
+// Input and output blocks are 0x400 bytes each. The arena holds every
+// arrangement below: disjoint, in place, and overlapping by one iteration in
+// either direction, where a store must be seen by a later iteration's load.
+inline constexpr std::uint32_t kAudioArenaBytes = 0xC00U;
+
+struct AudioMixCase
 {
-    for (std::size_t offset = 0; offset < input.size(); offset += 4U)
+    std::string_view name;
+    std::uint32_t input_offset;
+    std::uint32_t output_offset;
+};
+
+inline constexpr std::array kAudioMixCases{
+    AudioMixCase{"disjoint", 0x000U, 0x600U},
+    AudioMixCase{"in place", 0x200U, 0x200U},
+    AudioMixCase{"output one iteration ahead", 0x200U, 0x240U},
+    AudioMixCase{"output one iteration behind", 0x240U, 0x200U},
+};
+
+void FillAudioArena(std::span<std::byte> arena)
+{
+    for (std::size_t offset = 0; offset < arena.size(); offset += 4U)
     {
-        PutBigEndianFloat(input, offset, 0.125F + static_cast<float>(offset) * 0.0001F);
-        PutBigEndianFloat(output, offset, -0.25F + static_cast<float>(offset) * 0.0002F);
+        PutBigEndianFloat(arena, offset,
+                          offset % 8U == 0U ? 0.125F + static_cast<float>(offset) * 0.0001F
+                                            : -0.25F + static_cast<float>(offset) * 0.0002F);
     }
+}
+
+void FillAudioCoefficients(std::span<std::byte> coefficient0, std::span<std::byte> coefficient1)
+{
     PutBigEndianFloat(coefficient0, 0U, 0.125F);
     PutBigEndianFloat(coefficient0, 4U, -0.25F);
     PutBigEndianFloat(coefficient0, 8U, 0.5F);
@@ -193,6 +216,75 @@ void FillAudioFixture(std::span<std::byte> input, std::span<std::byte> output,
     PutBigEndianFloat(coefficient1, 4U, 0.1875F);
     PutBigEndianFloat(coefficient1, 8U, -0.3125F);
     PutBigEndianFloat(coefficient1, 12U, 0.4375F);
+}
+
+[[nodiscard]] std::uint32_t BigEndianWord(std::span<const std::byte> bytes, std::size_t at)
+{
+    return (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at])) << 24U) |
+           (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at + 1U])) << 16U) |
+           (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at + 2U])) << 8U) |
+           static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at + 3U]));
+}
+
+void ReportAudioDivergence(std::string_view name, std::span<const std::byte> expected,
+                           std::span<const std::byte> actual)
+{
+    std::size_t differing = 0;
+    for (std::size_t offset = 0; offset + 4U <= expected.size(); offset += 4U)
+    {
+        const std::uint32_t expected_word = BigEndianWord(expected, offset);
+        const std::uint32_t actual_word = BigEndianWord(actual, offset);
+        if (expected_word == actual_word)
+        {
+            continue;
+        }
+        if (differing < 8U)
+        {
+            std::cerr << "audio divergence (" << name << ") at +0x" << std::hex << offset
+                      << ": original=" << expected_word << " native=" << actual_word << std::dec
+                      << "\n";
+        }
+        ++differing;
+    }
+    std::cerr << "audio divergence (" << name << "): " << differing << " of "
+              << expected.size() / 4U << " arena words differ\n";
+}
+
+// Runs the original guest body and the native override on the same fixture and
+// requires the same result and the same bytes across the whole arena.
+void RequireNativeAudioMixMatchesOriginal(x360port::RuntimeContext &context, std::uint32_t arena,
+                                          std::uint32_t coefficient0, std::uint32_t coefficient1,
+                                          const AudioMixCase &mix_case)
+{
+    std::array<std::byte, kAudioArenaBytes> fixture{};
+    FillAudioArena(fixture);
+    const std::array<std::uint64_t, 4> arguments{
+        arena + mix_case.output_offset, arena + mix_case.input_offset, coefficient0, coefficient1};
+
+    Require(!context.WriteGuestMemory(arena, fixture), "could not write the audio arena");
+    const x360port::ExecutionResult original =
+        context.CallOriginal(gears::titles::gears1::kAudioMixAddress, arguments,
+                             {.max_guest_blocks = 1000U, .max_interpreter_instructions = 100'000U});
+    Require(static_cast<bool>(original), original.failure.detail);
+    std::array<std::byte, kAudioArenaBytes> original_arena{};
+    Require(!context.ReadGuestMemory(arena, original_arena), "could not read the original arena");
+
+    Require(!context.WriteGuestMemory(arena, fixture), "could not rewrite the audio arena");
+    const std::uint64_t calls_before = context.Statistics().native_override_calls;
+    const x360port::ExecutionResult native =
+        context.Execute(gears::titles::gears1::kAudioMixAddress, arguments);
+    Require(static_cast<bool>(native) && native.value == original.value,
+            "the native audio override returned a different guest result");
+    Require(context.Statistics().native_override_calls == calls_before + 1U,
+            "the authenticated audio address did not dispatch through the native override");
+    std::array<std::byte, kAudioArenaBytes> native_arena{};
+    Require(!context.ReadGuestMemory(arena, native_arena), "could not read the native arena");
+    if (native_arena != original_arena)
+    {
+        ReportAudioDivergence(mix_case.name, original_arena, native_arena);
+    }
+    Require(native_arena == original_arena && native_arena != fixture,
+            "the native audio override diverged from the Xenia original output");
 }
 
 } // namespace
@@ -423,93 +515,29 @@ int main(int argc, char **argv)
     Require(context->Statistics().translation_invalidations == invalidations_before_removal,
             "override removal unnecessarily retranslated the original guest function");
 
-    const x360port::GuestMemoryAllocationResult audio_input = context->AllocateGuestMemory(0x500U);
-    const x360port::GuestMemoryAllocationResult audio_output = context->AllocateGuestMemory(0x500U);
+    const x360port::GuestMemoryAllocationResult audio_arena =
+        context->AllocateGuestMemory(kAudioArenaBytes);
     const x360port::GuestMemoryAllocationResult audio_coefficient0 =
         context->AllocateGuestMemory(16U);
     const x360port::GuestMemoryAllocationResult audio_coefficient1 =
         context->AllocateGuestMemory(16U);
-    Require(static_cast<bool>(audio_input) && static_cast<bool>(audio_output) &&
-                static_cast<bool>(audio_coefficient0) && static_cast<bool>(audio_coefficient1),
+    Require(static_cast<bool>(audio_arena) && static_cast<bool>(audio_coefficient0) &&
+                static_cast<bool>(audio_coefficient1),
             "the runtime could not allocate the audio differential fixture");
-    std::array<std::byte, 0x500> audio_input_bytes{};
-    std::array<std::byte, 0x500> audio_output_bytes{};
     std::array<std::byte, 16> audio_coefficient0_bytes{};
     std::array<std::byte, 16> audio_coefficient1_bytes{};
-    FillAudioFixture(audio_input_bytes, audio_output_bytes, audio_coefficient0_bytes,
-                     audio_coefficient1_bytes);
-    const auto write_audio_fixture = [&]
-    {
-        Require(!context->WriteGuestMemory(audio_input.allocation.address, audio_input_bytes),
-                "could not write the audio input fixture");
-        Require(!context->WriteGuestMemory(audio_output.allocation.address, audio_output_bytes),
-                "could not write the audio output fixture");
-        Require(!context->WriteGuestMemory(audio_coefficient0.allocation.address,
-                                           audio_coefficient0_bytes),
-                "could not write the first audio coefficient fixture");
-        Require(!context->WriteGuestMemory(audio_coefficient1.allocation.address,
+    FillAudioCoefficients(audio_coefficient0_bytes, audio_coefficient1_bytes);
+    Require(!context->WriteGuestMemory(audio_coefficient0.allocation.address,
+                                       audio_coefficient0_bytes) &&
+                !context->WriteGuestMemory(audio_coefficient1.allocation.address,
                                            audio_coefficient1_bytes),
-                "could not write the second audio coefficient fixture");
-    };
-    write_audio_fixture();
-    const std::array<std::uint64_t, 4> audio_arguments{
-        audio_output.allocation.address, audio_input.allocation.address,
-        audio_coefficient0.allocation.address, audio_coefficient1.allocation.address};
-    constexpr x360port::ExecutionLimits audio_limits{.max_guest_blocks = 1000U,
-                                                     .max_interpreter_instructions = 100'000U};
-    const x360port::ExecutionResult audio_original = context->CallOriginal(
-        gears::titles::gears1::kAudioMixAddress, audio_arguments, audio_limits);
-    Require(static_cast<bool>(audio_original), audio_original.failure.detail);
-    std::array<std::byte, 0x500> original_audio_output{};
-    const x360port::RuntimeFailure original_audio_read =
-        context->ReadGuestMemory(audio_output.allocation.address, original_audio_output);
-    Require(!original_audio_read, original_audio_read.detail);
-    write_audio_fixture();
-    const std::uint64_t native_override_calls_before_audio =
-        context->Statistics().native_override_calls;
-    const x360port::ExecutionResult audio_native =
-        context->Execute(gears::titles::gears1::kAudioMixAddress, audio_arguments);
-    Require(static_cast<bool>(audio_native) && audio_native.value == audio_original.value,
-            "the native audio override returned a different guest result");
-    Require(context->Statistics().native_override_calls == native_override_calls_before_audio + 1U,
-            "the authenticated audio address did not dispatch through the native override");
-    std::array<std::byte, 0x500> native_audio_output{};
-    const x360port::RuntimeFailure native_audio_read =
-        context->ReadGuestMemory(audio_output.allocation.address, native_audio_output);
-    if (native_audio_output != original_audio_output)
+            "could not write the audio coefficient fixture");
+    for (const AudioMixCase &mix_case : kAudioMixCases)
     {
-        std::size_t differing = 0;
-        for (std::size_t offset = 0; offset + 4U <= original_audio_output.size(); offset += 4U)
-        {
-            const auto word = [](std::span<const std::byte> bytes, std::size_t at)
-            {
-                return (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at]))
-                        << 24U) |
-                       (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at + 1U]))
-                        << 16U) |
-                       (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at + 2U]))
-                        << 8U) |
-                       static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[at + 3U]));
-            };
-            const std::uint32_t expected_word = word(original_audio_output, offset);
-            const std::uint32_t actual_word = word(native_audio_output, offset);
-            if (expected_word == actual_word)
-            {
-                continue;
-            }
-            if (differing < 8U)
-            {
-                std::cerr << "audio divergence at +0x" << std::hex << offset
-                          << ": original=" << expected_word << " native=" << actual_word << std::dec
-                          << "\n";
-            }
-            ++differing;
-        }
-        std::cerr << "audio divergence: " << differing << " of "
-                  << original_audio_output.size() / 4U << " output words differ\n";
+        RequireNativeAudioMixMatchesOriginal(*context, audio_arena.allocation.address,
+                                             audio_coefficient0.allocation.address,
+                                             audio_coefficient1.allocation.address, mix_case);
     }
-    Require(!native_audio_read && native_audio_output == original_audio_output,
-            "the native audio override diverged from the Xenia original output");
 
     const x360port::RuntimeFailure invalidated =
         context->NotifyExecutableWrite(kResourceAddRef, 4U);
@@ -582,6 +610,7 @@ int main(int argc, char **argv)
                  "NtFreeVirtualMemory imports, executed 0x8222E868, "
                  "scoped original, nested guest-call override/removal, executable invalidation, "
                  "and the native audio mix at 0x825F2D40 matching the original guest body on "
-                 "its return value and all 320 output words, passed\n";
+                 "its return value and every arena word with disjoint, in-place and "
+                 "overlapping blocks, passed\n";
     return 0;
 }

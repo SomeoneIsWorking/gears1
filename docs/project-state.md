@@ -81,10 +81,12 @@ without a CPU executor. Gap: no live Xenia-fed native frame exists.
 Evidence: `runtime/titles/gears1/audio_mix.*` owns the independently authored
 kernel at guest address `0x825F2D40`. The runtime owner installs the override
 only when the authenticated image contains that exact address, and the handler
-uses x360port's validated mapped-memory contract.
+uses x360port's validated mapped-memory contract: it stages its input and output blocks
+with one validated read each and writes the output back once.
 `tests/test_gears1_real_leaf.cpp` qualifies it differentially on the real image:
 the native override and `CallOriginal` on the original guest body agree on the
-return value and on all 320 output words. Faithfulness required reproducing the
+return value and on every byte of the arena with disjoint, in-place and overlapping
+input and output blocks. Faithfulness required reproducing the
 guest's r3 result and `vmaddfp`'s fused multiply-add with denormal-input
 flushing. Claim C099 records the falsifier.
 
@@ -260,7 +262,12 @@ global-mutex acquire (34 to 49 presents/s), a scan of every live occlusion repor
 each BEGIN (49 to 63), and oracle shader hashing on each unarmed draw; PM4 register ranges
 are now written in bulk rather than through a virtual call per register, and swap and
 resolve diagnostics no longer log every frame. The next cost is the guest render thread's
-spin on GPU progress (`sub_8222F460`, S005; 42% of that thread in a profile of play). `tools/run_offscreen.py
+spin on GPU progress (`sub_8222F460`, S005; 41% of that thread at the junction), and
+that spin waits on Xenia's GPU command thread, which is saturated there (0.9 of a core)
+with a flat per-draw profile led by descriptor-set updates and the global mutex. The
+command processor now reports its ring read pointer every RB_BLKSZ rather than once per
+batch, and the native audio mix, whose per-vector guest-memory validation had taken 27% of
+all process samples at the junction, now takes 8%. `tools/run_offscreen.py
 --perf-map` names translated guest functions in `perf report`.
 
 Gap: gameplay does not yet hold 120 presents/s at the path junction, and no frame-time percentiles or

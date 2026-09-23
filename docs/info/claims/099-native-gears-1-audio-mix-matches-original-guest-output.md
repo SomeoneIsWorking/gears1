@@ -17,7 +17,10 @@ function `0x825F2D40` bit-exactly when the original is executed through Xenia.
 `tests/test_gears1_real_leaf.cpp` allocates a guest fixture, runs the original
 function through `CallOriginal` on the authenticated real image, re-seeds the
 fixture, dispatches the native override through `Execute`, and compares the
-return value and all 320 output words. They agree exactly.
+return value and every byte of the arena, with the input and output blocks
+disjoint, in place, and overlapping by one iteration either way. They agree
+exactly; forcing the overlapping blocks to be staged separately makes 239 of 768
+words differ, so the comparison sees aliasing.
 
 Two divergences were found and fixed at their cause while establishing this:
 the guest returns the last processed input block in r3 rather than the output
