@@ -42,7 +42,9 @@ The service-binding frontier recorded by `docs/issues/0171` is superseded for th
 product: the system session answers every import with Xenia's kernel instead of a
 title-local claim table. The profile's gameplay walk now plays past the opening scene to Act 1's first
 path choice, and play driven over the control channel reaches Act 1's first firefight.
-What remains for S009 is a reproducible combat route and a comparison against the oracle. The native
+`tools/combat_route.py` plays from there into the firefight reproducibly by steering
+on the local player's position read over the control channel. What remains for S009 is
+a comparison against the oracle. The native
 audio mix now runs in the product, about 47,000 calls per second in play
 (`docs/issues/0172`). Presentation now runs
 up to 120 presents/s under a host limit; S013 records the gameplay rate and its next costs.
@@ -220,8 +222,14 @@ open with X; crosses the dark cell room to the yard; takes cover with A; revives
 is downed by Locust fire; and aims with LT and fires with RT, the ammunition count falling
 from 312 to 298. A fixed-time script does not repeat this route: the tutorial holds begin
 where the player happens to be, and two runs of the same walk ended in different places.
-Gap: no scripted route reaches combat reproducibly, and no play is compared against the
-oracle. Linux has gamepad input only. The product's
+`tools/combat_route.py` repeats it closed-loop: it starts a fresh `--walk gameplay` run,
+reads the local player (`GET /api/player`, chain in `docs/re-frontier.md`, "Local player"),
+steers the stick toward each measured position, answers a tutorial prompt only when the
+player stalls, and passes only when the player reaches the yard cover and the weapon's
+magazine count rises. Two consecutive fresh runs passed with the same trace: the door
+opened 30.8 s after arrival on the third kick attempt, the yard legs took 1.4-1.8 s
+each, and the weapon fired 6 and 5 rounds on the second cover attempt. Gap: no play is
+compared against the oracle. Linux has gamepad input only. The product's
 native audio-mix override is reached on real guest threads (`docs/issues/0172`). Two startup failures seen during a
 concurrent heavy build are unexplained (`docs/issues/0173`).
 

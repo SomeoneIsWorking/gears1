@@ -56,7 +56,7 @@ endif()
 
 set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
     "Exact shared/x360port checkout consumed by GearsUE3")
-set(X360PORT_REQUIRED_REVISION "5bf539eac321fd36dc5937f1d791e96ca7042a84")
+set(X360PORT_REQUIRED_REVISION "7626d39b4adedba17201baa4a4610b7edf3b5897")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
@@ -203,6 +203,22 @@ add_executable(test_pad_form tests/test_pad_form.cpp)
 target_link_libraries(test_pad_form PRIVATE gears1_pad_form)
 x360port_enable_warnings(test_pad_form)
 gears_add_binary_test(gears1_pad_form test_pad_form)
+add_library(gears1_memory_request STATIC runtime/product/memory_request.cpp)
+target_include_directories(gears1_memory_request PUBLIC runtime/product)
+target_link_libraries(gears1_memory_request PUBLIC lucent::lucent)
+x360port_enable_warnings(gears1_memory_request)
+add_executable(test_memory_request tests/test_memory_request.cpp)
+target_link_libraries(test_memory_request PRIVATE gears1_memory_request)
+x360port_enable_warnings(test_memory_request)
+gears_add_binary_test(gears1_memory_request test_memory_request)
+add_library(gears1_player_probe STATIC runtime/titles/gears1/player_probe.cpp)
+target_include_directories(gears1_player_probe PUBLIC runtime/titles/gears1)
+target_link_libraries(gears1_player_probe PUBLIC x360port::x360port)
+x360port_enable_warnings(gears1_player_probe)
+add_executable(test_player_probe tests/test_player_probe.cpp)
+target_link_libraries(test_player_probe PRIVATE gears1_player_probe)
+x360port_enable_warnings(test_player_probe)
+gears_add_binary_test(gears1_player_probe test_player_probe)
 # x360port provides the full console only where it has a windowed host (GTK on
 # Linux today). Elsewhere the product target is absent by name, and the
 # launcher refuses with the same reason; the execution contracts still build.
@@ -213,7 +229,9 @@ if(TARGET x360port::system)
         runtime/product/offscreen_run.cpp
         runtime/product/control_channel.cpp
         runtime/product/portable_pixmap.cpp)
-    target_link_libraries(gears1 PRIVATE gears1_product_options gears1_pad_form gears1_audio_mix
+    target_link_libraries(gears1 PRIVATE gears1_product_options gears1_pad_form gears1_memory_request
+                                         gears1_player_probe
+                                         gears1_audio_mix
                                          gears_input
                                          x360port::system lucent::lucent)
     x360port_enable_warnings(gears1)
@@ -237,6 +255,9 @@ if(GEARS_DYNAREC_CONTRACT_ONLY)
     add_test(NAME gears_perf_guest_report
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tests/test_perf_guest_report.py")
+    add_test(NAME gears_combat_route
+        COMMAND ${GEARS_UV_RUN} python
+                "${CMAKE_SOURCE_DIR}/tests/test_combat_route.py")
     return()
 endif()
 

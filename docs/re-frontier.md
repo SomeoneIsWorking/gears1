@@ -154,9 +154,52 @@ Qualify x86-64, Apple
   roll command storage through `0x82221980`.
 - The game-authored command-list interpreter at `0x8223B2AC` consumes UE3/Xenos
   command records. This names game behavior, not a CPU execution mode.
+- The engine's own map change: `PrepareMapChange` `0x82426D98`,
+  `IsReadyForMapChange` `0x824272C0`, `ProcessAsyncLoading` `0x8242AFF8`, and
+  `FName::FName` `0x82364678`, called in that order by `sub_821B4620` at
+  `0x821B4F0C..0x821B4F48`. The commit step is not identified.
 
 These facts must be re-observed through the authenticated Xenia context before
 they authorize dispatch or a shared `x360ue3` contract.
+
+### Local player
+
+Read live through `GET /api/memory` on sp_prison_p; `runtime/titles/gears1/player_probe.*`
+follows this chain for `GET /api/player`:
+
+- `0x82BED138` holds the `UGameEngine` pointer. A UObject begins with its
+  vtable, Outer at `+0x28`, name at `+0x2C`, Class at `+0x34`, and archetype at
+  `+0x38`.
+- Engine `+0x29C` is the local-player array (data, then count at `+0x2A0`);
+  a local player's `+0x40` is its player controller.
+- Controller `+0x1A0` is the pawn, null while the player is dead; pawn `+0x1AC`
+  points back at the controller. Controller `+0x294` is the camera actor.
+- Actor location is three floats at `+0xCC`; rotation is pitch, yaw, roll at
+  `+0xD8`, 65536 units per turn and accumulating past a turn. Left-stick
+  movement follows the controller's yaw; the world is left-handed, so full
+  right moves a quarter turn toward +y of +x. Holding Y turns the camera actor,
+  not the controller, toward the point of interest.
+- Pawn `+0x35C` is the held weapon; weapon `+0x490` counts rounds fired from
+  the current magazine (a Lancer burst adds 12). Found by differencing the
+  weapon across bursts: the HUD's ammo totals appear elsewhere in memory but
+  never changed with firing, so their owner is still unknown.
+- Health and the enemy-pawn list are not located. Pawn `+0x350` (2000) and
+  `+0x48C` (301) are unverified health candidates.
+
+`tools/combat_route.py` steers by this chain from where the gameplay walk
+leaves Marcus (in cover near (-760, 1190); the walk's fixed timing varies it by
+tens of units) to the yard's first cover and fires there, through
+(-922, 1124), (-1002, 1420), and (-1123, 1936) to the jammed door
+(-1252, 2325). Tutorial prompts hold Marcus until their button is held under
+them, and each appears some seconds after its trigger, so the route answers a
+prompt only when the player stalls. At the door the objectives prompt (LB)
+follows about 20 s of radio dialogue; the kick (X) is offered only after LB is
+released, and an X pressed while the objectives display is still closing is
+lost. The cell room and yard follow (-1253, 2637), (-1669, 2727),
+(-1752, 3104), (-1377, 3350), and (-1034, 3530) to cover at (-1034, 3640),
+where the cover prompt (A) holds the trigger and the first drones engage. The
+points-of-interest prompt (Y) near (-1017, 1360) held Marcus in one live run
+and not in later ones. The yard checkpoint respawns at (-1606, 2573).
 
 The ignored `build/ghidra/gears` project imports the loaded image linearly, so
 its addresses agree with the runtime: `0x8222E868` reads `7d8802a6`. The
