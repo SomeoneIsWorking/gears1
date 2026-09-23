@@ -26,7 +26,7 @@ namespace
 
 using x360port::GuestAddress;
 
-constexpr GuestAddress kResourceAddRef = 0x82233668U;
+constexpr GuestAddress kResourceAddRef = 0x8222E868U;
 constexpr std::size_t kResourceObjectSize = 0x1CU;
 
 // Guest ABI values the kernel's virtual-memory exports take and answer with,
@@ -526,7 +526,7 @@ int main(int argc, char **argv)
     Require(static_cast<bool>(recursive_memory), recursive_memory.failure.detail);
     const GuestAddress outer_resource = recursive_memory.allocation.address;
     const GuestAddress inner_resource = outer_resource + kResourceObjectSize;
-    // The real leaf calls AddRef at 0x822336C0 for a first reference to this linked resource kind.
+    // The real leaf calls AddRef at 0x8222E8C0 for a first reference to this linked resource kind.
     std::array<std::byte, 2U * kResourceObjectSize> recursive_bytes{};
     recursive_bytes[0] = std::byte{0x40};
     recursive_bytes[3] = std::byte{0x04};
@@ -579,9 +579,9 @@ int main(int argc, char **argv)
                  "owned guest storage, polled retained pad state/capabilities through the "
                  "XamInputGetState and XamInputGetCapabilities claims, committed and released "
                  "a range through the retained NtAllocateVirtualMemory and "
-                 "NtFreeVirtualMemory imports, executed 0x82233668, "
+                 "NtFreeVirtualMemory imports, executed 0x8222E868, "
                  "scoped original, nested guest-call override/removal, executable invalidation, "
-                 "and the native audio mix at 0x825F7B40 matching the original guest body on "
+                 "and the native audio mix at 0x825F2D40 matching the original guest body on "
                  "its return value and all 320 output words, passed\n";
     return 0;
 }

@@ -16,7 +16,7 @@ computed address matches, so a string constant or a device register can be
 traced back to the code that uses it.
 
     tools/find_addr_refs.py <image> <base> <address> [address ...]
-    tools/find_addr_refs.py scratch/raw/gears_mapped.bin 0x82000000 0x820bda98
+    tools/find_addr_refs.py scratch/raw/gears_image.bin 0x82000000 0x820bda98
 
 Both shapes that build an address are recognised:
 
@@ -32,7 +32,7 @@ instrument, because "no hits" reads as an answer.
 import struct
 import sys
 
-from guest_image import GuestImageError, load_mapped_image
+from guest_image import GuestImageError, load_guest_image
 
 # The pair can be separated by unrelated instructions, but not many: compilers
 # emit the halves close together, and a wide window costs false positives where
@@ -228,7 +228,7 @@ def main():
     targets = [int(x, 0) for x in sys.argv[3:]]
 
     try:
-        data = load_mapped_image(image)
+        data = load_guest_image(image)
     except GuestImageError as error:
         print(f"find_addr_refs: refusing: {error}", file=sys.stderr)
         return 2

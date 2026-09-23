@@ -161,6 +161,8 @@ add_test(NAME migration_boundary_selftest
     COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_migration_boundary.py" --selftest)
 add_test(NAME title_identity
     COMMAND ${GEARS_UV_RUN} python "${CMAKE_CURRENT_SOURCE_DIR}/test_title_identity.py")
+add_test(NAME guest_image_layout
+    COMMAND ${GEARS_UV_RUN} python "${CMAKE_CURRENT_SOURCE_DIR}/test_guest_image.py")
 add_test(NAME archive_input
     COMMAND ${GEARS_UV_RUN} python "${CMAKE_CURRENT_SOURCE_DIR}/test_archive_input.py")
 add_test(NAME gdf_extract

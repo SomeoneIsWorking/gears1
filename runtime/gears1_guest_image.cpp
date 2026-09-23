@@ -8,7 +8,7 @@
 namespace gears
 {
 
-bool Gears1GuestImage::Initialize(std::span<const std::byte> normalized_image,
+bool Gears1GuestImage::Initialize(std::span<const std::byte> loaded_image,
                                   const XexIdentity &expected, std::span<const ImportSpec> imports,
                                   std::string &error)
 {
@@ -17,27 +17,27 @@ bool Gears1GuestImage::Initialize(std::span<const std::byte> normalized_image,
     imports_.clear();
     descriptor_ = {};
 
-    if (normalized_image.size() != expected.imageSize ||
-        x360port::HashBytes(normalized_image) != expected.imageDigest)
+    if (loaded_image.size() != expected.imageSize ||
+        x360port::HashBytes(loaded_image) != expected.imageDigest)
     {
-        error = "normalized XEX image does not match the exact Gears profile";
+        error = "loaded XEX image does not match the exact Gears profile";
         return false;
     }
 
-    const x360port::PeImageLayoutResult mapped = x360port::MapPeImage(normalized_image);
-    if (!mapped)
+    const x360port::PeImageLayoutResult loaded = x360port::DescribeLoadedPeImage(loaded_image);
+    if (!loaded)
     {
-        error = mapped.error;
+        error = loaded.error;
         return false;
     }
-    if (mapped.layout.identity.base != expected.imageBase ||
-        mapped.layout.identity.entry_point != expected.entryPoint)
+    if (loaded.layout.identity.base != expected.imageBase ||
+        loaded.layout.identity.entry_point != expected.entryPoint)
     {
-        error = "normalized image geometry does not match the exact Gears profile";
+        error = "loaded image geometry does not match the exact Gears profile";
         return false;
     }
 
-    image_ = mapped.layout.image;
+    image_.assign(loaded_image.begin(), loaded_image.end());
     import_specs_.assign(imports.begin(), imports.end());
     std::ranges::sort(import_specs_,
                       [](const ImportSpec &left, const ImportSpec &right)
@@ -48,8 +48,8 @@ bool Gears1GuestImage::Initialize(std::span<const std::byte> normalized_image,
                           }
                           return left.ordinal < right.ordinal;
                       });
-    descriptor_.image = mapped.layout.identity;
-    descriptor_.code = mapped.layout.code;
+    descriptor_.image = loaded.layout.identity;
+    descriptor_.code = loaded.layout.code;
     RebuildManifest();
     error.clear();
     return true;
@@ -78,7 +78,7 @@ bool Gears1GuestImage::InitializeCheckedXex(std::span<const std::byte> xex,
         imports.push_back({import.kind, import.library, import.ordinal, import.name, import.address,
                            import.record_address});
     }
-    return Initialize(inspected.inspection.normalized_image, expected, imports, error);
+    return Initialize(inspected.inspection.loaded_image, expected, imports, error);
 }
 
 const x360port::ModuleDescriptor &Gears1GuestImage::Descriptor() const noexcept

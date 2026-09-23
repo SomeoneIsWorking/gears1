@@ -20,14 +20,14 @@ Gears1Runtime::Gears1Runtime(std::uint32_t av_pack, x360port::XamPadReader state
 {
 }
 
-x360port::RuntimeFailure Gears1Runtime::Initialize(std::span<const std::byte> normalized_image,
+x360port::RuntimeFailure Gears1Runtime::Initialize(std::span<const std::byte> loaded_image,
                                                    const XexIdentity &expected,
                                                    std::span<const ImportSpec> imports)
 {
     Reset();
 
     std::string error;
-    if (!module_.Initialize(normalized_image, expected, imports, error))
+    if (!module_.Initialize(loaded_image, expected, imports, error))
     {
         return {x360port::RuntimeError::ModuleValidationFailed, std::move(error)};
     }

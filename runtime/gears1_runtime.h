@@ -31,7 +31,7 @@ class Gears1Runtime final
     Gears1Runtime &operator=(Gears1Runtime &&) = delete;
     ~Gears1Runtime() = default;
 
-    [[nodiscard]] x360port::RuntimeFailure Initialize(std::span<const std::byte> normalized_image,
+    [[nodiscard]] x360port::RuntimeFailure Initialize(std::span<const std::byte> loaded_image,
                                                       const XexIdentity &expected,
                                                       std::span<const ImportSpec> imports);
     [[nodiscard]] x360port::RuntimeFailure InitializeCheckedXex(std::span<const std::byte> xex,

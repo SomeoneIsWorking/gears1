@@ -106,7 +106,7 @@ A maintained headless discriminator loads the ignored image whose SHA-256 matche
 the Gears 1 profile, maps its PE sections into guest virtual offsets, allocates
 and initializes a caller-owned guest object and variable-import storage through
 `x360port`, invokes a retained real-image function-import thunk through the
-authenticated manifest, and enters `0x82233668` through the pinned Xenia
+authenticated manifest, and enters `0x8222E868` through the pinned Xenia
 dynarec. The real body returned `0x5`; its native override called the real
 original once, and reported executable-write invalidation restored the original
 path. This grounds the real leaf body and shared dispatch contracts; the shared
@@ -166,9 +166,9 @@ at composition rather than presenting as an import the title never reaches.
 
 The real-image discriminator passed against the ignored user XEX with this
 composition: 236 imports resolved into owned guest storage, the pad state and
-capabilities services reached through their named claims, real leaf `0x82233668`
+capabilities services reached through their named claims, real leaf `0x8222E868`
 executed with scoped original, nested guest-call override and removal,
-executable invalidation, and the native audio mix at `0x825F7B40` matching the
+executable invalidation, and the native audio mix at `0x825F2D40` matching the
 original guest body on its return value and all 320 output words. That the real
 manifest's ordinals match the names resolved from the export table is the
 discriminator for this change; the synthetic gate cannot prove it.

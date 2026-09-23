@@ -8,21 +8,21 @@ make the decompiler's view of such a function pure fiction). This tool reads the
 image bytes directly and decodes them with capstone, so it is independent of any
 Ghidra state.
 
-Addresses are guest virtual addresses, so this reads the virtual-address-indexed
-mapped image through tools/guest_image.py, which refuses the normalized layout
-rather than decoding the wrong bytes.
+Addresses are guest virtual addresses in the image as the XEX loader leaves it,
+so this reads that loaded image through tools/guest_image.py, which refuses a
+copy re-laid by section VirtualAddress rather than decoding the wrong bytes.
 
 Usage:
     tools/ppcdis.py 0x8223B8A0 0x8223B940
     tools/ppcdis.py 0x8223B8A0 +0x80
-    tools/ppcdis.py --image scratch/raw/gears_mapped.bin --base 0x82000000 0x8223B8A0 +0x40
+    tools/ppcdis.py --image scratch/raw/gears_image.bin --base 0x82000000 0x8223B8A0 +0x40
 """
 import argparse
 import sys
 
 import capstone
 
-from guest_image import DEFAULT_BASE, DEFAULT_IMAGE, GuestImageError, load_mapped_image, read_range
+from guest_image import DEFAULT_BASE, DEFAULT_IMAGE, GuestImageError, load_guest_image, read_range
 
 
 def main() -> int:
@@ -38,7 +38,7 @@ def main() -> int:
     end = start + int(args.end[1:], 0) if args.end.startswith("+") else int(args.end, 0)
 
     try:
-        data = read_range(load_mapped_image(args.image), base, start, end)
+        data = read_range(load_guest_image(args.image), base, start, end)
     except GuestImageError as error:
         print(f"ppcdis: refusing: {error}", file=sys.stderr)
         return 2

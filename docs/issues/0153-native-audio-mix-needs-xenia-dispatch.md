@@ -11,15 +11,15 @@ tags: performance,audio,native-engine,xenia
 ## Retained contract
 
 `runtime/titles/gears1/audio_mix.*` owns an independently authored SIMD kernel for
-original guest function `0x825F7B40`. The recorded address was previously
-`0x825F2D40`, a normalized-image offset mistaken for a virtual address.
+original guest function `0x825F2D40`, an address in the image as the XEX loader
+leaves it (see instrument I067).
 
 ## Resolution
 
 `Gears1Runtime::ComposeBindings` installs the override only when the authenticated
 image contains the exact address, and `tests/test_gears1_real_leaf.cpp` compares
 the native override against `CallOriginal` on the real image: the return value and
-all 320 output words agree exactly. Fixing the cause required the corrected
+all 320 output words agree exactly. Fixing the cause required the exact
 address, reproducing the guest's r3 result (the last processed input block, not
 the output pointer), and a fused multiply-add with denormal-input flushing to
 match `vmaddfp`.

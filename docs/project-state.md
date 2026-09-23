@@ -40,15 +40,15 @@ Act 1, and plays its opening scene at 118-119 presents/s.
 The service-binding frontier recorded by `docs/issues/0171` is superseded for the
 product: the system session answers every import with Xenia's kernel instead of a
 title-local claim table. The profile's gameplay walk now plays past the opening scene to Act 1's first
-path choice. What remains for S009 is combat, a comparison against the oracle,
-and the native audio mix, which the product binds but the
-title never reaches on this path (`docs/issues/0172`). Presentation now runs
+path choice. What remains for S009 is combat and a comparison against the oracle. The native
+audio mix now runs in the product, about 47,000 calls per second in play
+(`docs/issues/0172`). Presentation now runs
 up to 120 presents/s; S013 records the gameplay rate and its next costs.
 
 Two facts from an earlier qualification constrain further native-override work. Recovered guest
-addresses must come from the virtual-address-indexed mapped image, because the normalized
-image displaces everything past the 0x4E00 `.text` alignment gap; `tools/guest_image.py`
-refuses the wrong layout. And a guest fault inside a translated block strands the calling
+addresses are addresses in the image as the XEX loader leaves it, with each section at its
+raw offset; a copy re-laid by section VirtualAddress displaces everything from `.text` on
+(0x4E00 at `.text`), and `tools/guest_image.py` refuses it. And a guest fault inside a translated block strands the calling
 thread: the translated-block budget is checked at block entry, so it cannot interrupt an
 instruction that faults repeatedly. Entering a wrong address is therefore a hang, not a
 typed failure.
@@ -79,7 +79,7 @@ without a CPU executor. Gap: no live Xenia-fed native frame exists.
 ### S004 — native audio mix
 
 Evidence: `runtime/titles/gears1/audio_mix.*` owns the independently authored
-kernel at guest address `0x825F7B40`. The runtime owner installs the override
+kernel at guest address `0x825F2D40`. The runtime owner installs the override
 only when the authenticated image contains that exact address, and the handler
 uses x360port's validated mapped-memory contract.
 `tests/test_gears1_real_leaf.cpp` qualifies it differentially on the real image:
@@ -148,10 +148,10 @@ The maintained headless discriminator now initializes `Gears1Runtime` from the
 profile-matching ignored image; that owner maps its PE sections, allocates and
 initializes the caller-owned guest object and variable-import storage, and
 invokes a retained real-image function-import thunk through its composed manifest,
-and executes real leaf `0x82233668`: it returns `0x5`, the native override
+and executes real leaf `0x8222E868`: it returns `0x5`, the native override
 calls the real original once, and reported executable-write invalidation restores
 the original path. A second real-image fixture activates the leaf's own nested
-guest call at `0x822336C0`: outer and inner calls both enter the native override,
+guest call at `0x8222E8C0`: outer and inner calls both enter the native override,
 then removal restores the nested original call and its inner refcount effect.
 The production `Gears1GuestImage` adapter now authenticates
 the same normalized image and import manifest; its synthetic CTest and real
@@ -208,7 +208,7 @@ functions with 0 failures.
 A control override on the draw entry counted 211 guest
 calls in 8 s, so dispatch and original-body calls work on real guest threads.
 Gap: no route yet reaches combat, and no play is compared against the oracle. Linux has gamepad input only. The product's
-single native override is unreached (`docs/issues/0172`). Two startup failures seen during a
+native audio-mix override is reached on real guest threads (`docs/issues/0172`). Two startup failures seen during a
 concurrent heavy build are unexplained (`docs/issues/0173`).
 
 ### S010 — Apple Silicon A64
@@ -250,18 +250,20 @@ The console presents Gears 1 every second vblank, and the title's game clock is 
 host clock (`runtime/titles/gears1/presentation.h` records the evidence), so the product
 runs the console's vblank at 240 Hz for a 120 presents/s ceiling instead of the
 console's 30. Measured headless on an AMD Radeon RX 6700 XT (RADV) with the profile's
-gameplay walk, 305 s: the menus and Act 1's opening hold 118-119 presents/s; play in the
-first corridor runs at about 58-63.
+gameplay walk, 305 s (2026-09-23): the menus, Act 1's opening scene and play through the
+cell block and first corridor hold 118-119 presents/s; the last 40 s, at the "Choose path"
+junction, run at 67-76.
 
-Play is bound by Xenia's GPU command thread, not the host GPU (40-80% busy). Three
+Play was bound by Xenia's GPU command thread, not the host GPU (40-80% busy). Three
 costs on that thread were removed in the pinned fork: a `gettid` syscall on every
 global-mutex acquire (34 to 49 presents/s), a scan of every live occlusion report on
-each BEGIN (49 to 63), and oracle shader hashing on each unarmed draw. The next cost is
-the per-register virtual `WriteRegister` path (18% of the thread), then the guest render
-thread's spin on GPU progress (`sub_8222F460`, S005). `tools/run_offscreen.py
+each BEGIN (49 to 63), and oracle shader hashing on each unarmed draw; PM4 register ranges
+are now written in bulk rather than through a virtual call per register, and swap and
+resolve diagnostics no longer log every frame. The next cost is the guest render thread's
+spin on GPU progress (`sub_8222F460`, S005; 42% of that thread in a profile of play). `tools/run_offscreen.py
 --perf-map` names translated guest functions in `perf report`.
 
-Gap: gameplay does not yet hold 120 presents/s, and no frame-time percentiles or
+Gap: gameplay does not yet hold 120 presents/s at the path junction, and no frame-time percentiles or
 windowed measurement exist.
 
 ### S014 — later Gears titles

@@ -26,7 +26,10 @@ void Put32(std::vector<std::byte> &bytes, std::size_t offset, std::uint32_t valu
     }
 }
 
-std::vector<std::byte> SyntheticNormalizedImage()
+// One code section whose PE VirtualAddress (0x1000) sits above its raw offset
+// (0x200), as retail images do. The loader leaves it at the raw offset, so the
+// entry point and code range are there too.
+std::vector<std::byte> SyntheticLoadedImage()
 {
     std::vector<std::byte> image(0x400U);
     image[0] = std::byte{'M'};
@@ -37,7 +40,7 @@ std::vector<std::byte> SyntheticNormalizedImage()
     Put16(image, 0x86U, 1U);
     Put16(image, 0x94U, 224U);
     Put16(image, 0x98U, 0x10bU);
-    Put32(image, 0xa8U, 0x1000U);
+    Put32(image, 0xa8U, 0x200U);
     Put32(image, 0xb4U, 0x82000000U);
     Put32(image, 0xb8U, 0x1000U);
     Put32(image, 0xd0U, 0x2000U);
@@ -66,7 +69,7 @@ int main(int argc, char **argv)
 {
     if (argc > 2)
     {
-        std::fputs("usage: test_gears1_guest_image [normalized-image]\n", stderr);
+        std::fputs("usage: test_gears1_guest_image [loaded-image]\n", stderr);
         return 2;
     }
 
@@ -97,23 +100,23 @@ int main(int argc, char **argv)
     }
     else
     {
-        source = SyntheticNormalizedImage();
+        source = SyntheticLoadedImage();
         expected = {.imageDigest = x360port::HashBytes(source),
                     .imageBase = 0x82000000U,
                     .imageSize = static_cast<std::uint32_t>(source.size()),
-                    .entryPoint = 0x82001000U};
+                    .entryPoint = 0x82000200U};
     }
 
     gears::Gears1GuestImage module;
     std::string error;
     if (!module.Initialize(source, expected, {}, error))
     {
-        std::fprintf(stderr, "FAIL valid normalized image was refused: %s\n", error.c_str());
+        std::fprintf(stderr, "FAIL valid loaded image was refused: %s\n", error.c_str());
         return 1;
     }
-    const std::uint32_t expected_flat_size = argc == 2 ? 14563840U : 0x2000U;
-    const std::uint32_t expected_code_base = argc == 2 ? 0x82170000U : 0x82001000U;
-    if (module.Descriptor().image.size != expected_flat_size ||
+    const std::uint32_t expected_loaded_size = argc == 2 ? 13500416U : 0x400U;
+    const std::uint32_t expected_code_base = argc == 2 ? 0x8216B200U : 0x82000200U;
+    if (module.Descriptor().image.size != expected_loaded_size ||
         module.Descriptor().image.sha256 != x360port::HashBytes(module.ImageBytes()) ||
         module.Descriptor().code.base != expected_code_base || module.ImportManifest().size() != 0U)
     {
@@ -135,7 +138,6 @@ int main(int argc, char **argv)
             return 1;
         }
     }
-    std::puts(
-        "Gears normalized-image adapter: profile authentication and flat guest mapping passed");
+    std::puts("Gears loaded-image adapter: profile authentication and flat guest mapping passed");
     return 0;
 }

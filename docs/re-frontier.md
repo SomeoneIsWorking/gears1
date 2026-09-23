@@ -67,9 +67,9 @@ The shared
    discriminator allocates and initializes a caller-owned guest object and
    variable-import storage through `x360port`, invokes a retained real-image
    function-import thunk through the authenticated manifest, then executes the
-   real `0x82233668` body, proving its result, native override/scoped original
+   real `0x8222E868` body, proving its result, native override/scoped original
    path, and both reported-write and automatic virtual-write invalidation. The
-   authenticated PE's `0x822336C0` call returns to `0x82233668` when a resource
+   authenticated PE's `0x8222E8C0` call returns to `0x8222E868` when a resource
    first gains a reference with type nibble 4, flag `0x40000000`, and a linked
    resource at offset 24. A headless real-image fixture proves that call enters
    the native override and that removal restores the original nested call.
@@ -139,14 +139,15 @@ Qualify x86-64, Apple
 
 ## Retained exact facts
 
-- Resource AddRef/Release entry points are `0x82233668` and `0x822336E0`.
-- The Gears 1 audio-mix operation begins at `0x825F7B40`.
-- Guest addresses are virtual addresses. The normalized XEX image lays sections
-  out by raw offset, and Gears 1 has a 0x4E00 alignment gap in front of `.text`,
-  so reading the normalized image as virtual-address-indexed silently yields a
-  different, still-plausible function for every address at or above `.text`.
-  Reverse-engineering reads the mapped image via `tools/guest_image.py`, which
-  refuses the normalized layout; `x360-xex-inspect --mapped-image-out` writes it.
+- Resource AddRef/Release entry points are `0x8222E868` and `0x8222E8E0`.
+- The Gears 1 audio-mix operation begins at `0x825F2D40`.
+- Guest addresses index the image as the XEX loader leaves it: the decompressed
+  basefile copied flat, each section at its raw offset. Gears 1's PE section
+  headers claim VirtualAddresses above those offsets (`.text` claims 0x170000
+  but sits at 0x16B200), so a copy re-laid by VirtualAddress decodes a
+  different, still-plausible function at every address from `.text` on.
+  Reverse-engineering reads the loaded image via `tools/guest_image.py`, which
+  refuses the re-laid copy; `x360-xex-inspect --image-out` writes it.
 - Normal draw entry points are `0x8222CFF8`, `0x8222D4F8`, `0x8222DA48`, and
   `0x8222DE50`; shader setters are `0x82222808` and `0x82222B98`.
 - Shader-state flush `0x822346A8` emits ordered Xenos `IM_LOAD` packets and may
@@ -157,15 +158,12 @@ Qualify x86-64, Apple
 These facts must be re-observed through the authenticated Xenia context before
 they authorize dispatch or a shared `x360ue3` contract.
 
-The old ignored `build/ghidra/gears` project imported the normalized PE as a
-linear raw image: at guest VA `0x82233668` it reads raw file offset `0x233668`
-(`954b0004`) instead of the authenticated `.text` section's offset `0x22e868`
-(`7d8802a6`). Its zero-reference and VA-based disassembly results are
-distrusted. The separate ignored `build/ghidra-mapped/gears` PE import returns
-the latter bytes and `4bffffa9` at `0x822336C0`; full autoanalysis did not
-complete, so its reference database is not yet evidence. Use mapped PE bytes
-or the running Xenia discriminator for exact VAs; Ghidra callers/decompilation
-need a completed, byte-checked mapped analysis.
+The ignored `build/ghidra/gears` project imports the loaded image linearly, so
+its addresses agree with the runtime: `0x8222E868` reads `7d8802a6`. The
+separate ignored `build/ghidra-mapped/gears` import re-lays sections by
+VirtualAddress and is distrusted for every address from `.text` on. Ghidra
+callers and decompilation still need a completed auto-analysis of the linear
+import before they count as evidence.
 
 The title-neutral UE3 contract layer is now grounded separately: Gears consumes
 the pinned `shared/x360ue3` binding-schema, frame-lifetime, and semantic-RHI

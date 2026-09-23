@@ -42,7 +42,7 @@ The retired path previously demonstrated exact-revision Gears 1 boot, menus,
 Act 1 gameplay, guest threading and memory, SDL-backed input, working XMA audio,
 and a bounded Vulkan renderer driven by the title's PM4/Xenos stream. It also
 grounded a growing set of title-owned native seams, including resource lifetime
-leaf `0x82233668`. Those observations remain useful as migration targets, but
+leaf `0x8222E868`. Those observations remain useful as migration targets, but
 they are not evidence that the x360port product exists or passes gameplay.
 
 The compatibility renderer's in-game world is still not fully faithful, saves

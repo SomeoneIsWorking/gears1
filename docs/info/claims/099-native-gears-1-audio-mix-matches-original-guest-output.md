@@ -10,7 +10,7 @@ depends: runtime/titles/gears1/audio_mix.cpp
 ## Claim
 
 The native Gears 1 audio-mix kernel reproduces the output of original guest
-function `0x825F7B40` bit-exactly when the original is executed through Xenia.
+function `0x825F2D40` bit-exactly when the original is executed through Xenia.
 
 ## Evidence
 
@@ -23,9 +23,10 @@ Two divergences were found and fixed at their cause while establishing this:
 the guest returns the last processed input block in r3 rather than the output
 pointer, and `vmaddfp` is a fused multiply-add that flushes denormal inputs to
 signed zero, so the kernel uses `std::fma` rather than a separate multiply and
-add. The previously recorded address `0x825F2D40` was a normalized-image offset
-mistaken for a virtual address, displaced by the 0x4E00 `.text` alignment gap;
-executing it ran an unrelated epilogue thunk.
+add. The kernel was first qualified on a runtime image re-laid by section
+VirtualAddress, which carried this body at `0x825F7B40`; on the image the XEX
+loader actually produces (and the product runs) it is at `0x825F2D40`, and the
+comparison was re-run and agrees there (2026-09-23).
 
 ## What would falsify it
 
