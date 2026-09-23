@@ -307,8 +307,16 @@ p50 12.7 to 11.7 ms). Skipping the global mutex for already-valid vertex ranges 
 change the junction rate beyond the run-to-run spread and was not kept. The
 command processor now reports its ring read pointer every RB_BLKSZ rather than once per
 batch, and the native audio mix, whose per-vector guest-memory validation had taken 27% of
-all process samples at the junction, now takes 8%. `tools/run_offscreen.py
---perf-map` names translated guest functions in `perf report`.
+all process samples at the junction, now takes 8%. `perf report` cannot name translated
+guest code, which Xenia keeps in a shared-memory file; `tools/perf_guest_report.py`
+resolves a recording against the map `tools/run_offscreen.py --perf-map` writes.
+
+At the junction (s282-290, 999 Hz samples) the guest render thread is the saturated one:
+0.99 of a core against 0.92 for the GPU command thread and 0.73 for the game thread.
+About 17% of the render thread is its wait on the GPU (`sub_822306A0`, the wait-condition
+check, 8.7%, and the `sub_8222F460` poll, 8.6%); the rest is its own rendering work with
+no function above 4%. A cheaper command thread shortens that wait; the rest needs the
+render thread's work itself to be native (S012).
 
 Gap: gameplay does not yet hold 120 presents/s at the path junction (p50 8.5-9.5 ms there).
 
