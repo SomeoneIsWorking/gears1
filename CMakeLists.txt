@@ -234,6 +234,9 @@ if(GEARS_DYNAREC_CONTRACT_ONLY)
     add_test(NAME gears_bootstrap_contract
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tests/test_bootstrap.py")
+    add_test(NAME gears_perf_guest_report
+        COMMAND ${GEARS_UV_RUN} python
+                "${CMAKE_SOURCE_DIR}/tests/test_perf_guest_report.py")
     return()
 endif()
 

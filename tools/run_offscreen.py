@@ -81,7 +81,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--perf-map",
         action="store_true",
-        help="write /tmp/perf-<pid>.map so `perf report` names translated guest functions",
+        help="write /tmp/perf-<pid>.map, which tools/perf_guest_report.py resolves perf samples "
+        "against to name translated guest functions",
     )
     parser.add_argument(
         "--control-port",
