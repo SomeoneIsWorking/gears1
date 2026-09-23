@@ -25,6 +25,7 @@ x360port::SystemSessionConfig Gears1SessionConfig(const ProductOptions &options,
         offscreen ? x360port::SystemHostInput::None : x360port::SystemHostInput::Gamepads;
     config.desktop_input = desktop;
     config.display_refresh_hz = titles::gears1::kDisplayRefreshHz;
+    config.max_presents_per_second = titles::gears1::kTargetPresentsPerSecond;
     config.write_perf_map = options.perf_map;
     config.overrides.push_back({.address = titles::gears1::kAudioMixAddress,
                                 .handler = titles::gears1::ApplyNativeAudioMix,
