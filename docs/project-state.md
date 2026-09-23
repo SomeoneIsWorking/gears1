@@ -203,9 +203,10 @@ single-player, and difficulty menus; the unsigned-profile prompt; and Act 1's op
 scene with its subtitles. The run fails unless the dynarec translated guest code and
 no function failed to translate: over 60 s it translated 10,996 guest functions to
 24.8 MB of host code with 0 failures. The system session has no interpreter fallback.
-`--walk gameplay` continues past that scene under scripted stick and button input:
-Marcus walks out of the cell block to the "Choose path: Combat / Training" prompt
-with Dom ahead of him. The run has 8989 presents in 305 s and 13,988 translated
+`--walk gameplay` continues past that scene under scripted stick, trigger and button
+input: Marcus walks out of the cell block to the "Choose path: Combat / Training" prompt
+with Dom ahead of him, takes the combat path with LT, and walks on while Dom radios
+Delta. The run has 8989 presents in 305 s and 13,988 translated
 functions with 0 failures.
 A control override on the draw entry counted 211 guest
 calls in 8 s, so dispatch and original-body calls work on real guest threads.
