@@ -258,9 +258,9 @@ which holds a present only when it arrives early. Measured headless on an AMD Ra
 6700 XT (RADV) with the profile's gameplay walk, 300 s (2026-09-23), from the offscreen
 run's per-10 s frame-time percentiles (host time between guest presents, 0.1 ms buckets):
 the menus, Act 1's opening scene, the cell block and first corridor hold 120 presents/s
-at p50 8.4 ms, p99 8.7-9.5 ms; the last 30 s, at the "Choose path" junction, run at about
-77 presents/s, p50 12.7-12.8 ms, p99 17 ms (240 Hz vblank pacing: about 59, p50 16.8 ms,
-in the same session).
+at p50 8.4 ms, p99 8.7-10.4 ms; the last 30 s, at the "Choose path" junction, run at
+77-96 presents/s, p50 10.6-11.7 ms (240 Hz vblank pacing: about 59, p50 16.8 ms, in the
+same session).
 
 Play was bound by Xenia's GPU command thread, not the host GPU (40-80% busy). Three
 costs on that thread were removed in the pinned fork: a `gettid` syscall on every
@@ -272,15 +272,16 @@ spin on GPU progress (`sub_8222F460`, S005; a third of that thread's stack sampl
 junction), while the game thread yields waiting on the render thread. The GPU command
 thread is busy about 0.8 of a core with a flat per-draw profile led by descriptor-set
 updates. Its `WAIT_REG_MEM` on guest word physical `0x1F99E004` is the per-present
-vblank wait above: once per frame, now about 1 ms at the junction, because Xenia polls it
-at `wait / 0x100` ms. Skipping the global mutex for already-valid vertex ranges did not
+vblank wait above: once per frame, and woken by the vblank thread after the title's
+vblank handler runs rather than after Xenia's `wait / 0x100` ms poll interval (junction
+p50 12.7 to 11.7 ms). Skipping the global mutex for already-valid vertex ranges did not
 change the junction rate beyond the run-to-run spread and was not kept. The
 command processor now reports its ring read pointer every RB_BLKSZ rather than once per
 batch, and the native audio mix, whose per-vector guest-memory validation had taken 27% of
 all process samples at the junction, now takes 8%. `tools/run_offscreen.py
 --perf-map` names translated guest functions in `perf report`.
 
-Gap: gameplay does not yet hold 120 presents/s at the path junction (p50 12.7 ms there).
+Gap: gameplay does not yet hold 120 presents/s at the path junction (p50 11.7 ms there).
 
 ### S014 — later Gears titles
 
