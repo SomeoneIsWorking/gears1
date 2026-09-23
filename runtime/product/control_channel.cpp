@@ -2,12 +2,16 @@
 
 #include <format>
 #include <string>
+#include <span>
 #include <string_view>
+#include <utility>
 
 #include <lucent/log.h>
 
 #include "input.h"
+#include "memory_request.h"
 #include "pad_form.h"
+#include "player_probe.h"
 #include "portable_pixmap.h"
 
 namespace gears::product
@@ -123,6 +127,14 @@ lucent::http::Response ControlChannel::Handle(const lucent::http::Request &reque
     {
         return Frame();
     }
+    if (request.method == "GET" && path == "/api/memory")
+    {
+        return Memory(request);
+    }
+    if (request.method == "GET" && path == "/api/player")
+    {
+        return Player();
+    }
     return JsonError(404, "Not Found", std::format("no route {} {}", request.method, path));
 }
 
@@ -165,6 +177,47 @@ lucent::http::Response ControlChannel::Frame() const
     }
     return lucent::http::Response::binary(200, "OK", "image/x-portable-pixmap",
                                           EncodePortablePixmap(image));
+}
+
+lucent::http::Response ControlChannel::Memory(const lucent::http::Request &request) const
+{
+    MemoryRequest read;
+    std::string error;
+    if (!ParseMemoryRequest(request.query(), read, error))
+    {
+        return JsonError(400, "Bad Request", error);
+    }
+    std::string bytes(read.length, '\0');
+    if (x360port::RuntimeFailure failure =
+            session_.ReadGuestMemory(read.address, std::as_writable_bytes(std::span(bytes))))
+    {
+        return JsonError(422, "Unprocessable Content", failure.detail);
+    }
+    return lucent::http::Response::binary(200, "OK", "application/octet-stream", std::move(bytes));
+}
+
+lucent::http::Response ControlChannel::Player() const
+{
+    titles::gears1::PlayerSnapshot player;
+    std::string error;
+    auto read = [this](std::uint32_t address, std::span<std::byte> bytes)
+    { return session_.ReadGuestMemory(address, bytes); };
+    if (!titles::gears1::ReadPlayer(read, player, error))
+    {
+        return JsonError(409, "Conflict", error);
+    }
+    std::string pawn = "null";
+    if (player.has_pawn)
+    {
+        pawn = std::format("{{\"location\":[{},{},{}],\"magazine_rounds_fired\":{}}}",
+                           player.location[0], player.location[1], player.location[2],
+                           player.has_weapon ? std::to_string(player.magazine_rounds_fired)
+                                             : std::string("null"));
+    }
+    return lucent::http::Response::json(
+        200, "OK",
+        std::format("{{\"control_yaw\":{},\"camera_yaw\":{},\"pawn\":{}}}\n", player.control_yaw,
+                    player.camera_yaw, pawn));
 }
 
 } // namespace gears::product

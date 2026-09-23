@@ -9,6 +9,7 @@ plays. A walk owns the pad until its last step; the channel refuses input
         --control-port 32125
     uv run --locked python tools/product_control.py --port 32125 pad --ly 32767 --hold 2
     uv run --locked python tools/product_control.py --port 32125 frame scratch/control/now.png
+    uv run --locked python tools/product_control.py --port 32125 memory 82BED138 64
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import struct
 import sys
 import time
 import urllib.error
@@ -52,6 +54,14 @@ class ProductControl:
     def frame(self) -> Image.Image:
         return Image.open(io.BytesIO(self._request("GET", "/api/frame.ppm")))
 
+    def player(self) -> dict[str, object]:
+        """The local player's view yaws and pawn; ControlError before gameplay."""
+        return json.loads(self._request("GET", "/api/player"))
+
+    def memory(self, address: int, length: int) -> bytes:
+        query = urllib.parse.urlencode({"address": f"0x{address:08X}", "length": length})
+        return self._request("GET", f"/api/memory?{query}")
+
     def _request(self, method: str, path: str, body: bytes | None = None) -> bytes:
         request = urllib.request.Request(self._base + path, data=body, method=method)
         try:
@@ -74,6 +84,19 @@ def pad_fields(arguments: argparse.Namespace) -> dict[str, str]:
     }
 
 
+def hex_dump(address: int, data: bytes) -> str:
+    """Sixteen bytes a line, with each big-endian word also read as a float."""
+    lines = []
+    for offset in range(0, len(data), 16):
+        row = data[offset : offset + 16]
+        words = " ".join(row[i : i + 4].hex() for i in range(0, len(row), 4))
+        floats = " ".join(
+            f"{struct.unpack('>f', row[i : i + 4])[0]:.6g}" for i in range(0, len(row) - 3, 4)
+        )
+        lines.append(f"{address + offset:08X}  {words:<35}  {floats}")
+    return "\n".join(lines)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, required=True)
@@ -87,6 +110,10 @@ def _parser() -> argparse.ArgumentParser:
         pad.add_argument(f"--{trigger}", type=int)
     pad.add_argument("--hold", type=float, help="release after this many seconds")
     commands.add_parser("release", help="a neutral pad, still connected")
+    commands.add_parser("player", help="print the local player's position, view and weapon")
+    memory = commands.add_parser("memory", help="dump guest memory as words and floats")
+    memory.add_argument("address", type=lambda text: int(text, 16))
+    memory.add_argument("length", type=int)
     frame = commands.add_parser("frame", help="save the latest guest output")
     frame.add_argument("output", type=Path)
     return parser
@@ -105,6 +132,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 control.release()
         elif arguments.command == "release":
             control.release()
+        elif arguments.command == "player":
+            print(json.dumps(control.player(), indent=2))
+        elif arguments.command == "memory":
+            print(hex_dump(arguments.address, control.memory(arguments.address, arguments.length)))
         else:
             arguments.output.parent.mkdir(parents=True, exist_ok=True)
             control.frame().save(arguments.output)

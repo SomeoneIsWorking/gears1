@@ -33,6 +33,8 @@ $C pad --buttons A,START               # replace the whole pad, held until chang
 $C pad --lt 255 --hold 0.3             # pull the left trigger
 $C release                             # neutral pad, still connected
 $C frame scratch/control/now.png       # the latest guest output
+$C player                              # the local player's position, yaw and weapon
+$C memory 82BED138 64                  # guest words and big-endian floats
 ```
 
 Every pad write replaces the whole pad; omitted fields are neutral. Buttons use
@@ -50,3 +52,5 @@ is refused with HTTP 400 naming the field.
 | `POST /api/input/release` | a neutral pad, still connected |
 | `DELETE /api/input` | disconnect the remote controller |
 | `GET /api/frame.ppm` | the latest guest output as binary PPM; 503 before the first present |
+| `GET /api/memory?address=HEX&length=N` | `N` (1..4096) bytes of guest virtual memory; 422 when any of the range is unmapped |
+| `GET /api/player` | JSON: control and camera yaw, and the pawn's location and weapon (`null` while dead); 409 before gameplay |

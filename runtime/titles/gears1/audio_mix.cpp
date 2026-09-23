@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <utility>
 
+#include <x360port/guest_endian.hpp>
+
 namespace gears::titles::gears1
 {
 namespace
@@ -19,23 +21,6 @@ constexpr std::uint32_t kGuestVectorMask = ~std::uint32_t{0x0FU};
 // Sixteen iterations of four vectors each, for both the input and the output.
 constexpr std::uint32_t kMixIterations = 16U;
 constexpr std::uint32_t kMixBlockBytes = kMixIterations * 4U * kGuestVectorSize;
-
-[[nodiscard]] std::uint32_t LoadBigEndian(std::span<const std::byte> bytes,
-                                          std::size_t offset) noexcept
-{
-    return (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset])) << 24U) |
-           (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset + 1U])) << 16U) |
-           (static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset + 2U])) << 8U) |
-           static_cast<std::uint32_t>(std::to_integer<std::uint8_t>(bytes[offset + 3U]));
-}
-
-void StoreBigEndian(std::span<std::byte> bytes, std::size_t offset, std::uint32_t value) noexcept
-{
-    bytes[offset] = static_cast<std::byte>(value >> 24U);
-    bytes[offset + 1U] = static_cast<std::byte>(value >> 16U);
-    bytes[offset + 2U] = static_cast<std::byte>(value >> 8U);
-    bytes[offset + 3U] = static_cast<std::byte>(value);
-}
 
 [[nodiscard]] GuestVector Add(const GuestVector &left, const GuestVector &right) noexcept
 {
@@ -78,7 +63,7 @@ void StoreBigEndian(std::span<std::byte> bytes, std::size_t offset, std::uint32_
     for (std::size_t lane = 0; lane < value.size(); ++lane)
     {
         const std::size_t guestLane = value.size() - lane - 1U;
-        value[lane] = std::bit_cast<float>(LoadBigEndian(bytes, guestLane * 4U));
+        value[lane] = std::bit_cast<float>(x360port::LoadGuestWord(bytes, guestLane * 4U));
     }
     return value;
 }
@@ -88,7 +73,7 @@ void EncodeGuestVector(std::span<std::byte> bytes, const GuestVector &value) noe
     for (std::size_t lane = 0; lane < value.size(); ++lane)
     {
         const std::size_t guestLane = value.size() - lane - 1U;
-        StoreBigEndian(bytes, guestLane * 4U, std::bit_cast<std::uint32_t>(value[lane]));
+        x360port::StoreGuestWord(bytes, guestLane * 4U, std::bit_cast<std::uint32_t>(value[lane]));
     }
 }
 

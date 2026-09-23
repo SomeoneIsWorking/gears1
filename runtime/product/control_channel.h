@@ -16,6 +16,8 @@ namespace gears::product
 //   POST   /api/input/release
 //   DELETE /api/input
 //   GET    /api/frame.ppm  the latest guest output
+//   GET    /api/memory     address=0x..&length=N, guest memory as raw bytes
+//   GET    /api/player     the local player's view yaws and pawn; 409 before gameplay
 //
 // The pad is refused (409) while a scripted walk owns it.
 class ControlChannel final
@@ -34,6 +36,8 @@ class ControlChannel final
     [[nodiscard]] lucent::http::Response Status() const;
     [[nodiscard]] static lucent::http::Response SetPad(const lucent::http::Request &request);
     [[nodiscard]] lucent::http::Response Frame() const;
+    [[nodiscard]] lucent::http::Response Memory(const lucent::http::Request &request) const;
+    [[nodiscard]] lucent::http::Response Player() const;
 
     const x360port::SystemSession &session_;
     lucent::http::Server server_;
