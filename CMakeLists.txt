@@ -141,6 +141,11 @@ add_executable(test_remote_input tests/test_remote_input.cpp)
 target_link_libraries(test_remote_input PRIVATE gears_input)
 x360port_enable_warnings(test_remote_input)
 gears_add_binary_test(gears_remote_input test_remote_input)
+add_executable(test_script_handoff tests/test_script_handoff.cpp)
+target_link_libraries(test_script_handoff PRIVATE gears_input)
+x360port_enable_warnings(test_script_handoff)
+gears_add_binary_test(gears_script_handoff test_script_handoff)
+set_tests_properties(gears_script_handoff PROPERTIES ENVIRONMENT "GEARS_INPUT_SCRIPT=f1:A,f2:")
 add_executable(test_gears1_desktop_controls tests/test_gears1_desktop_controls.cpp)
 target_link_libraries(test_gears1_desktop_controls PRIVATE gears_input)
 x360port_enable_warnings(test_gears1_desktop_controls)
@@ -182,6 +187,14 @@ add_executable(test_gears1_product_options tests/test_gears1_product_options.cpp
 target_link_libraries(test_gears1_product_options PRIVATE gears1_product_options)
 x360port_enable_warnings(test_gears1_product_options)
 gears_add_binary_test(gears1_product_options test_gears1_product_options)
+add_library(gears1_pad_form STATIC runtime/product/pad_form.cpp)
+target_include_directories(gears1_pad_form PUBLIC runtime/product)
+target_link_libraries(gears1_pad_form PUBLIC gears_input lucent::lucent)
+x360port_enable_warnings(gears1_pad_form)
+add_executable(test_pad_form tests/test_pad_form.cpp)
+target_link_libraries(test_pad_form PRIVATE gears1_pad_form)
+x360port_enable_warnings(test_pad_form)
+gears_add_binary_test(gears1_pad_form test_pad_form)
 # x360port provides the full console only where it has a windowed host (GTK on
 # Linux today). Elsewhere the product target is absent by name, and the
 # launcher refuses with the same reason; the execution contracts still build.
@@ -189,8 +202,11 @@ if(TARGET x360port::system)
     add_executable(gears1
         runtime/product/gears1_main.cpp
         runtime/product/gears1_session.cpp
-        runtime/product/offscreen_run.cpp)
-    target_link_libraries(gears1 PRIVATE gears1_product_options gears1_audio_mix gears_input
+        runtime/product/offscreen_run.cpp
+        runtime/product/control_channel.cpp
+        runtime/product/portable_pixmap.cpp)
+    target_link_libraries(gears1 PRIVATE gears1_product_options gears1_pad_form gears1_audio_mix
+                                         gears_input
                                          x360port::system lucent::lucent)
     x360port_enable_warnings(gears1)
 else()

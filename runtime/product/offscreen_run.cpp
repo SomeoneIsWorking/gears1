@@ -1,5 +1,7 @@
 #include "offscreen_run.h"
 
+#include "portable_pixmap.h"
+
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -21,30 +23,13 @@ namespace gears::product
 namespace
 {
 
-constexpr std::size_t kCapturedChannels = 3;
-constexpr std::size_t kGuestPixelBytes = 4;
-
-// Writes the RGB channels of an RGBX guest image as a binary PPM. The format
-// needs no encoder, and the maintainer tool converts it for viewing.
+// Writes a capture as a binary PPM.
 [[nodiscard]] bool WritePortablePixmap(const std::filesystem::path &path,
                                        const x360port::SystemFrameImage &image)
 {
+    std::string pixmap = EncodePortablePixmap(image);
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    file << "P6\n" << image.width << ' ' << image.height << "\n255\n";
-    std::string row(static_cast<std::size_t>(image.width) * kCapturedChannels, '\0');
-    for (std::uint32_t y = 0; y < image.height; ++y)
-    {
-        const std::byte *source = image.pixels.data() + static_cast<std::size_t>(y) * image.stride;
-        for (std::uint32_t x = 0; x < image.width; ++x)
-        {
-            for (std::size_t channel = 0; channel < kCapturedChannels; ++channel)
-            {
-                row[static_cast<std::size_t>(x) * kCapturedChannels + channel] = static_cast<char>(
-                    source[static_cast<std::size_t>(x) * kGuestPixelBytes + channel]);
-            }
-        }
-        file.write(row.data(), static_cast<std::streamsize>(row.size()));
-    }
+    file.write(pixmap.data(), static_cast<std::streamsize>(pixmap.size()));
     return static_cast<bool>(file);
 }
 

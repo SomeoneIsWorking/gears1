@@ -1,66 +1,52 @@
-# Interactive debug control
+# Interactive control of an offscreen run
 
-The live port exposes a loopback-only HTTP API on `127.0.0.1:32123`. It is on
-for the default `./run.sh` target and for the executable itself. Set
-`GEARS_DEBUG_HTTP_PORT=0` to disable it or `./run.sh --http-port N` when several
-instances need distinct ports.
-
-This is a runtime control plane, not a second emulator path. Controller writes
-replace the same `PadState` snapshot read by `XamInputGetState`, and frame probes
-request one renderer readback independently of its capture/report path.
-The normal shared-device path therefore keeps pixels on the GPU until a probe is
-requested; a probe causes one deliberate hitch rather than a permanent readback
-tax.
-
-Lucent owns the reusable loopback listener, bounded HTTP parsing, concurrent
-dispatch, response framing, and shutdown. This port owns only the routes and
-their controller/renderer semantics, so a probe waiting for a frame does not
-block a second connection from delivering input or reading status.
-
-## Drive the controller
-
-Every `POST /api/input` replaces the whole pad atomically. Omitted values are
-neutral. Button names are the same names accepted by `GEARS_INPUT_SCRIPT`:
-`UP`, `DOWN`, `LEFT`, `RIGHT`, `START`, `BACK`, `LTHUMB`, `RTHUMB`, `LB`, `RB`,
-`A`, `B`, `X`, and `Y`.
+An offscreen product run can serve a loopback-only HTTP control channel, so a
+maintainer or agent can press buttons, read status and look at the guest's
+output while the title plays. It is off unless asked for:
 
 ```sh
-# Hold A and push the left stick forward.
-curl -sS -X POST http://127.0.0.1:32123/api/input \
-  -d 'buttons=A&ly=32767'
-
-# Neutral state, still connected as the remote controller.
-curl -sS -X POST http://127.0.0.1:32123/api/input/release
-
-# Disconnect remote input and hand the pad back to SDL.
-curl -sS -X DELETE http://127.0.0.1:32123/api/input
+uv run --locked python tools/run_offscreen.py --walk gameplay --seconds 900 \
+    --control-port 32125
 ```
 
-Stick fields `lx`, `ly`, `rx`, and `ry` accept `-32767..32767`; triggers `lt`
-and `rt` accept `0..255`. A startup `GEARS_INPUT_SCRIPT` deliberately rejects
-remote writes with HTTP 409: mixing an interactive source into a scripted
-measurement would make that measurement irreproducible.
+The product itself takes `--control-port N` only with `--offscreen`; the
+player's windowed product never listens. `runtime/product/control_channel.*`
+owns the routes, and Lucent owns the listener, bounded parsing, concurrent
+dispatch and shutdown.
 
-## Probe graphics
+## A walk first, then the channel
+
+A scripted walk owns the pad until its last step has fired; until then every
+input write is refused with HTTP 409, so a measurement cannot be disturbed.
+Once the walk has finished, the channel may take the pad and continue from
+where the walk left the game. `--walk none` hands the pad over from the start.
+
+## The client
+
+`tools/product_control.py` drives the routes:
 
 ```sh
-curl -sS http://127.0.0.1:32123/api/status | jq
-curl -sS http://127.0.0.1:32123/api/frame.ppm \
-  -o scratch/screenshots/interactive.ppm
+C="uv run --locked python tools/product_control.py --port 32125"
+$C status                              # presents and the pad's source and state
+$C pad --ly 32767 --hold 2             # walk forward for 2 s, then release
+$C pad --buttons A,START               # replace the whole pad, held until changed
+$C pad --lt 255 --hold 0.3             # pull the left trigger
+$C release                             # neutral pad, still connected
+$C frame scratch/control/now.png       # the latest guest output
 ```
 
-`/api/status` reports the guest's own present counter, exact controller packet,
-render-thread submitted/dropped/rendered counters, and metadata for the latest
-probe: guest frame, draw and shader-pair counts, non-black pixels, mean RGB, and
-an FNV-1a identity hash of the exact RGBA bytes.
+Every pad write replaces the whole pad; omitted fields are neutral. Buttons use
+the names scripted input uses: `UP`, `DOWN`, `LEFT`, `RIGHT`, `START`, `BACK`,
+`LTHUMB`, `RTHUMB`, `LB`, `RB`, `A`, `B`, `X`, `Y`. Sticks `lx`, `ly`, `rx`,
+`ry` take `-32767..32767` and triggers `lt`, `rt` take `0..255`; anything else
+is refused with HTTP 400 naming the field.
 
-`/api/frame.ppm` waits up to ten seconds for the next complete guest frame. An
-explicit probe bypasses a held `DRAW_FRAME_AT`, content, or camera selector for
-that diagnostic frame only. It does not open the selector, increment
-`DRAW_FRAME_COUNT`, write capture artifacts, or turn a diagnostic into a report.
-It returns that renderer readback as binary PPM. A timeout is HTTP 504; a frame
-that could not render or did not yield correctly sized RGBA is HTTP 503. Neither
-case is returned as an empty or black image, because absence and black output are
-different graphics findings. The returned bytes come from the same post-gamma
-scan-out image published to the presenter; the HTTP probe does not observe a
-brighter pre-LUT rendering path.
+## Routes
+
+| Route | Result |
+|---|---|
+| `GET /api/status` | JSON: presents so far, and the pad's source, packet and state |
+| `POST /api/input` | form fields as above; 409 while a walk owns the pad |
+| `POST /api/input/release` | a neutral pad, still connected |
+| `DELETE /api/input` | disconnect the remote controller |
+| `GET /api/frame.ppm` | the latest guest output as binary PPM; 503 before the first present |

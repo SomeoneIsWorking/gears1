@@ -83,6 +83,12 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="write /tmp/perf-<pid>.map so `perf report` names translated guest functions",
     )
+    parser.add_argument(
+        "--control-port",
+        type=int,
+        help="serve the loopback control channel on this port; tools/product_control.py drives "
+        "the pad once the walk has finished",
+    )
     route = parser.add_mutually_exclusive_group()
     route.add_argument("--walk", default="menu", help="none, start, menu, checkpoint, or gameplay")
     route.add_argument(
@@ -95,6 +101,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     if arguments.seconds <= 0 or arguments.capture_every <= 0:
         raise SystemExit("--seconds and --capture-every must be positive")
+    if arguments.control_port is not None and not 0 < arguments.control_port < 65536:
+        raise SystemExit("--control-port must be in 1..65535")
     profile = load_profile(REPO_ROOT)
     selected = environment_file(REPO_ROOT)
     environment = load_environment(REPO_ROOT, env_file=selected)
@@ -126,6 +134,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ]
     if arguments.perf_map:
         command.append("--perf-map")
+    if arguments.control_port is not None:
+        command += ["--control-port", str(arguments.control_port)]
     status = run_logged_child(
         command, cwd=REPO_ROOT, environ=child_environment, log_path=run_root / "run.log"
     )

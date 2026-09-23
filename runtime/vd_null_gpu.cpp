@@ -33,7 +33,6 @@
 #include "gpu_swap_packet.h"
 #include "input.h"
 #include "missing_x360port_executor.h"
-#include "debug_http.h"
 #include "graphics_probe.h"
 #include "graphics_probe_render.h"
 #include "frame_probe_capture.h"
@@ -2859,11 +2858,9 @@ void CommandProcessorThread()
     // The pad's source depends on whether a window came up, so input is brought
     // up once that is known.
     gears::InitialiseInput(haveWindow);
-    gears::StartDebugHttpServer();
 
     CommandProcessor cp;
     cp.Run();
-    gears::StopDebugHttpServer();
 }
 
 std::atomic<bool> g_commandProcessorStarted{false};
