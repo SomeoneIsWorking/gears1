@@ -282,8 +282,13 @@ before, 96.8M and 90.7M with texture set reuse, then 97.2M and 96.9M against 94.
 a fifth of the thread's time when it ran at the end of each submission, now runs on a
 recording thread as the commands fill 32 KiB: 94.7M instructions per present to 77.3M,
 junction p50 8.5-9.5 ms against 9.7-14.4 ms for the previous build in alternating runs.
-The rest of the profile has no dominant cost: the global mutex is 7% of the thread's
-instructions and constant setup 11%. Its `WAIT_REG_MEM` on guest word physical `0x1F99E004` is the per-present
+Samplers are now kept across draws with the same shaders in the same submission while
+none of the fetch constants they name is written: 77.8M instructions per present to 67.7M.
+Storing constants only when their value changes made no difference (77.2M and 77.5M
+against 77.5M and 77.4M) and was not kept. Moving the command thread to a core of its own,
+with every other product thread off that core, lowered the junction from 94 to 67
+presents/s in the same run. The rest of the profile has no dominant cost: the global mutex
+is 7% of the thread's instructions and constant setup 11%. Its `WAIT_REG_MEM` on guest word physical `0x1F99E004` is the per-present
 vblank wait above: once per frame, and woken by the vblank thread after the title's
 vblank handler runs rather than after Xenia's `wait / 0x100` ms poll interval (junction
 p50 12.7 to 11.7 ms). Skipping the global mutex for already-valid vertex ranges did not
