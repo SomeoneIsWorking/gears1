@@ -23,9 +23,10 @@ struct ImportSpec
     x360port::GuestAddress record_address = 0;
 };
 
-// Adapts the checked XEX inspector's normalized PE image to the flat image
-// contract consumed by x360port. Profile authentication remains Gears-owned;
-// this owner only maps the authenticated image and seals its runtime module.
+// Adapts the checked XEX inspector's loaded image, which the XEX loader leaves
+// in place at the image base, to the flat image contract consumed by x360port.
+// Profile authentication remains Gears-owned; this owner only describes the
+// authenticated image and seals its runtime module.
 class Gears1GuestImage final : public x360port::GuestModule
 {
   public:
@@ -35,12 +36,12 @@ class Gears1GuestImage final : public x360port::GuestModule
     Gears1GuestImage(Gears1GuestImage &&) = delete;
     Gears1GuestImage &operator=(Gears1GuestImage &&) = delete;
 
-    [[nodiscard]] bool Initialize(std::span<const std::byte> normalized_image,
+    [[nodiscard]] bool Initialize(std::span<const std::byte> loaded_image,
                                   const XexIdentity &expected, std::span<const ImportSpec> imports,
                                   std::string &error);
 
     // Inspect and authenticate the user-owned XEX before adapting its
-    // normalized image. The checked inspector owns container expansion and
+    // loaded image. The checked inspector owns container expansion and
     // import discovery; this title owner only verifies the exact profile and
     // converts the discovered manifest into x360port's module contract.
     [[nodiscard]] bool InitializeCheckedXex(std::span<const std::byte> xex,

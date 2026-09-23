@@ -24,15 +24,15 @@ import argparse
 import struct
 import sys
 
-from guest_image import DEFAULT_BASE, DEFAULT_IMAGE, GuestImageError, load_mapped_image
+from guest_image import DEFAULT_BASE, DEFAULT_IMAGE, GuestImageError, load_guest_image
 
 PURE = 0x828D0790
 BASE = DEFAULT_BASE
 
 
 def build(image):
-    d = load_mapped_image(image)
-    # The mapped image spans the whole guest image, so its length is the
+    d = load_guest_image(image)
+    # The loaded image spans the whole guest image, so its length is the
     # authoritative upper bound; a hardcoded limit silently drops every
     # address above whichever image layout it was measured from.
     limit = BASE + len(d)

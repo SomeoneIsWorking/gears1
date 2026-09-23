@@ -28,7 +28,7 @@ The microcode is the payload: Xenos ucode, NOT D3D9 bytecode. The
 Usage:
     tools/shader_extract.py --out scratch/shaders/containers \\
         scratch/game/WarGame/CookedXenon/EngineMaterials.xxx
-    tools/shader_extract.py --out DIR --image scratch/raw/gears_mapped.bin \\
+    tools/shader_extract.py --out DIR --image scratch/raw/gears_image.bin \\
         --at 0x39878 --at 0x39A40
 """
 import argparse
@@ -37,7 +37,7 @@ import os
 import struct
 import sys
 
-from guest_image import GuestImageError, load_mapped_image
+from guest_image import GuestImageError, load_guest_image
 
 MAGIC_PREFIX = bytes.fromhex("102A11")
 TYPE_NAMES = {0: "ps", 1: "vs"}
@@ -148,7 +148,7 @@ def main():
         if not args.image:
             ap.error("--at requires --image")
         try:
-            img = load_mapped_image(args.image)
+            img = load_guest_image(args.image)
         except GuestImageError as error:
             print(f"shader_extract: refusing: {error}", file=sys.stderr)
             return 2

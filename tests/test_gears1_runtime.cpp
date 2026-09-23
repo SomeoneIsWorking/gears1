@@ -24,6 +24,8 @@ void Put32(std::vector<std::byte> &bytes, std::size_t offset, std::uint32_t valu
     }
 }
 
+// The code section claims VirtualAddress 0x1000 but sits at raw offset 0x200,
+// where the loader leaves it, so the entry point and import thunk are there.
 std::vector<std::byte> SyntheticImage()
 {
     std::vector<std::byte> image(0x400U);
@@ -35,7 +37,7 @@ std::vector<std::byte> SyntheticImage()
     Put16(image, 0x86U, 1U);
     Put16(image, 0x94U, 224U);
     Put16(image, 0x98U, 0x10bU);
-    Put32(image, 0xa8U, 0x1000U);
+    Put32(image, 0xa8U, 0x200U);
     Put32(image, 0xb4U, 0x82000000U);
     Put32(image, 0xb8U, 0x1000U);
     Put32(image, 0xd0U, 0x2000U);
@@ -92,9 +94,9 @@ int main()
     const gears::XexIdentity expected{.imageDigest = x360port::HashBytes(image),
                                       .imageBase = 0x82000000U,
                                       .imageSize = static_cast<std::uint32_t>(image.size()),
-                                      .entryPoint = 0x82001000U};
+                                      .entryPoint = 0x82000200U};
     const std::array<gears::ImportSpec, 1> imports{{
-        {x360port::ImportKind::Function, "xam.xex", 971U, "XGetAVPack", 0x82001010U, 0x82001010U},
+        {x360port::ImportKind::Function, "xam.xex", 971U, "XGetAVPack", 0x82000210U, 0x82000210U},
     }};
 
     gears::Gears1Runtime runtime(7U, ReadPad, ReadCapabilities, nullptr);
