@@ -40,6 +40,8 @@ struct ScriptStep
     // moves and aims on the STICKS, so a script limited to buttons can walk the
     // menus but can never test whether the game responds to a player at all.
     int16_t thumbLX = 0, thumbLY = 0, thumbRX = 0, thumbRY = 0;
+    // Trigger pulls. Gears chooses between some paths and aims with them.
+    uint8_t leftTrigger = 0, rightTrigger = 0;
 };
 std::vector<ScriptStep> g_script;
 uint64_t (*g_frameSource)() = nullptr;
@@ -110,11 +112,29 @@ bool StickByName(std::string_view name, ScriptStep &into)
     return false;
 }
 
+// A trigger named in a script step, "LT" or "RT", pulled all the way. Returns
+// false if the name is not a trigger.
+bool TriggerByName(std::string_view name, ScriptStep &into)
+{
+    if (name == "LT")
+    {
+        into.leftTrigger = UINT8_MAX;
+        return true;
+    }
+    if (name == "RT")
+    {
+        into.rightTrigger = UINT8_MAX;
+        return true;
+    }
+    return false;
+}
+
 // "3000:START,3200:,5000:A" -- at 3000 ms hold START, at 3200 ms release
 // everything, at 5000 ms hold A. Times are milliseconds since start-up.
 //
 // A step may also name STICK deflections: LX/LY/RX/RY suffixed with '+' or '-',
 // e.g. "9000:LY+" walks forward. Y follows the console's convention, positive up.
+// LT and RT pull the triggers.
 //
 // Names within a step are combined with '&', not '+': '+' is a stick SIGN, and
 // using it for both roles is ambiguous ("LY++A" could split either way). '&'
@@ -154,7 +174,7 @@ void ParseScript(std::string_view text)
         {
             const size_t sep = buttons.find('&');
             const std::string_view name = buttons.substr(0, sep);
-            if (!StickByName(name, entry))
+            if (!StickByName(name, entry) && !TriggerByName(name, entry))
             {
                 uint16_t button = 0;
                 if (PadButtonByName(name, button))
@@ -392,12 +412,14 @@ void UpdateScriptedInput()
     next.thumbLY = current.thumbLY;
     next.thumbRX = current.thumbRX;
     next.thumbRY = current.thumbRY;
+    next.leftTrigger = current.leftTrigger;
+    next.rightTrigger = current.rightTrigger;
     Publish(next);
     lucent::info("input",
-                 "scripted pad at {} ms: buttons {:#06x} stick L({},{})"
+                 "scripted pad at {} ms: buttons {:#06x} triggers {},{} stick L({},{})"
                  " R({},{})",
-                 elapsed, current.buttons, current.thumbLX, current.thumbLY, current.thumbRX,
-                 current.thumbRY);
+                 elapsed, current.buttons, current.leftTrigger, current.rightTrigger,
+                 current.thumbLX, current.thumbLY, current.thumbRX, current.thumbRY);
 }
 
 void SetHostPadSource(HostPadSampler sampler, void *context)

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _HEX32 = re.compile(r"[0-9a-f]{8}")
-_STEP_INPUT = r"(?:START|[ABXY]|L[XY][+-]?|R[XY][+-]?)"
+_STEP_INPUT = r"(?:START|[ABXY]|[LR]T|L[XY][+-]?|R[XY][+-]?)"
 # "ms:" releases everything; "ms:LY+&RX-" holds a chord, as the runtime parses it.
 _TIMED_STEP = re.compile(rf"(?:0|[1-9][0-9]*):(?:{_STEP_INPUT}(?:&{_STEP_INPUT})*)?")
 _FRAME_ACTION = re.compile(r"(?:START|[ABXY])(?:~[1-9][0-9]*)?|[LR][XY](?:[+-]|0)")
