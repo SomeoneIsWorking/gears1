@@ -254,7 +254,11 @@ runs the console's vblank at 240 Hz for a 120 presents/s ceiling instead of the
 console's 30. Measured headless on an AMD Radeon RX 6700 XT (RADV) with the profile's
 gameplay walk, 305 s (2026-09-23): the menus, Act 1's opening scene and play through the
 cell block and first corridor hold 118-119 presents/s; the last 40 s, at the "Choose path"
-junction, run at 68-88 from run to run on this shared host.
+junction, run at 68-88 from run to run on this shared host. The offscreen run reports
+frame-time percentiles (host time between guest presents, 0.1 ms buckets) for every 10 s
+window and the whole run: the cell block and corridor hold p50 8.3-8.7 ms, p99 9.5-11.8 ms,
+and the junction p50 16.3-16.5 ms, p95 20-21 ms, p99 23-25 ms (2026-09-23). The junction's
+frame times do not fall on the 4.2 ms vblank grid, so they are work, not vblank pacing.
 
 Play was bound by Xenia's GPU command thread, not the host GPU (40-80% busy). Three
 costs on that thread were removed in the pinned fork: a `gettid` syscall on every
@@ -269,15 +273,14 @@ updates, and 22% of its samples sleep in `WAIT_REG_MEM` polling a guest word (ph
 `0x1F99E004`) that the CPU clears, where Xenia sleeps `wait / 0x100` ms per poll. Neither
 skipping the global mutex for already-valid vertex ranges nor polling that word at
 sub-millisecond intervals changed the junction rate beyond the run-to-run spread, so
-neither was kept; a quieter host or a tighter metric than presents per second is needed
-to separate the next change. The
+neither was kept; a quieter host or the frame-time percentiles are needed to separate
+the next change. The
 command processor now reports its ring read pointer every RB_BLKSZ rather than once per
 batch, and the native audio mix, whose per-vector guest-memory validation had taken 27% of
 all process samples at the junction, now takes 8%. `tools/run_offscreen.py
 --perf-map` names translated guest functions in `perf report`.
 
-Gap: gameplay does not yet hold 120 presents/s at the path junction, and no frame-time percentiles or
-windowed measurement exist.
+Gap: gameplay does not yet hold 120 presents/s at the path junction (p50 16.3 ms there).
 
 ### S014 — later Gears titles
 

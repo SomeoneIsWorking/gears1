@@ -4,10 +4,15 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <format>
 #include <fstream>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
+
+#include <x360port/frame_intervals.hpp>
 
 #include <lucent/log.h>
 
@@ -64,9 +69,34 @@ void CaptureSecond(const x360port::SystemSession &session, const ProductOptions 
                  path.string());
 }
 
-bool ReportRun(std::uint32_t seconds, std::uint64_t presents,
-               const x360port::SystemExecutionCounts &counts)
+constexpr std::uint32_t kFrameTimeWindowSeconds = 10;
+constexpr double kMicrosecondsPerMillisecond = 1000.0;
+
+std::string FormatQuantile(const x360port::FrameIntervalHistogram &intervals, double fraction)
 {
+    std::optional<x360port::FrameIntervalQuantile> quantile = intervals.Quantile(fraction);
+    if (!quantile)
+    {
+        return "none";
+    }
+    return std::format("{}{:.1f} ms", quantile->open_ended ? ">=" : "",
+                       quantile->microseconds / kMicrosecondsPerMillisecond);
+}
+
+// Frame times between guest swaps, as the upper edge of the 0.1 ms bucket each
+// percentile falls in.
+void ReportFrameTimes(std::string_view span, const x360port::FrameIntervalHistogram &intervals)
+{
+    lucent::info("product", "{}: {} frame times, p50 {}, p95 {}, p99 {}, max {}", span,
+                 intervals.Count(), FormatQuantile(intervals, 0.5), FormatQuantile(intervals, 0.95),
+                 FormatQuantile(intervals, 0.99), FormatQuantile(intervals, 1.0));
+}
+
+bool ReportRun(std::uint32_t seconds, std::uint64_t presents,
+               const x360port::SystemExecutionCounts &counts,
+               const x360port::FrameIntervalHistogram &intervals)
+{
+    ReportFrameTimes(std::format("whole run of {} s", seconds), intervals);
     lucent::info("product",
                  "offscreen run ended after {} s: {} presents; {} guest functions translated to "
                  "{} host bytes, {} translation failures; {} native-override calls",
@@ -109,6 +139,7 @@ bool RunOffscreen(x360port::SystemSession &session, const ProductOptions &option
     }
     auto start = std::chrono::steady_clock::now();
     std::uint64_t previous_presents = 0;
+    x360port::FrameIntervalHistogram window_start = session.FrameIntervals();
     for (std::uint32_t second = 1; second <= options.run_seconds; ++second)
     {
         std::this_thread::sleep_until(start + std::chrono::seconds(second));
@@ -120,12 +151,21 @@ bool RunOffscreen(x360port::SystemSession &session, const ProductOptions &option
                      second, presents - previous_presents, presents, counts.translated_functions,
                      counts.native_override_calls);
         previous_presents = presents;
+        if (second % kFrameTimeWindowSeconds == 0)
+        {
+            x360port::FrameIntervalHistogram now = session.FrameIntervals();
+            ReportFrameTimes(
+                std::format("seconds {}-{}", second - kFrameTimeWindowSeconds + 1, second),
+                now.Since(window_start));
+            window_start = now;
+        }
         if (options.capture_interval_seconds != 0 && second % options.capture_interval_seconds == 0)
         {
             CaptureSecond(session, options, second);
         }
     }
-    return ReportRun(options.run_seconds, session.PresentedFrameCount(), session.ExecutionCounts());
+    return ReportRun(options.run_seconds, session.PresentedFrameCount(), session.ExecutionCounts(),
+                     session.FrameIntervals());
 }
 
 } // namespace gears::product
