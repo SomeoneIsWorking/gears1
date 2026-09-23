@@ -16,6 +16,9 @@ using GuestVector = std::array<float, 4>;
 
 constexpr std::size_t kGuestVectorSize = 16U;
 constexpr std::uint32_t kGuestVectorMask = ~std::uint32_t{0x0FU};
+// Sixteen iterations of four vectors each, for both the input and the output.
+constexpr std::uint32_t kMixIterations = 16U;
+constexpr std::uint32_t kMixBlockBytes = kMixIterations * 4U * kGuestVectorSize;
 
 [[nodiscard]] std::uint32_t LoadBigEndian(std::span<const std::byte> bytes,
                                           std::size_t offset) noexcept
@@ -69,7 +72,27 @@ void StoreBigEndian(std::span<std::byte> bytes, std::size_t offset, std::uint32_
     return result;
 }
 
-[[nodiscard]] bool LoadGuestVector(x360port::GuestCallContext &call, std::uint32_t address,
+[[nodiscard]] GuestVector DecodeGuestVector(std::span<const std::byte> bytes) noexcept
+{
+    GuestVector value{};
+    for (std::size_t lane = 0; lane < value.size(); ++lane)
+    {
+        const std::size_t guestLane = value.size() - lane - 1U;
+        value[lane] = std::bit_cast<float>(LoadBigEndian(bytes, guestLane * 4U));
+    }
+    return value;
+}
+
+void EncodeGuestVector(std::span<std::byte> bytes, const GuestVector &value) noexcept
+{
+    for (std::size_t lane = 0; lane < value.size(); ++lane)
+    {
+        const std::size_t guestLane = value.size() - lane - 1U;
+        StoreBigEndian(bytes, guestLane * 4U, std::bit_cast<std::uint32_t>(value[lane]));
+    }
+}
+
+[[nodiscard]] bool LoadGuestVector(const x360port::GuestCallContext &call, std::uint32_t address,
                                    GuestVector &value, x360port::RuntimeFailure &failure) noexcept
 {
     std::array<std::byte, kGuestVectorSize> bytes{};
@@ -78,32 +101,82 @@ void StoreBigEndian(std::span<std::byte> bytes, std::size_t offset, std::uint32_
     {
         return false;
     }
-    for (std::size_t lane = 0; lane < value.size(); ++lane)
-    {
-        const std::size_t guestLane = value.size() - lane - 1U;
-        value[lane] = std::bit_cast<float>(LoadBigEndian(bytes, guestLane * 4U));
-    }
+    value = DecodeGuestVector(bytes);
     return true;
 }
 
-[[nodiscard]] bool StoreGuestVector(x360port::GuestCallContext &call, std::uint32_t address,
-                                    const GuestVector &value,
-                                    x360port::RuntimeFailure &failure) noexcept
+// The input and output blocks the mix reads and writes, staged in host memory:
+// one validated guest read per block before the kernel runs and one validated
+// write of the output block after it, instead of a validated access for every
+// vector. Blocks that overlap share one staged range, so a store is seen by
+// every later load of the same bytes exactly as on the guest.
+class StagedMixBlocks final
 {
-    std::array<std::byte, kGuestVectorSize> bytes{};
-    failure = call.ReadMappedGuestMemory(address & kGuestVectorMask, bytes);
-    if (failure)
+  public:
+    enum class Block : std::uint8_t
     {
-        return false;
-    }
-    for (std::size_t lane = 0; lane < value.size(); ++lane)
+        Input,
+        Output,
+    };
+
+    [[nodiscard]] x360port::RuntimeFailure Stage(const x360port::GuestCallContext &call,
+                                                 std::uint32_t input, std::uint32_t output) noexcept
     {
-        const std::size_t guestLane = value.size() - lane - 1U;
-        StoreBigEndian(bytes, guestLane * 4U, std::bit_cast<std::uint32_t>(value[lane]));
+        output_ = output & kGuestVectorMask;
+        const std::uint32_t inputBase = input & kGuestVectorMask;
+        const bool overlap =
+            output_ - inputBase < kMixBlockBytes || inputBase - output_ < kMixBlockBytes;
+        if (!overlap)
+        {
+            inputStart_ = 0;
+            outputStart_ = kMixBlockBytes;
+            x360port::RuntimeFailure failure = call.ReadMappedGuestMemory(
+                inputBase, std::span(storage_).subspan(inputStart_, kMixBlockBytes));
+            if (failure)
+            {
+                return failure;
+            }
+            return call.ReadMappedGuestMemory(
+                output_, std::span(storage_).subspan(outputStart_, kMixBlockBytes));
+        }
+        const std::uint32_t base = inputBase < output_ ? inputBase : output_;
+        inputStart_ = inputBase - base;
+        outputStart_ = output_ - base;
+        const std::size_t size =
+            (inputStart_ > outputStart_ ? inputStart_ : outputStart_) + kMixBlockBytes;
+        return call.ReadMappedGuestMemory(base, std::span(storage_).first(size));
     }
-    failure = call.WriteMappedGuestMemory(address & kGuestVectorMask, bytes);
-    return !failure;
-}
+
+    [[nodiscard]] GuestVector Load(Block block, std::uint32_t offset) const noexcept
+    {
+        return DecodeGuestVector(
+            std::span(storage_).subspan(Start(block) + offset, kGuestVectorSize));
+    }
+
+    void Store(Block block, std::uint32_t offset, const GuestVector &value) noexcept
+    {
+        EncodeGuestVector(std::span(storage_).subspan(Start(block) + offset, kGuestVectorSize),
+                          value);
+    }
+
+    // The mix stores only into the output block.
+    [[nodiscard]] x360port::RuntimeFailure Commit(x360port::GuestCallContext &call) const noexcept
+    {
+        return call.WriteMappedGuestMemory(
+            output_, std::span(storage_).subspan(outputStart_, kMixBlockBytes));
+    }
+
+  private:
+    [[nodiscard]] std::size_t Start(Block block) const noexcept
+    {
+        return block == Block::Input ? inputStart_ : outputStart_;
+    }
+
+    std::array<std::byte, 2U * kMixBlockBytes> storage_{};
+    std::uint32_t output_ = 0;
+    std::size_t inputStart_ = 0;
+    std::size_t outputStart_ = 0;
+};
 
 [[nodiscard]] x360port::ExecutionResult Failed(x360port::RuntimeFailure failure) noexcept
 {
@@ -124,12 +197,10 @@ x360port::ExecutionResult ApplyNativeAudioMix(x360port::GuestCallContext &call,
                 0};
     }
 
-    std::uint32_t output = static_cast<std::uint32_t>(arguments[0]);
+    const std::uint32_t output = static_cast<std::uint32_t>(arguments[0]);
     const std::uint32_t input = static_cast<std::uint32_t>(arguments[1]);
     const std::uint32_t coefficient0 = static_cast<std::uint32_t>(arguments[2]);
     const std::uint32_t coefficient1 = static_cast<std::uint32_t>(arguments[3]);
-    const std::uint32_t outputInputDelta = output - input;
-    std::uint32_t cursor = input + 32U;
 
     // The guest leaves the last processed input block in r3 and returns it
     // without setting a result, so the override reproduces that exact value.
@@ -153,79 +224,47 @@ x360port::ExecutionResult ApplyNativeAudioMix(x360port::GuestCallContext &call,
     v11 = Add(v13, v11);
     v10 = Add(v13, v10);
 
-    for (std::uint32_t iteration = 0; iteration < 16U; ++iteration)
+    StagedMixBlocks blocks;
+    failure = blocks.Stage(call, input, output);
+    if (failure)
     {
-        const std::uint32_t output0 = output + 48U;
-        const std::uint32_t output1 = output;
-        const std::uint32_t output2 = output + 16U;
-        const std::uint32_t input0 = cursor + 16U;
-        const std::uint32_t input1 = cursor - 32U;
-        lastInputBlock = input1;
-        const std::uint32_t input2 = outputInputDelta + cursor;
-        const std::uint32_t input3 = cursor - 16U;
+        return Failed(std::move(failure));
+    }
+    using Block = StagedMixBlocks::Block;
+    for (std::uint32_t iteration = 0; iteration < kMixIterations; ++iteration)
+    {
+        const std::uint32_t block = iteration * 64U;
+        lastInputBlock = input + block;
 
-        GuestVector v9{};
-        if (!LoadGuestVector(call, output0, v9, failure))
-        {
-            return Failed(std::move(failure));
-        }
-        GuestVector v7{};
-        if (!LoadGuestVector(call, input0, v7, failure))
-        {
-            return Failed(std::move(failure));
-        }
-        GuestVector v4{};
-        if (!LoadGuestVector(call, output1, v4, failure))
-        {
-            return Failed(std::move(failure));
-        }
+        GuestVector v9 = blocks.Load(Block::Output, block + 48U);
+        GuestVector v7 = blocks.Load(Block::Input, block + 48U);
+        const GuestVector v4 = blocks.Load(Block::Output, block);
         v9 = MultiplyAdd(v7, v10, v9);
 
-        GuestVector v6{};
-        if (!LoadGuestVector(call, input1, v6, failure))
-        {
-            return Failed(std::move(failure));
-        }
-        GuestVector v8{};
-        if (!LoadGuestVector(call, cursor, v8, failure))
-        {
-            return Failed(std::move(failure));
-        }
+        GuestVector v6 = blocks.Load(Block::Input, block);
+        GuestVector v8 = blocks.Load(Block::Input, block + 32U);
         v7 = MultiplyAdd(v6, v13, v4);
 
-        GuestVector v3{};
-        if (!LoadGuestVector(call, output2, v3, failure))
-        {
-            return Failed(std::move(failure));
-        }
-        cursor += 64U;
-
-        GuestVector v2{};
-        if (!LoadGuestVector(call, input2, v2, failure))
-        {
-            return Failed(std::move(failure));
-        }
+        const GuestVector v3 = blocks.Load(Block::Output, block + 16U);
+        const GuestVector v2 = blocks.Load(Block::Output, block + 32U);
         v13 = Add(v13, v0);
 
-        GuestVector v5{};
-        if (!LoadGuestVector(call, input3, v5, failure))
-        {
-            return Failed(std::move(failure));
-        }
+        const GuestVector v5 = blocks.Load(Block::Input, block + 16U);
         v8 = MultiplyAdd(v8, v11, v2);
         v6 = MultiplyAdd(v5, v12, v3);
         v12 = Add(v12, v0);
         v11 = Add(v11, v0);
         v10 = Add(v10, v0);
 
-        if (!StoreGuestVector(call, output0, v9, failure) ||
-            !StoreGuestVector(call, output1, v7, failure) ||
-            !StoreGuestVector(call, input2, v8, failure) ||
-            !StoreGuestVector(call, output2, v6, failure))
-        {
-            return Failed(std::move(failure));
-        }
-        output += 64U;
+        blocks.Store(Block::Output, block + 48U, v9);
+        blocks.Store(Block::Output, block, v7);
+        blocks.Store(Block::Output, block + 32U, v8);
+        blocks.Store(Block::Output, block + 16U, v6);
+    }
+    failure = blocks.Commit(call);
+    if (failure)
+    {
+        return Failed(std::move(failure));
     }
 
     return {{}, lastInputBlock};
