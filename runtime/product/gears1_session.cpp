@@ -17,6 +17,7 @@ x360port::SystemSessionConfig Gears1SessionConfig(const ProductOptions &options,
     config.title_path = options.image;
     config.storage_root = storage_root;
     config.expected_title_id = options.title_id;
+    config.player_gamertag = kLocalPlayerGamertag;
     config.audio = offscreen ? x360port::SystemAudio::Silent : x360port::SystemAudio::Device;
     config.input = {.state = titles::gears1::ReadXamPad,
                     .capabilities = titles::gears1::ReadXamCapabilities,

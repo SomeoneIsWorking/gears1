@@ -26,6 +26,7 @@ This inventory reports observable capabilities independently of the product goal
 | S016 | Independently authored shared UE3/Xbox contract | verified | S006 | G001 |
 | S017 | Asset-free native/JIT boundary CI | partial | S006 | G001, G002, G004 |
 | S018 | PC keyboard and mouse controls beside host gamepads | partial | S009 | G001 |
+| S019 | Campaign checkpoints save and resume in the player's user-data directory | verified | S006 | G001 |
 
 ## Current focus
 
@@ -380,3 +381,17 @@ mouse's dead-zone offset, Y inversion and clamp, and the arbitration that lets a
 pad take the controller and the window's input resume after it. Gaps: no agent run
 exercises the GTK capture, which needs a person at the window; bindings are fixed; the
 Windows and macOS hosts do not exist yet.
+
+### S019 — campaign saves
+
+On the console a signed-in profile holds the campaign's checkpoints. The product signs
+in one local profile, `Player`, before the game starts: `x360port`'s system session
+creates it under the storage root on the first run and signs the same profile in on
+every later one. The windowed product's storage root is the OS user-data directory;
+offscreen runs use `scratch/offscreen/storage`. Before this the game ran with nobody
+signed in and wrote no checkpoint. Evidence (2026-09-23, offscreen): the gameplay walk's
+menus show "Profile 1: Player", Act 1 writes `default_checkpoint.sav` (the level's first
+checkpoint) under the profile's content, and on the next run Single Player offers
+Continue Campaign, which resumes the level from that checkpoint; New Campaign then asks
+before overwriting it. `system_config_tests` covers the refused gamertags.
+
