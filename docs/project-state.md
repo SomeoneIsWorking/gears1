@@ -254,7 +254,7 @@ runs the console's vblank at 240 Hz for a 120 presents/s ceiling instead of the
 console's 30. Measured headless on an AMD Radeon RX 6700 XT (RADV) with the profile's
 gameplay walk, 305 s (2026-09-23): the menus, Act 1's opening scene and play through the
 cell block and first corridor hold 118-119 presents/s; the last 40 s, at the "Choose path"
-junction, run at 67-76.
+junction, run at 68-88 from run to run on this shared host.
 
 Play was bound by Xenia's GPU command thread, not the host GPU (40-80% busy). Three
 costs on that thread were removed in the pinned fork: a `gettid` syscall on every
@@ -262,9 +262,15 @@ global-mutex acquire (34 to 49 presents/s), a scan of every live occlusion repor
 each BEGIN (49 to 63), and oracle shader hashing on each unarmed draw; PM4 register ranges
 are now written in bulk rather than through a virtual call per register, and swap and
 resolve diagnostics no longer log every frame. The next cost is the guest render thread's
-spin on GPU progress (`sub_8222F460`, S005; 41% of that thread at the junction), and
-that spin waits on Xenia's GPU command thread, which is saturated there (0.9 of a core)
-with a flat per-draw profile led by descriptor-set updates and the global mutex. The
+spin on GPU progress (`sub_8222F460`, S005; a third of that thread's stack samples at the
+junction), while the game thread yields waiting on the render thread. The GPU command
+thread is busy about 0.8 of a core with a flat per-draw profile led by descriptor-set
+updates, and 22% of its samples sleep in `WAIT_REG_MEM` polling a guest word (physical
+`0x1F99E004`) that the CPU clears, where Xenia sleeps `wait / 0x100` ms per poll. Neither
+skipping the global mutex for already-valid vertex ranges nor polling that word at
+sub-millisecond intervals changed the junction rate beyond the run-to-run spread, so
+neither was kept; a quieter host or a tighter metric than presents per second is needed
+to separate the next change. The
 command processor now reports its ring read pointer every RB_BLKSZ rather than once per
 batch, and the native audio mix, whose per-vector guest-memory validation had taken 27% of
 all process samples at the junction, now takes 8%. `tools/run_offscreen.py

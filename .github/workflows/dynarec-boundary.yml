@@ -9,7 +9,7 @@ permissions:
   contents: read
 
 env:
-  X360PORT_REVISION: da34f78a83f49e2f5baf60e4087db9b685de47f2
+  X360PORT_REVISION: ad4dae317b7849eb0b38f9c59e73b900dfb52713
   X360UE3_REVISION: 7bc5763b9a3acb3ea04463ef05056b222a2579be
 
 jobs:
