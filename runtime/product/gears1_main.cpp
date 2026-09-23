@@ -10,6 +10,7 @@
 #include <lucent/platform.h>
 #include <x360port/system_session.hpp>
 
+#include "control_channel.h"
 #include "gears1_session.h"
 #include "input.h"
 #include "offscreen_run.h"
@@ -56,6 +57,17 @@ constexpr std::string_view kSaveNamespace = "gears1";
     {
         lucent::error("product", "Gears of War did not launch: {}", failure.detail);
         x360port::SystemSession::EndProcess(EXIT_FAILURE);
+    }
+    std::optional<gears::product::ControlChannel> control;
+    if (options.control_port != 0)
+    {
+        control.emplace(*created.session, options.control_port);
+        if (!control->Start())
+        {
+            lucent::error("product", "the control channel cannot serve on loopback port {}",
+                          options.control_port);
+            x360port::SystemSession::EndProcess(EXIT_FAILURE);
+        }
     }
     bool evidence = gears::product::RunOffscreen(*created.session, options);
     x360port::SystemSession::EndProcess(evidence ? EXIT_SUCCESS : EXIT_FAILURE);

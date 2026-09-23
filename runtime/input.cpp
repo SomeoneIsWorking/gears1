@@ -46,6 +46,10 @@ struct ScriptStep
 std::vector<ScriptStep> g_script;
 uint64_t (*g_frameSource)() = nullptr;
 size_t g_scriptCursor = 0;
+// Set once every scripted step has fired. From then on the script no longer
+// owns the pad, so a remote controller may continue the run from where the
+// script left it.
+std::atomic<bool> g_scriptFinished{false};
 std::chrono::steady_clock::time_point g_start;
 
 void PublishLocked(const PadState &next)
@@ -195,6 +199,12 @@ void ParseScript(std::string_view text)
                      [](const ScriptStep &a, const ScriptStep &b) { return a.atMs < b.atMs; });
 }
 
+// Whether a script still drives the pad: it has steps left to fire.
+bool ScriptOwnsPad()
+{
+    return !g_script.empty() && !g_scriptFinished.load(std::memory_order_acquire);
+}
+
 } // namespace
 
 void InitialiseInput(bool haveWindow)
@@ -271,7 +281,7 @@ bool PadButtonByName(std::string_view name, uint16_t &button)
 bool SetRemotePad(const PadState &state)
 {
     std::lock_guard<std::mutex> guard(g_mutex);
-    if (!g_script.empty())
+    if (ScriptOwnsPad())
         return false;
     g_remoteActive = true;
     PublishLocked(state);
@@ -297,7 +307,7 @@ void DisconnectRemotePad()
 InputSource CurrentInputSource()
 {
     std::lock_guard<std::mutex> guard(g_mutex);
-    if (!g_script.empty())
+    if (ScriptOwnsPad())
         return InputSource::kScript;
     if (g_remoteActive)
         return InputSource::kRemote;
@@ -396,6 +406,7 @@ void UpdateScriptedInput()
     }
     if (!fired)
         return;
+    const bool finished = g_scriptCursor == g_script.size();
     guard.unlock();
 
     if (skipped != 0)
@@ -420,6 +431,14 @@ void UpdateScriptedInput()
                  " R({},{})",
                  elapsed, current.buttons, current.leftTrigger, current.rightTrigger,
                  current.thumbLX, current.thumbLY, current.thumbRX, current.thumbRY);
+    // Only after its last state is published, so a remote write cannot be
+    // overwritten by the script it followed.
+    if (finished)
+    {
+        g_scriptFinished.store(true, std::memory_order_release);
+        lucent::info("input",
+                     "the input script has finished; a remote controller may take the pad");
+    }
 }
 
 void SetHostPadSource(HostPadSampler sampler, void *context)
@@ -438,7 +457,7 @@ void PollHostInput()
         std::lock_guard<std::mutex> guard(g_mutex);
         // A scripted run drives the pad itself; mixing the two would make the
         // script non-reproducible. A remote pad owns it until disconnected.
-        if (!g_haveWindow || !g_script.empty() || g_remoteActive)
+        if (!g_haveWindow || ScriptOwnsPad() || g_remoteActive)
             return;
         sampler = g_hostSampler;
         context = g_hostContext;

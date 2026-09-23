@@ -32,6 +32,8 @@ struct ProductOptions
     std::uint32_t capture_interval_seconds = 0;
     // Offscreen only: write a Linux perf map of the translated guest code.
     bool perf_map = false;
+    // Offscreen only: serve the loopback control channel on this port.
+    std::uint16_t control_port = 0;
 };
 
 struct ProductOptionsResult

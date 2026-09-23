@@ -46,8 +46,9 @@ class ArgumentCursor final
     std::size_t index_ = 0;
 };
 
-constexpr std::array<std::string_view, 6> kValueOptions = {
-    "--image", "--title-id", "--storage-root", "--seconds", "--capture-dir", "--capture-every"};
+constexpr std::array<std::string_view, 7> kValueOptions = {
+    "--image",       "--title-id",      "--storage-root", "--seconds",
+    "--capture-dir", "--capture-every", "--control-port"};
 
 [[nodiscard]] bool TakesValue(std::string_view option) noexcept
 {
@@ -68,10 +69,10 @@ constexpr std::array<std::string_view, 6> kValueOptions = {
     {
         if (!options.storage_root.empty() || options.run_seconds != 0 ||
             !options.capture_directory.empty() || options.capture_interval_seconds != 0 ||
-            options.perf_map)
+            options.perf_map || options.control_port != 0)
         {
-            return "--storage-root, --seconds, --capture-dir, --capture-every, and --perf-map "
-                   "apply only with --offscreen";
+            return "--storage-root, --seconds, --capture-dir, --capture-every, --perf-map, and "
+                   "--control-port apply only with --offscreen";
         }
         return {};
     }
@@ -141,6 +142,10 @@ ProductOptionsResult ParseProductOptions(std::span<const char *const> arguments)
         else if (option == "--capture-dir")
         {
             options.capture_directory = value;
+        }
+        else if (option == "--control-port")
+        {
+            parsed = ParseInteger(value, 10, options.control_port) && options.control_port != 0;
         }
         else
         {
