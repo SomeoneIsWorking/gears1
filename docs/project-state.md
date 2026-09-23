@@ -304,7 +304,11 @@ is 7% of the thread's instructions and constant setup 11%. Its `WAIT_REG_MEM` on
 vblank wait above: once per frame, and woken by the vblank thread after the title's
 vblank handler runs rather than after Xenia's `wait / 0x100` ms poll interval (junction
 p50 12.7 to 11.7 ms). Skipping the global mutex for already-valid vertex ranges did not
-change the junction rate beyond the run-to-run spread and was not kept. The
+change the junction rate beyond the run-to-run spread and was not kept. Remembering
+which shader an unchanged `IM_LOAD` range produced, under a shared-memory watch, cut the
+pipeline cache's shader hashing from 4% of the thread to nothing, but its own lookup took
+1.5%, and alternating runs measured 66.2M and 66.1M instructions per present against
+66.2M and 66.1M without it, so it was not kept. The
 command processor now reports its ring read pointer every RB_BLKSZ rather than once per
 batch, and the native audio mix, whose per-vector guest-memory validation had taken 27% of
 all process samples at the junction, now takes 8%. `perf report` cannot name translated
