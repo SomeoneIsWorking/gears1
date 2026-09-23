@@ -6,6 +6,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 enable_testing()
 
+# Xenia builds its Debug objects with libstdc++'s debug containers, which have a
+# different layout. Every library linked into the same program must agree, so
+# the composing build sets it for all of them, including Lucent, rather than
+# only for targets that inherit it from x360port.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_compile_definitions($<$<CONFIG:Debug>:_GLIBCXX_DEBUG>)
+endif()
+
 option(GEARS_REQUIRE_PRODUCT_DEPS
     "Refuse a reduced build that cannot run the current GearsUE3 product" OFF)
 option(GEARS_DYNAREC_CONTRACT_ONLY
