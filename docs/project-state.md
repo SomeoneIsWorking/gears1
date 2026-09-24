@@ -413,10 +413,13 @@ in the host runtime: the GPU wait again took 12.7%, then the vertex-shader const
 setter `0x82222350` (`docs/d3d-seam.md`) 5.5% and the DMA-indexed draw `0x8222DE50` 3.0%.
 A native override of that setter and its pixel twin `0x82222460` (about 193K calls/s)
 made presents dearer, not cheaper: 74.1M and 77.9M render-thread instructions per present
-against 71.3M and 70.4M without it, in alternating runs at s282. Each call's checked guest
-reads and writes go through `x360port::GuestMemory::CanAccess`, whose Xenia heap query takes
-the global critical region the GPU command thread also holds, so a short, frequently called
-leaf costs more native than translated until mapped access has a cheaper validated path.
+against 71.3M and 70.4M without it, in alternating runs at s282. Xenia's heap query no
+longer takes the global critical region (a four-access call fell from about 230 ns to 70 ns
+while another thread held that lock), yet the override still cost 75.5M, 78.5M and 76.5M
+against 70.4M and 74.3M. With it the render thread spent 14% in host code instead of 1.7%:
+the copies through a bounce buffer 6.8%, range checks (the MMIO range scan, page query and
+`CanAccess`) 3.4%, the setter's own code 1.6%, and dispatch 0.7%, against 5.5% for the
+translated setter, so it was not kept. A leaf this short does not pay for a native call.
 
 The combat route's yard firefight (`tools/combat_route.py`) ran at 103-114 presents/s
 in one run and fell to 19-50 in another, while another agent's emulator held 2.3 cores
