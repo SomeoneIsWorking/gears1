@@ -5,11 +5,11 @@ from __future__ import annotations
 
 import argparse
 import platform
-import shutil
 import sys
+import time
 from pathlib import Path
 
-from gearsue3_bootstrap.crash_triage import TriageError, report_backtraces, run_under_debugger
+from gearsue3_bootstrap.crash_triage import TriageError, host_backtrace, report_backtraces
 from gearsue3_bootstrap.paths import build_directory
 from gearsue3_bootstrap.process import CommandError, CommandRunner
 
@@ -96,6 +96,8 @@ def main() -> int:
     )
     ctest = require_program("ctest")
     junit_report = output / "ctest-results.xml"
+    # Crash reports written from here on belong to this run's tests.
+    tests_began = time.time()
     try:
         runner.run(
             [ctest, "--test-dir", output, "--output-on-failure",
@@ -108,7 +110,7 @@ def main() -> int:
             report_backtraces(
                 junit_report,
                 runner.capture([ctest, "--test-dir", output, "--show-only=json-v1"], cwd=ROOT),
-                platform.system(), shutil.which, run_under_debugger)
+                host_backtrace(platform.system(), tests_began))
         except TriageError as error:
             print(f"crash triage: {error}", file=sys.stderr)
         raise
