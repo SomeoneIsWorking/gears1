@@ -118,7 +118,8 @@ def render(threads: dict[str, Counter[str]], thread_count: int, function_count: 
 
 def _script_samples(data: Path) -> list[str]:
     result = subprocess.run(
-        ["perf", "script", "-i", str(data), "-F", "comm,ip"],
+        # -G keeps a call-graph recording to one line per sample.
+        ["perf", "script", "-i", str(data), "-F", "comm,ip", "-G"],
         check=True,
         capture_output=True,
         text=True,
