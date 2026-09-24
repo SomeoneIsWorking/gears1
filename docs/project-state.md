@@ -310,11 +310,17 @@ indirection table at 0x80000000, its generated code at 0xA0000000 and its guest
 trampolines below 2 GB, and stored 32-bit host code addresses. The fork's A64 code cache
 now lets the host place the table and code anywhere on every host, stores each entry as
 an offset from the execute base, loads both bases from the backend context before a
-call, and reserves the trampolines inside the code cache; Darwin writes code through a
-separate read-write view. Under qemu-aarch64 on Linux the fork's CPU tests pass 251 of
-252 with every base above 4 GB (the one failure, a JIT unwind backtrace depth, fails
-identically before the change). Gap: the macOS job has not yet run the relocated layout,
-and the quality gate there needed the SDK passed to clang-tidy.
+call, and reserves the trampolines inside the code cache. Under qemu-aarch64 on Linux the
+fork's CPU tests pass 251 of 252 with every base above 4 GB (the one failure, a JIT unwind
+backtrace depth, fails identically before the change). On macOS CI the relocated layout
+still trapped; the ReportCrash stack the verifier now prints showed
+`KERN_PROTECTION_FAILURE` at the page-aligned start of generated code, on the first call
+into it from `A64Function::CallImpl`: Apple silicon executes only signed or `MAP_JIT`
+pages, and the code executed from a view of a shared file mapping. On Apple silicon the
+code cache now takes one `MAP_JIT` region, written only inside a per-thread
+`pthread_jit_write_protect_np` scope around placement, trap fill, data, and trampolines;
+other hosts keep their mappings. Gap: that change has been compiled only for x64 Linux;
+the macOS job is its first A64 Darwin build and run.
 
 ### S011 — Android A64
 
