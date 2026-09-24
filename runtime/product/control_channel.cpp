@@ -245,10 +245,8 @@ lucent::http::Response ControlChannel::Player() const
         std::string weapon = "null";
         if (player.has_weapon)
         {
-            weapon = std::format("{{\"id\":{},\"magazine_size\":{},\"magazine_rounds_fired\":{},"
-                                 "\"spare_rounds\":{}}}",
-                                 player.weapon, player.magazine_size, player.magazine_rounds_fired,
-                                 player.spare_rounds);
+            weapon = std::format("{{\"id\":{},\"rounds_fired\":{}}}", player.weapon,
+                                 player.rounds_fired);
         }
         pawn = std::format("{{\"location\":[{},{},{}],\"health\":{},\"team\":{},\"weapon\":{}}}",
                            player.location[0], player.location[1], player.location[2],

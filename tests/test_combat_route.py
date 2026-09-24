@@ -35,6 +35,7 @@ class SimulatedPlayer:
         self.speed = speed
         self.wall_x = wall_x
         self.wall_gap_y = wall_gap_y  # the wall stops short of this y, leaving a way round
+        self.cover_slides = False  # held at the wall, any sideways stick runs along it at full speed
         self.graph: list[dict[str, object]] = []
         self.mates: list[dict[str, object]] = []  # squad mates, each walking at its velocity
         self.vaulting = False  # A pressed at the wall lets the next moves cross it
@@ -45,7 +46,9 @@ class SimulatedPlayer:
         self.alive = True
         self.health = 301
         self.now = 0.0
+        self.world = 0.0
         self.time_scale = 1.0
+        self.prompt = False  # a tutorial prompt: the pad does nothing but A, the world runs on
         self.hostiles: list[dict[str, object]] = []
         self.incoming = 0.0  # damage per second while exposed
         self.shots_on: list[int] = []
@@ -67,18 +70,17 @@ class SimulatedPlayer:
         pawns = [{"id": hostile["id"], "location": list(hostile["location"]),
                   "health": hostile["health"], "team": 1, "is_player": False}
                  for hostile in self.hostiles]
-        pawns += [{"id": mate["id"], "location": list(mate["location"]), "health": 301,
-                   "team": 0, "is_player": False} for mate in self.mates]
+        pawns += [{"id": mate["id"], "location": list(mate["location"]),
+                   "health": mate.get("health", 301), "team": 0, "is_player": False}
+                  for mate in self.mates]
         reading = {"control_yaw": self.yaw % 65536, "control_pitch": self.pitch % 65536,
                    "camera_yaw": self.yaw % 65536, "camera_location": [*self.camera(), 0.0],
-                   "world_seconds": self.now * self.time_scale,
+                   "world_seconds": self.world,
                    "pawn": None, "pawns": pawns}
         if self.alive:
             weapon = self.weapons[self.held]
             reading["pawn"] = {"location": [*self.position, 0.0], "health": self.health, "team": 0,
-                               "weapon": {"id": weapon["id"], "magazine_size": weapon["size"],
-                                          "magazine_rounds_fired": weapon["fired"],
-                                          "spare_rounds": weapon["spare"]}}
+                               "weapon": {"id": weapon["id"], "rounds_fired": weapon["fired"]}}
             pawns.insert(0, {"id": 1, "location": [*self.position, 0.0], "health": self.health,
                              "team": 0, "is_player": True})
         return reading
@@ -100,8 +102,17 @@ class SimulatedPlayer:
         self._apply({})
 
     def _apply(self, fields: dict[str, str]) -> None:
+        if self.prompt:
+            self.prompt = fields.get("buttons") != "A"
+            fields = {}
+        if fields.get("buttons") == "X" and self.alive:
+            for mate in self.mates:
+                if (mate.get("health", 301) == 0
+                        and math.dist(self.position, mate["location"][:2]) <= 100.0):
+                    mate["health"] = 301
         if fields.get("buttons") == "A" and not self.alive and self.checkpoint is not None:
             self.alive, self.health, self.position = True, 301, self.checkpoint
+            self.world = 0.0  # the load starts the level's clock again
             self.incoming = self.incoming_after_respawn
         if (fields.get("buttons") == "A" and self.alive and self.wall_x is not None
                 and abs(self.position[0] - self.wall_x) < 80.0):
@@ -160,6 +171,7 @@ class SimulatedPlayer:
 
     def sleep(self, seconds: float) -> None:
         self.now += seconds
+        self.world += seconds * self.time_scale
         for mate in self.mates:
             x, y, z = mate["location"]
             vx, vy = mate["velocity"]
@@ -191,6 +203,8 @@ class SimulatedPlayer:
                                          or min(y, self.position[1]) < self.wall_gap_y)
         if self.wall_x is not None and blocked and (x > self.wall_x) != (self.position[0] > self.wall_x):
             x = self.position[0]
+            if self.cover_slides and dy:
+                y = self.position[1] + math.copysign(self.speed * seconds * 10, dy)
         self.position = (x, y)
 
 
@@ -219,6 +233,12 @@ class WalkTest(unittest.TestCase):
             route.walk("reach", (-500.0, 300.0), radius=40.0, timeout=20.0)
             self.assertLessEqual(math.dist(player.position, (-500.0, 300.0)), 40.0 + 60.0 * 2)
             self.assertEqual(route.steps[-1]["step"], "reach")
+
+    def test_sliding_along_cover_is_blocked_although_the_player_moves(self) -> None:
+        player = SimulatedPlayer((60.0, 0.0), 0, wall_x=100.0)
+        player.cover_slides = True
+        with self.assertRaisesRegex(RouteFailure, "reach: blocked"):
+            route_over(player).walk("reach", (300.0, 69.0), radius=40.0, timeout=20.0)
 
     def test_a_wall_is_reported_as_blocked(self) -> None:
         player = SimulatedPlayer((0.0, 0.0), 0, wall_x=100.0)
@@ -258,6 +278,19 @@ class TravelTest(unittest.TestCase):
         self.assertEqual(route.steps[-1]["points"], 4)
         self.assertEqual([step["step"] for step in route.steps[:2]],
                          ["round: point 1 of 4", "round: point 2 of 4"])
+
+    def test_a_goal_short_of_an_unreachable_point_ends_the_travel(self) -> None:
+        # The point nearest the goal lies behind a wall with no way round; the
+        # goal itself is reached before the wall.
+        player = SimulatedPlayer((-200.0, 0.0), 0, wall_x=100.0)
+        player.graph = [
+            {"id": 1, "location": [-200.0, 0.0, 0.0], "paths": [[2, 400, "walk"]]},
+            {"id": 2, "location": [200.0, 0.0, 0.0], "paths": [[1, 400, "walk"]]},
+        ]
+        route = route_over(player)
+        route.travel("short", (130.0, 0.0, 0.0), radius=90.0)
+        self.assertLessEqual(math.dist(player.position, (130.0, 0.0)), 90.0)
+        self.assertEqual(route.steps[-1]["step"], "short")
 
     def test_a_straight_walk_is_stopped_by_the_same_wall(self) -> None:
         player = SimulatedPlayer((-30.0, 10.0), 0, wall_x=100.0, wall_gap_y=300.0)
@@ -376,6 +409,87 @@ class AdvanceTest(unittest.TestCase):
             route_module.advance_to_next_checkpoint(route_over(self._player()),
                                                     lambda: self.CHECKPOINT)
 
+    def test_a_downed_mate_is_revived_before_following_him(self) -> None:
+        player = self._player()
+        player.mates[0]["health"] = 0
+
+        def saved() -> route_module.Checkpoint:
+            return self.NEXT if player.mates[0]["health"] > 0 else self.CHECKPOINT
+
+        route = route_over(player)
+        self.assertEqual(route_module.advance_to_next_checkpoint(route, saved), self.NEXT)
+        self.assertEqual(route.steps[-1]["revives"], 1)
+        self.assertIn("advance to the next checkpoint: revive 1",
+                      [step["step"] for step in route.steps])
+
+    def test_a_mate_who_stays_down_fails(self) -> None:
+        player = self._player()
+        player.mates[0].update(health=0, location=(100.0, 0.0, 0.0))
+        route = route_over(player)
+        player.set_pad = lambda fields: SimulatedPlayer._apply(
+            player, {key: value for key, value in fields.items() if value != "X"})
+        with self.assertRaisesRegex(RouteFailure, "revive 1: the squad mate was still down "
+                                                  "after 5 presses of X"):
+            route_module.advance_to_next_checkpoint(route, lambda: self.CHECKPOINT)
+
+    def test_the_revive_prompt_is_dismissed_when_x_does_nothing(self) -> None:
+        player = self._player()
+        # Beside him, so no walk's unblock dismisses the prompt first.
+        player.mates[0].update(health=0, location=(50.0, 0.0, 0.0))
+        player.prompt = True
+
+        def saved() -> route_module.Checkpoint:
+            return self.NEXT if player.mates[0]["health"] > 0 else self.CHECKPOINT
+
+        route = route_over(player)
+        self.assertEqual(route_module.advance_to_next_checkpoint(route, saved), self.NEXT)
+        self.assertFalse(player.prompt)
+        # The travel to him is recorded under the same name before the presses.
+        revive = [step for step in route.steps
+                  if step["step"] == "advance to the next checkpoint: revive 1"][-1]
+        self.assertEqual(revive["presses"], 2)
+
+    def test_a_mate_downed_during_the_walk_to_him_is_revived(self) -> None:
+        player = self._player()
+        player.graph = [{"id": 1, "location": [0.0, 0.0, 0.0], "paths": []}]
+        player.mates[0]["location"] = (900.0, 0.0, 0.0)
+        route = route_over(player)
+        sleep = player.sleep
+
+        def downed_on_the_way(seconds: float) -> None:
+            sleep(seconds)
+            if player.position[0] > 200.0 and "health" not in player.mates[0]:
+                player.mates[0]["health"] = 0
+
+        route._sleep = downed_on_the_way
+        route_module.join_squad(route, "join")
+        self.assertEqual(player.mates[0]["health"], 301)
+        walk = [step for step in route.steps if step["step"] == "join"][0]
+        self.assertTrue(walk["stopped"])
+        self.assertEqual(route.steps[-1]["step"], "join: revive Dom")
+
+    def test_a_mate_downed_while_joining_him_is_revived(self) -> None:
+        player = self._player()
+        player.mates[0]["health"] = 0
+        route = route_over(player)
+        route_module.join_squad(route, "join")
+        self.assertEqual(player.mates[0]["health"], 301)
+        names = [step["step"] for step in route.steps]
+        self.assertIn("join: revive Dom", names)
+        self.assertEqual(names[-1], "join")
+
+    def test_a_death_reloads_the_checkpoint_and_play_goes_on(self) -> None:
+        player = self._player()
+        player.alive = False
+        player.checkpoint = (0.0, 0.0)
+
+        def saved() -> route_module.Checkpoint:
+            return self.NEXT if player.alive and player.now > 30.0 else self.CHECKPOINT
+
+        route = route_over(player)
+        route_module.advance_to_next_checkpoint(route, saved)
+        self.assertEqual(route.steps[-1]["deaths"], 1)
+
     def test_a_first_save_counts_as_new(self) -> None:
         player = self._player()
         saves = iter([None, None, self.NEXT])
@@ -432,18 +546,47 @@ class GameTimeTest(unittest.TestCase):
     def test_real_time_passes(self) -> None:
         player = SimulatedPlayer((0.0, 0.0), 0)
         route = route_over(player)
-        start = route.clock()
+        route.start_timing()
         player.sleep(100.0)
-        self.assertAlmostEqual(route.require_real_time(start), 1.0)
+        self.assertAlmostEqual(route.require_real_time(), 1.0)
 
     def test_a_fast_simulation_fails(self) -> None:
         player = SimulatedPlayer((0.0, 0.0), 0)
         player.time_scale = 2.0
         route = route_over(player)
-        start = route.clock()
+        route.start_timing()
         player.sleep(100.0)
         with self.assertRaisesRegex(RouteFailure, "game time ran at 2.000"):
-            route.require_real_time(start)
+            route.require_real_time()
+
+    def test_untimed_routes_refuse(self) -> None:
+        with self.assertRaisesRegex(RouteFailure, "never timed"):
+            route_over(SimulatedPlayer((0.0, 0.0), 0)).require_real_time()
+
+    def test_a_checkpoint_load_restarts_the_world_clock_without_failing(self) -> None:
+        player = SimulatedPlayer((0.0, 0.0), 0)
+        player.checkpoint = (0.0, 0.0)
+        route = route_over(player)
+        route.start_timing()
+        player.sleep(100.0)
+        player.alive = False
+        route.respawn("reload", 30.0)
+        player.sleep(50.0)
+        self.assertAlmostEqual(route.require_real_time(), 1.0)
+        self.assertEqual(route.steps[-1]["wall_seconds"], 150.0)
+
+    def test_a_checkpoint_load_does_not_hide_a_fast_simulation(self) -> None:
+        player = SimulatedPlayer((0.0, 0.0), 0)
+        player.checkpoint = (0.0, 0.0)
+        player.time_scale = 2.0
+        route = route_over(player)
+        route.start_timing()
+        player.sleep(100.0)
+        player.alive = False
+        route.respawn("reload", 30.0)
+        player.sleep(100.0)
+        with self.assertRaisesRegex(RouteFailure, "game time ran at 2.000"):
+            route.require_real_time()
 
 
 class FireTest(unittest.TestCase):
@@ -526,7 +669,11 @@ class FirefightTest(unittest.TestCase):
         route.clear_firefight("fight", timeout=120.0, arrival=5.0)
         self.assertEqual(player.held, "RIGHT")
         self.assertLess(player.weapons["RIGHT"]["spare"], 1000)
-        self.assertTrue(route.steps[-1]["bursts"][0]["fired"])
+        fired = [burst["fired"] for burst in route.steps[-1]["bursts"]]
+        self.assertEqual(fired[:3], [False, False, True])
+        names = [step["step"] for step in route.steps]
+        self.assertIn("fight: weapon 2 fired nothing; press A", names)
+        self.assertIn("fight: weapon 2 fired nothing; press RB", names)
 
     def test_an_empty_weapon_is_swapped_for_one_with_ammunition(self) -> None:
         player = SimulatedPlayer((0.0, 0.0), 0)
@@ -535,7 +682,21 @@ class FirefightTest(unittest.TestCase):
         route = route_over(player)
         route.clear_firefight("fight", timeout=120.0, arrival=5.0)
         self.assertEqual(player.held, "DOWN")
-        self.assertIn("fight: switch to the weapon on DOWN", [step["step"] for step in route.steps])
+        names = [step["step"] for step in route.steps]
+        self.assertIn("fight: weapon 2 is dry", names)
+        self.assertIn("fight: switch to the weapon on DOWN", names)
+
+    def test_a_prompt_under_the_trigger_is_not_a_dry_weapon(self) -> None:
+        player = SimulatedPlayer((0.0, 0.0), 0)
+        player.add_hostile(7, (1000.0, 300.0, 0.0))
+        player.prompt = True
+        route = route_over(player)
+        route.clear_firefight("fight", timeout=120.0, arrival=5.0)
+        names = [step["step"] for step in route.steps]
+        self.assertIn("fight: weapon 2 fired nothing; press A", names)
+        self.assertNotIn("fight: weapon 2 fired nothing; press RB", names)
+        self.assertNotIn("fight: weapon 2 is dry", names)
+        self.assertEqual(player.weapons["RIGHT"]["spare"], 1000)
 
     def test_no_ammunition_anywhere_fails(self) -> None:
         player = SimulatedPlayer((0.0, 0.0), 0)

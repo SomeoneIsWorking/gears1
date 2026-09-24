@@ -182,14 +182,16 @@ follows this chain for `GET /api/player`:
   movement follows the controller's yaw; the world is left-handed, so full
   right moves a quarter turn toward +y of +x. Holding Y turns the camera actor,
   not the controller, toward the point of interest.
-- Pawn `+0x35C` is the held weapon; weapon `+0x450` is its magazine size
-  (pistol 12, Hammerburst 26), `+0x490` counts rounds fired from the current
-  magazine (a Lancer burst adds 12), and `+0x498` holds the spare rounds a
-  reload draws from: one pistol shot moved `+0x490` from 0 to 1, and RB then
-  reset it and took `+0x498` from 36 to 35. D-pad right held the rifle and down
-  the pistol. Pawn `+0x358` is the inventory manager. Found by differencing the
-  weapon across bursts: the HUD's ammo totals appear elsewhere in memory but
-  never changed with firing, so their owner is still unknown.
+- Pawn `+0x35C` is the held weapon; weapon `+0x490` rises by one for each
+  round fired and falls when RB reloads (a Lancer burst adds 12; one pistol
+  shot moved it from 0 to 1 and RB reset it). Weapon `+0x450` is not the
+  magazine size: a Hammerburst read 26 there while firing 78 rounds without a
+  reload, and the HUD's 048 matched `+0x490` = 30. `+0x498` fell from 36 to 35
+  on a pistol reload but its meaning for other weapons is unknown. D-pad right
+  held the rifle and down the pistol. Pawn `+0x358` is the inventory manager.
+  Found by differencing the weapon across bursts; the HUD's ammo totals appear
+  elsewhere in memory but never changed with firing, so their owner is still
+  unknown.
 - WorldInfo `+0x328` heads the pawn list, linked through pawn `+0x1B0`;
   WorldInfo `+0x324` heads the controller list, linked through controller
   `+0x1AC`. At the yard's first firefight the pawn list held Marcus, Dom, and
@@ -202,6 +204,11 @@ follows this chain for `GET /api/player`:
   shot to death. Pawn `+0x48C` is the same 301/250 but did not fall, so it is a
   maximum. The first byte of pawn `+0x3B4` is the team: 0 for COG, 1 for every
   drone.
+  A downed squad mate (Dom at `WarCheckpoint_3`) reads health 0 while alive and
+  revivable. The REVIVE tutorial prompt shown then ignores the stick and the
+  trigger until A dismisses it, while both WorldInfo clocks run on: over 2.6 s
+  with it shown `+0x288` and `+0x28C` each advanced 2.6 s, the stick moved
+  Marcus 0 units and RT fired no round; after A, RT fired.
 - The camera actor's location is the view's origin, not the pawn's: about 40
   units to the pawn's right, 70 behind and 66 up while aiming. Aiming from the
   pawn misses by that offset, most at close range. The right stick turns the
