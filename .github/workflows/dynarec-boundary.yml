@@ -70,6 +70,8 @@ jobs:
         with:
           version: 20.1.8
           arch: ${{ matrix.llvm_arch }}
+          # Outside the checkout, whose untracked sources the structure check reads.
+          directory: ${{ runner.temp }}/llvm
           env: true
 
       - name: Install pinned uv and Python
