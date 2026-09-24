@@ -186,8 +186,19 @@ follows this chain for `GET /api/player`:
   the current magazine (a Lancer burst adds 12). Found by differencing the
   weapon across bursts: the HUD's ammo totals appear elsewhere in memory but
   never changed with firing, so their owner is still unknown.
-- Health and the enemy-pawn list are not located. Pawn `+0x350` (2000) and
-  `+0x48C` (301) are unverified health candidates.
+- WorldInfo `+0x328` heads the pawn list, linked through pawn `+0x1B0`;
+  WorldInfo `+0x324` heads the controller list, linked through controller
+  `+0x1AC`. At the yard's first firefight the pawn list held Marcus, Dom, and
+  four Locust drones: two in the yard near (-1470, 4830) and (-1630, 4550) at
+  z 203-220 and two on the balcony near (-3195, 5550-5850) at z 845. Pawn
+  vtable `0x820ABC18` was both COG pawns and `0x820AB558` every drone.
+- Health is not located. Pawn `+0x48C` is 301 for COG and 250 for drones and
+  stayed 301 on Dom while his HUD showed him down, so it is not current health;
+  `+0x350` is 2000 on every pawn. No drone was hit in the one live attempt:
+  aiming at a drone's location from the yard cover put the crosshair on the
+  wall in front of it, and the Lancer emptied into cover. Aiming needs a stick
+  magnitude of about 11000 before the camera turns; below that the error
+  stalls at 700-850 units.
 
 `tools/combat_route.py` steers by this chain from where the gameplay walk
 leaves Marcus (in cover near (-760, 1190); the walk's fixed timing varies it by
