@@ -174,6 +174,9 @@ follows this chain for `GET /api/player`:
   a local player's `+0x40` is its player controller.
 - Controller `+0x1A0` is the pawn, null while the player is dead; pawn `+0x1AC`
   points back at the controller. Controller `+0x294` is the camera actor.
+- An actor's `+0x8C` is the level's WorldInfo; WorldInfo `+0x288` and `+0x28C`
+  are floats that each advanced 0.999-1.000 game seconds per wall second over
+  5 s and 20 s of play at 120 presents per second, the game and real clocks.
 - Actor location is three floats at `+0xCC`; rotation is pitch, yaw, roll at
   `+0xD8`, 65536 units per turn and accumulating past a turn. Left-stick
   movement follows the controller's yaw; the world is left-handed, so full

@@ -70,6 +70,8 @@ bool ReadPlayer(const GuestMemoryReader &read, PlayerSnapshot &snapshot, std::st
     std::uint32_t player = 0;
     std::uint32_t controller = 0;
     std::uint32_t camera = 0;
+    std::uint32_t world_info = 0;
+    std::uint32_t world_seconds = 0;
     std::uint32_t pawn = 0;
     if (!chain.Object(kGEngineAddress, "GEngine", engine) ||
         !chain.Word(engine + kEngineGamePlayersOffset + 4U, "the engine's player count",
@@ -88,10 +90,14 @@ bool ReadPlayer(const GuestMemoryReader &read, PlayerSnapshot &snapshot, std::st
         !chain.Object(controller + kControllerCameraOffset, "the controller's camera", camera) ||
         !chain.Yaw(controller, "the controller's rotation", snapshot.control_yaw) ||
         !chain.Yaw(camera, "the camera's rotation", snapshot.camera_yaw) ||
+        !chain.Object(controller + kActorWorldInfoOffset, "the controller's world info",
+                      world_info) ||
+        !chain.Word(world_info + kWorldInfoTimeSecondsOffset, "the world's time", world_seconds) ||
         !chain.Word(controller + kControllerPawnOffset, "the controller's pawn", pawn))
     {
         return false;
     }
+    snapshot.world_seconds = std::bit_cast<float>(world_seconds);
     if (pawn == 0)
     {
         return true;

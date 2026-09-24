@@ -216,8 +216,8 @@ lucent::http::Response ControlChannel::Player() const
     }
     return lucent::http::Response::json(
         200, "OK",
-        std::format("{{\"control_yaw\":{},\"camera_yaw\":{},\"pawn\":{}}}\n", player.control_yaw,
-                    player.camera_yaw, pawn));
+        std::format("{{\"control_yaw\":{},\"camera_yaw\":{},\"world_seconds\":{},\"pawn\":{}}}\n",
+                    player.control_yaw, player.camera_yaw, player.world_seconds, pawn));
 }
 
 } // namespace gears::product

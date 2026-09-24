@@ -60,6 +60,7 @@ constexpr std::uint32_t kController = 0x425A6000U;
 constexpr std::uint32_t kCamera = 0x48FA8700U;
 constexpr std::uint32_t kPawn = 0x4742AA00U;
 constexpr std::uint32_t kWeapon = 0x4645AA00U;
+constexpr std::uint32_t kWorldInfo = 0x42550000U;
 
 FakeGuest PlayingGuest()
 {
@@ -73,6 +74,8 @@ FakeGuest PlayingGuest()
     // Rotations accumulate past a turn; only the low 16 bits are a heading.
     guest.Put(kController + kActorRotationOffset + 4U, 104707U);
     guest.Put(kCamera + kActorRotationOffset + 4U, 0xFFFF0001U);
+    guest.Put(kController + kActorWorldInfoOffset, kWorldInfo);
+    guest.PutFloat(kWorldInfo + kWorldInfoTimeSecondsOffset, 224.5F);
     guest.Put(kController + kControllerPawnOffset, kPawn);
     guest.PutFloat(kPawn + kActorLocationOffset, -1051.5F);
     guest.PutFloat(kPawn + kActorLocationOffset + 4U, 3640.0F);
@@ -104,6 +107,7 @@ int main()
             "the pawn's location was not read");
     Require(snapshot.control_yaw == 104707U % 65536U && snapshot.camera_yaw == 1U,
             "yaws were not reduced to one turn");
+    Require(snapshot.world_seconds == 224.5F, "the world's time was not read");
     Require(snapshot.has_weapon && snapshot.magazine_rounds_fired == 42U,
             "the weapon's rounds were not read");
 
@@ -129,5 +133,8 @@ int main()
     FakeGuest unreadable_pawn = PlayingGuest();
     unreadable_pawn.Erase(kPawn + kActorLocationOffset + 8U);
     RequireRefused(unreadable_pawn, "the pawn's location at 0x4742AAD4 is unreadable");
+    FakeGuest no_world = PlayingGuest();
+    no_world.Put(kController + kActorWorldInfoOffset, 0U);
+    RequireRefused(no_world, "the controller's world info");
     return EXIT_SUCCESS;
 }

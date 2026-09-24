@@ -28,14 +28,17 @@ class SimulatedPlayer:
         self.firing = False
         self.alive = True
         self.now = 0.0
+        self.time_scale = 1.0
 
     # Pad protocol
     def player(self) -> dict[str, object]:
         if not self.alive:
-            return {"control_yaw": self.yaw, "camera_yaw": self.yaw, "pawn": None}
+            return {"control_yaw": self.yaw, "camera_yaw": self.yaw,
+                    "world_seconds": self.now * self.time_scale, "pawn": None}
         return {
             "control_yaw": self.yaw,
             "camera_yaw": self.yaw,
+            "world_seconds": self.now * self.time_scale,
             "pawn": {"location": [*self.position, 0.0], "magazine_rounds_fired": self.rounds},
         }
 
@@ -139,6 +142,24 @@ class UnblockTest(unittest.TestCase):
         route_over(player).holding("Y", 2.5)()
         self.assertEqual(pressed, [{"buttons": "Y"}])
         self.assertEqual(player.now, 2.5)
+
+
+class GameTimeTest(unittest.TestCase):
+    def test_real_time_passes(self) -> None:
+        player = SimulatedPlayer((0.0, 0.0), 0)
+        route = route_over(player)
+        start = route.clock()
+        player.sleep(100.0)
+        self.assertAlmostEqual(route.require_real_time(start), 1.0)
+
+    def test_a_fast_simulation_fails(self) -> None:
+        player = SimulatedPlayer((0.0, 0.0), 0)
+        player.time_scale = 2.0
+        route = route_over(player)
+        start = route.clock()
+        player.sleep(100.0)
+        with self.assertRaisesRegex(RouteFailure, "game time ran at 2.000"):
+            route.require_real_time(start)
 
 
 class FireTest(unittest.TestCase):
