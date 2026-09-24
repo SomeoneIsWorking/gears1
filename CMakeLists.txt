@@ -263,6 +263,9 @@ if(GEARS_DYNAREC_CONTRACT_ONLY)
     add_test(NAME gears_combat_route
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tests/test_combat_route.py")
+    add_test(NAME gears_frame_parity
+        COMMAND ${GEARS_UV_RUN} python
+                "${CMAKE_SOURCE_DIR}/tests/test_frame_parity.py")
     return()
 endif()
 

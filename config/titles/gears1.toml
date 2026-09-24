@@ -27,10 +27,6 @@ gameplay_walk = "25000:START,25300:,30000:A,30300:,35000:B,35300:,42000:A,42300:
 checkpoint_walk = "25000:START,25300:,30000:A,30300:,35000:B,35300:,42000:A,42300:,50000:A,50300:,60000:A,60300:"
 repro_rate_walk = "25000:START,25300:,32000:A,32300:,39000:A,39300:,46000:A,46300:,53000:A,53300:,60000:A,60300:,67000:A,67300:,74000:A,74300:"
 camera_pair_frame_walk = "90:START~120 600:A"
-oracle_compare_input = "START@25+8,A@30+2"
-oracle_compare_repeat_start_ms = 30000
-oracle_compare_repeat_period_ms = 2000
-oracle_compare_repeat_hold_ms = 150
 
 # One semantic frame-keyed route rendered into the native and oracle syntaxes.
 frame_walk = "750:START 900:A 1050:B 1260:A 1500:A 1800:A 2250:A 2700:A 3150:A 3600:A 4500:LY+ 5100:LY0 5250:RX+ 5400:RX0 5550:LY+ 6150:LY0"

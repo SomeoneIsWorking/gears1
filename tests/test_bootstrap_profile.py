@@ -44,6 +44,22 @@ class BootstrapProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(profile.ProfileError, "unique and ordered"):
             profile.parse_frame_walk("100:A 90:B")
 
+    def test_timed_walk_renders_the_oracle_presses(self) -> None:
+        self.assertEqual(
+            profile.oracle_timed_schedule("25000:START,25300:,30500:A,30800:"),
+            "START@25,A@30.5",
+        )
+        menu = profile.load_profile(REPO_ROOT).navigation.menu_walk
+        self.assertTrue(profile.oracle_timed_schedule(menu).startswith("START@25,A@30,B@35"))
+
+    def test_an_unreplayable_timed_step_is_refused(self) -> None:
+        with self.assertRaisesRegex(profile.ProfileError, "only single buttons"):
+            profile.oracle_timed_schedule("1000:LY+,2000:")
+        with self.assertRaisesRegex(profile.ProfileError, "only single buttons"):
+            profile.oracle_timed_schedule("1000:A&B,2000:")
+        with self.assertRaisesRegex(profile.ProfileError, "presses nothing"):
+            profile.oracle_timed_schedule("1000:")
+
     def test_profile_contains_no_machine_path(self) -> None:
         contents = (REPO_ROOT / "config/titles/gears1.toml").read_text()
         self.assertNotIn(str(Path.home()), contents)
