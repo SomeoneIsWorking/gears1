@@ -11,7 +11,6 @@ _HEX32 = re.compile(r"[0-9a-f]{8}")
 _STEP_INPUT = r"(?:START|[ABXY]|[LR]T|L[XY][+-]?|R[XY][+-]?)"
 # "ms:" releases everything; "ms:LY+&RX-" holds a chord, as the runtime parses it.
 _TIMED_STEP = re.compile(rf"(?:0|[1-9][0-9]*):(?:{_STEP_INPUT}(?:&{_STEP_INPUT})*)?")
-_FRAME_ACTION = re.compile(r"(?:START|[ABXY])(?:~[1-9][0-9]*)?|[LR][XY](?:[+-]|0)")
 
 
 class ProfileError(RuntimeError):
@@ -36,10 +35,6 @@ class Navigation:
     start_walk: str
     checkpoint_walk: str
     gameplay_walk: str
-    repro_rate_walk: str
-    camera_pair_frame_walk: str
-    frame_walk: str
-    button_hold_frames: int
 
 
 @dataclass(frozen=True)
@@ -49,13 +44,6 @@ class TitleProfile:
     save_namespace: str
     identity: TitleIdentity
     navigation: Navigation
-
-
-@dataclass(frozen=True)
-class FrameEvent:
-    frame: int
-    action: str
-    duration: int | None
 
 
 def _mapping(value: object, description: str) -> dict[str, object]:
@@ -101,25 +89,6 @@ def _validate_timed_walk(schedule: str, description: str) -> None:
         raise ProfileError(f"{description} times must be unique and ordered")
 
 
-def parse_frame_walk(schedule: str) -> tuple[FrameEvent, ...]:
-    events: list[FrameEvent] = []
-    for token in schedule.split():
-        frame_text, separator, raw_action = token.partition(":")
-        if separator == "" or not frame_text.isdecimal() or int(frame_text) <= 0:
-            raise ProfileError(f"invalid frame-walk event {token!r}")
-        if _FRAME_ACTION.fullmatch(raw_action) is None:
-            raise ProfileError(f"invalid frame-walk action {raw_action!r}")
-        action, marker, duration_text = raw_action.partition("~")
-        duration = int(duration_text) if marker else None
-        events.append(FrameEvent(int(frame_text), action, duration))
-    if not events:
-        raise ProfileError("navigation.frame_walk must contain at least one event")
-    frames = [event.frame for event in events]
-    if frames != sorted(frames) or len(frames) != len(set(frames)):
-        raise ProfileError("navigation.frame_walk frames must be unique and ordered")
-    return tuple(events)
-
-
 def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
     profile_path = repo_root / "config" / "titles" / f"{key}.toml"
     try:
@@ -142,18 +111,10 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
     start_walk = _string(navigation_table, "start_walk", "navigation")
     checkpoint_walk = _string(navigation_table, "checkpoint_walk", "navigation")
     gameplay_walk = _string(navigation_table, "gameplay_walk", "navigation")
-    repro_rate_walk = _string(navigation_table, "repro_rate_walk", "navigation")
-    camera_pair_frame_walk = _string(
-        navigation_table, "camera_pair_frame_walk", "navigation"
-    )
-    frame_walk = _string(navigation_table, "frame_walk", "navigation")
     _validate_timed_walk(menu_walk, "navigation.menu_walk")
     _validate_timed_walk(start_walk, "navigation.start_walk")
     _validate_timed_walk(checkpoint_walk, "navigation.checkpoint_walk")
     _validate_timed_walk(gameplay_walk, "navigation.gameplay_walk")
-    _validate_timed_walk(repro_rate_walk, "navigation.repro_rate_walk")
-    parse_frame_walk(camera_pair_frame_walk)
-    parse_frame_walk(frame_walk)
 
     return TitleProfile(
         key=key,
@@ -176,52 +137,7 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
             start_walk=start_walk,
             checkpoint_walk=checkpoint_walk,
             gameplay_walk=gameplay_walk,
-            repro_rate_walk=repro_rate_walk,
-            camera_pair_frame_walk=camera_pair_frame_walk,
-            frame_walk=frame_walk,
-            button_hold_frames=_positive_integer(
-                navigation_table, "button_hold_frames", "navigation"
-            ),
         ),
-    )
-
-
-def native_schedule(navigation: Navigation, schedule: str | None = None) -> str:
-    hold = navigation.button_hold_frames
-    rendered: list[str] = []
-    for event in parse_frame_walk(schedule or navigation.frame_walk):
-        if event.action.endswith("0"):
-            rendered.append(f"f{event.frame}:")
-        elif event.action[-1:] in {"+", "-"}:
-            rendered.append(f"f{event.frame}:{event.action}")
-        else:
-            duration = event.duration or hold
-            rendered.extend((f"f{event.frame}:{event.action}", f"f{event.frame + duration}:"))
-    return ",".join(rendered)
-
-
-def oracle_schedule(navigation: Navigation, schedule: str | None = None) -> str:
-    hold = navigation.button_hold_frames
-    rendered: list[str] = []
-    for event in parse_frame_walk(schedule or navigation.frame_walk):
-        if event.action.endswith("0") or event.action[-1:] in {"+", "-"}:
-            rendered.append(f"{event.action}@{event.frame}")
-            continue
-        duration = event.duration or hold
-        last_start = max(event.frame, event.frame + duration - hold)
-        start = event.frame
-        while True:
-            rendered.append(f"{event.action}@{start}")
-            if start >= last_start:
-                break
-            start = min(start + hold - 1, last_start)
-    return ",".join(rendered)
-
-
-def last_frame(navigation: Navigation, schedule: str | None = None) -> int:
-    return max(
-        event.frame + (event.duration or 0)
-        for event in parse_frame_walk(schedule or navigation.frame_walk)
     )
 
 

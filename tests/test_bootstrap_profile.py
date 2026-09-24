@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for the tracked title profile and its two schedule renderers."""
+"""Tests for the tracked title profile and its oracle schedule renderer."""
 
 from __future__ import annotations
 
@@ -25,24 +25,6 @@ class BootstrapProfileTests(unittest.TestCase):
             selected.identity.image_sha256,
             "f61cc78e4057bc68a2c65386a0341f6d26a7add3dfd9918007a455750ec6ed5c",
         )
-
-    def test_frame_table_renders_both_shipping_notations(self) -> None:
-        navigation = profile.load_profile(REPO_ROOT).navigation
-        native = profile.native_schedule(navigation, "90:START~120 600:A 700:LY+ 800:LY0")
-        oracle = profile.oracle_schedule(navigation, "90:START~120 600:A 700:LY+ 800:LY0")
-        self.assertIn("f90:START", native)
-        self.assertIn("f210:", native)
-        self.assertIn("START@90", oracle)
-        self.assertIn("START@202", oracle)
-        self.assertIn("A@600", oracle)
-        self.assertIn("LY+@700", oracle)
-        self.assertEqual(profile.last_frame(navigation, "90:START~120 600:A"), 600)
-
-    def test_invalid_table_is_refused_instead_of_silently_skipped(self) -> None:
-        with self.assertRaisesRegex(profile.ProfileError, "invalid frame-walk action"):
-            profile.parse_frame_walk("90:START 100:TYPO")
-        with self.assertRaisesRegex(profile.ProfileError, "unique and ordered"):
-            profile.parse_frame_walk("100:A 90:B")
 
     def test_timed_walk_renders_the_oracle_presses(self) -> None:
         self.assertEqual(

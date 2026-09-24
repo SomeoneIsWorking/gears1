@@ -183,8 +183,8 @@ def unpack_dest(px, fmt, np, endian=0):
 def atlas_tiles(ours_dir, source_base):
     """The scissor rectangles the frame's own draws rendered into a depth base.
 
-    Read from the per-draw table (GEARS_DRAW_DIAG) written by the SAME capture
-    run, which is why layer_capture.py takes one. A depth atlas holds several
+    Read from the per-draw table (GEARS_DRAW_DIAG) written by the SAME replay
+    run, which is why our side must be captured with one. A depth atlas holds several
     lights' shadow maps side by side, and a mean over the whole 864x864 hides
     which of them is wrong: measured, seven tiles agreed (one to 0.0003) while
     the eighth was UNWRITTEN at exactly the cleared value, and the whole-atlas
@@ -872,8 +872,8 @@ def main(argv):
             if tiles is None:
                 tile_lines.append(
                     f"       (no per-draw table in {ours_dir}, so this pass is"
-                    f" not broken down by tile -- re-capture with the current"
-                    f" layer_capture.py)")
+                    f" not broken down by tile -- re-run the replay with"
+                    f" GEARS_DRAW_DIAG=<ours>/draws.tsv)")
             for (tx, ty, tw, th), n in tiles or []:
                 if tw >= w and th >= h:
                     continue              # the full-surface rect, not a tile

@@ -7,12 +7,11 @@
 // not actually comparable. With a capture, every arm renders byte-identical
 // input in about a second:
 //
-//   # once: reach a gameplay frame and capture it
-//   GEARS_DRAW_FRAME_DUMP=scratch/frames/act1.gfr tools/capture_gameplay_frame.py
+//   <build>/runtime/frame_replay scratch/frames/act1.gfr
+//   GEARS_DRAW_ONLY_BASE=0x400 <build>/runtime/frame_replay scratch/frames/act1.gfr
 //
-//   # then, as often as needed
-//   build/release/runtime/frame_replay scratch/frames/act1.gfr
-//   GEARS_DRAW_ONLY_BASE=0x400 build/release/runtime/frame_replay scratch/frames/act1.gfr
+// Captures were written by the retired executable's GEARS_DRAW_FRAME_DUMP
+// path; no current target writes a new one, so only existing captures replay.
 //
 // Every GEARS_DRAW_* knob the live backend honours works here, because this
 // links the same runtime/gpu_draw.cpp. What it does NOT do is emulate: a capture
@@ -49,8 +48,8 @@ int main(int argc, char** argv)
     if (argc < 2)
     {
         lucent::error("replay", "usage: frame_replay <capture.gfr> [repeat-count]");
-        lucent::error("replay", "capture one with"
-            " GEARS_DRAW_FRAME_DUMP=<path> on any run that renders frames");
+        lucent::error("replay", "no current target writes captures; replay an"
+            " existing GEARS_DRAW_FRAME_DUMP capture");
         return 2;
     }
     const std::string path = argv[1];

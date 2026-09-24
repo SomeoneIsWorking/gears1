@@ -7,7 +7,6 @@ import signal
 import subprocess
 import sys
 import threading
-import time
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import BinaryIO
@@ -63,56 +62,6 @@ def terminate_child(process: subprocess.Popen[object], grace_seconds: float = 10
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait()
-
-
-def terminate_process_group(
-    process: subprocess.Popen[object], grace_seconds: float = 10
-) -> None:
-    """Terminate one captured new-session process group and no sibling run."""
-
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-    deadline = time.monotonic() + grace_seconds
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(process.pid, 0)
-        except ProcessLookupError:
-            break
-        time.sleep(0.05)
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-    if process.poll() is None:
-        process.wait()
-
-
-def run_for_duration(
-    command: Sequence[str | os.PathLike[str]],
-    *,
-    cwd: Path,
-    environ: Mapping[str, str],
-    duration_seconds: float,
-) -> int:
-    """Run a diagnostic child for a bounded duration without killing by name."""
-
-    process = subprocess.Popen(
-        [os.fspath(value) for value in command], cwd=cwd, env=dict(environ)
-    )
-    deadline = time.monotonic() + duration_seconds
-    try:
-        while process.poll() is None and time.monotonic() < deadline:
-            time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
-        if process.poll() is None:
-            terminate_child(process)
-            return 0
-        assert process.returncode is not None
-        return process.returncode
-    finally:
-        terminate_child(process)
 
 
 def _copy_output(source: BinaryIO, destinations: tuple[BinaryIO, ...]) -> None:
