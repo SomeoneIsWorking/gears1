@@ -19,7 +19,7 @@ chain, because the sequencer rounds after every step -- is left standing.
     tools/ucode_reduce.py --selftest
 
 Get a disassembly with:
-    build/release/tools/xenos_translate/xenos_translate --raw OUTDIR \\
+    <build>/tools/xenos_translate/xenos_translate --raw OUTDIR \\
         scratch/shaders/bound/ps_<hash>.ucode
 
 WHAT IT IS NOT. Not a translator and not a substitute for the A/B gate. It has no

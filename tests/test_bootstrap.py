@@ -19,7 +19,6 @@ sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "tests"))
 
-import replay_corpus
 import test_gdf_extract as gdf_fixture
 
 from tools import clean_build, run_offscreen
@@ -230,18 +229,6 @@ class BootstrapTests(unittest.TestCase):
         with self.assertRaisesRegex(paths.BuildPathError, "must be a child"):
             paths.build_directory(
                 self.root, self.root.parent, self.root / "build/release"
-            )
-
-    def test_diagnostic_integer_is_bounded_and_names_invalid_input(self) -> None:
-        self.assertEqual(
-            replay_corpus.environment_integer({"LIMIT": "4"}, "LIMIT", 2, minimum=1),
-            4,
-        )
-        with self.assertRaisesRegex(replay_corpus.ReplayCorpusError, "LIMIT.*integer"):
-            replay_corpus.environment_integer({"LIMIT": "oops"}, "LIMIT", 2)
-        with self.assertRaisesRegex(replay_corpus.ReplayCorpusError, "LIMIT.*1..3"):
-            replay_corpus.environment_integer(
-                {"LIMIT": "4"}, "LIMIT", 2, minimum=1, maximum=3
             )
 
     def test_build_cleanup_accepts_only_one_named_top_level_child(self) -> None:

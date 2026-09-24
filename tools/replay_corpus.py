@@ -15,25 +15,6 @@ class ReplayCorpusError(RuntimeError):
     """A replay diagnostic has no executable, corpus, or fresh output."""
 
 
-def environment_integer(
-    environment: dict[str, str],
-    name: str,
-    default: int,
-    *,
-    minimum: int = 0,
-    maximum: int | None = None,
-) -> int:
-    raw = environment.get(name, str(default))
-    try:
-        value = int(raw)
-    except ValueError as error:
-        raise ReplayCorpusError(f"{name} must be an integer, got {raw!r}") from error
-    if value < minimum or (maximum is not None and value > maximum):
-        bounds = f"{minimum}..{maximum}" if maximum is not None else f">= {minimum}"
-        raise ReplayCorpusError(f"{name} must be {bounds}, got {value}")
-    return value
-
-
 def reset_scratch_directory(path: Path) -> Path:
     scratch = (REPO_ROOT / "scratch").resolve()
     target = path.resolve()
