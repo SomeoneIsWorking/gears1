@@ -264,6 +264,11 @@ if(GEARS_DYNAREC_CONTRACT_ONLY)
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.py"
                 "${CMAKE_BINARY_DIR}")
+    add_test(NAME gears_source_structure
+        COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py")
+    add_test(NAME gears_source_structure_selftest
+        COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py"
+                --selftest)
     add_test(NAME gears_bootstrap_contract
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tests/test_bootstrap.py")
@@ -273,6 +278,9 @@ if(GEARS_DYNAREC_CONTRACT_ONLY)
     add_test(NAME gears_combat_route
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tests/test_combat_route.py")
+    add_test(NAME gears_combat_world
+        COMMAND ${GEARS_UV_RUN} python
+                "${CMAKE_SOURCE_DIR}/tests/test_combat_world.py")
     add_test(NAME gears_navigation
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tests/test_navigation.py")
