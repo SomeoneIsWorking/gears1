@@ -401,7 +401,10 @@ At the junction (s282-290, 999 Hz samples) the guest render thread is the satura
 About 17% of the render thread is its wait on the GPU (`sub_822306A0`, the wait-condition
 check, 8.7%, and the `sub_8222F460` poll, 8.6%); the rest is its own rendering work with
 no function above 4%. A cheaper command thread shortens that wait; the rest needs the
-render thread's work itself to be native (S012).
+render thread's work itself to be native (S012). A later recording there (s282-290,
+2026-09-24) put 98.3% of the render thread's samples in translated guest code and 1.7%
+in the host runtime: the GPU wait again took 12.7%, then the vertex-shader constant
+setter `0x82222350` (`docs/d3d-seam.md`) 5.5% and the DMA-indexed draw `0x8222DE50` 3.0%.
 
 The combat route's yard firefight (`tools/combat_route.py`) ran at 103-114 presents/s
 in one run and fell to 19-50 in another, while another agent's emulator held 2.3 cores
