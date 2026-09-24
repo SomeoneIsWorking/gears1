@@ -269,21 +269,24 @@ mantle, game time 0.9996 of wall time over 145 s, and the run stopped after 459 
 p50 8.4 ms and 0 translation failures. Two runs before it failed at the jammed door
 (the kicks missed while the walk pressed Marcus against it; the route now steps back
 first) and at a navigation path with a null end (now reported rather than refused).
-From Dom the route fights every listed hostile and follows him until the title saves a
-new checkpoint, which it reads from the run's storage (`tools/gears1_checkpoint.py`).
-Before each burst it reloads an empty magazine (RB) and swaps an empty weapon for the
-first d-pad slot with ammunition; the earlier route switched to the pistol whenever a
-burst fired nothing and stayed there until both weapons were dry. A fresh run on
-2026-09-24 passed: the yard's four drones in 51 s with no death, Dom joined over 13
-points and one mantle, the second firefight's drones (one behind a fence) killed after
-swapping the empty Hammerburst for the pistol, and `WarCheckpoint_3` of
-`SP_Prison_S05_Scripting` saved; game time 0.9996 of wall time over 243 s, 0 translation
-failures. Its frame rate is not evidence: other jobs held the host's load average at
-8-16 and the scripted walk, 120 presents/s in earlier runs, fell to 14-50.
-Gap: nothing after `WarCheckpoint_3` is scripted. A REVIVE tutorial for a downed Dom (A
-to dismiss, X beside him) appeared there in one manual run and the route does not handle
-it; a death after the yard reloads the yard checkpoint, which the route does not replay;
-and no later act or level load has been exercised.
+From Dom the route fights every listed hostile, revives Dom when he is downed (health 0),
+and follows him until the title saves a new checkpoint, which it reads from the run's
+storage (`tools/gears1_checkpoint.py`). A burst that fires nothing is answered first with
+A, since the REVIVE tutorial ignores the stick and trigger until A dismisses it, then
+with RB, and only then is the weapon marked dry and swapped for the first d-pad slot with
+ammunition. A walk counts as blocked when it comes no closer to its goal, which catches
+Marcus sliding along cover; a travel ends early once its goal is in reach or its squad
+mate goes down. A death reloads the checkpoint, and game time is compared with wall
+time only while a level runs, since the reload restarts the world's clock. A fresh run
+on 2026-09-24 passed: the yard's four drones in 57 s with no death, Dom joined over 14
+points and one mantle, and `WarCheckpoint_3` of `SP_Prison_S05_Scripting` saved; game
+time 0.9995 of wall time over 269 s, 120 presents/s for most seconds, 0 translation
+failures in 583 s.
+Gap: past `WarCheckpoint_3` the route has not cleared the door breach. In five
+consecutive attempts of one run, the drones that cut through the door downed Dom early
+and killed Marcus, who fights from wherever he stands, while a drone flanked him; the
+route has no notion of cover positions (Gears' cover links are not yet read). No later
+act or level load has been exercised.
 
 ### S010 — Apple Silicon A64
 
