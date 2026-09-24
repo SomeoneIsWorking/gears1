@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 
 CPP_SUFFIXES = {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"}
@@ -189,6 +191,28 @@ def selected_tidy_units(root: Path, database_sources: set[Path]) -> list[Path]:
     return units
 
 
+def sdk_arguments(system: str, sdk_path: Callable[[], str]) -> list[str]:
+    """clang-tidy arguments naming the SDK a compiler driver finds implicitly.
+
+    On macOS, AppleClang finds the SDK itself and CMake 4 no longer writes
+    -isysroot into the compile database, so another clang driver such as
+    Homebrew's clang-tidy would find no standard headers without it.
+    """
+
+    if system != "Darwin":
+        return []
+    path = sdk_path()
+    if not path:
+        raise RuntimeError("xcrun named no macOS SDK")
+    return [f"--extra-arg=-isysroot{path}"]
+
+
+def xcrun_sdk_path() -> str:
+    return subprocess.run(
+        ["xcrun", "--show-sdk-path"], check=True, text=True, capture_output=True
+    ).stdout.strip()
+
+
 def run(command: list[str], root: Path) -> None:
     subprocess.run(command, cwd=root, check=True)
 
@@ -202,6 +226,14 @@ def selftest() -> int:
         pass
     else:
         raise AssertionError("missing tools must be refused")
+    assert sdk_arguments("Linux", lambda: "/sdk") == []
+    assert sdk_arguments("Darwin", lambda: "/sdk") == ["--extra-arg=-isysroot/sdk"]
+    try:
+        sdk_arguments("Darwin", lambda: "")
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("a macOS host without an SDK must be refused")
 
     root = Path(__file__).resolve().parents[1]
     discovered = first_party_cpp(root)
@@ -215,7 +247,7 @@ def selftest() -> int:
     print(
         f"C++ quality checker selftest passed: discovered {len(discovered)} current "
         f"first-party files and validated {len(MAINTAINED_FILES)} maintained files; "
-        "missing-tool and compiled-unit refusals exercised"
+        "missing-tool, missing-SDK and compiled-unit refusals exercised"
     )
     return 0
 
@@ -251,6 +283,7 @@ def main(argv: list[str]) -> int:
             )
         database_sources = compile_database_sources(build_dir)
         tidy_units = selected_tidy_units(root, database_sources)
+        sdk = sdk_arguments(platform.system(), xcrun_sdk_path)
     except RuntimeError as error:
         print(f"REFUSING: {error}", file=sys.stderr)
         return 1
@@ -265,6 +298,7 @@ def main(argv: list[str]) -> int:
             "-p",
             str(build_dir),
             f"--extra-arg=-resource-dir={resource_dir}",
+            *sdk,
             "--quiet",
             *map(str, tidy_units),
         ],
