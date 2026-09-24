@@ -1,4 +1,4 @@
-"""Closed-loop steering of the Gears 1 combat route against a simulated player."""
+"""Closed-loop play of the Gears 1 combat route against a simulated player."""
 
 from __future__ import annotations
 
@@ -10,8 +10,12 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+from tests.test_combat_world import COVER_GRAPH
 from tools import combat_route as route_module
-from tools.combat_route import Route, RouteFailure, stick_toward
+from tools import combat_world as world
+from tools import route_driver as driver
+from tools.gears1_checkpoint import Checkpoint
+from tools.route_driver import Route, RouteFailure
 
 
 class SimulatedPlayer:
@@ -96,7 +100,7 @@ class SimulatedPlayer:
     def camera(self) -> tuple[float, float]:
         """The view's origin: CAMERA_RIGHT units right of the pawn, a quarter turn clockwise."""
 
-        yaw = self.yaw * 2.0 * math.pi / route_module.YAW_UNITS_PER_TURN
+        yaw = self.yaw * 2.0 * math.pi / world.YAW_UNITS_PER_TURN
         return (self.position[0] - self.CAMERA_RIGHT * math.sin(yaw),
                 self.position[1] + self.CAMERA_RIGHT * math.cos(yaw))
 
@@ -150,8 +154,8 @@ class SimulatedPlayer:
 
         if self.cover_yaw is None:
             return False
-        units = route_module.YAW_UNITS_PER_TURN / (2.0 * math.pi)
-        wrap = route_module.YAW_UNITS_PER_TURN
+        units = world.YAW_UNITS_PER_TURN / (2.0 * math.pi)
+        wrap = world.YAW_UNITS_PER_TURN
         for hostile in self.hostiles:
             if hostile["health"] <= 0:
                 continue
@@ -176,10 +180,10 @@ class SimulatedPlayer:
         """The simulation's own ray from the camera; independent of the route's aim_error."""
 
         x, y = self.camera()
-        units = route_module.YAW_UNITS_PER_TURN / (2.0 * math.pi)
+        units = world.YAW_UNITS_PER_TURN / (2.0 * math.pi)
         yaw = math.atan2(target[1] - y, target[0] - x) * units
-        pitch = math.atan2(target[2] + route_module.AIM_HEIGHT, math.hypot(target[0] - x, target[1] - y)) * units
-        wrap = route_module.YAW_UNITS_PER_TURN
+        pitch = math.atan2(target[2] + world.AIM_HEIGHT, math.hypot(target[0] - x, target[1] - y)) * units
+        wrap = world.YAW_UNITS_PER_TURN
         return (round((yaw - self.yaw + wrap / 2) % wrap - wrap / 2),
                 round((pitch - self.pitch + wrap / 2) % wrap - wrap / 2))
 
@@ -218,11 +222,11 @@ class SimulatedPlayer:
             self.health = min(301, self.health + round(150 * seconds))
         rx, ry = self.aim_stick
         if abs(rx) > self.DEAD_ZONE:
-            self.yaw += round(rx / route_module.STICK_LIMIT * self.TURN_RATE * seconds)
+            self.yaw += round(rx / world.STICK_LIMIT * self.TURN_RATE * seconds)
         if abs(ry) > self.DEAD_ZONE:
-            self.pitch += round(ry / route_module.STICK_LIMIT * self.TURN_RATE * seconds)
-        lx, ly = (value / route_module.STICK_LIMIT for value in self.stick)
-        yaw = self.yaw * 2.0 * math.pi / route_module.YAW_UNITS_PER_TURN
+            self.pitch += round(ry / world.STICK_LIMIT * self.TURN_RATE * seconds)
+        lx, ly = (value / world.STICK_LIMIT for value in self.stick)
+        yaw = self.yaw * 2.0 * math.pi / world.YAW_UNITS_PER_TURN
         # Forward is along yaw; right is a quarter turn toward +y in the left-handed world.
         dx = ly * math.cos(yaw) - lx * math.sin(yaw)
         dy = ly * math.sin(yaw) + lx * math.cos(yaw)
@@ -239,19 +243,6 @@ class SimulatedPlayer:
 
 def route_over(player: SimulatedPlayer) -> Route:
     return Route(player, clock=player.clock, sleep=player.sleep)
-
-
-class StickTest(unittest.TestCase):
-    def test_goal_ahead_is_full_forward(self) -> None:
-        self.assertEqual(stick_toward((0.0, 0.0), 0, (100.0, 0.0)), (0, 32767))
-
-    def test_goal_a_quarter_turn_clockwise_is_full_right(self) -> None:
-        # Facing +x, +y is to the right in the left-handed world.
-        self.assertEqual(stick_toward((0.0, 0.0), 0, (0.0, 100.0)), (32767, 0))
-
-    def test_yaw_is_subtracted(self) -> None:
-        # Facing +y (yaw a quarter turn), a goal at +y is straight ahead.
-        self.assertEqual(stick_toward((0.0, 0.0), 16384, (0.0, 100.0)), (0, 32767))
 
 
 class WalkTest(unittest.TestCase):
@@ -429,8 +420,8 @@ class JoinSquadTest(unittest.TestCase):
 
 
 class AdvanceTest(unittest.TestCase):
-    CHECKPOINT = route_module.Checkpoint("sp_prison_p", "SP_Prison_S04_Scripting", "WarCheckpoint_1")
-    NEXT = route_module.Checkpoint("sp_prison_p", "SP_Prison_S05_Scripting", "WarCheckpoint_3")
+    CHECKPOINT = Checkpoint("sp_prison_p", "SP_Prison_S04_Scripting", "WarCheckpoint_1")
+    NEXT = Checkpoint("sp_prison_p", "SP_Prison_S05_Scripting", "WarCheckpoint_3")
 
     def _player(self) -> SimulatedPlayer:
         player = SimulatedPlayer((0.0, 0.0), 0)
@@ -442,7 +433,7 @@ class AdvanceTest(unittest.TestCase):
         player = self._player()
         player.add_hostile(7, (1000.0, 300.0, 0.0))
 
-        def saved() -> route_module.Checkpoint:
+        def saved() -> Checkpoint:
             # The title saves once the fight is over and the player has moved on.
             done = all(hostile["health"] <= 0 for hostile in player.hostiles)
             return self.NEXT if done and player.now > 60.0 else self.CHECKPOINT
@@ -462,7 +453,7 @@ class AdvanceTest(unittest.TestCase):
         player = self._player()
         player.mates[0]["health"] = 0
 
-        def saved() -> route_module.Checkpoint:
+        def saved() -> Checkpoint:
             return self.NEXT if player.mates[0]["health"] > 0 else self.CHECKPOINT
 
         route = route_over(player)
@@ -487,7 +478,7 @@ class AdvanceTest(unittest.TestCase):
         player.mates[0].update(health=0, location=(50.0, 0.0, 0.0))
         player.prompt = True
 
-        def saved() -> route_module.Checkpoint:
+        def saved() -> Checkpoint:
             return self.NEXT if player.mates[0]["health"] > 0 else self.CHECKPOINT
 
         route = route_over(player)
@@ -532,7 +523,7 @@ class AdvanceTest(unittest.TestCase):
         player.alive = False
         player.checkpoint = (0.0, 0.0)
 
-        def saved() -> route_module.Checkpoint:
+        def saved() -> Checkpoint:
             return self.NEXT if player.alive and player.now > 30.0 else self.CHECKPOINT
 
         route = route_over(player)
@@ -564,7 +555,7 @@ class UnblockTest(unittest.TestCase):
         with self.assertRaisesRegex(RouteFailure, "reach: blocked"):
             route_over(player).walk("reach", (500.0, 0.0), radius=40.0, timeout=60.0,
                                     unblock=lambda: calls.append(1))
-        self.assertEqual(len(calls), route_module.MAX_UNBLOCKS)
+        self.assertEqual(len(calls), driver.MAX_UNBLOCKS)
 
     def test_a_trigger_unblock_frees_a_player_held_by_a_choice(self) -> None:
         player = SimulatedPlayer((0.0, 0.0), 0, wall_x=100.0)
@@ -669,23 +660,6 @@ class FireTest(unittest.TestCase):
             route_over(player).fire("fire", seconds=2.0, attempts=3)
 
 
-class AimTest(unittest.TestCase):
-    def test_small_errors_still_turn_past_the_dead_zone(self) -> None:
-        self.assertGreaterEqual(abs(route_module.aim_stick(300)), route_module.AIM_STICK_FLOOR)
-        self.assertLess(route_module.aim_stick(-300), 0)
-        self.assertEqual(route_module.aim_stick(10), 0)
-
-    def test_the_error_wraps_across_a_turn(self) -> None:
-        player = route_module.Player((0.0, 0.0), 65000, 0, control_pitch=65500)
-        yaw_error, pitch_error = route_module.aim_error(player, (100.0, 0.0, -30.0))
-        self.assertEqual((yaw_error, pitch_error), (536, 36))
-
-    def test_aim_is_taken_from_the_camera(self) -> None:
-        player = route_module.Player((0.0, 0.0), 0, 0, camera=(0.0, 40.0, 0.0))
-        yaw_error, _ = route_module.aim_error(player, (400.0, 0.0, -30.0))
-        self.assertLess(yaw_error, -500)
-
-
 class FirefightTest(unittest.TestCase):
     def test_kills_every_hostile(self) -> None:
         player = SimulatedPlayer((0.0, 0.0), 0)
@@ -780,7 +754,7 @@ class FirefightTest(unittest.TestCase):
         self.assertTrue(player.alive)
         bursts = route.steps[-1]["bursts"]
         self.assertTrue(bursts)
-        self.assertTrue(all(burst["own_health"] >= route_module.RECOVER_HEALTH for burst in bursts))
+        self.assertTrue(all(burst["own_health"] >= driver.RECOVER_HEALTH for burst in bursts))
 
     def test_a_death_reloads_the_checkpoint_and_the_fight_resumes(self) -> None:
         player = SimulatedPlayer(route_module.YARD_COVER, 16384)
@@ -820,70 +794,7 @@ class FirefightTest(unittest.TestCase):
         self.assertEqual(route.steps[-1]["hostiles"], 1)
 
 
-
-# A corridor of path nodes with cover slots at x 300, facing +x, and at x -200,
-# facing -x.
-COVER_GRAPH = [
-    {"id": 1, "location": [0.0, 0.0, 0.0], "paths": [[2, 300, "walk"], [3, 200, "walk"]]},
-    {"id": 2, "kind": "cover", "yaw": 0, "location": [300.0, 0.0, 0.0],
-     "paths": [[1, 300, "walk"]]},
-    {"id": 3, "kind": "cover", "yaw": 32768, "location": [-200.0, 0.0, 0.0],
-     "paths": [[1, 200, "walk"]]},
-]
-
-
 class CoverTest(unittest.TestCase):
-    def _graph(self, points: list[dict[str, object]]) -> route_module.NavigationGraph:
-        return route_module.NavigationGraph.from_json(
-            {"points": [{"kind": "path", "yaw": 0, **point} for point in points]})
-
-    def _player(self, position: tuple[float, float], height: float = 0.0) -> route_module.Player:
-        return route_module.Player(position, 0, None, height=height)
-
-    def _hostile(self, x: float, y: float) -> route_module.Pawn:
-        return route_module.Pawn(7, (x, y, 0.0), 250, 1, False)
-
-    def test_a_slot_facing_the_hostiles_beats_a_nearer_one(self) -> None:
-        slot = route_module.choose_cover(self._graph(COVER_GRAPH), self._player((-100.0, 0.0)),
-                                         [self._hostile(1500.0, 0.0)])
-        self.assertEqual(slot.id, 2)
-
-    def test_skips_a_slot_no_walk_reaches(self) -> None:
-        unreachable = {"id": 5, "kind": "cover", "yaw": 0, "location": [150.0, 0.0, 0.0],
-                       "paths": []}
-        slot = route_module.choose_cover(self._graph([*COVER_GRAPH, unreachable]),
-                                         self._player((-50.0, 0.0)),
-                                         [self._hostile(1500.0, 0.0)])
-        self.assertEqual(slot.id, 2)
-
-    def test_takes_the_nearest_of_the_slots_facing_them(self) -> None:
-        graph = self._graph([{**point, "yaw": 0} for point in COVER_GRAPH])
-        slot = route_module.choose_cover(graph, self._player((-100.0, 0.0)),
-                                         [self._hostile(1500.0, 0.0)])
-        self.assertEqual(slot.id, 3)
-
-    def test_the_slot_facing_most_hostiles_wins(self) -> None:
-        slot = route_module.choose_cover(self._graph(COVER_GRAPH), self._player((200.0, 0.0)),
-                                         [self._hostile(-1500.0, 0.0), self._hostile(-1400.0, 300.0),
-                                          self._hostile(1500.0, 0.0)])
-        self.assertEqual(slot.id, 3)
-
-    def test_skips_a_slot_a_hostile_stands_close_to(self) -> None:
-        graph = self._graph([{**point, "yaw": 0} for point in COVER_GRAPH])
-        slot = route_module.choose_cover(graph, self._player((100.0, 0.0)),
-                                         [self._hostile(650.0, 0.0)])
-        self.assertEqual(slot.id, 3)
-
-    def test_skips_slots_facing_away_on_another_floor_and_out_of_reach(self) -> None:
-        graph = self._graph([
-            {"id": 1, "kind": "cover", "yaw": 0, "location": [100.0, 0.0, 400.0], "paths": []},
-            {"id": 2, "kind": "cover", "yaw": 0, "location": [900.0, 0.0, 0.0], "paths": []},
-            {"id": 4, "kind": "cover", "yaw": 32768, "location": [0.0, 100.0, 0.0], "paths": []},
-            {"id": 3, "location": [50.0, 0.0, 0.0], "paths": []},
-        ])
-        self.assertIsNone(route_module.choose_cover(graph, self._player((0.0, 0.0)),
-                                                    [self._hostile(3000.0, 0.0)]))
-
     def _open_fight(self) -> SimulatedPlayer:
         player = SimulatedPlayer((0.0, 0.0), 0)
         player.graph = [dict(point) for point in COVER_GRAPH]
@@ -898,7 +809,7 @@ class CoverTest(unittest.TestCase):
         route = route_over(player)
         self.assertEqual(route.clear_firefight("fight", timeout=120.0, arrival=5.0, cover=True), 2)
         self.assertTrue(player.alive)
-        self.assertLess(math.dist(player.position, (300.0, 0.0)), route_module.COVER_RADIUS)
+        self.assertLess(math.dist(player.position, (300.0, 0.0)), driver.COVER_RADIUS)
         taken = [step for step in route.steps if step["step"] == "fight: take cover"]
         self.assertEqual(taken[-1]["cover"], 2)
 
@@ -968,8 +879,8 @@ class CoverTest(unittest.TestCase):
         player._apply = timed
         route_over(player).clear_firefight("fight", timeout=120.0, arrival=5.0)
         # The close drone draws sustained fire; the far one half-second bursts.
-        self.assertGreaterEqual(held[0], route_module.CLOSE_BURST_SECONDS - 0.05)
-        self.assertAlmostEqual(held[-1], route_module.BURST_SECONDS, delta=0.05)
+        self.assertGreaterEqual(held[0], driver.CLOSE_BURST_SECONDS - 0.05)
+        self.assertAlmostEqual(held[-1], driver.BURST_SECONDS, delta=0.05)
 
     def test_a_hurt_player_still_shoots_a_close_hostile(self) -> None:
         player = SimulatedPlayer((0.0, 0.0), 0)
@@ -977,7 +888,7 @@ class CoverTest(unittest.TestCase):
         player.add_hostile(7, (300.0, 0.0, 0.0))
         route = route_over(player)
         route.clear_firefight("fight", timeout=60.0, arrival=5.0)
-        self.assertLess(route.steps[-1]["bursts"][0]["own_health"], route_module.RECOVER_HEALTH)
+        self.assertLess(route.steps[-1]["bursts"][0]["own_health"], driver.RECOVER_HEALTH)
 
     def test_sustained_fire_follows_a_moving_target(self) -> None:
         player = SimulatedPlayer((0.0, 0.0), 0)
