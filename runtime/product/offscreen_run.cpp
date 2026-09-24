@@ -148,7 +148,7 @@ bool ReportAudioMixCheck(const titles::gears1::AudioMixDifferential &check)
 } // namespace
 
 bool RunOffscreen(x360port::SystemSession &session, const ProductOptions &options,
-                  const titles::gears1::AudioMixDifferential *audio_mix_check)
+                  const RunStop &stop, const titles::gears1::AudioMixDifferential *audio_mix_check)
 {
     if (!options.capture_directory.empty())
     {
@@ -164,8 +164,10 @@ bool RunOffscreen(x360port::SystemSession &session, const ProductOptions &option
     auto start = std::chrono::steady_clock::now();
     std::uint64_t previous_presents = 0;
     x360port::FrameIntervalHistogram window_start = session.FrameIntervals();
-    for (std::uint32_t second = 1; second <= options.run_seconds; ++second)
+    std::uint32_t seconds_run = 0;
+    for (std::uint32_t second = 1; second <= options.run_seconds && !stop.Requested(); ++second)
     {
+        seconds_run = second;
         std::this_thread::sleep_until(start + std::chrono::seconds(second));
         std::uint64_t presents = session.PresentedFrameCount();
         x360port::SystemExecutionCounts counts = session.ExecutionCounts();
@@ -188,8 +190,8 @@ bool RunOffscreen(x360port::SystemSession &session, const ProductOptions &option
             CaptureSecond(session, options, second);
         }
     }
-    bool healthy = ReportRun(options.run_seconds, session.PresentedFrameCount(),
-                             session.ExecutionCounts(), session.FrameIntervals());
+    bool healthy = ReportRun(seconds_run, session.PresentedFrameCount(), session.ExecutionCounts(),
+                             session.FrameIntervals());
     if (audio_mix_check != nullptr && !ReportAudioMixCheck(*audio_mix_check))
     {
         healthy = false;

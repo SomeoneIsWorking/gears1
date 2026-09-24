@@ -3,12 +3,14 @@
 #include <x360port/system_session.hpp>
 
 #include "product_options.h"
+#include "run_stop.h"
 #include "titles/gears1/audio_mix_differential.h"
 
 namespace gears::product
 {
 
-// Drives a launched offscreen session for the requested duration. Each second
+// Drives a launched offscreen session for the requested duration, or until
+// `stop` is requested, which ends it at the next whole second. Each second
 // it logs presents, translated guest functions, and native-override calls, and
 // captures guest output at the requested interval. The run succeeds only when
 // the title presented, the dynarec translated guest code, and no function
@@ -17,6 +19,7 @@ namespace gears::product
 // unreached. With `audio_mix_check`, the run also fails unless the native mix
 // was compared with the original on at least one call and never disagreed.
 [[nodiscard]] bool RunOffscreen(x360port::SystemSession &session, const ProductOptions &options,
+                                const RunStop &stop,
                                 const titles::gears1::AudioMixDifferential *audio_mix_check);
 
 } // namespace gears::product

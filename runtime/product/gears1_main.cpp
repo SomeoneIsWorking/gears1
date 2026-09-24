@@ -65,10 +65,11 @@ constexpr std::string_view kSaveNamespace = "gears1";
         lucent::error("product", "Gears of War did not launch: {}", failure.detail);
         x360port::SystemSession::EndProcess(EXIT_FAILURE);
     }
+    gears::product::RunStop stop;
     std::optional<gears::product::ControlChannel> control;
     if (options.control_port != 0)
     {
-        control.emplace(*created.session, options.control_port);
+        control.emplace(*created.session, stop, options.control_port);
         if (!control->Start())
         {
             lucent::error("product", "the control channel cannot serve on loopback port {}",
@@ -76,7 +77,7 @@ constexpr std::string_view kSaveNamespace = "gears1";
             x360port::SystemSession::EndProcess(EXIT_FAILURE);
         }
     }
-    bool evidence = gears::product::RunOffscreen(*created.session, options, check);
+    bool evidence = gears::product::RunOffscreen(*created.session, options, stop, check);
     x360port::SystemSession::EndProcess(evidence ? EXIT_SUCCESS : EXIT_FAILURE);
 }
 

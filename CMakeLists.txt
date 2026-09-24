@@ -212,14 +212,24 @@ add_executable(test_memory_request tests/test_memory_request.cpp)
 target_link_libraries(test_memory_request PRIVATE gears1_memory_request)
 x360port_enable_warnings(test_memory_request)
 gears_add_binary_test(gears1_memory_request test_memory_request)
+add_library(gears1_guest_chain STATIC runtime/titles/gears1/guest_chain.cpp)
+target_include_directories(gears1_guest_chain PUBLIC runtime/titles/gears1)
+target_link_libraries(gears1_guest_chain PUBLIC x360port::x360port)
+x360port_enable_warnings(gears1_guest_chain)
 add_library(gears1_player_probe STATIC runtime/titles/gears1/player_probe.cpp)
-target_include_directories(gears1_player_probe PUBLIC runtime/titles/gears1)
-target_link_libraries(gears1_player_probe PUBLIC x360port::x360port)
+target_link_libraries(gears1_player_probe PUBLIC gears1_guest_chain)
 x360port_enable_warnings(gears1_player_probe)
 add_executable(test_player_probe tests/test_player_probe.cpp)
 target_link_libraries(test_player_probe PRIVATE gears1_player_probe)
 x360port_enable_warnings(test_player_probe)
 gears_add_binary_test(gears1_player_probe test_player_probe)
+add_library(gears1_navigation_probe STATIC runtime/titles/gears1/navigation_probe.cpp)
+target_link_libraries(gears1_navigation_probe PUBLIC gears1_guest_chain)
+x360port_enable_warnings(gears1_navigation_probe)
+add_executable(test_navigation_probe tests/test_navigation_probe.cpp)
+target_link_libraries(test_navigation_probe PRIVATE gears1_navigation_probe)
+x360port_enable_warnings(test_navigation_probe)
+gears_add_binary_test(gears1_navigation_probe test_navigation_probe)
 add_executable(test_audio_mix_differential tests/test_audio_mix_differential.cpp)
 target_link_libraries(test_audio_mix_differential PRIVATE gears1_audio_mix)
 x360port_enable_warnings(test_audio_mix_differential)
@@ -235,7 +245,7 @@ if(TARGET x360port::system)
         runtime/product/control_channel.cpp
         runtime/product/portable_pixmap.cpp)
     target_link_libraries(gears1 PRIVATE gears1_product_options gears1_pad_form gears1_memory_request
-                                         gears1_player_probe
+                                         gears1_player_probe gears1_navigation_probe
                                          gears1_audio_mix
                                          gears_input
                                          x360port::system lucent::lucent)
@@ -263,6 +273,9 @@ if(GEARS_DYNAREC_CONTRACT_ONLY)
     add_test(NAME gears_combat_route
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tests/test_combat_route.py")
+    add_test(NAME gears_navigation
+        COMMAND ${GEARS_UV_RUN} python
+                "${CMAKE_SOURCE_DIR}/tests/test_navigation.py")
     add_test(NAME gears_frame_parity
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tests/test_frame_parity.py")

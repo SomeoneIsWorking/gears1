@@ -5,6 +5,9 @@
 #include <lucent/http.h>
 #include <x360port/system_session.hpp>
 
+#include "guest_chain.h"
+#include "run_stop.h"
+
 namespace gears::product
 {
 
@@ -17,13 +20,17 @@ namespace gears::product
 //   DELETE /api/input
 //   GET    /api/frame.ppm  the latest guest output
 //   GET    /api/memory     address=0x..&length=N, guest memory as raw bytes
-//   GET    /api/player     the local player's view yaws and pawn; 409 before gameplay
+//   GET    /api/player     the local player's view, pawn, and the world's pawns; 409
+//                          before gameplay
+//   GET    /api/navigation the level's navigation points, each path as [end, distance,
+//                          kind]; 409 before gameplay
+//   POST   /api/stop       end the run at its next second, with its end-of-run checks
 //
 // The pad is refused (409) while a scripted walk owns it.
 class ControlChannel final
 {
   public:
-    ControlChannel(const x360port::SystemSession &session, std::uint16_t port);
+    ControlChannel(const x360port::SystemSession &session, RunStop &stop, std::uint16_t port);
     ControlChannel(const ControlChannel &) = delete;
     ControlChannel &operator=(const ControlChannel &) = delete;
     ~ControlChannel();
@@ -38,8 +45,11 @@ class ControlChannel final
     [[nodiscard]] lucent::http::Response Frame() const;
     [[nodiscard]] lucent::http::Response Memory(const lucent::http::Request &request) const;
     [[nodiscard]] lucent::http::Response Player() const;
+    [[nodiscard]] lucent::http::Response Navigation() const;
+    [[nodiscard]] titles::gears1::GuestMemoryReader GuestReader() const;
 
     const x360port::SystemSession &session_;
+    RunStop &stop_;
     lucent::http::Server server_;
 };
 
