@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
+import json
 import os
 import signal
 import subprocess
@@ -324,6 +327,24 @@ CTEST_COMMANDS = (
 )
 
 
+# A ReportCrash .ips report: a header line, then the body, each one JSON document.
+CRASH_REPORT = (
+    '{"app_name":"test_trap","name":"test_trap","bug_type":"309"}\n'
+    + json.dumps({
+        "exception": {"type": "EXC_BREAKPOINT", "signal": "SIGTRAP"},
+        "termination": {"indicator": "Trace/BPT trap: 5"},
+        "usedImages": [{"name": "test_trap"}, {"name": "libsystem_c.dylib"}],
+        "threads": [
+            {"name": "main", "frames": [{"imageIndex": 1, "imageOffset": 4096}] * 8},
+            {"triggered": True, "frames": [
+                {"imageIndex": 0, "imageOffset": 256, "symbol": "xe::Emit", "symbolLocation": 12},
+                {"imageIndex": 0, "imageOffset": 512},
+            ]},
+        ],
+    })
+)
+
+
 class CrashTriageTests(unittest.TestCase):
     def _report(self, text: str) -> Path:
         directory = tempfile.TemporaryDirectory()
@@ -332,19 +353,38 @@ class CrashTriageTests(unittest.TestCase):
         report.write_text(text)
         return report
 
-    def test_only_a_signal_death_is_rerun_under_the_debugger(self) -> None:
+    def test_only_a_signal_death_is_rerun_under_gdb(self) -> None:
         runs: list[tuple[list[str], str | None]] = []
-        count = crash_triage.report_backtraces(
-            self._report(CTEST_JUNIT), CTEST_COMMANDS, "Linux",
-            lambda name: f"/usr/bin/{name}", lambda command, cwd: runs.append((command, cwd)))
+        backtrace = crash_triage.gdb_backtrace(lambda name: f"/usr/bin/{name}",
+                                               lambda command, cwd: runs.append((command, cwd)))
+        count = crash_triage.report_backtraces(self._report(CTEST_JUNIT), CTEST_COMMANDS,
+                                               backtrace)
         self.assertEqual(count, 1)
         self.assertEqual(runs, [(["/usr/bin/gdb", "-batch", "-ex", "run", "-ex",
                                   "thread apply all bt", "--args", "/b/trap", "--x"], "/b")])
 
-    def test_macos_uses_lldb_and_stops_at_the_crash(self) -> None:
-        command = crash_triage.debugger_command("Darwin", lambda name: f"/x/{name}", ["/b/t"])
-        self.assertEqual(command, ["/x/lldb", "--batch", "-o", "run", "-k",
-                                   "thread backtrace all", "-k", "quit", "--", "/b/t"])
+    def test_a_crash_report_shows_the_crashed_thread_whole(self) -> None:
+        text = crash_triage.format_crash_report(CRASH_REPORT)
+        self.assertIn("test_trap: EXC_BREAKPOINT (SIGTRAP)", text)
+        self.assertIn("termination: Trace/BPT trap: 5", text)
+        self.assertIn("thread 1 crashed (2 frames)", text)
+        self.assertIn("#0 test_trap: xe::Emit + 12", text)
+        self.assertIn("#1 test_trap: 0x200", text)
+        self.assertIn("thread 0: main (8 frames, first 6)", text)
+
+    def test_macos_shows_the_report_written_since_the_run_began(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        reports = Path(directory.name)
+        (reports / "trap-2026-09-24-old.ips").write_text("stale")
+        os.utime(reports / "trap-2026-09-24-old.ips", (100.0, 100.0))
+        (reports / "trap-2026-09-24-new.ips").write_text(CRASH_REPORT)
+        (reports / "other-2026-09-24-new.ips").write_text("another test's")
+        show = crash_triage.crash_report_backtrace(reports, since=1000.0)
+        output = io.StringIO()
+        with contextlib.redirect_stderr(output):
+            show(crash_triage.TestCommand("traps", ("/b/trap",), None))
+        self.assertIn("#0 test_trap: xe::Emit + 12", output.getvalue())
 
     def test_refusals_name_what_is_missing(self) -> None:
         with self.assertRaisesRegex(crash_triage.TriageError, "no JUnit report"):
@@ -352,13 +392,31 @@ class CrashTriageTests(unittest.TestCase):
         with self.assertRaisesRegex(crash_triage.TriageError, "lists no test cases"):
             crash_triage.crashed_tests(self._report("<testsuite/>"))
         with self.assertRaisesRegex(crash_triage.TriageError, "gdb is not on PATH"):
-            crash_triage.debugger_command("Linux", lambda name: None, ["t"])
-        with self.assertRaisesRegex(crash_triage.TriageError, "no debugger is known for Windows"):
-            crash_triage.debugger_command("Windows", lambda name: "x", ["t"])
+            crash_triage.gdb_backtrace(lambda name: None, lambda command, cwd: None)
+        with self.assertRaisesRegex(crash_triage.TriageError,
+                                    "no source of crash stacks is known for Windows"):
+            crash_triage.host_backtrace("Windows", 0.0)
         with self.assertRaisesRegex(crash_triage.TriageError, "no command for traps"):
-            crash_triage.report_backtraces(self._report(CTEST_JUNIT), '{"tests": []}', "Linux",
-                                           lambda name: name, lambda command, cwd: None)
+            crash_triage.report_backtraces(self._report(CTEST_JUNIT), '{"tests": []}',
+                                           lambda test: None)
+        with self.assertRaisesRegex(crash_triage.TriageError, "lists no threads"):
+            crash_triage.format_crash_report('{"name":"t"}\n{"threads":[]}')
+        with self.assertRaisesRegex(crash_triage.TriageError, "no body"):
+            crash_triage.format_crash_report('{"name":"t"}')
+        ticks = iter(range(0, 1000, 10))
+        show = crash_triage.crash_report_backtrace(Path("/nonexistent"), 0.0,
+                                                   clock=lambda: float(next(ticks)),
+                                                   sleep=lambda seconds: None)
+        with self.assertRaisesRegex(crash_triage.TriageError,
+                                    "no crash report of trap appeared in /nonexistent within 60 s"):
+            show(crash_triage.TestCommand("traps", ("/b/trap",), None))
 
+    def test_a_hung_debugger_is_refused(self) -> None:
+        with patch.object(crash_triage.subprocess, "run",
+                               side_effect=subprocess.TimeoutExpired("gdb", 300)):
+            with self.assertRaisesRegex(crash_triage.TriageError,
+                                        "gdb was still running after 300 s"):
+                crash_triage.run_under_debugger(["gdb"], None)
 
 if __name__ == "__main__":
     unittest.main()
