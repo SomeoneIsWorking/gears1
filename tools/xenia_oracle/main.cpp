@@ -30,6 +30,7 @@
 // line saying so, rather than one ambiguous file.
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <string>
 #include <thread>
@@ -46,6 +47,9 @@
 #include "xenia/apu/sdl/sdl_audio_system.h"
 #include "xenia/gpu/vulkan/vulkan_graphics_system.h"
 #include "xenia/hid/input_driver.h"
+#include "xenia/kernel/kernel_state.h"
+#include "xenia/kernel/xam/profile_manager.h"
+#include "xenia/kernel/xam/xam_state.h"
 #include "xenia/ui/presenter.h"
 
 #include "scripted_input.h"
@@ -65,10 +69,31 @@
 // that EXISTS. Naming one that does not makes cxxopts throw, and the failure
 // then went to a zenity dialog rather than to stderr (fixed in the fork, but
 // the cvar still has to be declared).
+// Xenia cannot stop a running title: destroying the Emulator waits on guest
+// threads that never return, so every run ended in its caller's timeout.
+// Measured: 70 s runs sat in teardown until `timeout 200` killed them. Once the
+// title has launched the process ends here instead, as x360port's session does.
+[[noreturn]] void EndRunningTitle(int status) {
+  xe::FlushLog();
+  std::quick_exit(status);
+}
+
 DEFINE_transient_path(target, "", "The .iso or .xex to run.", "Oracle");
 
 DEFINE_path(oracle_out, "scratch/oracle/frames",
             "Directory to write captured frames into.", "Oracle");
+// The oracle's own storage root, so a run never reads or writes a player's
+// Xenia profiles, saves, or caches.
+DEFINE_path(oracle_storage, "scratch/oracle/storage",
+            "Storage root for the oracle's profiles, content, and caches.",
+            "Oracle");
+// The product signs one local profile into slot 0 before launch. Without the
+// same here the title takes a different front-end route ("not signed in"),
+// and no frame after the main menu is comparable.
+DEFINE_string(oracle_gamertag, "",
+              "Sign a local profile with this gamertag into slot 0 before "
+              "launch; empty signs no one in.",
+              "Oracle");
 DEFINE_int32(oracle_seconds, 120, "How long to let the title run, in seconds.",
              "Oracle");
 DEFINE_int32(oracle_interval, 10,
@@ -205,7 +230,9 @@ int oracle_main(const std::vector<std::string>& args) {
            "waits for a button. Expect black frames.");
   }
 
-  auto emulator = std::make_unique<Emulator>("", "", "", "");
+  const std::filesystem::path storage = cvars::oracle_storage;
+  auto emulator = std::make_unique<Emulator>("", storage, storage / "content",
+                                             storage / "cache_host");
   // Null window, null ImGui drawer -- and offscreen presentation ON, which is
   // the whole reason a windowless run can produce an image at all.
   X_STATUS result = emulator->Setup(
@@ -247,6 +274,36 @@ int oracle_main(const std::vector<std::string>& args) {
     return 4;
   }
 
+  if (!cvars::oracle_gamertag.empty()) {
+    kernel::xam::ProfileManager& profiles =
+        *emulator->kernel_state()->xam_state()->profile_manager();
+    // Accounts are ordered by XUID, so the same profile is chosen every run.
+    if (profiles.GetAccounts()->empty() &&
+        !profiles.CreateProfile(cvars::oracle_gamertag, /*autologin=*/false)) {
+      XELOGE("oracle: could not create the profile \"{}\". Nothing was run.",
+             cvars::oracle_gamertag);
+      return 4;
+    }
+    profiles.Login(profiles.GetAccounts()->begin()->first, 0,
+                   /*notify=*/false);
+    if (profiles.GetProfile(uint8_t{0}) == nullptr) {
+      XELOGE("oracle: the profile could not be signed in. Nothing was run.");
+      return 4;
+    }
+  }
+
+  // Refused before launch: once the title runs, the process can only end.
+  if (cvars::oracle_by_frame && !scripted_driver &&
+      !cvars::oracle_allow_no_input) {
+    XELOGE("oracle: --oracle_by_frame needs a scripted input schedule, and "
+           "--oracle_input is empty. Nothing would drive the title, so this "
+           "would produce a filmstrip of the title screen indexed by frame. "
+           "Pass --oracle_allow_no_input=true if the title boots straight "
+           "into a level (its startup map names one) and needs no driving. "
+           "Refusing.");
+    return 5;
+  }
+
   result = emulator->LaunchPath(target);
   if (XFAILED(result)) {
     XELOGE("oracle: failed to launch {}: {:08X}", xe::path_to_utf8(target),
@@ -262,15 +319,6 @@ int oracle_main(const std::vector<std::string>& args) {
   // FRAME-DRIVEN: hand the input driver the guest's own frame counter, so the
   // schedule advances with the game rather than with the wall clock.
   if (cvars::oracle_by_frame) {
-    if (!scripted_driver && !cvars::oracle_allow_no_input) {
-      XELOGE("oracle: --oracle_by_frame needs a scripted input schedule, and "
-             "--oracle_input is empty. Nothing would drive the title, so this "
-             "would produce a filmstrip of the title screen indexed by frame. "
-             "Pass --oracle_allow_no_input=true if the title boots straight "
-             "into a level (its startup map names one) and needs no driving. "
-             "Refusing.");
-      return 5;
-    }
     gpu::GraphicsSystem* gs = emulator->graphics_system();
     if (scripted_driver) {
       scripted_driver->SetFrameTickSource([gs]() -> uint64_t {
@@ -349,8 +397,7 @@ int oracle_main(const std::vector<std::string>& args) {
     }
     XELOGI("oracle: captured {} of {} attempts over {} guest frames into {}",
            captured_f, attempted_f, total, xe::path_to_utf8(out_dir));
-    emulator.reset();
-    return captured_f > 0 ? 0 : 6;
+    EndRunningTitle(captured_f > 0 ? 0 : 6);
   }
 
   const int32_t seconds = std::max(1, cvars::oracle_seconds);
@@ -419,10 +466,9 @@ int oracle_main(const std::vector<std::string>& args) {
     }
   }
 
-  emulator.reset();
   // A run that captured nothing is a FAILED run, not an empty one: exiting 0
   // would let a harness above this treat "no frames" as success.
-  return captured ? 0 : 1;
+  EndRunningTitle(captured ? 0 : 1);
 }
 
 }  // namespace oracle

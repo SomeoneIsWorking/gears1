@@ -128,10 +128,10 @@ class BootstrapTests(unittest.TestCase):
         requirements.require_pkg_config_modules(("sdl2",), lambda module: True)
 
     def test_timed_walks_accept_chords_and_refuse_malformed_steps(self) -> None:
-        profile._validate_menu_walk("1000:START,1300:,2000:LY+&RX-,2500:,3000:LT&RT,3300:")
+        profile._validate_timed_walk("1000:START,1300:,2000:LY+&RX-,2500:,3000:LT&RT,3300:", "a walk")
         for invalid in ("1000:LY+&", "1000:ZZ", "1000:LT+", "2000:A,1000:", "1000:A,1000:"):
             with self.subTest(invalid=invalid), self.assertRaises(profile.ProfileError):
-                profile._validate_menu_walk(invalid)
+                profile._validate_timed_walk(invalid, "a walk")
         self.assertIn("&", profile.load_profile(REPO_ROOT).navigation.gameplay_walk)
 
     def test_offscreen_walks_come_from_the_profile(self) -> None:

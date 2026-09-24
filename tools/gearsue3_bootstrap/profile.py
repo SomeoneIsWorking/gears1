@@ -38,10 +38,6 @@ class Navigation:
     gameplay_walk: str
     repro_rate_walk: str
     camera_pair_frame_walk: str
-    oracle_compare_input: str
-    oracle_compare_repeat_start_ms: int
-    oracle_compare_repeat_period_ms: int
-    oracle_compare_repeat_hold_ms: int
     frame_walk: str
     button_hold_frames: int
 
@@ -96,13 +92,13 @@ def _sha256(table: dict[str, object], key: str) -> str:
     return value
 
 
-def _validate_menu_walk(schedule: str) -> None:
+def _validate_timed_walk(schedule: str, description: str) -> None:
     steps = schedule.split(",")
     if not steps or any(_TIMED_STEP.fullmatch(step) is None for step in steps):
-        raise ProfileError("navigation.menu_walk contains an invalid timed input step")
+        raise ProfileError(f"{description} contains an invalid timed input step")
     times = [int(step.partition(":")[0]) for step in steps]
     if times != sorted(times) or len(times) != len(set(times)):
-        raise ProfileError("navigation.menu_walk times must be unique and ordered")
+        raise ProfileError(f"{description} times must be unique and ordered")
 
 
 def parse_frame_walk(schedule: str) -> tuple[FrameEvent, ...]:
@@ -151,11 +147,11 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
         navigation_table, "camera_pair_frame_walk", "navigation"
     )
     frame_walk = _string(navigation_table, "frame_walk", "navigation")
-    _validate_menu_walk(menu_walk)
-    _validate_menu_walk(start_walk)
-    _validate_menu_walk(checkpoint_walk)
-    _validate_menu_walk(gameplay_walk)
-    _validate_menu_walk(repro_rate_walk)
+    _validate_timed_walk(menu_walk, "navigation.menu_walk")
+    _validate_timed_walk(start_walk, "navigation.start_walk")
+    _validate_timed_walk(checkpoint_walk, "navigation.checkpoint_walk")
+    _validate_timed_walk(gameplay_walk, "navigation.gameplay_walk")
+    _validate_timed_walk(repro_rate_walk, "navigation.repro_rate_walk")
     parse_frame_walk(camera_pair_frame_walk)
     parse_frame_walk(frame_walk)
 
@@ -182,18 +178,6 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
             gameplay_walk=gameplay_walk,
             repro_rate_walk=repro_rate_walk,
             camera_pair_frame_walk=camera_pair_frame_walk,
-            oracle_compare_input=_string(
-                navigation_table, "oracle_compare_input", "navigation"
-            ),
-            oracle_compare_repeat_start_ms=_positive_integer(
-                navigation_table, "oracle_compare_repeat_start_ms", "navigation"
-            ),
-            oracle_compare_repeat_period_ms=_positive_integer(
-                navigation_table, "oracle_compare_repeat_period_ms", "navigation"
-            ),
-            oracle_compare_repeat_hold_ms=_positive_integer(
-                navigation_table, "oracle_compare_repeat_hold_ms", "navigation"
-            ),
             frame_walk=frame_walk,
             button_hold_frames=_positive_integer(
                 navigation_table, "button_hold_frames", "navigation"
@@ -241,12 +225,28 @@ def last_frame(navigation: Navigation, schedule: str | None = None) -> int:
     )
 
 
-def native_oracle_compare_schedule(navigation: Navigation, duration_seconds: int) -> str:
-    steps = [navigation.start_walk]
-    duration_ms = duration_seconds * 1000
-    timestamp = navigation.oracle_compare_repeat_start_ms
-    while timestamp < duration_ms:
-        steps.append(f"{timestamp}:A")
-        steps.append(f"{timestamp + navigation.oracle_compare_repeat_hold_ms}:")
-        timestamp += navigation.oracle_compare_repeat_period_ms
-    return ",".join(steps)
+_ORACLE_BUTTONS = frozenset({"A", "B", "X", "Y", "START"})
+
+
+def oracle_timed_schedule(schedule: str) -> str:
+    """A timed button walk in the Xenia oracle's grammar: each press at its second.
+
+    The product's steps are ``MS:BUTTON`` presses and ``MS:`` releases; the oracle
+    holds each press briefly on its own, so releases carry nothing. A step the
+    oracle cannot express the same way (a stick, a trigger, a chord) is refused
+    rather than dropped, since a dropped step sends the two runs down different
+    routes.
+    """
+
+    _validate_timed_walk(schedule, "the oracle walk")
+    presses: list[str] = []
+    for step in schedule.split(","):
+        milliseconds, _, button = step.partition(":")
+        if not button:
+            continue
+        if button not in _ORACLE_BUTTONS:
+            raise ProfileError(f"the oracle cannot replay step {step!r}: only single buttons")
+        presses.append(f"{button}@{int(milliseconds) / 1000:g}")
+    if not presses:
+        raise ProfileError("the oracle walk presses nothing")
+    return ",".join(presses)

@@ -48,7 +48,8 @@ play, the audio mix (about 47,000 calls per second, `docs/issues/0172`), agrees 
 guest's own body on every live call of that route (S004), and the route fails unless
 the world's game clock keeps to wall time while the product presents up to 120 times a
 second, twice the console's rate (0.9997 game seconds per wall second over the route).
-What remains for S009 is a comparison of rendered frames against stock Xenia. Presentation now runs
+Its first idle view renders as stock Xenia renders it (`tools/oracle_compare.py`). What
+remains for S009 is the same comparison in combat scenes. Presentation now runs
 up to 120 presents/s under a host limit; S013 records the gameplay rate and its next costs.
 
 Two facts from an earlier qualification constrain further native-override work. Recovered guest
@@ -242,8 +243,16 @@ each, and the weapon fired 6 and 5 rounds on the second cover attempt. The nativ
 mix is compared with the guest's body on every call of that route (S004). The route also
 reads the world's game clock (WorldInfo `+0x288`) and fails unless it advanced within
 3% of wall time; the last run measured 0.9997 at 119-120 presents/s, so the doubled
-presentation rate does not speed up the simulation. Gap: rendered frames are not
-compared against stock Xenia. Linux has gamepad input only. The product's
+presentation rate does not speed up the simulation. `tools/oracle_compare.py` runs
+stock Xenia (`tools/xenia_oracle`, signed in like the product) and then the product on
+the menu walk for 240 s each, so both stand idle in Act 1's cell block. It passes when
+the product's last capture differs from the oracle's by at most twice the oracle's own
+change between its last two captures (`tools/frame_parity.py`). Measured: 0.351
+against a limit of 0.509 (oracle motion 0.255). Planted defects in the product frame
+score 1.04-7.9 against an oracle motion of 0.32: 10% brightness, a 120x200 hole, a
+2-pixel shift, gamma 0.9, swapped red and blue, black. Gap: only that idle view is
+compared. The firefight is not, because the oracle has no control channel to follow
+the closed-loop route. Linux has gamepad input only. The product's
 native audio-mix override is reached on real guest threads (`docs/issues/0172`). Two startup failures seen during a
 concurrent heavy build are unexplained (`docs/issues/0173`).
 
