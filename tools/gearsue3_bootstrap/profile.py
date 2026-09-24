@@ -37,6 +37,7 @@ class Navigation:
     start_walk: str
     checkpoint_walk: str
     gameplay_walk: str
+    continue_walk: str
 
 
 @dataclass(frozen=True)
@@ -113,10 +114,12 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
     start_walk = _string(navigation_table, "start_walk", "navigation")
     checkpoint_walk = _string(navigation_table, "checkpoint_walk", "navigation")
     gameplay_walk = _string(navigation_table, "gameplay_walk", "navigation")
+    continue_walk = _string(navigation_table, "continue_walk", "navigation")
     _validate_timed_walk(menu_walk, "navigation.menu_walk")
     _validate_timed_walk(start_walk, "navigation.start_walk")
     _validate_timed_walk(checkpoint_walk, "navigation.checkpoint_walk")
     _validate_timed_walk(gameplay_walk, "navigation.gameplay_walk")
+    _validate_timed_walk(continue_walk, "navigation.continue_walk")
 
     return TitleProfile(
         key=key,
@@ -139,6 +142,7 @@ def load_profile(repo_root: Path, key: str = "gears1") -> TitleProfile:
             start_walk=start_walk,
             checkpoint_walk=checkpoint_walk,
             gameplay_walk=gameplay_walk,
+            continue_walk=continue_walk,
         ),
     )
 

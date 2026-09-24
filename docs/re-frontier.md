@@ -224,9 +224,15 @@ follows this chain for `GET /api/player`:
   cover slots either side of low cover (52), and `0x820DF980` (104) and
   `0x820DF5E0` (12), both from cover slots, not yet understood. Point vtable
   `0x820955C0` (432) is at cover (z 244 against 186 for `0x820952E8` path
-  nodes). A mantle is crossed with the stick toward the far side, A to take
-  cover, then A again. `runtime/titles/gears1/navigation_probe.*` serves the
-  graph at `GET /api/navigation`.
+  nodes). A cover slot's yaw (Rotation `+0xDC`) is the direction its cover
+  faces: each of the 140 slots beside a mantle faced within 2842 units (16
+  degrees) of the heading across the wall, where the yaw of another slot
+  matched only 23 of them (median error 16174). A mantle is crossed with the
+  stick toward the far side, A to take cover, then A again. A pressed while the
+  view faces away from the slot's cover slides Marcus up to 300 units on to
+  cover in the view's direction; facing along the slot's yaw first takes the
+  slot's own cover. `runtime/titles/gears1/navigation_probe.*` serves the
+  graph, with each point's kind and yaw, at `GET /api/navigation`.
 - `0x82C0C8CC` is the name table, a TArray of name-entry pointers (33,754
   names in sp_prison_p); an entry's `+0x0` is its index and `+0x10` its
   UTF-16BE text, and an object's own name is the (index, number) pair at
@@ -257,6 +263,19 @@ cover below 280 health. It cleared the four drones in live runs, sometimes after
 reloading the checkpoint once or twice. Dom then walks to about (-1447, 6504)
 and radios "Six-Four, we are moving to your location"; Marcus's straight walk
 toward him from the yard cover is blocked by the cover and then by a wall.
+`WarCheckpoint_3` of `SP_Prison_S05_Scripting` respawns Marcus in cover at
+(-2308, 7920); Continue Campaign resumes it (the profile's `continue_walk`).
+Walking on toward Dom starts the door breach: three drones hold cover about
+1000-1500 units east and south, near (-1098, 8198), (-1036, 7579),
+(-1703, 7592), and (-2190, 7675), and move between those spots. Dom was
+downed early in every attempt. Six-round Lancer bursts from 1100 units or more
+took 0-22 health a drone, against 31-60 at 700; a drone that charged went from
+684 to 148 units in 3 s and took 112 of Marcus's health in one hit at 295.
+From a slot facing east Marcus kept losing 30-70 health a second while he
+waited in it, once the drones had moved south of him. With tracked two-second
+bursts (up to 24 rounds) at every hostile within 1500 units, 30 of 38 bursts
+in one run did no damage, while the drones held cover 950-1500 units away,
+and the run ended with every weapon empty.
 
 The ignored `build/ghidra/gears` project imports the loaded image linearly, so
 its addresses agree with the runtime: `0x8222E868` reads `7d8802a6`. The

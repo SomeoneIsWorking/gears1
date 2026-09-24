@@ -33,12 +33,15 @@ constexpr std::uint32_t kPaths = 0x46300000U;
 constexpr std::uint32_t kForward = 0x46400000U;
 constexpr std::uint32_t kBack = 0x46500000U;
 
-void PutPoint(FakeGuest &guest, std::uint32_t point, float x, float y, std::uint32_t paths,
-              std::uint32_t path_count, std::uint32_t next)
+void PutPoint(FakeGuest &guest, std::uint32_t point, std::uint32_t vtable, float x, float y,
+              std::uint32_t paths, std::uint32_t path_count, std::uint32_t next)
 {
+    guest.Put(point, vtable);
     guest.PutFloat(point + kActorLocationOffset, x);
     guest.PutFloat(point + kActorLocationOffset + 4U, y);
     guest.PutFloat(point + kActorLocationOffset + 8U, 200.0F);
+    // A yaw of a quarter turn, one full turn over: the probe keeps it within one.
+    guest.Put(point + kActorRotationOffset + 4U, 0x14000U);
     guest.Put(point + kNavigationPathsOffset, paths);
     guest.Put(point + kNavigationPathsOffset + 4U, path_count);
     guest.Put(point + kNavigationNextOffset, next);
@@ -53,8 +56,8 @@ void PutPath(FakeGuest &guest, std::uint32_t spec, std::uint32_t start, std::uin
     guest.Put(spec + kReachSpecDistanceOffset, distance);
 }
 
-// Two points joined both ways, walking forward and mantling back; the second's
-// array holds only the way back.
+// A path node and a cover slot joined both ways, walking forward and mantling
+// back; the second's array holds only the way back.
 FakeGuest LevelGuest()
 {
     FakeGuest guest;
@@ -65,8 +68,8 @@ FakeGuest LevelGuest()
     guest.Put(kPlayer + kPlayerControllerOffset, kController);
     guest.Put(kController + kActorWorldInfoOffset, kWorldInfo);
     guest.Put(kWorldInfo + kWorldInfoNavigationListOffset, kFirst);
-    PutPoint(guest, kFirst, -1606.0F, 2573.0F, kPaths, 1U, kSecond);
-    PutPoint(guest, kSecond, -1606.0F, 2730.0F, kPaths + 4U, 1U, 0U);
+    PutPoint(guest, kFirst, kPathNodeVtable, -1606.0F, 2573.0F, kPaths, 1U, kSecond);
+    PutPoint(guest, kSecond, kCoverSlotVtable, -1606.0F, 2730.0F, kPaths + 4U, 1U, 0U);
     guest.Put(kPaths, kForward);
     guest.Put(kPaths + 4U, kBack);
     PutPath(guest, kForward, kFirst, kSecond, 157U, kWalkReachSpecVtable);
@@ -95,6 +98,9 @@ int main()
             "the points were not listed in order");
     Require(points[0].location[0] == -1606.0F && points[1].location[1] == 2730.0F,
             "the points' locations were not read");
+    Require(points[0].kind == PointKind::PathNode && points[1].kind == PointKind::Cover,
+            "the path node and the cover slot were not told apart");
+    Require(points[1].yaw == 0x4000U, "the cover slot's facing was not read within one turn");
     Require(points[0].paths.size() == 1U && points[0].paths[0].end == kSecond &&
                 points[0].paths[0].distance == 157 && points[0].paths[0].kind == PathKind::Walk,
             "the forward path was not read");
@@ -108,6 +114,17 @@ int main()
                 points[0].paths[0].kind == PathKind::Other &&
                 points[0].paths[0].vtable == 0x820DF980U,
             "an unknown path class was not reported with its vtable");
+    FakeGuest pickup = LevelGuest();
+    pickup.Put(kFirst, 0x82095000U);
+    Require(ReadNavigation(pickup.Reader(), points, error) && points[0].kind == PointKind::Other &&
+                points[0].vtable == 0x82095000U,
+            "an unknown point class was not reported with its vtable");
+    FakeGuest unturned = LevelGuest();
+    unturned.Erase(kSecond + kActorRotationOffset + 4U);
+    RequireRefused(unturned, "a point's yaw at 0x462000DC is unreadable");
+    FakeGuest unnamed = LevelGuest();
+    unnamed.Erase(kSecond);
+    RequireRefused(unnamed, "a point's class at 0x46200000 is unreadable");
     FakeGuest classless = LevelGuest();
     classless.Erase(kBack);
     RequireRefused(classless, "a path's class at 0x46500000 is unreadable");

@@ -4,6 +4,9 @@ The engine's own path finder walks these points; a route that follows the same
 paths reaches places a straight-line walk runs into walls on the way to. Each
 path has a kind: "walk", "mantle" (over low cover), or an unknown ReachSpec
 class named by its vtable; a search follows only the kinds it is given.
+Each point has a kind too: "path" (a plain node), "cover" (a slot a pawn takes
+cover at), or an unknown class named by its vtable; and a yaw in engine units
+(65536 a turn), which for a cover slot is the direction its cover faces.
 """
 
 from __future__ import annotations
@@ -28,7 +31,9 @@ class Path:
 @dataclass(frozen=True)
 class Point:
     id: int
+    kind: str
     location: tuple[float, float, float]
+    yaw: int
     paths: tuple[Path, ...]
 
 
@@ -51,7 +56,9 @@ class NavigationGraph:
         points = [
             Point(
                 id=int(entry["id"]),
+                kind=str(entry["kind"]),
                 location=tuple(float(v) for v in entry["location"]),
+                yaw=int(entry["yaw"]),
                 paths=tuple(Path(int(end), int(length), str(kind))
                             for end, length, kind in entry["paths"]),
             )
@@ -64,6 +71,10 @@ class NavigationGraph:
 
     def point(self, point_id: int) -> Point:
         return self._points[point_id]
+
+    def of_kind(self, kind: str) -> list[Point]:
+        """Every point of the given kind, in the level's order."""
+        return [point for point in self._points.values() if point.kind == kind]
 
     def nearest(self, location: tuple[float, float, float], max_height: float) -> Point:
         """The point closest across the ground whose height is within max_height."""
@@ -91,9 +102,7 @@ class NavigationGraph:
                 return self._unwind(previous, start, goal)
             if spent > cost[current]:
                 continue
-            for path in self._points[current].paths:
-                if path.kind not in kinds or path.end not in self._points:
-                    continue
+            for path in self._followed(current, kinds):
                 through = spent + max(path.distance, 1)
                 if through < cost.get(path.end, math.inf):
                     cost[path.end] = through
@@ -103,6 +112,24 @@ class NavigationGraph:
             f"point {goal:#x} is unreachable from {start:#x} over {len(cost)} points "
             f"reached by {', '.join(sorted(kinds))} paths"
         )
+
+    def reachable(self, start: int, kinds: Collection[str]) -> frozenset[int]:
+        """Every point a walk from start over paths of the given kinds arrives at, start included."""
+        if start not in self._points:
+            raise NavigationError(f"point {start:#x} is not in the level")
+        reached = {start}
+        frontier = [start]
+        while frontier:
+            for path in self._followed(frontier.pop(), kinds):
+                if path.end not in reached:
+                    reached.add(path.end)
+                    frontier.append(path.end)
+        return frozenset(reached)
+
+    def _followed(self, point_id: int, kinds: Collection[str]) -> list[Path]:
+        """The paths of the given kinds from point_id that end at a point in the level."""
+        return [path for path in self._points[point_id].paths
+                if path.kind in kinds and path.end in self._points]
 
     def _unwind(self, previous: dict[int, tuple[int, str]], start: int, goal: int) -> list[Hop]:
         hops = []

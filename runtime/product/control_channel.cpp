@@ -96,6 +96,21 @@ constexpr std::size_t kMaxConnections = 8;
     return std::format("0x{:08X}", path.vtable);
 }
 
+// A point's kind as the navigation route names it; an unknown class by vtable.
+[[nodiscard]] std::string PointKindName(const titles::gears1::NavigationPoint &point)
+{
+    switch (point.kind)
+    {
+    case titles::gears1::PointKind::PathNode:
+        return "path";
+    case titles::gears1::PointKind::Cover:
+        return "cover";
+    case titles::gears1::PointKind::Other:
+        break;
+    }
+    return std::format("0x{:08X}", point.vtable);
+}
+
 } // namespace
 
 ControlChannel::ControlChannel(const x360port::SystemSession &session, RunStop &stop,
@@ -283,9 +298,10 @@ lucent::http::Response ControlChannel::Navigation() const
     for (std::size_t index = 0; index < points.size(); ++index)
     {
         const titles::gears1::NavigationPoint &point = points[index];
-        body +=
-            std::format("{}{{\"id\":{},\"location\":[{},{},{}],\"paths\":[", index == 0 ? "" : ",",
-                        point.address, point.location[0], point.location[1], point.location[2]);
+        body += std::format("{}{{\"id\":{},\"kind\":{},\"location\":[{},{},{}],\"yaw\":{},"
+                            "\"paths\":[",
+                            index == 0 ? "" : ",", point.address, JsonString(PointKindName(point)),
+                            point.location[0], point.location[1], point.location[2], point.yaw);
         for (std::size_t path = 0; path < point.paths.size(); ++path)
         {
             const titles::gears1::NavigationPath &reach = point.paths[path];
