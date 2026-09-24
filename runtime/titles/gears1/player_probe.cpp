@@ -103,8 +103,13 @@ bool ReadPlayer(const GuestMemoryReader &read, PlayerSnapshot &snapshot, std::st
         return true;
     }
     snapshot.has_weapon = true;
-    return chain.Word(weapon + kWeaponMagazineRoundsFiredOffset, "the weapon's rounds fired",
-                      snapshot.magazine_rounds_fired);
+    snapshot.weapon = weapon;
+    return chain.Word(weapon + kWeaponMagazineSizeOffset, "the weapon's magazine size",
+                      snapshot.magazine_size) &&
+           chain.Word(weapon + kWeaponMagazineRoundsFiredOffset, "the weapon's rounds fired",
+                      snapshot.magazine_rounds_fired) &&
+           chain.Word(weapon + kWeaponSpareRoundsOffset, "the weapon's spare rounds",
+                      snapshot.spare_rounds);
 }
 
 } // namespace gears::titles::gears1

@@ -19,12 +19,16 @@ every hostile the probe lists is dead; a death reloads the yard checkpoint and
 the fight resumes from the same cover, as a player would, up to a bound. When the
 fight is over it waits for Dom to stop walking ahead and joins him along the
 shortest path of the level's navigation graph (``/api/navigation``), which
-goes round the walls a straight walk runs into. Each tutorial holds
+goes round the walls a straight walk runs into. From there it fights every
+hostile the probe lists and follows Dom until the title saves its next
+checkpoint (read from the run's storage by ``tools/gears1_checkpoint.py``).
+Each tutorial holds
 Marcus in place until its button is held. The report in ``scratch/combat_route/``
 records where every step began and ended. The route fails, naming the step,
 when a step does not reach its goal; it passes only when the player reached
 cover in the yard, the weapon fired rounds there, every hostile of the first
-firefight died, Marcus reached Dom afterwards, the world's game time kept
+firefight died, Marcus reached Dom afterwards and then a new checkpoint,
+the world's game time kept
 to wall time throughout (the product presents up to 120 times a second, twice
 the console's rate), and the offscreen run's own
 checks passed (with ``--verify-audio-mix``, that the native audio mix agreed
@@ -48,8 +52,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tools.gears1_checkpoint import Checkpoint, read_checkpoint
 from tools.navigation import NavigationError, NavigationGraph
 from tools.product_control import ControlError, ProductControl
+from tools.run_offscreen import STORAGE_ROOT
 
 REPORT_ROOT = Path("scratch/combat_route")
 STICK_LIMIT = 32767
@@ -92,6 +98,11 @@ COVER_SECONDS = 1.2
 RECOVER_HEALTH = 280
 # Bursts at one target that leave its health unchanged before trying another.
 BURSTS_PER_TARGET = 4
+# A reload (RB) and a weapon switch (d-pad) take this long before the next
+# burst; the slots are tried in this order for a weapon with ammunition.
+RELOAD_SECONDS = 2.5
+SWITCH_SECONDS = 1.0
+WEAPON_SLOTS = ("RIGHT", "UP", "LEFT", "DOWN")
 AIM_POLL_SECONDS = 0.04
 RESPAWN_POLL_SECONDS = 3.0
 RESPAWN_SETTLE_SECONDS = 3.0
@@ -121,6 +132,8 @@ SQUAD_POLL_SECONDS = 1.0
 # Pulling the stick back this long leaves cover: a walk along a cover wall
 # stops at its end, as it did from the yard cover.
 LEAVE_COVER_SECONDS = 0.8
+# From Dom, fighting and following him reached the next checkpoint in 90 s live.
+ADVANCE_SECONDS = 300.0
 
 
 class RouteFailure(RuntimeError):
@@ -145,12 +158,33 @@ class Pawn:
 
 
 @dataclass(frozen=True)
+class Weapon:
+    """The held weapon as the probe reads it."""
+
+    id: int
+    magazine_size: int
+    rounds_fired: int
+    spare_rounds: int
+
+    @property
+    def loaded(self) -> int:
+        return max(0, self.magazine_size - self.rounds_fired)
+
+    @staticmethod
+    def from_json(reading: dict[str, object] | None) -> Weapon | None:
+        if reading is None:
+            return None
+        return Weapon(int(reading["id"]), int(reading["magazine_size"]),
+                      int(reading["magazine_rounds_fired"]), int(reading["spare_rounds"]))
+
+
+@dataclass(frozen=True)
 class Player:
     """One reading of the local player; position is None while the player is dead."""
 
     position: tuple[float, float] | None
     control_yaw: int
-    magazine_rounds_fired: int | None
+    weapon: Weapon | None
     world_seconds: float = 0.0
     control_pitch: int = 0
     height: float = 0.0
@@ -171,11 +205,10 @@ class Player:
             return Player(None, int(reading["control_yaw"]), None, world_seconds, pitch,
                           pawns=pawns, camera=(cx, cy, cz))
         location = pawn["location"]
-        rounds = pawn["magazine_rounds_fired"]
         return Player(
             (float(location[0]), float(location[1])),
             int(reading["control_yaw"]),
-            None if rounds is None else int(rounds),
+            Weapon.from_json(pawn["weapon"]),
             world_seconds,
             pitch,
             float(location[2]),
@@ -184,6 +217,10 @@ class Player:
             pawns,
             (cx, cy, cz),
         )
+
+    @property
+    def magazine_rounds_fired(self) -> int | None:
+        return None if self.weapon is None else self.weapon.rounds_fired
 
     def squad(self) -> list[Pawn]:
         """Living pawns of the player's team other than the player's own."""
@@ -358,7 +395,8 @@ class Route:
         """Walk to goal along the shortest path of the level's navigation graph.
 
         The walk starts at the point nearest the player and ends at the point
-        nearest goal, then walks the last stretch straight. It follows walk
+        nearest goal, then walks the last stretch straight, stopping as soon as
+        the player is within radius of goal. It follows walk
         paths on foot and mantles over low cover where the graph does. Refuses,
         naming the point, as walk does, or when the graph has no way there.
         """
@@ -378,6 +416,9 @@ class Route:
                 < distance(hops[0].point.location[:2], hops[1].point.location[:2])):
             hops = hops[1:]
         for index, hop in enumerate(hops):
+            # A goal such as a squad mate may stand on the last points.
+            if distance(self.alive(step).position, goal[:2]) <= radius:
+                break
             name = f"{step}: point {index + 1} of {len(hops)}"
             target = hop.point.location[:2]
             if hop.kind == "mantle":
@@ -483,8 +524,8 @@ class Route:
         Waits up to arrival seconds for hostiles to appear. Each round turns
         the view onto the nearest hostile from cover, raises the weapon with
         LT only to correct the aim and fire a burst, and drops back into
-        cover; below RECOVER_HEALTH it waits in cover instead, and an empty
-        weapon is swapped for the pistol. A target that
+        cover; below RECOVER_HEALTH it waits in cover instead. An empty
+        magazine is reloaded and an empty weapon swapped. A target that
         takes no damage from BURSTS_PER_TARGET bursts yields to the others.
         The step's record lists every burst, also when the step fails.
         Refuses when the player dies, no hostile ever appears, or hostiles
@@ -538,10 +579,10 @@ class Route:
         """Aim at target from cover, fire one burst, and return to cover.
 
         Returns the target as listed afterwards (None once it has left the
-        list) and whether the weapon fired. A weapon that fires nothing is
-        empty, so the burst switches to the pistol (d-pad down).
+        list) and whether the weapon fired.
         """
 
+        self._ready_weapon(step)
         self._aim(step, target, {})
         self._aim(step, target, {"lt": "255"})
         before = self.alive(step).magazine_rounds_fired
@@ -550,11 +591,39 @@ class Route:
         self._pad.release()
         player = self.alive(step)
         fired = player.magazine_rounds_fired != before
-        if not fired:
-            self.holding("DOWN", 0.3)()
         self._sleep(COVER_SECONDS)
         after = next((pawn for pawn in self.alive(step).pawns if pawn.id == target.id), None)
         return after, fired
+
+    def _ready_weapon(self, step: str) -> None:
+        """Leave a loaded weapon in hand, as a player would before firing.
+
+        An empty magazine with spare rounds is reloaded (RB); a weapon with
+        none is swapped for the first d-pad slot holding one that has.
+        Refuses when no slot does.
+        """
+
+        weapon = self.alive(step).weapon
+        if weapon is None:
+            raise RouteFailure(f"{step}: the player holds no weapon")
+        if weapon.loaded > 0:
+            return
+        if weapon.spare_rounds > 0:
+            self.holding("RB", 0.3)()
+            self._sleep(RELOAD_SECONDS)
+            return
+        for slot in WEAPON_SLOTS:
+            self.holding(slot, 0.3)()
+            self._sleep(SWITCH_SECONDS)
+            weapon = self.alive(step).weapon
+            if weapon is not None and weapon.loaded + weapon.spare_rounds > 0:
+                self.steps.append({"step": f"{step}: switch to the weapon on {slot}",
+                                   "loaded": weapon.loaded, "spare": weapon.spare_rounds})
+                if weapon.loaded == 0:
+                    self.holding("RB", 0.3)()
+                    self._sleep(RELOAD_SECONDS)
+                return
+        raise RouteFailure(f"{step}: every weapon is out of ammunition")
 
     def _aim(self, step: str, target: Pawn, held: dict[str, str]) -> None:
         """Turn the view onto target with held pad fields, for at most AIM_SECONDS."""
@@ -658,10 +727,9 @@ def clear_first_firefight(route: Route) -> int:
         attempt += 1
 
 
-def join_squad(route: Route) -> None:
+def join_squad(route: Route, step: str = "join Dom after the firefight") -> None:
     """Wait for the squad mate to stop walking ahead, then travel to him."""
 
-    step = "join Dom after the firefight"
     waited = 0.0
     mark: tuple[float, float, float] | None = None
     settled = 0.0
@@ -682,6 +750,39 @@ def join_squad(route: Route) -> None:
         waited += SQUAD_POLL_SECONDS
     route.travel(step, here, radius=SQUAD_RADIUS,
                  unblock=route.pressing({"ly": str(-STICK_LIMIT)}, LEAVE_COVER_SECONDS))
+
+
+def advance_to_next_checkpoint(route: Route,
+                               saved: Callable[[], Checkpoint | None]) -> Checkpoint:
+    """Fight every hostile and follow Dom until the title saves a new checkpoint.
+
+    saved reads the checkpoint the title last saved. Refuses when the player
+    dies, a fight or a walk fails, or no new checkpoint is saved within
+    ADVANCE_SECONDS.
+    """
+
+    step = "advance to the next checkpoint"
+    begin = route.alive(step)
+    start = saved()
+    started = route.clock()[0]
+    fights = follows = 0
+    while True:
+        checkpoint = saved()
+        if checkpoint is not None and checkpoint != start:
+            route.steps.append({"step": step, "from": begin.position,
+                                "to": route.player().position, "checkpoint": checkpoint.name,
+                                "level": checkpoint.level, "fights": fights, "follows": follows})
+            return checkpoint
+        if route.clock()[0] - started > ADVANCE_SECONDS:
+            last = "none" if start is None else start.name
+            raise RouteFailure(f"{step}: the title saved no checkpoint past {last} "
+                               f"within {ADVANCE_SECONDS:.0f} s")
+        if route.alive(step).hostiles():
+            fights += 1
+            route.clear_firefight(f"{step}: firefight {fights}", FIREFIGHT_SECONDS, 0.0)
+        else:
+            follows += 1
+            join_squad(route, f"{step}: follow Dom {follows}")
 
 
 def wait_for_handover(control: ProductControl, run: subprocess.Popen[bytes]) -> None:
@@ -734,6 +835,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             play_to_first_firefight(route)
             outcome["deaths"] = clear_first_firefight(route)
             join_squad(route)
+            checkpoint = advance_to_next_checkpoint(
+                route, lambda: read_checkpoint(REPO_ROOT / STORAGE_ROOT))
+            outcome["checkpoint"] = f"{checkpoint.level}.{checkpoint.name}"
             route.require_real_time(start)
             outcome["passed"] = True
         except (RouteFailure, ControlError) as error:
@@ -757,7 +861,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "see scratch/offscreen/run.log"
             )
         (report_root / "report.json").write_text(json.dumps(outcome, indent=2) + "\n")
-    verdict = "cleared the first firefight and joined Dom" if outcome["passed"] else f"FAILED: {outcome['failure']}"
+    verdict = (f"cleared the first firefight and reached {outcome['checkpoint']}"
+               if outcome["passed"] else f"FAILED: {outcome['failure']}")
     print(f"combat_route: {verdict}; report {report_root / 'report.json'}")
     return 0 if outcome["passed"] else 1
 

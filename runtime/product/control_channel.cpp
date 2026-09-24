@@ -242,10 +242,17 @@ lucent::http::Response ControlChannel::Player() const
     std::string pawn = "null";
     if (player.has_pawn)
     {
-        pawn = std::format(
-            "{{\"location\":[{},{},{}],\"health\":{},\"team\":{},\"magazine_rounds_fired\":{}}}",
-            player.location[0], player.location[1], player.location[2], player.health, player.team,
-            player.has_weapon ? std::to_string(player.magazine_rounds_fired) : std::string("null"));
+        std::string weapon = "null";
+        if (player.has_weapon)
+        {
+            weapon = std::format("{{\"id\":{},\"magazine_size\":{},\"magazine_rounds_fired\":{},"
+                                 "\"spare_rounds\":{}}}",
+                                 player.weapon, player.magazine_size, player.magazine_rounds_fired,
+                                 player.spare_rounds);
+        }
+        pawn = std::format("{{\"location\":[{},{},{}],\"health\":{},\"team\":{},\"weapon\":{}}}",
+                           player.location[0], player.location[1], player.location[2],
+                           player.health, player.team, weapon);
     }
     std::string pawns;
     for (const titles::gears1::PawnReading &listed : player.pawns)

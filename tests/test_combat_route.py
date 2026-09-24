@@ -36,11 +36,10 @@ class SimulatedPlayer:
         self.wall_x = wall_x
         self.wall_gap_y = wall_gap_y  # the wall stops short of this y, leaving a way round
         self.graph: list[dict[str, object]] = []
-        self.mates: list[dict[str, object]] = []
-        self.vaulting = False  # A pressed at the wall lets the next moves cross it  # squad mates, each walking at its velocity
+        self.mates: list[dict[str, object]] = []  # squad mates, each walking at its velocity
+        self.vaulting = False  # A pressed at the wall lets the next moves cross it
         self.stick = (0, 0)
         self.aim_stick = (0, 0)
-        self.rounds = 0
         self.firing = False
         self.aiming = False
         self.alive = True
@@ -50,10 +49,13 @@ class SimulatedPlayer:
         self.hostiles: list[dict[str, object]] = []
         self.incoming = 0.0  # damage per second while exposed
         self.shots_on: list[int] = []
-        self.magazine = 1000  # rounds left in the held weapon
+        # Weapons by d-pad slot; RB reloads the held one from its spares.
+        self.weapons = {"RIGHT": {"id": 2, "size": 60, "fired": 0, "spare": 1000},
+                        "DOWN": {"id": 3, "size": 12, "fired": 0, "spare": 36}}
+        self.held = "RIGHT"
+        self.burst_rounds = 0
         self.checkpoint: tuple[float, float] | None = None  # where A respawns a dead player
         self.incoming_after_respawn = 0.0
-        self.pistol = False
 
     def add_hostile(self, ident: int, location: tuple[float, float, float],
                     armoured: bool = False) -> None:
@@ -72,8 +74,11 @@ class SimulatedPlayer:
                    "world_seconds": self.now * self.time_scale,
                    "pawn": None, "pawns": pawns}
         if self.alive:
-            reading["pawn"] = {"location": [*self.position, 0.0], "health": self.health,
-                               "team": 0, "magazine_rounds_fired": self.rounds}
+            weapon = self.weapons[self.held]
+            reading["pawn"] = {"location": [*self.position, 0.0], "health": self.health, "team": 0,
+                               "weapon": {"id": weapon["id"], "magazine_size": weapon["size"],
+                                          "magazine_rounds_fired": weapon["fired"],
+                                          "spare_rounds": weapon["spare"]}}
             pawns.insert(0, {"id": 1, "location": [*self.position, 0.0], "health": self.health,
                              "team": 0, "is_player": True})
         return reading
@@ -103,8 +108,13 @@ class SimulatedPlayer:
             self.vaulting = True
         elif fields.get("lx", "0") == "0" and fields.get("ly", "0") == "0":
             self.vaulting = False
-        if fields.get("buttons") == "DOWN" and not self.pistol:
-            self.pistol, self.magazine = True, 48
+        if fields.get("buttons") in self.weapons:
+            self.held = fields["buttons"]
+        if fields.get("buttons") == "RB":
+            weapon = self.weapons[self.held]
+            refill = min(weapon["fired"], weapon["spare"])
+            weapon["fired"] -= refill
+            weapon["spare"] -= refill
         if self.firing and fields.get("rt") != "255":
             self._resolve_burst()
         self.stick = (int(fields.get("lx", "0")), int(fields.get("ly", "0")))
@@ -135,7 +145,8 @@ class SimulatedPlayer:
                 round((pitch - self.pitch + wrap / 2) % wrap - wrap / 2))
 
     def _resolve_burst(self) -> None:
-        if self.magazine == 0 and not self.pistol:
+        rounds, self.burst_rounds = self.burst_rounds, 0
+        if rounds == 0:
             return
         hostile = self._on_target()
         if hostile is not None:
@@ -153,10 +164,11 @@ class SimulatedPlayer:
             x, y, z = mate["location"]
             vx, vy = mate["velocity"]
             mate["location"] = (x + vx * seconds, y + vy * seconds, z)
-        if self.firing and self.magazine > 0:
-            fired = min(self.magazine, round(20 * seconds))
-            self.rounds += fired
-            self.magazine -= fired
+        weapon = self.weapons[self.held]
+        if self.firing:
+            fired = min(weapon["size"] - weapon["fired"], round(20 * seconds))
+            weapon["fired"] += fired
+            self.burst_rounds += fired
         if self.aiming and any(hostile["health"] > 0 for hostile in self.hostiles):
             self.health -= round(self.incoming * seconds)
             if self.health <= 0:
@@ -259,6 +271,14 @@ class TravelTest(unittest.TestCase):
         route.travel("round", (310.0, 10.0, 0.0), radius=60.0)
         self.assertEqual(route.steps[-1]["points"], 3)
 
+    def test_stops_once_within_the_goal_radius(self) -> None:
+        # The last point is where the goal stands, as a squad mate does.
+        player = SimulatedPlayer((-30.0, -60.0), 0, wall_x=100.0, wall_gap_y=300.0)
+        player.graph = ROUND_THE_WALL
+        route = route_over(player)
+        route.travel("round", (220.0, 400.0, 0.0), radius=250.0)
+        self.assertNotIn("round: point 3 of 3", [step["step"] for step in route.steps])
+
     def test_no_way_there_fails(self) -> None:
         player = SimulatedPlayer((310.0, 10.0), 0)
         player.graph = ROUND_THE_WALL
@@ -324,6 +344,43 @@ class JoinSquadTest(unittest.TestCase):
     def test_no_mate_fails(self) -> None:
         with self.assertRaisesRegex(RouteFailure, "the squad lists 0 living mates"):
             route_module.join_squad(route_over(SimulatedPlayer((0.0, 0.0), 0)))
+
+
+class AdvanceTest(unittest.TestCase):
+    CHECKPOINT = route_module.Checkpoint("sp_prison_p", "SP_Prison_S04_Scripting", "WarCheckpoint_1")
+    NEXT = route_module.Checkpoint("sp_prison_p", "SP_Prison_S05_Scripting", "WarCheckpoint_3")
+
+    def _player(self) -> SimulatedPlayer:
+        player = SimulatedPlayer((0.0, 0.0), 0)
+        player.graph = [{"id": 1, "location": [0.0, 0.0, 0.0], "paths": []}]
+        player.mates.append({"id": 2, "location": (100.0, 0.0, 0.0), "velocity": (0.0, 0.0)})
+        return player
+
+    def test_fights_then_follows_until_a_new_checkpoint(self) -> None:
+        player = self._player()
+        player.add_hostile(7, (1000.0, 300.0, 0.0))
+
+        def saved() -> route_module.Checkpoint:
+            # The title saves once the fight is over and the player has moved on.
+            done = all(hostile["health"] <= 0 for hostile in player.hostiles)
+            return self.NEXT if done and player.now > 60.0 else self.CHECKPOINT
+
+        route = route_over(player)
+        self.assertEqual(route_module.advance_to_next_checkpoint(route, saved), self.NEXT)
+        record = route.steps[-1]
+        self.assertEqual((record["checkpoint"], record["fights"]), ("WarCheckpoint_3", 1))
+        self.assertGreater(record["follows"], 0)
+
+    def test_no_new_checkpoint_fails(self) -> None:
+        with self.assertRaisesRegex(RouteFailure, "saved no checkpoint past WarCheckpoint_1 within 300 s"):
+            route_module.advance_to_next_checkpoint(route_over(self._player()),
+                                                    lambda: self.CHECKPOINT)
+
+    def test_a_first_save_counts_as_new(self) -> None:
+        player = self._player()
+        saves = iter([None, None, self.NEXT])
+        self.assertEqual(route_module.advance_to_next_checkpoint(
+            route_over(player), lambda: next(saves)), self.NEXT)
 
 
 class UnblockTest(unittest.TestCase):
@@ -461,15 +518,32 @@ class FirefightTest(unittest.TestCase):
         route._sleep = arrive
         self.assertEqual(route.clear_firefight("fight", timeout=60.0, arrival=10.0), 1)
 
-    def test_an_empty_rifle_is_swapped_for_the_pistol(self) -> None:
+    def test_an_empty_magazine_is_reloaded_not_swapped(self) -> None:
         player = SimulatedPlayer((0.0, 0.0), 0)
-        player.magazine = 0
+        player.weapons["RIGHT"]["fired"] = 60
         player.add_hostile(7, (1000.0, 300.0, 0.0))
         route = route_over(player)
         route.clear_firefight("fight", timeout=120.0, arrival=5.0)
-        self.assertTrue(player.pistol)
-        self.assertFalse(route.steps[-1]["bursts"][0]["fired"])
-        self.assertTrue(route.steps[-1]["bursts"][-1]["fired"])
+        self.assertEqual(player.held, "RIGHT")
+        self.assertLess(player.weapons["RIGHT"]["spare"], 1000)
+        self.assertTrue(route.steps[-1]["bursts"][0]["fired"])
+
+    def test_an_empty_weapon_is_swapped_for_one_with_ammunition(self) -> None:
+        player = SimulatedPlayer((0.0, 0.0), 0)
+        player.weapons["RIGHT"].update(fired=60, spare=0)
+        player.add_hostile(7, (1000.0, 300.0, 0.0))
+        route = route_over(player)
+        route.clear_firefight("fight", timeout=120.0, arrival=5.0)
+        self.assertEqual(player.held, "DOWN")
+        self.assertIn("fight: switch to the weapon on DOWN", [step["step"] for step in route.steps])
+
+    def test_no_ammunition_anywhere_fails(self) -> None:
+        player = SimulatedPlayer((0.0, 0.0), 0)
+        for weapon in player.weapons.values():
+            weapon.update(fired=weapon["size"], spare=0)
+        player.add_hostile(7, (1000.0, 300.0, 0.0))
+        with self.assertRaisesRegex(RouteFailure, "fight: every weapon is out of ammunition"):
+            route_over(player).clear_firefight("fight", timeout=120.0, arrival=5.0)
 
     def test_no_hostile_at_all_fails(self) -> None:
         with self.assertRaisesRegex(RouteFailure, "fight: no hostile appeared within 5 s"):

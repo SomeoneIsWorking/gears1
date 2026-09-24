@@ -49,9 +49,9 @@ guest's own body on every live call of that route (S004), and the route fails un
 the world's game clock keeps to wall time while the product presents up to 120 times a
 second, twice the console's rate (0.9997 game seconds per wall second over the route).
 Its first idle view renders as stock Xenia renders it (`tools/oracle_compare.py`). The route
-now clears that firefight and joins Dom along the level's navigation graph; what
-remains for S009 is playing on through Act 1 unattended (a REVIVE tutorial and further
-firefights follow) and loading later levels. Presentation now runs
+now clears that firefight, joins Dom along the level's navigation graph, and fights on to
+the next saved checkpoint; what remains for S009 is playing on through the rest of Act 1
+unattended and loading later levels. Presentation now runs
 up to 120 presents/s under a host limit; S013 records the gameplay rate and its next costs.
 
 Two facts from an earlier qualification constrain further native-override work. Recovered guest
@@ -269,12 +269,21 @@ mantle, game time 0.9996 of wall time over 145 s, and the run stopped after 459 
 p50 8.4 ms and 0 translation failures. Two runs before it failed at the jammed door
 (the kicks missed while the walk pressed Marcus against it; the route now steps back
 first) and at a navigation path with a null end (now reported rather than refused).
-Driven by hand from there with the same steps, Marcus followed Dom, cleared the second
-firefight (three drones, 51 s, full health) and reached `WarCheckpoint_3` of
-`SP_Prison_S05_Scripting`, where a REVIVE tutorial for a downed Dom stopped the walk.
-Gap: the route does not yet play past joining Dom: the second firefight, the revive
-(A to dismiss the tutorial, X beside Dom), and everything after `WarCheckpoint_3` are
-unscripted, and no later act or level load has been exercised.
+From Dom the route fights every listed hostile and follows him until the title saves a
+new checkpoint, which it reads from the run's storage (`tools/gears1_checkpoint.py`).
+Before each burst it reloads an empty magazine (RB) and swaps an empty weapon for the
+first d-pad slot with ammunition; the earlier route switched to the pistol whenever a
+burst fired nothing and stayed there until both weapons were dry. A fresh run on
+2026-09-24 passed: the yard's four drones in 51 s with no death, Dom joined over 13
+points and one mantle, the second firefight's drones (one behind a fence) killed after
+swapping the empty Hammerburst for the pistol, and `WarCheckpoint_3` of
+`SP_Prison_S05_Scripting` saved; game time 0.9996 of wall time over 243 s, 0 translation
+failures. Its frame rate is not evidence: other jobs held the host's load average at
+8-16 and the scripted walk, 120 presents/s in earlier runs, fell to 14-50.
+Gap: nothing after `WarCheckpoint_3` is scripted. A REVIVE tutorial for a downed Dom (A
+to dismiss, X beside him) appeared there in one manual run and the route does not handle
+it; a death after the yard reloads the yard checkpoint, which the route does not replay;
+and no later act or level load has been exercised.
 
 ### S010 — Apple Silicon A64
 
