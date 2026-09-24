@@ -17,7 +17,7 @@ This inventory reports observable capabilities independently of the product goal
 | S007 | Gears 1 leaf/import/override discriminator | partial | S001, S006 | G001, G002 |
 | S008 | Bounded runtime interpreter fallback | partial | S006 | G001, G002 |
 | S009 | Representative interactive Gears 1 gameplay | partial | S002, S003, S004, S005, S006, S007, S008 | G001, G002 |
-| S010 | Apple Silicon macOS A64 execution | missing | S006 | G001, G004 |
+| S010 | Apple Silicon macOS A64 execution | partial | S006 | G001, G004 |
 | S011 | Android arm64-v8a A64 execution | missing | S006 | G001, G004 |
 | S012 | Complete native RHI frontend | missing | S003, S006 | G001, G002, G003 |
 | S013 | Native 8.33 ms / 120 fps renderer budget | partial | S009, S012 | G003 |
@@ -296,9 +296,8 @@ units emptied every weapon. No later act or level load has been exercised.
 
 ### S010 — Apple Silicon A64
 
-Missing capability: qualify A64 code emission, executable memory,
-instruction-cache coherence, host ABI, exceptions, and packaging on Apple
-Silicon macOS.
+Partial: the asset-free A64 execution contract passes on Apple Silicon macOS CI; a
+guest title, packaging, and performance there are unqualified.
 
 The macOS CI job failed at link with 63 undefined `xe::` symbols because the fork's
 `xe_platform_sources` restored platform sources only for Windows and Linux. The fork now
@@ -331,8 +330,13 @@ test then showed two Darwin differences: its libunwind registers one FDE rather 
 of a 4 KB-page range, leaving guest page 0 readable, so a guest null read did not fault.
 The fork now registers the FDE on Darwin and protects such ranges at host-page
 granularity (a host page takes the most permissive access of its committed guest
-pages). Gap: those two fixes have run only on x64 Linux (x360port's 34 tests pass); no
-guest title has run on Apple silicon.
+pages). A device range must now cover whole host pages, since a 16 KB host page cannot
+protect a 4 KB range alone. With these, x360port's macOS arm64 CI job passed every test
+(run 36047539017, 2026-09-24): A64 translation from a `MAP_JIT` region, typed imports,
+overrides with scoped original calls, invalidation, the bounded fallback, device-memory
+dispatch, and a guest null read that faults and unwinds; gears1's macOS job passed its
+contract build on the same pins. Gap: no guest title has run on Apple silicon, and there
+is no macOS product host, package, or performance measurement.
 
 ### S011 — Android A64
 
