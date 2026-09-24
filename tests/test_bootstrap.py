@@ -23,6 +23,7 @@ import test_gdf_extract as gdf_fixture
 
 from tools import clean_build, run_offscreen
 from tools.gearsue3_bootstrap import (
+    crash_triage,
     environment,
     launcher,
     paths,
@@ -128,7 +129,8 @@ class BootstrapTests(unittest.TestCase):
 
     def test_timed_walks_accept_chords_and_refuse_malformed_steps(self) -> None:
         profile._validate_timed_walk("1000:START,1300:,2000:LY+&RX-,2500:,3000:LT&RT,3300:", "a walk")
-        for invalid in ("1000:LY+&", "1000:ZZ", "1000:LT+", "2000:A,1000:", "1000:A,1000:"):
+        profile._validate_timed_walk("1000:DOWN&RB,1300:,2000:BACK&LTHUMB,2300:,3000:UP,3300:", "a walk")
+        for invalid in ("1000:LY+&", "1000:ZZ", "1000:LT+", "1000:DWN", "1000:MB", "2000:A,1000:", "1000:A,1000:"):
             with self.subTest(invalid=invalid), self.assertRaises(profile.ProfileError):
                 profile._validate_timed_walk(invalid, "a walk")
         self.assertIn("&", profile.load_profile(REPO_ROOT).navigation.gameplay_walk)
@@ -293,6 +295,69 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(lines[0], "set -eu")
         self.assertEqual(lines[-1], 'exec uv run --frozen python bootstrap.py "$@"')
         self.assertLessEqual(len(lines), 4)
+
+
+
+# CTest 4.3's JUnit report of one test that raised SIGTRAP and one that exited 1.
+CTEST_JUNIT = """<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="(empty)" tests="3" failures="2" disabled="0" skipped="0">
+	<testcase name="traps" classname="traps" time="0.1" status="fail">
+		<failure message="SIGTRAP"/>
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="fails" classname="fails" time="0.01" status="fail">
+		<failure message="Failed"/>
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+	<testcase name="passes" classname="passes" time="0.01" status="run">
+		<properties/>
+		<system-out></system-out>
+	</testcase>
+</testsuite>
+"""
+CTEST_COMMANDS = (
+    '{"tests": [{"name": "traps", "command": ["/b/trap", "--x"], '
+    '"properties": [{"name": "WORKING_DIRECTORY", "value": "/b"}]}, '
+    '{"name": "fails", "command": ["false"]}, {"name": "passes", "command": ["true"]}]}'
+)
+
+
+class CrashTriageTests(unittest.TestCase):
+    def _report(self, text: str) -> Path:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        report = Path(directory.name) / "ctest-results.xml"
+        report.write_text(text)
+        return report
+
+    def test_only_a_signal_death_is_rerun_under_the_debugger(self) -> None:
+        runs: list[tuple[list[str], str | None]] = []
+        count = crash_triage.report_backtraces(
+            self._report(CTEST_JUNIT), CTEST_COMMANDS, "Linux",
+            lambda name: f"/usr/bin/{name}", lambda command, cwd: runs.append((command, cwd)))
+        self.assertEqual(count, 1)
+        self.assertEqual(runs, [(["/usr/bin/gdb", "-batch", "-ex", "run", "-ex",
+                                  "thread apply all bt", "--args", "/b/trap", "--x"], "/b")])
+
+    def test_macos_uses_lldb_and_stops_at_the_crash(self) -> None:
+        command = crash_triage.debugger_command("Darwin", lambda name: f"/x/{name}", ["/b/t"])
+        self.assertEqual(command, ["/x/lldb", "--batch", "-o", "run", "-k",
+                                   "thread backtrace all", "-k", "quit", "--", "/b/t"])
+
+    def test_refusals_name_what_is_missing(self) -> None:
+        with self.assertRaisesRegex(crash_triage.TriageError, "no JUnit report"):
+            crash_triage.crashed_tests(Path("/nonexistent/ctest-results.xml"))
+        with self.assertRaisesRegex(crash_triage.TriageError, "lists no test cases"):
+            crash_triage.crashed_tests(self._report("<testsuite/>"))
+        with self.assertRaisesRegex(crash_triage.TriageError, "gdb is not on PATH"):
+            crash_triage.debugger_command("Linux", lambda name: None, ["t"])
+        with self.assertRaisesRegex(crash_triage.TriageError, "no debugger is known for Windows"):
+            crash_triage.debugger_command("Windows", lambda name: "x", ["t"])
+        with self.assertRaisesRegex(crash_triage.TriageError, "no command for traps"):
+            crash_triage.report_backtraces(self._report(CTEST_JUNIT), '{"tests": []}', "Linux",
+                                           lambda name: name, lambda command, cwd: None)
 
 
 if __name__ == "__main__":

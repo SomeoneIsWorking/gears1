@@ -4,11 +4,14 @@
 from __future__ import annotations
 
 import argparse
+import platform
+import shutil
 import sys
 from pathlib import Path
 
+from gearsue3_bootstrap.crash_triage import TriageError, report_backtraces, run_under_debugger
 from gearsue3_bootstrap.paths import build_directory
-from gearsue3_bootstrap.process import CommandRunner
+from gearsue3_bootstrap.process import CommandError, CommandRunner
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,10 +94,24 @@ def main() -> int:
         ],
         cwd=ROOT,
     )
-    runner.run(
-        [require_program("ctest"), "--test-dir", output, "--output-on-failure"],
-        cwd=ROOT,
-    )
+    ctest = require_program("ctest")
+    junit_report = output / "ctest-results.xml"
+    try:
+        runner.run(
+            [ctest, "--test-dir", output, "--output-on-failure",
+             "--output-junit", junit_report],
+            cwd=ROOT,
+        )
+    except CommandError:
+        # A test that died on a signal may have printed nothing; show where.
+        try:
+            report_backtraces(
+                junit_report,
+                runner.capture([ctest, "--test-dir", output, "--show-only=json-v1"], cwd=ROOT),
+                platform.system(), shutil.which, run_under_debugger)
+        except TriageError as error:
+            print(f"crash triage: {error}", file=sys.stderr)
+        raise
     return 0
 
 

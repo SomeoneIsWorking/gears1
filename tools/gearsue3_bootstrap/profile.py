@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 _HEX32 = re.compile(r"[0-9a-f]{8}")
-_STEP_INPUT = r"(?:START|[ABXY]|[LR]T|L[XY][+-]?|R[XY][+-]?)"
+# The buttons runtime/input.cpp PadButtonByName accepts, the triggers, and stick deflections.
+_STEP_INPUT = (r"(?:UP|DOWN|LEFT|RIGHT|START|BACK|[LR]THUMB|[LR]B|[ABXY]|[LR]T"
+               r"|L[XY][+-]?|R[XY][+-]?)")
 # "ms:" releases everything; "ms:LY+&RX-" holds a chord, as the runtime parses it.
 _TIMED_STEP = re.compile(rf"(?:0|[1-9][0-9]*):(?:{_STEP_INPUT}(?:&{_STEP_INPUT})*)?")
 
