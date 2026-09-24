@@ -411,6 +411,12 @@ render thread's work itself to be native (S012). A later recording there (s282-2
 2026-09-24) put 98.3% of the render thread's samples in translated guest code and 1.7%
 in the host runtime: the GPU wait again took 12.7%, then the vertex-shader constant
 setter `0x82222350` (`docs/d3d-seam.md`) 5.5% and the DMA-indexed draw `0x8222DE50` 3.0%.
+A native override of that setter and its pixel twin `0x82222460` (about 193K calls/s)
+made presents dearer, not cheaper: 74.1M and 77.9M render-thread instructions per present
+against 71.3M and 70.4M without it, in alternating runs at s282. Each call's checked guest
+reads and writes go through `x360port::GuestMemory::CanAccess`, whose Xenia heap query takes
+the global critical region the GPU command thread also holds, so a short, frequently called
+leaf costs more native than translated until mapped access has a cheaper validated path.
 
 The combat route's yard firefight (`tools/combat_route.py`) ran at 103-114 presents/s
 in one run and fell to 19-50 in another, while another agent's emulator held 2.3 cores
