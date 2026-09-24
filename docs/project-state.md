@@ -325,8 +325,14 @@ into it from `A64Function::CallImpl`: Apple silicon executes only signed or `MAP
 pages, and the code executed from a view of a shared file mapping. On Apple silicon the
 code cache now takes one `MAP_JIT` region, written only inside a per-thread
 `pthread_jit_write_protect_np` scope around placement, trap fill, data, and trampolines;
-other hosts keep their mappings. Gap: that change has been compiled only for x64 Linux;
-the macOS job is its first A64 Darwin build and run.
+other hosts keep their mappings. With it the gears1 macOS job passed. x360port's runtime
+test then showed two Darwin differences: its libunwind registers one FDE rather than an
+`.eh_frame` starting at the CIE, and on 16 KB host pages Xenia skipped the host commit
+of a 4 KB-page range, leaving guest page 0 readable, so a guest null read did not fault.
+The fork now registers the FDE on Darwin and protects such ranges at host-page
+granularity (a host page takes the most permissive access of its committed guest
+pages). Gap: those two fixes have run only on x64 Linux (x360port's 34 tests pass); no
+guest title has run on Apple silicon.
 
 ### S011 — Android A64
 
