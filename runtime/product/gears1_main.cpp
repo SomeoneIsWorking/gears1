@@ -46,8 +46,15 @@ constexpr std::string_view kSaveNamespace = "gears1";
 [[nodiscard]] int RunOffscreenProduct(const ProductOptions &options,
                                       const std::filesystem::path &storage_root)
 {
+    std::optional<gears::titles::gears1::AudioMixDifferential> audio_mix_check;
+    if (options.verify_audio_mix)
+    {
+        audio_mix_check.emplace();
+    }
+    gears::titles::gears1::AudioMixDifferential *check =
+        audio_mix_check ? &*audio_mix_check : nullptr;
     x360port::SystemSessionCreateResult created = x360port::SystemSession::CreateOffscreen(
-        gears::product::Gears1SessionConfig(options, storage_root, nullptr));
+        gears::product::Gears1SessionConfig(options, storage_root, nullptr, check));
     if (!created)
     {
         lucent::error("product", "the console could not be composed: {}", created.failure.detail);
@@ -69,7 +76,7 @@ constexpr std::string_view kSaveNamespace = "gears1";
             x360port::SystemSession::EndProcess(EXIT_FAILURE);
         }
     }
-    bool evidence = gears::product::RunOffscreen(*created.session, options);
+    bool evidence = gears::product::RunOffscreen(*created.session, options, check);
     x360port::SystemSession::EndProcess(evidence ? EXIT_SUCCESS : EXIT_FAILURE);
 }
 
@@ -103,7 +110,7 @@ int main(int argc, char **argv)
     gears::InitialiseInput(true);
     gears::SetHostPadSource(gears::titles::gears1::SampleDesktopControls, &desktop);
     x360port::RuntimeFailure failure = x360port::RunWindowedSystem(
-        gears::product::Gears1SessionConfig(options, *storage_root, &desktop));
+        gears::product::Gears1SessionConfig(options, *storage_root, &desktop, nullptr));
     lucent::error("product", "Gears of War could not start: {}", failure.detail);
     return EXIT_FAILURE;
 }

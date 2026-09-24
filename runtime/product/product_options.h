@@ -34,6 +34,9 @@ struct ProductOptions
     bool perf_map = false;
     // Offscreen only: serve the loopback control channel on this port.
     std::uint16_t control_port = 0;
+    // Offscreen only: check the native audio mix against the guest's own
+    // body on every call, keeping the original's result.
+    bool verify_audio_mix = false;
 };
 
 struct ProductOptionsResult
