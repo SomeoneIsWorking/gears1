@@ -276,6 +276,9 @@ if(GEARS_DYNAREC_CONTRACT_ONLY)
     add_test(NAME gears_navigation
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tests/test_navigation.py")
+    add_test(NAME gears_ppcdis
+        COMMAND ${GEARS_UV_RUN} python
+                "${CMAKE_SOURCE_DIR}/tests/test_ppcdis.py")
     add_test(NAME gears1_checkpoint
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tests/test_gears1_checkpoint.py")

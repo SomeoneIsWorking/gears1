@@ -11,6 +11,8 @@ future Xenia-fed title adapter. They are not current dispatch hooks.
 | `0x82229B28` | Color-write gamma/sRGB state setter; maps format pairs 2/10 and 3/12 and marks dirty bit 37. |
 | `0x82222808` | Pixel-shader setter; device object field `+0x3080`. |
 | `0x82222B98` | Vertex-shader setter; device object field `+0x3084`. |
+| `0x82222350` | Vertex-shader float-constant setter: copies `r6` vec4s from unaligned `r5` to device `r3 + (r4 + 0x70) * 16`, then ORs the 64-bit mask `r7` into device `+0`. |
+| `0x82222460` | Pixel-shader float-constant setter: the same copy at register base `0x170`. |
 | `0x8222CFF8` | Transient auto-index draw. |
 | `0x8222D4F8` | Transient DMA-indexed draw. |
 | `0x8222DA48` | Bound-stream auto-index draw. |
