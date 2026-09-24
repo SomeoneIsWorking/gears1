@@ -5,11 +5,13 @@
 #include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <lucent/log.h>
 
 #include "input.h"
 #include "memory_request.h"
+#include "navigation_probe.h"
 #include "pad_form.h"
 #include "player_probe.h"
 #include "portable_pixmap.h"
@@ -79,11 +81,28 @@ constexpr std::size_t kMaxConnections = 8;
     return fields;
 }
 
+// A path's kind as the navigation route names it; an unknown class by vtable.
+[[nodiscard]] std::string PathKindName(const titles::gears1::NavigationPath &path)
+{
+    switch (path.kind)
+    {
+    case titles::gears1::PathKind::Walk:
+        return "walk";
+    case titles::gears1::PathKind::Mantle:
+        return "mantle";
+    case titles::gears1::PathKind::Other:
+        break;
+    }
+    return std::format("0x{:08X}", path.vtable);
+}
+
 } // namespace
 
-ControlChannel::ControlChannel(const x360port::SystemSession &session, std::uint16_t port)
-    : session_(session), server_(LoopbackOptions(port), [this](const lucent::http::Request &request)
-                                 { return Handle(request); })
+ControlChannel::ControlChannel(const x360port::SystemSession &session, RunStop &stop,
+                               std::uint16_t port)
+    : session_(session), stop_(stop),
+      server_(LoopbackOptions(port),
+              [this](const lucent::http::Request &request) { return Handle(request); })
 {
 }
 
@@ -134,6 +153,16 @@ lucent::http::Response ControlChannel::Handle(const lucent::http::Request &reque
     if (request.method == "GET" && path == "/api/player")
     {
         return Player();
+    }
+    if (request.method == "GET" && path == "/api/navigation")
+    {
+        return Navigation();
+    }
+    if (request.method == "POST" && path == "/api/stop")
+    {
+        stop_.Request();
+        lucent::info("control", "a stop was requested; the run ends at its next second");
+        return lucent::http::Response::json(202, "Accepted", "{\"stopping\":true}\n");
     }
     return JsonError(404, "Not Found", std::format("no route {} {}", request.method, path));
 }
@@ -196,28 +225,72 @@ lucent::http::Response ControlChannel::Memory(const lucent::http::Request &reque
     return lucent::http::Response::binary(200, "OK", "application/octet-stream", std::move(bytes));
 }
 
+titles::gears1::GuestMemoryReader ControlChannel::GuestReader() const
+{
+    return [this](std::uint32_t address, std::span<std::byte> bytes)
+    { return session_.ReadGuestMemory(address, bytes); };
+}
+
 lucent::http::Response ControlChannel::Player() const
 {
     titles::gears1::PlayerSnapshot player;
     std::string error;
-    auto read = [this](std::uint32_t address, std::span<std::byte> bytes)
-    { return session_.ReadGuestMemory(address, bytes); };
-    if (!titles::gears1::ReadPlayer(read, player, error))
+    if (!titles::gears1::ReadPlayer(GuestReader(), player, error))
     {
         return JsonError(409, "Conflict", error);
     }
     std::string pawn = "null";
     if (player.has_pawn)
     {
-        pawn = std::format("{{\"location\":[{},{},{}],\"magazine_rounds_fired\":{}}}",
-                           player.location[0], player.location[1], player.location[2],
-                           player.has_weapon ? std::to_string(player.magazine_rounds_fired)
-                                             : std::string("null"));
+        pawn = std::format(
+            "{{\"location\":[{},{},{}],\"health\":{},\"team\":{},\"magazine_rounds_fired\":{}}}",
+            player.location[0], player.location[1], player.location[2], player.health, player.team,
+            player.has_weapon ? std::to_string(player.magazine_rounds_fired) : std::string("null"));
+    }
+    std::string pawns;
+    for (const titles::gears1::PawnReading &listed : player.pawns)
+    {
+        pawns += std::format("{}{{\"id\":{},\"location\":[{},{},{}],\"health\":{},\"team\":{},"
+                             "\"is_player\":{}}}",
+                             pawns.empty() ? "" : ",", listed.address, listed.location[0],
+                             listed.location[1], listed.location[2], listed.health, listed.team,
+                             listed.is_player);
     }
     return lucent::http::Response::json(
         200, "OK",
-        std::format("{{\"control_yaw\":{},\"camera_yaw\":{},\"world_seconds\":{},\"pawn\":{}}}\n",
-                    player.control_yaw, player.camera_yaw, player.world_seconds, pawn));
+        std::format("{{\"control_yaw\":{},\"control_pitch\":{},\"camera_yaw\":{},"
+                    "\"camera_location\":[{},{},{}],\"world_seconds\":{},\"pawn\":{},"
+                    "\"pawns\":[{}]}}\n",
+                    player.control_yaw, player.control_pitch, player.camera_yaw,
+                    player.camera_location[0], player.camera_location[1], player.camera_location[2],
+                    player.world_seconds, pawn, pawns));
+}
+
+lucent::http::Response ControlChannel::Navigation() const
+{
+    std::vector<titles::gears1::NavigationPoint> points;
+    std::string error;
+    if (!titles::gears1::ReadNavigation(GuestReader(), points, error))
+    {
+        return JsonError(409, "Conflict", error);
+    }
+    std::string body = "{\"points\":[";
+    for (std::size_t index = 0; index < points.size(); ++index)
+    {
+        const titles::gears1::NavigationPoint &point = points[index];
+        body +=
+            std::format("{}{{\"id\":{},\"location\":[{},{},{}],\"paths\":[", index == 0 ? "" : ",",
+                        point.address, point.location[0], point.location[1], point.location[2]);
+        for (std::size_t path = 0; path < point.paths.size(); ++path)
+        {
+            const titles::gears1::NavigationPath &reach = point.paths[path];
+            body += std::format("{}[{},{},{}]", path == 0 ? "" : ",", reach.end, reach.distance,
+                                JsonString(PathKindName(reach)));
+        }
+        body += "]}";
+    }
+    body += "]}\n";
+    return lucent::http::Response::json(200, "OK", std::move(body));
 }
 
 } // namespace gears::product

@@ -48,9 +48,10 @@ play, the audio mix (about 47,000 calls per second, `docs/issues/0172`), agrees 
 guest's own body on every live call of that route (S004), and the route fails unless
 the world's game clock keeps to wall time while the product presents up to 120 times a
 second, twice the console's rate (0.9997 game seconds per wall second over the route).
-Its first idle view renders as stock Xenia renders it (`tools/oracle_compare.py`). What
-remains for S009 is play beyond the first firefight: clearing it, reaching a later
-checkpoint, and loading later levels. Presentation now runs
+Its first idle view renders as stock Xenia renders it (`tools/oracle_compare.py`). The route
+now clears that firefight and joins Dom along the level's navigation graph; what
+remains for S009 is playing on through Act 1 unattended (a REVIVE tutorial and further
+firefights follow) and loading later levels. Presentation now runs
 up to 120 presents/s under a host limit; S013 records the gameplay rate and its next costs.
 
 Two facts from an earlier qualification constrain further native-override work. Recovered guest
@@ -256,9 +257,24 @@ same Xenia GPU backend as the oracle, so what the comparison can catch is the pr
 own composition (the 1000 Hz vblank and the present cap, S013); its one native override
 in play is checked on every call instead (S004). The firefight's frames are not
 compared, because the oracle has no control channel to follow the closed-loop route.
-Gap: nothing past Act 1's first firefight has been played. No enemy is killed, no later
-checkpoint is reached (the save still names `WarCheckpoint_0`), and no later act or
-level load has been exercised.
+The route now fights: it reads every pawn's health and team (`/api/player`), aims from
+the camera at each living hostile, fires half-second bursts, recovers in cover below 280
+health, switches to the pistol when the Lancer runs dry, and after a death reloads the
+yard checkpoint and resumes, up to four attempts. When the drones are dead it waits for
+Dom to stop and joins him along the shortest walk-and-mantle path of the level's
+navigation graph (`/api/navigation`, `tools/navigation.py`), then ends the run through
+`POST /api/stop`. A fresh run on 2026-09-24 passed end to end: all four drones killed
+on the first attempt in 66 s with no death, Dom joined over 13 graph points and one
+mantle, game time 0.9996 of wall time over 145 s, and the run stopped after 459 s with
+p50 8.4 ms and 0 translation failures. Two runs before it failed at the jammed door
+(the kicks missed while the walk pressed Marcus against it; the route now steps back
+first) and at a navigation path with a null end (now reported rather than refused).
+Driven by hand from there with the same steps, Marcus followed Dom, cleared the second
+firefight (three drones, 51 s, full health) and reached `WarCheckpoint_3` of
+`SP_Prison_S05_Scripting`, where a REVIVE tutorial for a downed Dom stopped the walk.
+Gap: the route does not yet play past joining Dom: the second firefight, the revive
+(A to dismiss the tutorial, X beside Dom), and everything after `WarCheckpoint_3` are
+unscripted, and no later act or level load has been exercised.
 
 ### S010 — Apple Silicon A64
 

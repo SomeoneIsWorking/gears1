@@ -192,13 +192,33 @@ follows this chain for `GET /api/player`:
   four Locust drones: two in the yard near (-1470, 4830) and (-1630, 4550) at
   z 203-220 and two on the balcony near (-3195, 5550-5850) at z 845. Pawn
   vtable `0x820ABC18` was both COG pawns and `0x820AB558` every drone.
-- Health is not located. Pawn `+0x48C` is 301 for COG and 250 for drones and
-  stayed 301 on Dom while his HUD showed him down, so it is not current health;
-  `+0x350` is 2000 on every pawn. No drone was hit in the one live attempt:
-  aiming at a drone's location from the yard cover put the crosshair on the
-  wall in front of it, and the Lancer emptied into cover. Aiming needs a stick
-  magnitude of about 11000 before the camera turns; below that the error
-  stalls at 700-850 units.
+- Pawn `+0x288` is current health, a signed int: 301 for Marcus and 250 for a
+  drone when full, falling with hits, regenerating in cover, and zero or below
+  once dead (-750 after some kills). Found by differencing Marcus while he was
+  shot to death. Pawn `+0x48C` is the same 301/250 but did not fall, so it is a
+  maximum. The first byte of pawn `+0x3B4` is the team: 0 for COG, 1 for every
+  drone.
+- The camera actor's location is the view's origin, not the pawn's: about 40
+  units to the pawn's right, 70 behind and 66 up while aiming. Aiming from the
+  pawn misses by that offset, most at close range. The right stick turns the
+  view only past a magnitude of about 11000; below that an aim error stalls at
+  700-850 units.
+- WorldInfo `+0x320` heads the navigation point list (1150 points on
+  sp_prison_p), linked through point `+0x208`. Point `+0x1DC` is a TArray of
+  ReachSpec pointers (vtable `0x820DF328`); ReachSpec `+0x40` is its length,
+  `+0x44` its start point and `+0x48` its end point: the lengths matched the
+  points' spacing (157 and 196 units); after the yard's first firefight one
+  path's end was null. ReachSpec classes by vtable: `0x820DF328` plain walks
+  (2772 of 2940 paths with 645 points loaded), `0x820DF898` mantles joining the
+  cover slots either side of low cover (52), and `0x820DF980` (104) and
+  `0x820DF5E0` (12), both from cover slots, not yet understood. Point vtable
+  `0x820955C0` (432) is at cover (z 244 against 186 for `0x820952E8` path
+  nodes). A mantle is crossed with the stick toward the far side, A to take
+  cover, then A again. `runtime/titles/gears1/navigation_probe.*` serves the
+  graph at `GET /api/navigation`.
+- D-pad down draws the pistol (48 rounds) when the Lancer is empty; right draws
+  the Lancer back. A death shows "Objective Failed" with Load Last Checkpoint
+  selected, and A reloads the last checkpoint.
 
 `tools/combat_route.py` steers by this chain from where the gameplay walk
 leaves Marcus (in cover near (-760, 1190); the walk's fixed timing varies it by
@@ -209,11 +229,18 @@ them, and each appears some seconds after its trigger, so the route answers a
 prompt only when the player stalls. At the door the objectives prompt (LB)
 follows about 20 s of radio dialogue; the kick (X) is offered only after LB is
 released, and an X pressed while the objectives display is still closing is
-lost. The cell room and yard follow (-1253, 2637), (-1669, 2727),
+lost. A run whose walk stopped at the "Choose path" prompt stays at (-317, 1106)
+until LT takes the combat path. The cell room and yard follow (-1253, 2637), (-1669, 2727),
 (-1752, 3104), (-1377, 3350), and (-1034, 3530) to cover at (-1034, 3640),
 where the cover prompt (A) holds the trigger and the first drones engage. The
 points-of-interest prompt (Y) near (-1017, 1360) held Marcus in one live run
-and not in later ones. The yard checkpoint respawns at (-1606, 2573).
+and not in later ones. The yard checkpoint respawns at (-1606, 2573). The route
+fights from that cover: it aims from the camera at each hostile the pawn list
+names, first in cover and then with LT, fires half-second bursts, and returns to
+cover below 280 health. It cleared the four drones in live runs, sometimes after
+reloading the checkpoint once or twice. Dom then walks to about (-1447, 6504)
+and radios "Six-Four, we are moving to your location"; Marcus's straight walk
+toward him from the yard cover is blocked by the cover and then by a wall.
 
 The ignored `build/ghidra/gears` project imports the loaded image linearly, so
 its addresses agree with the runtime: `0x8222E868` reads `7d8802a6`. The

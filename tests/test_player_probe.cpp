@@ -1,13 +1,11 @@
 #include "player_probe.h"
 
-#include <bit>
+#include "fake_guest_memory.h"
+
 #include <cstdlib>
 #include <iostream>
-#include <map>
 #include <string>
 #include <string_view>
-
-#include <x360port/guest_endian.hpp>
 
 namespace
 {
@@ -23,35 +21,7 @@ void Require(bool condition, std::string_view message)
     }
 }
 
-// Guest memory as the words a test places; every other address is unreadable.
-class FakeGuest
-{
-  public:
-    void Put(std::uint32_t address, std::uint32_t word) { words_[address] = word; }
-    void PutFloat(std::uint32_t address, float value)
-    {
-        Put(address, std::bit_cast<std::uint32_t>(value));
-    }
-    void Erase(std::uint32_t address) { words_.erase(address); }
-
-    [[nodiscard]] GuestMemoryReader Reader() const
-    {
-        return [this](std::uint32_t address, std::span<std::byte> bytes)
-        {
-            auto word = words_.find(address);
-            if (bytes.size() != 4U || word == words_.end())
-            {
-                return x360port::RuntimeFailure{x360port::RuntimeError::GuestMemoryRangeInvalid,
-                                                "not placed"};
-            }
-            x360port::StoreGuestWord(bytes, 0, word->second);
-            return x360port::RuntimeFailure{};
-        };
-    }
-
-  private:
-    std::map<std::uint32_t, std::uint32_t> words_;
-};
+using FakeGuest = gears::tests::FakeGuestMemory;
 
 constexpr std::uint32_t kEngine = 0x48FF7000U;
 constexpr std::uint32_t kPlayers = 0x423BCE40U;
@@ -61,6 +31,7 @@ constexpr std::uint32_t kCamera = 0x48FA8700U;
 constexpr std::uint32_t kPawn = 0x4742AA00U;
 constexpr std::uint32_t kWeapon = 0x4645AA00U;
 constexpr std::uint32_t kWorldInfo = 0x42550000U;
+constexpr std::uint32_t kDrone = 0x475DD200U;
 
 FakeGuest PlayingGuest()
 {
@@ -72,15 +43,30 @@ FakeGuest PlayingGuest()
     guest.Put(kPlayer + kPlayerControllerOffset, kController);
     guest.Put(kController + kControllerCameraOffset, kCamera);
     // Rotations accumulate past a turn; only the low 16 bits are a heading.
+    guest.Put(kController + kActorRotationOffset, 0xFFFFFE0CU);
     guest.Put(kController + kActorRotationOffset + 4U, 104707U);
     guest.Put(kCamera + kActorRotationOffset + 4U, 0xFFFF0001U);
+    guest.PutFloat(kCamera + kActorLocationOffset, -1091.5F);
+    guest.PutFloat(kCamera + kActorLocationOffset + 4U, 3570.0F);
+    guest.PutFloat(kCamera + kActorLocationOffset + 8U, 269.0F);
     guest.Put(kController + kActorWorldInfoOffset, kWorldInfo);
     guest.PutFloat(kWorldInfo + kWorldInfoTimeSecondsOffset, 224.5F);
     guest.Put(kController + kControllerPawnOffset, kPawn);
     guest.PutFloat(kPawn + kActorLocationOffset, -1051.5F);
     guest.PutFloat(kPawn + kActorLocationOffset + 4U, 3640.0F);
     guest.PutFloat(kPawn + kActorLocationOffset + 8U, 203.0F);
+    guest.Put(kPawn + kPawnHealthOffset, 146U);
+    guest.Put(kPawn + kPawnTeamOffset, 0x00003931U);
     guest.Put(kPawn + kPawnWeaponOffset, kWeapon);
+    // The world lists the player's pawn, then a dead drone.
+    guest.Put(kWorldInfo + kWorldInfoPawnListOffset, kPawn);
+    guest.Put(kPawn + kPawnNextPawnOffset, kDrone);
+    guest.PutFloat(kDrone + kActorLocationOffset, -1367.0F);
+    guest.PutFloat(kDrone + kActorLocationOffset + 4U, 4919.0F);
+    guest.PutFloat(kDrone + kActorLocationOffset + 8U, 218.0F);
+    guest.Put(kDrone + kPawnHealthOffset, 0xFFFFFFFDU);
+    guest.Put(kDrone + kPawnTeamOffset, 0x01000000U);
+    guest.Put(kDrone + kPawnNextPawnOffset, 0U);
     guest.Put(kWeapon + kWeaponMagazineRoundsFiredOffset, 42U);
     return guest;
 }
@@ -107,6 +93,17 @@ int main()
             "the pawn's location was not read");
     Require(snapshot.control_yaw == 104707U % 65536U && snapshot.camera_yaw == 1U,
             "yaws were not reduced to one turn");
+    Require(snapshot.camera_location[0] == -1091.5F && snapshot.camera_location[2] == 269.0F,
+            "the camera's location was not read");
+    Require(snapshot.control_pitch == 0xFE0CU, "a downward pitch was not reduced to one turn");
+    Require(snapshot.health == 146 && snapshot.team == 0U, "the pawn's vitals were not read");
+    Require(snapshot.pawns.size() == 2U && snapshot.pawns[0].is_player &&
+                snapshot.pawns[0].health == 146 && !snapshot.pawns[1].is_player &&
+                snapshot.pawns[0].address == kPawn && snapshot.pawns[1].address == kDrone,
+            "the world's pawns were not listed in order");
+    Require(snapshot.pawns[1].health == -3 && snapshot.pawns[1].team == 1U &&
+                snapshot.pawns[1].location[1] == 4919.0F,
+            "a dead drone's health, team, and location were not read");
     Require(snapshot.world_seconds == 224.5F, "the world's time was not read");
     Require(snapshot.has_weapon && snapshot.magazine_rounds_fired == 42U,
             "the weapon's rounds were not read");
@@ -120,6 +117,15 @@ int main()
     Require(ReadPlayer(guest.Reader(), snapshot, error) && !snapshot.has_pawn &&
                 snapshot.control_yaw == 104707U % 65536U,
             "a dead player was not reported without a pawn");
+    Require(snapshot.pawns.size() == 2U && !snapshot.pawns[0].is_player,
+            "a dead player's world was not listed");
+
+    FakeGuest cyclic = PlayingGuest();
+    cyclic.Put(kDrone + kPawnNextPawnOffset, kPawn);
+    RequireRefused(cyclic, "runs past 256 pawns");
+    FakeGuest unreadable_drone = PlayingGuest();
+    unreadable_drone.Erase(kDrone + kPawnTeamOffset);
+    RequireRefused(unreadable_drone, "a listed pawn's vitals at 0x475DD5B4 is unreadable");
 
     FakeGuest no_player = PlayingGuest();
     no_player.Put(kEngine + kEngineGamePlayersOffset + 4U, 0U);
@@ -132,7 +138,7 @@ int main()
     RequireRefused(no_controller, "the player's controller at 0x4271CEC0 is null");
     FakeGuest unreadable_pawn = PlayingGuest();
     unreadable_pawn.Erase(kPawn + kActorLocationOffset + 8U);
-    RequireRefused(unreadable_pawn, "the pawn's location at 0x4742AAD4 is unreadable");
+    RequireRefused(unreadable_pawn, "pawn's location at 0x4742AAD4 is unreadable");
     FakeGuest no_world = PlayingGuest();
     no_world.Put(kController + kActorWorldInfoOffset, 0U);
     RequireRefused(no_world, "the controller's world info");

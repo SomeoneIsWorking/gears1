@@ -55,8 +55,16 @@ class ProductControl:
         return Image.open(io.BytesIO(self._request("GET", "/api/frame.ppm")))
 
     def player(self) -> dict[str, object]:
-        """The local player's view yaws and pawn; ControlError before gameplay."""
+        """The local player's view, pawn, and the world's pawns; ControlError before gameplay."""
         return json.loads(self._request("GET", "/api/player"))
+
+    def navigation(self) -> dict[str, object]:
+        """The level's navigation points and paths; ControlError before gameplay."""
+        return json.loads(self._request("GET", "/api/navigation"))
+
+    def stop(self) -> None:
+        """End the run at its next second; it still runs its end-of-run checks."""
+        self._request("POST", "/api/stop", b"")
 
     def memory(self, address: int, length: int) -> bytes:
         query = urllib.parse.urlencode({"address": f"0x{address:08X}", "length": length})
