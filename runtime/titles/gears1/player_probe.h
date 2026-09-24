@@ -22,6 +22,9 @@ inline constexpr std::uint32_t kEngineGamePlayersOffset = 0x29CU;
 inline constexpr std::uint32_t kPlayerControllerOffset = 0x40U;
 // Controller: the possessed pawn, null while the player is dead.
 inline constexpr std::uint32_t kControllerPawnOffset = 0x1A0U;
+// Actor: the level's WorldInfo, and in it the world's clock in game seconds.
+inline constexpr std::uint32_t kActorWorldInfoOffset = 0x8CU;
+inline constexpr std::uint32_t kWorldInfoTimeSecondsOffset = 0x288U;
 // PlayerController: the camera actor, whose rotation is the view.
 inline constexpr std::uint32_t kControllerCameraOffset = 0x294U;
 // AActor: Location (three floats) and Rotation (pitch, yaw, roll).
@@ -42,6 +45,9 @@ struct PlayerSnapshot
 {
     std::uint16_t control_yaw = 0;
     std::uint16_t camera_yaw = 0;
+    // Game time since the level began; it advances one second per wall second
+    // unless the simulation runs faster or slower than real time.
+    float world_seconds = 0.0F;
     bool has_pawn = false;
     std::array<float, 3> location{};
     bool has_weapon = false;

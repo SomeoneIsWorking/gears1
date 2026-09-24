@@ -53,4 +53,4 @@ is refused with HTTP 400 naming the field.
 | `DELETE /api/input` | disconnect the remote controller |
 | `GET /api/frame.ppm` | the latest guest output as binary PPM; 503 before the first present |
 | `GET /api/memory?address=HEX&length=N` | `N` (1..4096) bytes of guest virtual memory; 422 when any of the range is unmapped |
-| `GET /api/player` | JSON: control and camera yaw, and the pawn's location and weapon (`null` while dead); 409 before gameplay |
+| `GET /api/player` | JSON: control and camera yaw, the world's game time in seconds, and the pawn's location and weapon (`null` while dead); 409 before gameplay |

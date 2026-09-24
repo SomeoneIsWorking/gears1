@@ -17,7 +17,9 @@ crosses the cell room to the yard, takes cover, and fires. Each tutorial holds
 Marcus in place until its button is held. The report in ``scratch/combat_route/``
 records where every step began and ended. The route fails, naming the step,
 when a step does not reach its goal; it passes only when the player reached
-cover in the yard, the weapon fired rounds there, and the offscreen run's own
+cover in the yard, the weapon fired rounds there, the world's game time kept
+to wall time throughout (the product presents up to 120 times a second, twice
+the console's rate), and the offscreen run's own
 checks passed (with ``--verify-audio-mix``, that the native audio mix agreed
 with the guest's body on every compared call).
 """
@@ -51,6 +53,9 @@ STALL_SECONDS = 2.5
 # The walk takes about 300 s; the route about 120 s; the rest is margin.
 RUN_SECONDS = 720
 HANDOVER_TIMEOUT_SECONDS = 600
+# Game time must keep to wall time while the product presents up to 120 times
+# a second; the bound covers the control channel's sampling latency.
+GAME_TIME_RATE_TOLERANCE = 0.03
 TUTORIAL_HOLD_SECONDS = 2.5
 OBJECTIVES_CLOSE_SECONDS = 1.5
 # A late prompt can need a second hold; a third stall is a real obstacle.
@@ -68,18 +73,21 @@ class Player:
     position: tuple[float, float] | None
     control_yaw: int
     magazine_rounds_fired: int | None
+    world_seconds: float = 0.0
 
     @staticmethod
     def from_json(reading: dict[str, object]) -> Player:
         pawn = reading["pawn"]
+        world_seconds = float(reading["world_seconds"])
         if pawn is None:
-            return Player(None, int(reading["control_yaw"]), None)
+            return Player(None, int(reading["control_yaw"]), None, world_seconds)
         location = pawn["location"]
         rounds = pawn["magazine_rounds_fired"]
         return Player(
             (float(location[0]), float(location[1])),
             int(reading["control_yaw"]),
             None if rounds is None else int(rounds),
+            world_seconds,
         )
 
 
@@ -122,6 +130,22 @@ class Route:
 
     def player(self) -> Player:
         return Player.from_json(self._pad.player())
+
+    def clock(self) -> tuple[float, float]:
+        """Wall seconds and the world's game seconds, read together."""
+
+        return self._clock(), self.player().world_seconds
+
+    def require_real_time(self, start: tuple[float, float]) -> float:
+        """Game seconds per wall second since start; refuses a simulation off real time."""
+
+        wall, world = self.clock()
+        rate = (world - start[1]) / (wall - start[0])
+        self.steps.append({"step": "game time kept to wall time", "rate": round(rate, 4),
+                           "wall_seconds": round(wall - start[0], 1)})
+        if abs(rate - 1.0) > GAME_TIME_RATE_TOLERANCE:
+            raise RouteFailure(f"game time ran at {rate:.3f} game seconds per wall second")
+        return rate
 
     def alive(self, step: str) -> Player:
         player = self.player()
@@ -322,7 +346,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         run = subprocess.Popen(command, cwd=REPO_ROOT, stdout=run_output, stderr=subprocess.STDOUT)
         try:
             wait_for_handover(control, run)
+            start = route.clock()
             play_to_first_firefight(route)
+            route.require_real_time(start)
             outcome["passed"] = True
         except (RouteFailure, ControlError) as error:
             outcome["failure"] = str(error)

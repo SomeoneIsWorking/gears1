@@ -45,10 +45,10 @@ path choice, and play driven over the control channel reaches Act 1's first fire
 `tools/combat_route.py` plays from there into the firefight reproducibly by steering
 on the local player's position read over the control channel. The one native owner in
 play, the audio mix (about 47,000 calls per second, `docs/issues/0172`), agrees with the
-guest's own body on every live call of that route (S004). What remains for S009 is a
-frame and timing comparison against stock Xenia: the product presents up to 120 times
-a second where the console presents at most 60, and no run has yet shown that the
-faster presentation leaves play unchanged. Presentation now runs
+guest's own body on every live call of that route (S004), and the route fails unless
+the world's game clock keeps to wall time while the product presents up to 120 times a
+second, twice the console's rate (0.9997 game seconds per wall second over the route).
+What remains for S009 is a comparison of rendered frames against stock Xenia. Presentation now runs
 up to 120 presents/s under a host limit; S013 records the gameplay rate and its next costs.
 
 Two facts from an earlier qualification constrain further native-override work. Recovered guest
@@ -239,9 +239,11 @@ player stalls, and passes only when the player reaches the yard cover and the we
 magazine count rises. Two consecutive fresh runs passed with the same trace: the door
 opened 30.8 s after arrival on the third kick attempt, the yard legs took 1.4-1.8 s
 each, and the weapon fired 6 and 5 rounds on the second cover attempt. The native audio
-mix is compared with the guest's body on every call of that route (S004). Gap: no frame
-or timing comparison against stock Xenia shows that presenting up to 120 times a second
-leaves play unchanged. Linux has gamepad input only. The product's
+mix is compared with the guest's body on every call of that route (S004). The route also
+reads the world's game clock (WorldInfo `+0x288`) and fails unless it advanced within
+3% of wall time; the last run measured 0.9997 at 119-120 presents/s, so the doubled
+presentation rate does not speed up the simulation. Gap: rendered frames are not
+compared against stock Xenia. Linux has gamepad input only. The product's
 native audio-mix override is reached on real guest threads (`docs/issues/0172`). Two startup failures seen during a
 concurrent heavy build are unexplained (`docs/issues/0173`).
 
