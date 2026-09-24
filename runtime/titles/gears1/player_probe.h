@@ -20,9 +20,12 @@ inline constexpr std::uint32_t kControllerPawnOffset = 0x1A0U;
 inline constexpr std::uint32_t kWorldInfoTimeSecondsOffset = 0x288U;
 // PlayerController: the camera actor, whose location and rotation are the view.
 inline constexpr std::uint32_t kControllerCameraOffset = 0x294U;
-// Pawn: the held weapon; weapon: rounds fired from the current magazine.
+// Pawn: the held weapon. Weapon: its magazine's size, rounds fired from the
+// current magazine, and spare rounds a reload (RB) draws from.
 inline constexpr std::uint32_t kPawnWeaponOffset = 0x35CU;
+inline constexpr std::uint32_t kWeaponMagazineSizeOffset = 0x450U;
 inline constexpr std::uint32_t kWeaponMagazineRoundsFiredOffset = 0x490U;
+inline constexpr std::uint32_t kWeaponSpareRoundsOffset = 0x498U;
 // WorldInfo: the first pawn in the world; each pawn links to the next.
 inline constexpr std::uint32_t kWorldInfoPawnListOffset = 0x328U;
 inline constexpr std::uint32_t kPawnNextPawnOffset = 0x1B0U;
@@ -63,7 +66,11 @@ struct PlayerSnapshot
     std::int32_t health = 0;
     std::uint8_t team = 0;
     bool has_weapon = false;
+    // The held weapon, by guest address; it changes when the player switches.
+    std::uint32_t weapon = 0;
+    std::uint32_t magazine_size = 0;
     std::uint32_t magazine_rounds_fired = 0;
+    std::uint32_t spare_rounds = 0;
     // Every pawn in the player's world, in the engine's list order.
     std::vector<PawnReading> pawns;
 };

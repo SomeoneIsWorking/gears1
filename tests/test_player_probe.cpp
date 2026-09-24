@@ -67,7 +67,9 @@ FakeGuest PlayingGuest()
     guest.Put(kDrone + kPawnHealthOffset, 0xFFFFFFFDU);
     guest.Put(kDrone + kPawnTeamOffset, 0x01000000U);
     guest.Put(kDrone + kPawnNextPawnOffset, 0U);
+    guest.Put(kWeapon + kWeaponMagazineSizeOffset, 60U);
     guest.Put(kWeapon + kWeaponMagazineRoundsFiredOffset, 42U);
+    guest.Put(kWeapon + kWeaponSpareRoundsOffset, 529U);
     return guest;
 }
 
@@ -105,8 +107,12 @@ int main()
                 snapshot.pawns[1].location[1] == 4919.0F,
             "a dead drone's health, team, and location were not read");
     Require(snapshot.world_seconds == 224.5F, "the world's time was not read");
-    Require(snapshot.has_weapon && snapshot.magazine_rounds_fired == 42U,
+    Require(snapshot.has_weapon && snapshot.weapon == kWeapon && snapshot.magazine_size == 60U &&
+                snapshot.magazine_rounds_fired == 42U && snapshot.spare_rounds == 529U,
             "the weapon's rounds were not read");
+    FakeGuest no_spares = PlayingGuest();
+    no_spares.Erase(kWeapon + kWeaponSpareRoundsOffset);
+    RequireRefused(no_spares, "the weapon's spare rounds at 0x4645AE98 is unreadable");
 
     guest.Put(kPawn + kPawnWeaponOffset, 0U);
     Require(ReadPlayer(guest.Reader(), snapshot, error) && snapshot.has_pawn &&

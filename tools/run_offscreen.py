@@ -33,6 +33,8 @@ from tools.gearsue3_bootstrap.profile import Navigation, load_profile
 from tools.gearsue3_bootstrap.provision import prepare_title
 
 RUN_ROOT = Path("scratch/offscreen")
+# The title's content and saves for offscreen runs, kept across runs.
+STORAGE_ROOT = RUN_ROOT / "storage"
 SHEET_COLUMNS = 3
 SHEET_CELL = (426, 240)
 
@@ -131,7 +133,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     command = prepared.command() + [
         "--offscreen",
         "--storage-root",
-        os.fspath(run_root / "storage"),
+        os.fspath(REPO_ROOT / STORAGE_ROOT),
         "--seconds",
         str(arguments.seconds),
         "--capture-dir",

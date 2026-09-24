@@ -182,8 +182,12 @@ follows this chain for `GET /api/player`:
   movement follows the controller's yaw; the world is left-handed, so full
   right moves a quarter turn toward +y of +x. Holding Y turns the camera actor,
   not the controller, toward the point of interest.
-- Pawn `+0x35C` is the held weapon; weapon `+0x490` counts rounds fired from
-  the current magazine (a Lancer burst adds 12). Found by differencing the
+- Pawn `+0x35C` is the held weapon; weapon `+0x450` is its magazine size
+  (pistol 12, Hammerburst 26), `+0x490` counts rounds fired from the current
+  magazine (a Lancer burst adds 12), and `+0x498` holds the spare rounds a
+  reload draws from: one pistol shot moved `+0x490` from 0 to 1, and RB then
+  reset it and took `+0x498` from 36 to 35. D-pad right held the rifle and down
+  the pistol. Pawn `+0x358` is the inventory manager. Found by differencing the
   weapon across bursts: the HUD's ammo totals appear elsewhere in memory but
   never changed with firing, so their owner is still unknown.
 - WorldInfo `+0x328` heads the pawn list, linked through pawn `+0x1B0`;
@@ -216,8 +220,13 @@ follows this chain for `GET /api/player`:
   nodes). A mantle is crossed with the stick toward the far side, A to take
   cover, then A again. `runtime/titles/gears1/navigation_probe.*` serves the
   graph at `GET /api/navigation`.
-- D-pad down draws the pistol (48 rounds) when the Lancer is empty; right draws
-  the Lancer back. A death shows "Objective Failed" with Load Last Checkpoint
+- `0x82C0C8CC` is the name table, a TArray of name-entry pointers (33,754
+  names in sp_prison_p); an entry's `+0x0` is its index and `+0x10` its
+  UTF-16BE text, and an object's own name is the (index, number) pair at
+  `+0x2C`. `0x82BFC5A4` is a TArray of 100,644 pointers, probably the object
+  table. A level's `+0x3C` is its actor array: 412 actors, including
+  `WarDroppedPickup`s lying where drones died (collision centre z 131-133).
+  Walking onto one and pressing X refilled ammunition. A death shows "Objective Failed" with Load Last Checkpoint
   selected, and A reloads the last checkpoint.
 
 `tools/combat_route.py` steers by this chain from where the gameplay walk
