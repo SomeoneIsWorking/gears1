@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -404,11 +405,13 @@ class CrashTriageTests(unittest.TestCase):
         with self.assertRaisesRegex(crash_triage.TriageError, "no body"):
             crash_triage.format_crash_report('{"name":"t"}')
         ticks = iter(range(0, 1000, 10))
-        show = crash_triage.crash_report_backtrace(Path("/nonexistent"), 0.0,
+        missing = Path("/nonexistent")
+        show = crash_triage.crash_report_backtrace(missing, 0.0,
                                                    clock=lambda: float(next(ticks)),
                                                    sleep=lambda seconds: None)
         with self.assertRaisesRegex(crash_triage.TriageError,
-                                    "no crash report of trap appeared in /nonexistent within 60 s"):
+                                    f"no crash report of trap appeared in {re.escape(str(missing))} "
+                                    "within 60 s"):
             show(crash_triage.TestCommand("traps", ("/b/trap",), None))
 
     def test_a_hung_debugger_is_refused(self) -> None:
