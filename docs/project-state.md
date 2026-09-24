@@ -27,10 +27,18 @@ This inventory reports observable capabilities independently of the product goal
 | S017 | Asset-free native/JIT boundary CI | partial | S006 | G001, G002, G004 |
 | S018 | PC keyboard and mouse controls beside host gamepads | partial | S009 | G001 |
 | S019 | Campaign checkpoints save and resume in the player's user-data directory | verified | S006 | G001 |
+| S020 | Native engine reads Gears 1's cooked packages without the guest | verified | S002 | G001 |
+| S021 | Native engine reads objects' serialized properties | missing | S020 | G001 |
+| S022 | Native engine decodes textures and static meshes and renders a level | missing | S020, S021 | G001, G003 |
 
 ## Current focus
 
-S009 is the current focus. Gears 1 is the only active title. `./run.sh` now authenticates
+The native engine (S020-S022) is the current focus: independently written C++ that owns
+UE3 subsystems over Gears 1's own content, with the dynarec only for what remains. S020
+is the first layer. The Xenia-hosted product below is the dynarec half and is no longer
+where new work goes first.
+
+S009 was the previous focus. Gears 1 is the only active title. `./run.sh` now authenticates
 the user's disc by its `default.xex` digest, builds the `gears1` product, and runs it
 through `x360port::SystemSession`: Xenia's kernel, file system, GPU, audio, and input
 services host the authenticated executable, the guest CPU runs on Xenia's x64 dynarec,
@@ -520,3 +528,26 @@ checkpoint) under the profile's content, and on the next run Single Player offer
 Continue Campaign, which resumes the level from that checkpoint; New Campaign then asks
 before overwriting it. `system_config_tests` covers the refused gamertags.
 
+### S020 — native cooked-package loading
+
+`runtime/engine/package/` loads a cooked package as it lies on the disc: whole-file
+compressed (a little-endian record header), chunk compressed (a plain big-endian summary
+whose chunk table addresses the package as if the table were absent), or plain, with
+sector padding refused unless it is zero. LZO1X is decoded natively. Summaries, names,
+imports, and exports are read for package file version 374 only, and every name and
+object reference is range-checked. The layouts were measured on the disc's own files.
+Evidence: `test_engine_package` (CTest `gears_engine_package`) covers the three forms,
+padding, and refusals. `gears_package_census` loaded all 1,745 packages of the retail
+disc with every package's export data tiling its body exactly: 1,010,626 names, 200,133
+imports, 2,862,196 exports of 1,878 classes, 9,682 MiB uncompressed. Its LZO1X decoder
+agreed byte for byte with FFmpeg's on the whole-file packages.
+
+### S021 — native property serialization
+
+Missing. Next layer: the tagged-property stream at the start of each export's data,
+and the class and struct schemas from the script packages that give it meaning.
+
+### S022 — native asset decode and level rendering
+
+Missing. Needs S021 for Texture2D and StaticMesh properties, then their native bulk
+data and a Vulkan renderer that draws a persistent level from its actors.

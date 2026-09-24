@@ -254,6 +254,8 @@ else()
     message(STATUS "gears1: x360port has no full-console host here; the product is not built")
 endif()
 
+add_subdirectory(runtime/engine)
+
 add_executable(test_gears1_ue3_contract tests/test_gears1_ue3_contract.cpp)
 target_link_libraries(test_gears1_ue3_contract PRIVATE x360ue3::x360ue3)
 x360port_enable_warnings(test_gears1_ue3_contract)
