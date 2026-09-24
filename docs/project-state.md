@@ -49,7 +49,8 @@ guest's own body on every live call of that route (S004), and the route fails un
 the world's game clock keeps to wall time while the product presents up to 120 times a
 second, twice the console's rate (0.9997 game seconds per wall second over the route).
 Its first idle view renders as stock Xenia renders it (`tools/oracle_compare.py`). What
-remains for S009 is the same comparison in combat scenes. Presentation now runs
+remains for S009 is play beyond the first firefight: clearing it, reaching a later
+checkpoint, and loading later levels. Presentation now runs
 up to 120 presents/s under a host limit; S013 records the gameplay rate and its next costs.
 
 Two facts from an earlier qualification constrain further native-override work. Recovered guest
@@ -212,8 +213,8 @@ imports/devices, real-image fallback, and title gameplay remain open.
 ### S009 — representative gameplay
 
 Evidence: `tools/run_offscreen.py --seconds 150 --walk menu` runs the shipping
-executable headless and silent on the supported disc. It presents 4445 frames in
-150 s, 29-30 each second. Its captures show the logos; the main, campaign,
+executable headless and silent on the supported disc. It presents at 30/s while the
+title boots and 120/s from the front end on (the host cap, S013). Its captures show the logos; the main, campaign,
 single-player, and difficulty menus; the unsigned-profile prompt; and Act 1's opening
 scene with its subtitles. The run fails unless the dynarec translated guest code and
 no function failed to translate: over 60 s it translated 10,996 guest functions to
@@ -250,11 +251,14 @@ the product's last capture differs from the oracle's by at most twice the oracle
 change between its last two captures (`tools/frame_parity.py`). Measured: 0.351
 against a limit of 0.509 (oracle motion 0.255). Planted defects in the product frame
 score 1.04-7.9 against an oracle motion of 0.32: 10% brightness, a 120x200 hole, a
-2-pixel shift, gamma 0.9, swapped red and blue, black. Gap: only that idle view is
-compared. The firefight is not, because the oracle has no control channel to follow
-the closed-loop route. Linux has gamepad input only. The product's
-native audio-mix override is reached on real guest threads (`docs/issues/0172`). Two startup failures seen during a
-concurrent heavy build are unexplained (`docs/issues/0173`).
+2-pixel shift, gamma 0.9, swapped red and blue, black. The product draws through the
+same Xenia GPU backend as the oracle, so what the comparison can catch is the product's
+own composition (the 1000 Hz vblank and the present cap, S013); its one native override
+in play is checked on every call instead (S004). The firefight's frames are not
+compared, because the oracle has no control channel to follow the closed-loop route.
+Gap: nothing past Act 1's first firefight has been played. No enemy is killed, no later
+checkpoint is reached (the save still names `WarCheckpoint_0`), and no later act or
+level load has been exercised.
 
 ### S010 — Apple Silicon A64
 
