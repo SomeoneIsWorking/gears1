@@ -20,16 +20,18 @@ the fight resumes from the same cover, as a player would, up to a bound. When th
 fight is over it waits for Dom to stop walking ahead and joins him along the
 shortest path of the level's navigation graph (``/api/navigation``), which
 goes round the walls a straight walk runs into. From there it fights every
-hostile the probe lists, revives Dom when he is downed, and follows him until
+hostile the probe lists from the level's nearest cover slot, revives Dom when he is downed, and follows him until
 the title saves its next checkpoint (read from the run's storage by
 ``tools/gears1_checkpoint.py``); a death reloads the checkpoint.
-``--checkpoints N`` plays on through N saves.
+``--checkpoints N`` plays on through N saves. ``--continue`` instead resumes
+the profile's last saved checkpoint through Continue Campaign (the profile's
+continue walk) and plays on from there, skipping the opening.
 Each tutorial holds Marcus in place until its button is held, and a prompt that
 blocks his input is dismissed with A when a burst, walk, or revive has no effect. The report in ``scratch/combat_route/``
 records where every step began and ended. The route fails, naming the step,
-when a step does not reach its goal; it passes only when the player reached cover in the yard, the weapon fired
-rounds there, every hostile of the first firefight died, and Marcus reached Dom afterwards; then
-each requested new checkpoint was saved,
+when a step does not reach its goal; it passes only when, in a new campaign, the player reached
+cover in the yard, the weapon fired rounds there, every hostile of the first firefight died, and
+Marcus reached Dom afterwards; then each requested new checkpoint was saved,
 the world's game time kept to wall time while the world ran (the product
 presents up to 120 times a second, twice the console's rate), and the offscreen run's own
 checks passed (with ``--verify-audio-mix``, that the native audio mix agreed
@@ -44,7 +46,7 @@ import math
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
@@ -54,7 +56,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.gears1_checkpoint import Checkpoint, read_checkpoint
-from tools.navigation import NavigationError, NavigationGraph
+from tools.navigation import NavigationError, NavigationGraph, Point
 from tools.product_control import ControlError, ProductControl
 from tools.run_offscreen import STORAGE_ROOT
 
@@ -153,6 +155,26 @@ PROMPT_DISMISS_SECONDS = 0.5
 REVIVE_RADIUS = 90.0
 REVIVE_PRESSES = 5
 REVIVE_PRESS_SECONDS = 1.5
+# Past the first firefight the route fights from the level's cover slots, which
+# face the way their yaw points: of those within COVER_SEARCH_RADIUS that stand
+# at least COVER_HOSTILE_MARGIN from every hostile, the one whose facing covers
+# the most hostiles (each within COVER_ARC of it), then the nearest. Marcus is
+# at a slot within COVER_RADIUS of it. A slid him into cover up to 300 units on
+# in the view's direction, where a drone beside the cover killed him, so he
+# turns along the slot's facing before pressing A.
+COVER_SEARCH_RADIUS = 800.0
+COVER_HOSTILE_MARGIN = 450.0
+COVER_ARC = YAW_UNITS_PER_TURN // 6
+COVER_RADIUS = 80.0
+COVER_FACING_DISTANCE = 300.0
+COVER_SETTLE_SECONDS = 1.0
+# A hostile this close is fired at without a break for CLOSE_BURST_SECONDS,
+# the aim following it, however hurt the player is: past the door breach a
+# drone charged from 684 to 148 units in 3 s and took 112 health in one hit at
+# 295, and both running for other cover from it and waiting in cover for
+# health to return cost Marcus his life.
+CLOSE_RANGE = 600.0
+CLOSE_BURST_SECONDS = 2.0
 
 
 class RouteFailure(RuntimeError):
@@ -321,6 +343,48 @@ def aim_stick(error: int) -> int:
 
 def distance(a: tuple[float, float], b: tuple[float, float]) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
+
+
+def bearing(origin: tuple[float, float], point: tuple[float, float]) -> int:
+    """The yaw, in engine units, from origin toward point."""
+
+    units = YAW_UNITS_PER_TURN / (2.0 * math.pi)
+    return round(math.atan2(point[1] - origin[1], point[0] - origin[0]) * units)
+
+
+def covered(slot: Point, hostile: Pawn) -> bool:
+    """Whether the slot's cover faces the hostile, within COVER_ARC."""
+
+    return abs(wrap_angle(bearing(slot.location[:2], hostile.location[:2]) - slot.yaw)) <= COVER_ARC
+
+
+def choose_cover(graph: NavigationGraph, player: Player, hostiles: Sequence[Pawn],
+                 avoid: Collection[int] = ()) -> Point | None:
+    """The cover slot on the player's floor whose cover faces the most hostiles, then the nearest.
+
+    Only slots within COVER_SEARCH_RADIUS, reachable from the player over
+    TRAVEL_PATH_KINDS paths, COVER_HOSTILE_MARGIN from every hostile, facing
+    at least one of them, and not in avoid count; None when there is none.
+    """
+
+    here = graph.nearest((*player.position, player.height), NAV_HEIGHT)
+    reachable = graph.reachable(here.id, TRAVEL_PATH_KINDS)
+
+    def usable(slot: Point) -> bool:
+        ground = slot.location[:2]
+        return (slot.id not in avoid
+                and slot.id in reachable
+                and abs(slot.location[2] - player.height) <= NAV_HEIGHT
+                and distance(player.position, ground) <= COVER_SEARCH_RADIUS
+                and all(distance(ground, hostile.location[:2]) >= COVER_HOSTILE_MARGIN
+                        for hostile in hostiles))
+
+    facing = [(count, slot) for slot in graph.of_kind("cover") if usable(slot)
+              if (count := sum(covered(slot, hostile) for hostile in hostiles))]
+    if not facing:
+        return None
+    return min(facing, key=lambda entry: (-entry[0],
+                                          distance(player.position, entry[1].location[:2])))[1]
 
 
 class Route:
@@ -592,10 +656,15 @@ class Route:
         self.steps.append({"step": step, "to": player.position,
                            "seconds": round(self._clock() - start, 1)})
 
-    def clear_firefight(self, step: str, timeout: float, arrival: float) -> int:
+    def clear_firefight(self, step: str, timeout: float, arrival: float,
+                        cover: bool = False) -> int:
         """Fight from cover until no living hostile is listed; returns the hostiles fought.
 
-        Waits up to arrival seconds for hostiles to appear. Each round turns
+        Waits up to arrival seconds for hostiles to appear. With cover, the
+        player first takes a cover slot (take_cover), and leaves a slot for
+        another, never to return, when he loses health while waiting in it:
+        its cover no longer faces where the hostiles shoot from. Without
+        cover, he fights from where he stands, in cover already. Each round turns
         the view onto the nearest hostile from cover, raises the weapon with
         LT only to correct the aim and fire a burst, and drops back into
         cover; below RECOVER_HEALTH it waits in cover instead. An empty
@@ -616,6 +685,8 @@ class Route:
         seen = {pawn.id for pawn in begin.hostiles()}
         misses: dict[int, int] = {}
         bursts: list[dict[str, int | None]] = []
+        slot: Point | None = None
+        flanked: set[int] = set()
         try:
             while True:
                 player = self.alive(step)
@@ -627,9 +698,18 @@ class Route:
                     raise RouteFailure(
                         f"{step}: {len(hostiles)} hostile(s) still standing after {timeout:.0f} s"
                     )
-                if player.health < RECOVER_HEALTH:
+                if cover:
+                    slot = self.take_cover(f"{step}: take cover")
+                    cover = False
+                    continue
+                close = [pawn for pawn in hostiles
+                         if distance(player.position, pawn.location[:2]) <= CLOSE_RANGE]
+                if player.health < RECOVER_HEALTH and not close:
                     self._pad.release()
                     self._sleep(COVER_SECONDS)
+                    if slot is not None and self.alive(step).health < player.health:
+                        flanked.add(slot.id)
+                        slot = self.take_cover(f"{step}: leave flanked cover", flanked)
                     continue
                 target = min(hostiles, key=lambda pawn: (
                     misses.get(pawn.id, 0) // BURSTS_PER_TARGET,
@@ -650,22 +730,59 @@ class Route:
                      seconds=round(self._clock() - start, 1))
         return len(seen)
 
+    def take_cover(self, step: str, avoid: Collection[int] = ()) -> Point | None:
+        """Take the cover slot choose_cover picks, other than those in avoid.
+
+        Travels to the slot unless already at it, turns the view along the
+        slot's facing so that A takes the cover beside it, and presses A.
+        Returns the slot, or None, recording how many slots the level has,
+        when no slot qualifies; the player then fights from where he stands.
+        """
+
+        begin = self.alive(step)
+        hostiles = begin.hostiles()
+        try:
+            graph = NavigationGraph.from_json(self._pad.navigation())
+        except (ControlError, NavigationError) as error:
+            raise RouteFailure(f"{step}: {error}") from error
+        slot = choose_cover(graph, begin, hostiles, avoid)
+        if slot is None:
+            self._record(step, begin, cover=None, slots=len(graph.of_kind("cover")))
+            return None
+        if distance(begin.position, slot.location[:2]) > COVER_RADIUS:
+            self.travel(f"{step}: reach the slot", slot.location, radius=COVER_RADIUS,
+                        unblock=self.unstick)
+        radians = slot.yaw * 2.0 * math.pi / YAW_UNITS_PER_TURN
+        ahead = (slot.location[0] + COVER_FACING_DISTANCE * math.cos(radians),
+                 slot.location[1] + COVER_FACING_DISTANCE * math.sin(radians),
+                 slot.location[2] - AIM_HEIGHT)
+        self._aim(step, ahead, {})
+        self.holding("A", 0.3)()
+        self._sleep(COVER_SETTLE_SECONDS)
+        self._record(step, begin, cover=slot.id, at=slot.location)
+        return slot
+
     def _burst(self, step: str, target: Pawn
                ) -> tuple[Pawn | None, bool, tuple[int | None, int | None]]:
         """Aim at target from cover, fire one burst, and return to cover.
 
-        Returns the target as listed afterwards (None once it has left the
-        list), whether the weapon fired, and its rounds-fired count before and
-        after the burst (None without a weapon).
+        A target within CLOSE_RANGE is fired at for CLOSE_BURST_SECONDS with
+        the aim following it. Returns the target as listed afterwards (None
+        once it has left the list), whether the weapon fired, and its
+        rounds-fired count before and after the burst (None without a weapon).
         """
 
         self._hold_live_weapon(step)
-        self._aim(step, target, {})
-        self._aim(step, target, {"lt": "255"})
+        self._aim(step, target.location, {})
+        self._aim(step, target.location, {"lt": "255"})
         start = self.alive(step)
         before = start.weapon
-        self._pad.set_pad({"lt": "255", "rt": "255"})
-        self._sleep(BURST_SECONDS)
+        firing = {"lt": "255", "rt": "255"}
+        if distance(start.position, target.location[:2]) <= CLOSE_RANGE:
+            self._track(step, target, firing, CLOSE_BURST_SECONDS)
+        else:
+            self._pad.set_pad(firing)
+            self._sleep(BURST_SECONDS)
         self._pad.release()
         end = self.alive(step)
         after_burst = end.weapon
@@ -760,12 +877,26 @@ class Route:
                 return
         raise RouteFailure(f"{step}: every weapon is out of ammunition")
 
-    def _aim(self, step: str, target: Pawn, held: dict[str, str]) -> None:
-        """Turn the view onto target with held pad fields, for at most AIM_SECONDS."""
+    def _track(self, step: str, target: Pawn, held: dict[str, str], seconds: float) -> None:
+        """Hold held pad fields for seconds, turning the view after target as it moves."""
+
+        start = self._clock()
+        while self._clock() - start < seconds:
+            player = self.alive(step)
+            listed = next((pawn for pawn in player.pawns if pawn.id == target.id), None)
+            if listed is None or listed.health <= 0:
+                return
+            yaw_error, pitch_error = aim_error(player, listed.location)
+            self._pad.set_pad({**held, "rx": str(aim_stick(yaw_error)),
+                               "ry": str(aim_stick(pitch_error))})
+            self._sleep(AIM_POLL_SECONDS)
+
+    def _aim(self, step: str, target: tuple[float, float, float], held: dict[str, str]) -> None:
+        """Turn the view onto a point above target with held pad fields, for at most AIM_SECONDS."""
 
         start = self._clock()
         while self._clock() - start < AIM_SECONDS:
-            yaw_error, pitch_error = aim_error(self.alive(step), target.location)
+            yaw_error, pitch_error = aim_error(self.alive(step), target)
             if abs(yaw_error) <= AIM_TOLERANCE and abs(pitch_error) <= AIM_TOLERANCE:
                 return
             self._pad.set_pad({**held, "rx": str(aim_stick(yaw_error)),
@@ -902,11 +1033,30 @@ def join_squad(route: Route, step: str = "join Dom after the firefight") -> None
         route.revive(f"{step}: revive Dom", downed[0])
 
 
+def wait_for_squad(route: Route, timeout: float) -> None:
+    """Wait until the level lists a squad mate, standing or downed.
+
+    A resumed checkpoint gives the player his pawn before the level spawns
+    Dom. Refuses after timeout.
+    """
+
+    step = "wait for the squad"
+    begin = route.alive(step)
+    waited = 0.0
+    while not (begin.squad() or begin.downed_squad()):
+        if waited >= timeout:
+            raise RouteFailure(f"{step}: no squad mate was listed within {timeout:.0f} s")
+        route.wait(SQUAD_POLL_SECONDS)
+        waited += SQUAD_POLL_SECONDS
+        begin = route.alive(step)
+    route.steps.append({"step": step, "seconds": waited})
+
+
 def advance_to_next_checkpoint(route: Route,
                                saved: Callable[[], Checkpoint | None]) -> Checkpoint:
     """Play on until the title saves a new checkpoint.
 
-    Each round fights every listed hostile, revives a downed squad mate, or
+    Each round fights every listed hostile from cover, revives a downed squad mate, or
     follows Dom, in that order. A
     death reloads the checkpoint the advance started from, up to
     ADVANCE_DEATHS times. saved reads the checkpoint the title last saved.
@@ -943,7 +1093,7 @@ def advance_to_next_checkpoint(route: Route,
             if player.hostiles():
                 counts["fights"] += 1
                 route.clear_firefight(f"{step}: firefight {counts['fights']}",
-                                      FIREFIGHT_SECONDS, 0.0)
+                                      FIREFIGHT_SECONDS, 0.0, cover=True)
             elif player.downed_squad():
                 counts["revives"] += 1
                 route.revive(f"{step}: revive {counts['revives']}", player.downed_squad()[0])
@@ -986,6 +1136,13 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--checkpoints", type=int, default=1,
                         help="new checkpoints to reach before the route passes")
     parser.add_argument(
+        "--continue",
+        dest="resume",
+        action="store_true",
+        help="resume the last saved checkpoint instead of starting a new campaign; refuses when "
+        "none is saved",
+    )
+    parser.add_argument(
         "--verify-audio-mix",
         action="store_true",
         help="compare the native audio mix with the guest's body on every call during the route",
@@ -998,9 +1155,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments.checkpoints < 1:
         raise SystemExit("--checkpoints must be at least 1")
     storage = REPO_ROOT / STORAGE_ROOT
+    resumed = read_checkpoint(storage) if arguments.resume else None
+    if arguments.resume and resumed is None:
+        raise SystemExit(f"--continue: no checkpoint is saved under {STORAGE_ROOT}")
     report_root = REPO_ROOT / REPORT_ROOT
     report_root.mkdir(parents=True, exist_ok=True)
-    command = [sys.executable, str(REPO_ROOT / "tools/run_offscreen.py"), "--walk", "gameplay",
+    walk = "continue" if arguments.resume else "gameplay"
+    command = [sys.executable, str(REPO_ROOT / "tools/run_offscreen.py"), "--walk", walk,
                "--seconds", str(RUN_SECONDS), "--control-port", str(arguments.port)]
     if arguments.iso:
         command += ["--iso", arguments.iso]
@@ -1014,9 +1175,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             wait_for_handover(control, run)
             route.start_timing()
-            play_to_first_firefight(route)
-            outcome["deaths"] = clear_first_firefight(route)
-            join_squad(route)
+            if resumed is None:
+                play_to_first_firefight(route)
+                outcome["deaths"] = clear_first_firefight(route)
+                join_squad(route)
+            else:
+                outcome["resumed"] = f"{resumed.level}.{resumed.name}"
+                wait_for_squad(route, SQUAD_WAIT_SECONDS)
             reached = []
             for _ in range(arguments.checkpoints):
                 checkpoint = advance_to_next_checkpoint(route, lambda: read_checkpoint(storage))

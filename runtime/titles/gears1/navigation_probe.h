@@ -28,6 +28,10 @@ inline constexpr std::uint32_t kReachSpecEndOffset = 0x48U;
 // 12 paths) start at cover slots and are not yet understood.
 inline constexpr std::uint32_t kWalkReachSpecVtable = 0x820DF328U;
 inline constexpr std::uint32_t kMantleReachSpecVtable = 0x820DF898U;
+// NavigationPoint classes by vtable: plain path nodes, and the slots a pawn
+// takes cover at (432 of sp_prison_p's first 1150 points).
+inline constexpr std::uint32_t kPathNodeVtable = 0x820952E8U;
+inline constexpr std::uint32_t kCoverSlotVtable = 0x820955C0U;
 // Bounds past which a list is corrupt or cyclic, not a level.
 inline constexpr std::size_t kMaxNavigationPoints = 8192U;
 inline constexpr std::uint32_t kMaxNavigationPaths = 64U;
@@ -55,12 +59,30 @@ struct NavigationPath
 // The kind of path a ReachSpec vtable names.
 [[nodiscard]] PathKind PathKindOf(std::uint32_t vtable);
 
+// What a navigation point is to a walker.
+enum class PointKind : std::uint8_t
+{
+    PathNode,
+    Cover,
+    Other,
+};
+
+// The kind of point a NavigationPoint vtable names.
+[[nodiscard]] PointKind PointKindOf(std::uint32_t vtable);
+
 // One navigation point: path nodes, cover slots, pickups, and doors alike.
 struct NavigationPoint
 {
     // The point object's guest address, its identity for the level's life.
     std::uint32_t address = 0;
+    PointKind kind = PointKind::Other;
+    // The point's vtable, naming its class when kind is Other.
+    std::uint32_t vtable = 0;
     std::array<float, 3> location{};
+    // The point's yaw in engine units (65536 a turn); a cover slot's is the
+    // direction its cover faces: each of sp_prison_p's 140 slots beside a
+    // mantle faced within 16 degrees of the far side (docs/re-frontier.md).
+    std::uint16_t yaw = 0;
     std::vector<NavigationPath> paths;
 };
 

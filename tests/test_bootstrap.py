@@ -145,9 +145,11 @@ class BootstrapTests(unittest.TestCase):
             menu_walk="menu",
             checkpoint_walk="checkpoint",
             gameplay_walk="gameplay",
+            continue_walk="continue",
         )
         self.assertEqual(run_offscreen.walk_script(navigation, "menu"), "menu")
         self.assertEqual(run_offscreen.walk_script(navigation, "gameplay"), "gameplay")
+        self.assertEqual(run_offscreen.walk_script(navigation, "continue"), "continue")
         self.assertEqual(run_offscreen.walk_script(navigation, "none"), "")
         with self.assertRaisesRegex(ValueError, "unknown walk"):
             run_offscreen.walk_script(navigation, "boss-fight")

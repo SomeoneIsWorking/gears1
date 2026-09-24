@@ -48,6 +48,7 @@ def walk_script(navigation: Navigation, walk: str) -> str:
         "menu": navigation.menu_walk,
         "checkpoint": navigation.checkpoint_walk,
         "gameplay": navigation.gameplay_walk,
+        "continue": navigation.continue_walk,
     }
     if walk not in routes:
         raise ValueError(f"unknown walk {walk!r}; choose one of {', '.join(routes)}")
@@ -99,7 +100,7 @@ def _parser() -> argparse.ArgumentParser:
         "the run on any disagreement",
     )
     route = parser.add_mutually_exclusive_group()
-    route.add_argument("--walk", default="menu", help="none, start, menu, checkpoint, or gameplay")
+    route.add_argument("--walk", default="menu", help="none, start, menu, checkpoint, gameplay, or continue")
     route.add_argument(
         "--script", help="an explicit input script in the runtime's step grammar, e.g. 9000:LY+"
     )

@@ -65,6 +65,19 @@ PathKind PathKindOf(std::uint32_t vtable)
     }
 }
 
+PointKind PointKindOf(std::uint32_t vtable)
+{
+    switch (vtable)
+    {
+    case kPathNodeVtable:
+        return PointKind::PathNode;
+    case kCoverSlotVtable:
+        return PointKind::Cover;
+    default:
+        return PointKind::Other;
+    }
+}
+
 bool ReadNavigation(const GuestMemoryReader &read, std::vector<NavigationPoint> &points,
                     std::string &error)
 {
@@ -90,12 +103,14 @@ bool ReadNavigation(const GuestMemoryReader &read, std::vector<NavigationPoint> 
         }
         NavigationPoint point;
         point.address = address;
-        if (!chain.Location(address, "a point's location", point.location) ||
-            !ReadPaths(chain, point) ||
+        if (!chain.Word(address, "a point's class", point.vtable) ||
+            !chain.Location(address, "a point's location", point.location) ||
+            !chain.Angle(address, 1U, "a point's yaw", point.yaw) || !ReadPaths(chain, point) ||
             !chain.Word(address + kNavigationNextOffset, "a point's successor", address))
         {
             return false;
         }
+        point.kind = PointKindOf(point.vtable);
         points.push_back(std::move(point));
     }
     return true;

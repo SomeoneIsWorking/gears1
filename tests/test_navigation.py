@@ -18,7 +18,7 @@ WALK = ("walk",)
 def graph(points):
     """Points whose paths are (end, distance) walks or (end, distance, kind)."""
     return NavigationGraph.from_json(
-        {"points": [{"id": i, "location": loc,
+        {"points": [{"id": i, "kind": "path", "yaw": 0, "location": loc,
                      "paths": [path if len(path) == 3 else [*path, "walk"] for path in paths]}
                     for i, loc, paths in points]}
     )
@@ -83,6 +83,34 @@ class NearestTest(unittest.TestCase):
     def test_empty_level_refuses(self):
         with self.assertRaisesRegex(NavigationError, "no navigation points"):
             graph([])
+
+
+class ReachableTest(unittest.TestCase):
+    def test_follows_only_the_given_kinds(self):
+        self.assertEqual(SQUARE.reachable(1, {"walk"}), {1, 2, 3, 4})
+        self.assertEqual(SQUARE.reachable(3, {"mantle"}), {3, 1})
+        self.assertEqual(SQUARE.reachable(5, {"walk", "mantle"}), {5})
+
+    def test_an_unknown_start_refuses(self):
+        with self.assertRaisesRegex(NavigationError, "0x9 is not in the level"):
+            SQUARE.reachable(9, {"walk"})
+
+
+class KindTest(unittest.TestCase):
+    def test_lists_the_points_of_a_kind(self):
+        level = NavigationGraph.from_json({"points": [
+            {"id": 1, "kind": "path", "yaw": 0, "location": [0, 0, 0], "paths": []},
+            {"id": 2, "kind": "cover", "yaw": 16384, "location": [50, 0, 0], "paths": []},
+            {"id": 3, "kind": "0x82095000", "yaw": 0, "location": [90, 0, 0], "paths": []},
+        ]})
+        self.assertEqual([point.id for point in level.of_kind("cover")], [2])
+        self.assertEqual(level.point(3).kind, "0x82095000")
+        self.assertEqual(level.point(2).yaw, 16384)
+
+    def test_a_point_without_a_kind_refuses(self):
+        with self.assertRaises(KeyError):
+            NavigationGraph.from_json({"points": [{"id": 1, "yaw": 0, "location": [0, 0, 0],
+                                                   "paths": []}]})
 
 
 if __name__ == "__main__":

@@ -282,11 +282,17 @@ on 2026-09-24 passed: the yard's four drones in 57 s with no death, Dom joined o
 points and one mantle, and `WarCheckpoint_3` of `SP_Prison_S05_Scripting` saved; game
 time 0.9995 of wall time over 269 s, 120 presents/s for most seconds, 0 translation
 failures in 583 s.
-Gap: past `WarCheckpoint_3` the route has not cleared the door breach. In five
-consecutive attempts of one run, the drones that cut through the door downed Dom early
-and killed Marcus, who fights from wherever he stands, while a drone flanked him; the
-route has no notion of cover positions (Gears' cover links are not yet read). No later
-act or level load has been exercised.
+`--continue` resumes the last saved checkpoint through Continue Campaign and waits for
+the squad to spawn. In a firefight the route now takes a cover slot (`/api/navigation`
+lists each point's kind and yaw): one it can walk to, away from every hostile, whose
+cover faces the most of them, reached and then taken by facing along its yaw and
+pressing A; it leaves a slot where it keeps losing health for another one, and fires
+two-second tracked bursts at a hostile within 600 units.
+Gap: past `WarCheckpoint_3` the route has not cleared the door breach. In two
+five-death runs on 2026-09-24 the drones held cover 950-1500 units away, one moved south
+of Marcus's slot and wore him down in it, and he died walking to the next slot; bursts
+at that range did no damage in most cases, and a trial of tracked fire out to 1500
+units emptied every weapon. No later act or level load has been exercised.
 
 ### S010 — Apple Silicon A64
 
