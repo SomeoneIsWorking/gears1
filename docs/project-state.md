@@ -239,7 +239,7 @@ where the player happens to be, and two runs of the same walk ended in different
 reads the local player (`GET /api/player`, chain in `docs/re-frontier.md`, "Local player"),
 steers the stick toward each measured position, answers a tutorial prompt only when the
 player stalls, and passes only when the player reaches the yard cover and the weapon's
-magazine count rises. Two consecutive fresh runs passed with the same trace: the door
+rounds-fired count rises. Two consecutive fresh runs passed with the same trace: the door
 opened 30.8 s after arrival on the third kick attempt, the yard legs took 1.4-1.8 s
 each, and the weapon fired 6 and 5 rounds on the second cover attempt. The native audio
 mix is compared with the guest's body on every call of that route (S004). The route also
@@ -300,13 +300,18 @@ semaphore for thread suspension, Mach thread ids, the ARM64 Darwin signal contex
 SIGBUS as a protection fault, `mach_vm_region` for page protection, short shared-memory
 names, and Launch Services, alert, and NSOpenPanel implementations.
 
-The A64 backend cannot run on macOS as laid out. It reserves its indirection table at
-host address 0x80000000, its generated code at 0xA0000000, and its guest trampolines below
-0x80000000, and stores 32-bit host code addresses in the table
-(`cpu/backend/code_cache_base.h`, `a64_emitter.cc` `Call`/`CallIndirect`). XNU refuses to
-load an arm64 executable whose `__PAGEZERO` does not cover the low 4 GB, so none of those
-addresses can be mapped. Running there needs the table, code and trampolines moved above
-4 GB and addressed from a base register, with table entries as offsets from the code base.
+On that build every test passed except the two that start the A64 backend
+(`gears1_dynarec_boundary`, `gears1_runtime_composition`), which trapped at startup: XNU
+reserves the low 4 GB of an arm64 process as `__PAGEZERO`, and the backend reserved its
+indirection table at 0x80000000, its generated code at 0xA0000000 and its guest
+trampolines below 2 GB, and stored 32-bit host code addresses. The fork's A64 code cache
+now lets the host place the table and code anywhere on every host, stores each entry as
+an offset from the execute base, loads both bases from the backend context before a
+call, and reserves the trampolines inside the code cache; Darwin writes code through a
+separate read-write view. Under qemu-aarch64 on Linux the fork's CPU tests pass 251 of
+252 with every base above 4 GB (the one failure, a JIT unwind backtrace depth, fails
+identically before the change). Gap: the macOS job has not yet run the relocated layout,
+and the quality gate there needed the SDK passed to clang-tidy.
 
 ### S011 — Android A64
 
