@@ -56,7 +56,7 @@ endif()
 
 set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
     "Exact shared/x360port checkout consumed by GearsUE3")
-set(X360PORT_REQUIRED_REVISION "83e975c05808138ee3e518c3fb7e9d82d384b927")
+set(X360PORT_REQUIRED_REVISION "ab10439457043aee69f1a2e837bc37a400807505")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
