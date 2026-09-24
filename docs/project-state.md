@@ -353,7 +353,17 @@ check, 8.7%, and the `sub_8222F460` poll, 8.6%); the rest is its own rendering w
 no function above 4%. A cheaper command thread shortens that wait; the rest needs the
 render thread's work itself to be native (S012).
 
-Gap: gameplay does not yet hold 120 presents/s at the path junction (p50 8.5-9.5 ms there).
+The combat route's yard firefight (`tools/combat_route.py`) ran at 103-114 presents/s
+in one run and fell to 19-50 in another, while another agent's emulator held 2.3 cores
+and the load average was 11.8 on 16 cores; in the slow seconds every product thread
+fell to about 0.5 of a core together, so those drops measure the host, not the product.
+In the yard, the guest render thread was at 0.95-0.98 of a core, as at the junction.
+Disabling Xenia's host/guest stack synchronization did not lower the render thread's
+instructions per present at the junction (36.5M against 34.1M, within the variation its
+GPU-wait spin adds), so it stays enabled.
+
+Gap: gameplay does not yet hold 120 presents/s at the path junction (p50 8.5-9.5 ms there)
+or in the yard firefight (103-114 presents/s), where the guest render thread is saturated.
 
 ### S014 — later Gears titles
 
