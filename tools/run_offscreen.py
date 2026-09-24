@@ -90,6 +90,12 @@ def _parser() -> argparse.ArgumentParser:
         help="serve the loopback control channel on this port; tools/product_control.py drives "
         "the pad once the walk has finished",
     )
+    parser.add_argument(
+        "--verify-audio-mix",
+        action="store_true",
+        help="run the guest's own audio-mix body beside the native mix on every call and fail "
+        "the run on any disagreement",
+    )
     route = parser.add_mutually_exclusive_group()
     route.add_argument("--walk", default="menu", help="none, start, menu, checkpoint, or gameplay")
     route.add_argument(
@@ -137,6 +143,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         command.append("--perf-map")
     if arguments.control_port is not None:
         command += ["--control-port", str(arguments.control_port)]
+    if arguments.verify_audio_mix:
+        command.append("--verify-audio-mix")
     status = run_logged_child(
         command, cwd=REPO_ROOT, environ=child_environment, log_path=run_root / "run.log"
     )

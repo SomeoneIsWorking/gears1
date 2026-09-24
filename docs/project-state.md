@@ -93,6 +93,14 @@ return value and on every byte of the arena with disjoint, in-place and overlapp
 input and output blocks. Faithfulness required reproducing the
 guest's r3 result and `vmaddfp`'s fused multiply-add with denormal-input
 flushing. Claim C099 records the falsifier.
+The same comparison runs on live play: `--verify-audio-mix` (through
+`tools/run_offscreen.py` or `tools/combat_route.py`) installs
+`audio_mix_differential.*`, which on every call snapshots both blocks, runs the native
+mix, restores the snapshot, runs the original body through Xenia, compares both blocks
+and r3, and keeps the original's result. Its unit test proves it locates output, input
+and r3 disagreements and undoes the native writes. Over the whole 720 s combat route,
+into Act 1's first firefight, it compared 33,406,491 calls with 0 disagreements and
+0 calls left uncompared.
 
 ### S005 — native GPU ticket wait
 

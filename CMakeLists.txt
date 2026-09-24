@@ -159,7 +159,8 @@ target_link_libraries(test_gears1_desktop_controls PRIVATE gears_input)
 x360port_enable_warnings(test_gears1_desktop_controls)
 gears_add_binary_test(gears1_desktop_controls test_gears1_desktop_controls)
 
-add_library(gears1_audio_mix STATIC runtime/titles/gears1/audio_mix.cpp)
+add_library(gears1_audio_mix STATIC runtime/titles/gears1/audio_mix.cpp
+                                    runtime/titles/gears1/audio_mix_differential.cpp)
 target_include_directories(gears1_audio_mix PUBLIC runtime)
 target_link_libraries(gears1_audio_mix PUBLIC x360port::x360port)
 x360port_enable_warnings(gears1_audio_mix)
@@ -219,6 +220,10 @@ add_executable(test_player_probe tests/test_player_probe.cpp)
 target_link_libraries(test_player_probe PRIVATE gears1_player_probe)
 x360port_enable_warnings(test_player_probe)
 gears_add_binary_test(gears1_player_probe test_player_probe)
+add_executable(test_audio_mix_differential tests/test_audio_mix_differential.cpp)
+target_link_libraries(test_audio_mix_differential PRIVATE gears1_audio_mix)
+x360port_enable_warnings(test_audio_mix_differential)
+gears_add_binary_test(gears1_audio_mix_differential test_audio_mix_differential)
 # x360port provides the full console only where it has a windowed host (GTK on
 # Linux today). Elsewhere the product target is absent by name, and the
 # launcher refuses with the same reason; the execution contracts still build.

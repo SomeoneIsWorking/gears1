@@ -7,9 +7,10 @@
 namespace gears::product
 {
 
-x360port::SystemSessionConfig Gears1SessionConfig(const ProductOptions &options,
-                                                  const std::filesystem::path &storage_root,
-                                                  x360port::DesktopInputState *desktop)
+x360port::SystemSessionConfig
+Gears1SessionConfig(const ProductOptions &options, const std::filesystem::path &storage_root,
+                    x360port::DesktopInputState *desktop,
+                    titles::gears1::AudioMixDifferential *audio_mix_check)
 {
     bool offscreen = options.mode == ProductMode::Offscreen;
     x360port::SystemSessionConfig config;
@@ -28,9 +29,18 @@ x360port::SystemSessionConfig Gears1SessionConfig(const ProductOptions &options,
     config.display_refresh_hz = titles::gears1::kDisplayRefreshHz;
     config.max_presents_per_second = titles::gears1::kTargetPresentsPerSecond;
     config.write_perf_map = options.perf_map;
-    config.overrides.push_back({.address = titles::gears1::kAudioMixAddress,
-                                .handler = titles::gears1::ApplyNativeAudioMix,
-                                .context = nullptr});
+    if (audio_mix_check != nullptr)
+    {
+        config.overrides.push_back({.address = titles::gears1::kAudioMixAddress,
+                                    .handler = titles::gears1::AudioMixDifferential::Apply,
+                                    .context = audio_mix_check});
+    }
+    else
+    {
+        config.overrides.push_back({.address = titles::gears1::kAudioMixAddress,
+                                    .handler = titles::gears1::ApplyNativeAudioMix,
+                                    .context = nullptr});
+    }
     return config;
 }
 

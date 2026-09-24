@@ -17,7 +17,9 @@ crosses the cell room to the yard, takes cover, and fires. Each tutorial holds
 Marcus in place until its button is held. The report in ``scratch/combat_route/``
 records where every step began and ended. The route fails, naming the step,
 when a step does not reach its goal; it passes only when the player reached
-cover in the yard and the weapon fired rounds there.
+cover in the yard, the weapon fired rounds there, and the offscreen run's own
+checks passed (with ``--verify-audio-mix``, that the native audio mix agreed
+with the guest's body on every compared call).
 """
 
 from __future__ import annotations
@@ -295,6 +297,11 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, default=32126, help="the run's loopback control port")
     parser.add_argument("--iso", help="disc image or 7z archive (default: as ./run.sh)")
+    parser.add_argument(
+        "--verify-audio-mix",
+        action="store_true",
+        help="compare the native audio mix with the guest's body on every call during the route",
+    )
     return parser
 
 
@@ -306,6 +313,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                "--seconds", str(RUN_SECONDS), "--control-port", str(arguments.port)]
     if arguments.iso:
         command += ["--iso", arguments.iso]
+    if arguments.verify_audio_mix:
+        command.append("--verify-audio-mix")
     control = ProductControl(arguments.port)
     route = Route(control)
     outcome: dict[str, object] = {"passed": False}
@@ -322,8 +331,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ControlError as error:
             outcome["final_frame"] = str(error)
         outcome["steps"] = route.steps
+        # The run ends on its own and fails when its own checks do.
+        outcome["run_status"] = run.wait()
+        if outcome["passed"] and outcome["run_status"] != 0:
+            outcome["passed"] = False
+            outcome["failure"] = (
+                f"the offscreen run failed its own checks with status {outcome['run_status']}; "
+                "see scratch/offscreen/run.log"
+            )
         (report_root / "report.json").write_text(json.dumps(outcome, indent=2) + "\n")
-        run.wait()
     verdict = "reached the first firefight" if outcome["passed"] else f"FAILED: {outcome['failure']}"
     print(f"combat_route: {verdict}; report {report_root / 'report.json'}")
     return 0 if outcome["passed"] else 1

@@ -107,9 +107,48 @@ bool ReportRun(std::uint32_t seconds, std::uint64_t presents,
     return healthy;
 }
 
+[[nodiscard]] std::string_view MismatchPlace(titles::gears1::AudioMixMismatch::Where where)
+{
+    switch (where)
+    {
+    case titles::gears1::AudioMixMismatch::Where::Output:
+        return "output block";
+    case titles::gears1::AudioMixMismatch::Where::Input:
+        return "input block";
+    case titles::gears1::AudioMixMismatch::Where::ReturnValue:
+        return "return value";
+    }
+    return "unknown place";
+}
+
+bool ReportAudioMixCheck(const titles::gears1::AudioMixDifferential &check)
+{
+    titles::gears1::AudioMixDifferentialCounts counts = check.Counts();
+    lucent::info("product",
+                 "audio mix differential: {} calls compared with the original body, {} "
+                 "disagreed, {} not compared because a side failed",
+                 counts.compared, counts.mismatched, counts.failed);
+    if (std::optional<titles::gears1::AudioMixMismatch> first = check.FirstMismatch())
+    {
+        lucent::error("product",
+                      "first disagreement: output {:#010x} input {:#010x}, {} byte {}: native "
+                      "{:#010x}, original {:#010x}; r3 native {:#x}, original {:#x}",
+                      first->output, first->input, MismatchPlace(first->where), first->byte_offset,
+                      first->native_word, first->original_word, first->native_return,
+                      first->original_return);
+    }
+    if (counts.compared == 0)
+    {
+        lucent::error("product", "the audio mix differential compared no call");
+        return false;
+    }
+    return counts.mismatched == 0 && counts.failed == 0;
+}
+
 } // namespace
 
-bool RunOffscreen(x360port::SystemSession &session, const ProductOptions &options)
+bool RunOffscreen(x360port::SystemSession &session, const ProductOptions &options,
+                  const titles::gears1::AudioMixDifferential *audio_mix_check)
 {
     if (!options.capture_directory.empty())
     {
@@ -149,8 +188,13 @@ bool RunOffscreen(x360port::SystemSession &session, const ProductOptions &option
             CaptureSecond(session, options, second);
         }
     }
-    return ReportRun(options.run_seconds, session.PresentedFrameCount(), session.ExecutionCounts(),
-                     session.FrameIntervals());
+    bool healthy = ReportRun(options.run_seconds, session.PresentedFrameCount(),
+                             session.ExecutionCounts(), session.FrameIntervals());
+    if (audio_mix_check != nullptr && !ReportAudioMixCheck(*audio_mix_check))
+    {
+        healthy = false;
+    }
+    return healthy;
 }
 
 } // namespace gears::product
