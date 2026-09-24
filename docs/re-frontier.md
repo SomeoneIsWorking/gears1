@@ -159,6 +159,13 @@ Qualify x86-64, Apple
   `FName::FName` `0x82364678`, called in that order by `sub_821B4620` at
   `0x821B4F0C..0x821B4F48`. The commit step is not identified.
 
+- Gears 1's cooked packages (`WarGame/CookedXenon/*.xxx`) carry package file version
+  374, licensee 0. The UE3 source checkout provided for development is engine
+  version 867 and refuses packages below 491, and its `WarfareGame` module is the
+  107-class sample game, not Gears 1's `War*` game code. Neither that engine
+  nor its game module can load or run Gears 1's content as it stands; a native
+  engine must work on the guest's own version-374 object layouts.
+
 These facts must be re-observed through the authenticated Xenia context before
 they authorize dispatch or a shared `x360ue3` contract.
 
