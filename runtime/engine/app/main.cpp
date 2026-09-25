@@ -11,7 +11,9 @@
 
 #include "device_input.h"
 #include "game/game_world.h"
+#include "game/pawn_defaults.h"
 #include "game_window.h"
+#include "object/class_defaults.h"
 #include "object/class_hierarchy.h"
 #include "object/object_resolver.h"
 #include "package/content_files.h"
@@ -41,11 +43,14 @@ void RunGame(const fs::path &content, const std::string &level_name)
     engine::object::ObjectResolver resolver(store);
     auto world = engine::scene::World::Load(store, classes, resolver, level_name);
     engine::scene::StaticMeshes static_meshes(classes);
-    engine::game::GameWorld game(world, static_meshes, engine::game::PawnTuning{},
-                                 engine::game::CameraRig{});
-    lucent::info("gears-native", "{}: {} level(s), {} collision triangle(s)",
+    engine::object::ClassDefaults defaults(classes, resolver);
+    std::string pawn_class = engine::game::PlayerPawnClass(
+        defaults, std::string(engine::game::kSinglePlayerGameClass));
+    engine::game::PawnTuning tuning = engine::game::ReadPawnTuning(defaults, pawn_class);
+    engine::game::GameWorld game(world, static_meshes, tuning, engine::game::CameraRig{});
+    lucent::info("gears-native", "{}: {} level(s), {} collision triangle(s); player {}",
                  world.Persistent().Name(), world.Levels().size(),
-                 game.Collision().TriangleCount());
+                 game.Collision().TriangleCount(), pawn_class);
 
     engine::app::GameWindow window("Gears of War", kWindowExtent);
     engine::render::VulkanDevice device(window.Surface());
