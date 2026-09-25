@@ -28,6 +28,10 @@ class ClassHierarchy
     // chain ends there. Refuses a class whose package cannot be loaded.
     [[nodiscard]] bool IsA(const std::string &class_path, std::string_view ancestor);
 
+    // The superclass path of a class, or none for a root or intrinsic class.
+    // Refuses a class whose package cannot be loaded.
+    [[nodiscard]] const std::optional<std::string> &Superclass(const std::string &class_path);
+
     // Intrinsic classes met so far, for reports.
     [[nodiscard]] const std::set<std::string, std::less<>> &IntrinsicClasses() const noexcept
     {
@@ -35,9 +39,6 @@ class ClassHierarchy
     }
 
   private:
-    // The superclass path of a class, or none for a root class.
-    const std::optional<std::string> &Parent(const std::string &class_path);
-
     package::PackageStore &store_;
     std::map<std::string, std::optional<std::string>, std::less<>> parents_;
     std::set<std::string, std::less<>> intrinsic_;

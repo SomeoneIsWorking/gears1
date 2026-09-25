@@ -15,6 +15,7 @@ x360port_enable_warnings(gears_engine_package)
 
 add_library(gears_engine_object STATIC
     object/bulk_data.cpp
+    object/class_defaults.cpp
     object/class_hierarchy.cpp
     object/object_resolver.cpp
     object/property_values.cpp
@@ -61,6 +62,7 @@ x360port_enable_warnings(gears_engine_scene)
 add_library(gears_engine_game STATIC
     game/collision_world.cpp
     game/game_world.cpp
+    game/pawn_defaults.cpp
     game/player_camera.cpp
     game/player_pawn.cpp
     game/walking_movement.cpp)

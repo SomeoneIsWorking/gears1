@@ -2,7 +2,9 @@
 
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "package/package.h"
@@ -45,6 +47,11 @@ class ObjectResolver
     // Refuses an import that names a package rather than an object, or whose
     // package has no file.
     [[nodiscard]] Resolution Resolve(const package::Package &package, package::PackageIndex index);
+    // The export of package `package_name` at `object_path` (outer names
+    // joined by dots, without the package), or none when the package does
+    // not export it. Refuses a package that has no file.
+    [[nodiscard]] std::optional<ExportLocation> Find(std::string_view package_name,
+                                                     std::string_view object_path);
 
   private:
     using ExportPaths = std::unordered_map<std::string, std::size_t>;

@@ -34,6 +34,19 @@ Resolution ObjectResolver::Resolve(const package::Package &package, package::Pac
     return {ResolutionStatus::kFound, {&owner, found->second}};
 }
 
+std::optional<ExportLocation> ObjectResolver::Find(std::string_view package_name,
+                                                   std::string_view object_path)
+{
+    const package::Package &owner = store_.Load(package_name);
+    const ExportPaths &paths = PathsOf(owner);
+    auto found = paths.find(std::string(object_path));
+    if (found == paths.end())
+    {
+        return std::nullopt;
+    }
+    return ExportLocation{&owner, found->second};
+}
+
 const ObjectResolver::ExportPaths &ObjectResolver::PathsOf(const package::Package &package)
 {
     auto [entry, inserted] = export_paths_.try_emplace(&package);

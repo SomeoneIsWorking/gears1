@@ -29,7 +29,7 @@ bool ClassHierarchy::IsA(const std::string &class_path, std::string_view ancesto
         {
             return true;
         }
-        const std::optional<std::string> &parent = Parent(current);
+        const std::optional<std::string> &parent = Superclass(current);
         if (!parent)
         {
             return false;
@@ -40,7 +40,7 @@ bool ClassHierarchy::IsA(const std::string &class_path, std::string_view ancesto
         std::format("class {} has a cyclic superclass chain", class_path));
 }
 
-const std::optional<std::string> &ClassHierarchy::Parent(const std::string &class_path)
+const std::optional<std::string> &ClassHierarchy::Superclass(const std::string &class_path)
 {
     auto cached = parents_.find(class_path);
     if (cached != parents_.end())

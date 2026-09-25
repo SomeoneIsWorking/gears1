@@ -4,9 +4,8 @@ namespace gears::engine::game
 {
 
 // The player pawn's collision shape and movement rates, in world units and
-// seconds. These are Unreal's stock pawn values (cylinder radius and half
-// height, walking speed, the world's default gravity), not yet the title's
-// own: reading them from the Gears pawn class's defaults is issue 0180.
+// seconds. The member defaults are Unreal's stock pawn, for synthetic worlds;
+// the game reads the title's own through ReadPawnTuning.
 struct PawnTuning
 {
     float radius = 34.0F;
