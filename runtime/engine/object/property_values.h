@@ -38,6 +38,8 @@ class PropertyValues
     // `element_size` bytes); an empty span when absent.
     [[nodiscard]] std::span<const std::uint8_t> Array(std::string_view name,
                                                       std::size_t element_size) const;
+    // An array of object references; empty when absent.
+    [[nodiscard]] std::vector<PackageIndex> ObjectArray(std::string_view name) const;
     // A script struct saved field by field, or none when absent. Refuses
     // another struct type.
     [[nodiscard]] std::optional<TaggedProperties> StructFields(std::string_view name,

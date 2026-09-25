@@ -1,4 +1,4 @@
-// Renders the static meshes one level package places, headlessly through the
+// Renders a level package and every sublevel it streams, headlessly through the
 // native engine's Vulkan renderer, and writes the frame as a binary PPM. A
 // maintainer tool: the image is derived from the user's disc and belongs
 // under scratch/.
@@ -23,6 +23,7 @@
 #include "render/level_renderer.h"
 #include "render/vulkan_device.h"
 #include "scene/level_scene.h"
+#include "scene/streaming_levels.h"
 
 namespace
 {
@@ -45,23 +46,27 @@ float Quantile(std::vector<float> values, double q)
 
 // A three-quarter overview of where the level's meshes and BSP vertices
 // stand.
-gears::engine::scene::Camera OverviewCamera(const gears::engine::scene::LevelScene &scene)
+gears::engine::scene::Camera
+OverviewCamera(const std::vector<gears::engine::scene::LevelScene> &scenes)
 {
     std::array<std::vector<float>, 3> axes;
-    for (const auto &instance : scene.Instances())
+    for (const auto &scene : scenes)
     {
-        for (std::size_t axis = 0; axis < 3U; ++axis)
+        for (const auto &instance : scene.Instances())
         {
-            axes[axis].push_back(instance.world.m[3][axis]);
+            for (std::size_t axis = 0; axis < 3U; ++axis)
+            {
+                axes[axis].push_back(instance.world.m[3][axis]);
+            }
         }
-    }
-    for (const auto &model : scene.Models())
-    {
-        for (const auto &vertex : model.geometry.vertices)
+        for (const auto &model : scene.Models())
         {
-            axes[0].push_back(vertex.position.x);
-            axes[1].push_back(vertex.position.y);
-            axes[2].push_back(vertex.position.z);
+            for (const auto &vertex : model.geometry.vertices)
+            {
+                axes[0].push_back(vertex.position.x);
+                axes[1].push_back(vertex.position.y);
+                axes[2].push_back(vertex.position.z);
+            }
         }
     }
     std::array<float, 3> low{};
@@ -101,40 +106,47 @@ int Run(const fs::path &level_path, const fs::path &out_path)
     gears::engine::package::PackageStore store(files);
     gears::engine::object::ClassHierarchy classes(store);
     gears::engine::object::ObjectResolver resolver(store);
-    const auto &level = store.Load(level_path.stem().string());
-    auto scene = gears::engine::scene::LevelScene::Build(level, classes, resolver);
-    const auto &census = scene.Census();
-    lucent::info(
-        "level-render",
-        "{}: {} static mesh component(s), {} template(s), {} placed, {} without a mesh, {} with a "
-        "cooked-out mesh, {} outside an actor; {} model component(s)",
-        level.Name(), census.components, census.templates, census.placed, census.without_mesh,
-        census.cooked_out_mesh, census.outside_actor, census.model_components);
-    if (scene.Instances().empty() && scene.Models().empty())
+    const auto &persistent = store.Load(level_path.stem().string());
+    std::vector<const gears::engine::package::Package *> levels{&persistent};
+    for (const std::string &name :
+         gears::engine::scene::StreamingLevelPackages(persistent, classes))
     {
-        lucent::error("level-render", "REFUSING: {} places no static meshes or BSP", level.Name());
+        levels.push_back(&store.Load(name));
+    }
+    std::vector<gears::engine::scene::LevelScene> scenes;
+    scenes.reserve(levels.size());
+    std::size_t placed = 0;
+    std::size_t models = 0;
+    for (const auto *level : levels)
+    {
+        scenes.push_back(gears::engine::scene::LevelScene::Build(*level, classes, resolver));
+        const auto &census = scenes.back().Census();
+        placed += census.placed;
+        models += census.model_components;
+        lucent::info("level-render", "{}: {} placed static mesh(es), {} model component(s)",
+                     level->Name(), census.placed, census.model_components);
+    }
+    if (placed == 0U && models == 0U)
+    {
+        lucent::error("level-render", "REFUSING: {} places no static meshes or BSP",
+                      persistent.Name());
         return 1;
     }
 
     gears::engine::render::VulkanDevice device;
     gears::engine::render::LevelRenderer renderer(device, kImageExtent, files, classes, resolver);
-    renderer.Prepare(level, scene);
-    auto camera = OverviewCamera(scene);
+    for (std::size_t i = 0; i < levels.size(); ++i)
+    {
+        renderer.Prepare(*levels[i], scenes[i]);
+    }
+    auto camera = OverviewCamera(scenes);
     WritePpm(out_path, renderer.Extent(), renderer.Render(camera));
     const auto &drawn = renderer.Census();
-    for (const auto &[source, count] : drawn.section_colors)
-    {
-        lucent::info("level-render", "  section colour {:>6} {}", count, source);
-    }
     lucent::info("level-render",
-                 "{} section draw(s) of {} mesh(es), {} BSP component(s) ({} empty) and {} "
-                 "texture(s), {} placement(s) of a mesh with no LOD, on {}; camera eye ({:.0f}, "
-                 "{:.0f}, {:.0f}) target ({:.0f}, {:.0f}, "
-                 "{:.0f}) -> {}",
-                 drawn.draws, drawn.meshes, drawn.models, drawn.models_without_triangles,
-                 drawn.textures, drawn.placements_without_lod, device.Name(), camera.eye.x,
-                 camera.eye.y, camera.eye.z, camera.target.x, camera.target.y, camera.target.z,
-                 out_path.filename().string());
+                 "{} level(s): {} section draw(s), {} mesh(es), {} BSP component(s), {} "
+                 "texture(s) on {} -> {}",
+                 levels.size(), drawn.draws, drawn.meshes, drawn.models, drawn.textures,
+                 device.Name(), out_path.filename().string());
     return 0;
 }
 

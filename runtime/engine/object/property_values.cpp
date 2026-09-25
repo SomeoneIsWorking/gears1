@@ -140,4 +140,16 @@ std::span<const std::uint8_t> PropertyValues::Array(std::string_view name,
     return tag->value.subspan(4U);
 }
 
+std::vector<PackageIndex> PropertyValues::ObjectArray(std::string_view name) const
+{
+    std::span<const std::uint8_t> elements = Array(name, 4U);
+    std::vector<PackageIndex> objects;
+    objects.reserve(elements.size() / 4U);
+    for (std::size_t offset = 0; offset < elements.size(); offset += 4U)
+    {
+        objects.push_back(static_cast<PackageIndex>(BigEndian32(elements.subspan(offset))));
+    }
+    return objects;
+}
+
 } // namespace gears::engine::object

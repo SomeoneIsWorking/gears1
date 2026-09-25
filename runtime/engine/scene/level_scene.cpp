@@ -61,17 +61,6 @@ Matrix Placement(const object::PropertyValues &properties, std::string_view loca
                           Scaled(scale_3d, properties.Float(scale, 1.0F)));
 }
 
-std::vector<package::PackageIndex> MaterialOverrides(const object::PropertyValues &properties)
-{
-    std::span<const std::uint8_t> elements = properties.Array("Materials", 4U);
-    std::vector<package::PackageIndex> materials;
-    for (std::size_t offset = 0; offset < elements.size(); offset += 4U)
-    {
-        materials.push_back(static_cast<package::PackageIndex>(BigEndian32(elements, offset)));
-    }
-    return materials;
-}
-
 } // namespace
 
 LevelScene LevelScene::Build(const package::Package &level, object::ClassHierarchy &classes,
@@ -135,7 +124,7 @@ LevelScene LevelScene::Build(const package::Package &level, object::ClassHierarc
         Matrix world =
             Placement(actor_properties, "Location", "Rotation", "DrawScale", "DrawScale3D");
         scene.instances_.push_back(
-            {mesh.location, local * world, MaterialOverrides(component_properties)});
+            {mesh.location, local * world, component_properties.ObjectArray("Materials")});
         ++scene.census_.placed;
     }
     return scene;
