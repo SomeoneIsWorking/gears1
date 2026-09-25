@@ -33,13 +33,14 @@ This inventory reports observable capabilities independently of the product goal
 
 ## Current focus
 
-The native engine (S020-S022) is the current focus: independently written C++ that owns
-UE3 subsystems over Gears 1's own content, with the dynarec only for what remains. S020
-and S021 are verified; S022 renders a level's placed static meshes and BSP surfaces with their
-materials' base-colour textures. The
-Xenia-hosted product below is the dynarec half and is no longer where new work goes first.
+The current focus is the playable product: Gears 1 (then Gears 2 and 3) running through
+`x360port` with native overrides, optimized, and behaving like a PC game. The open items
+are gameplay beyond Act 1 (S009), the frame budget in combat (S013), PC settings,
+rebindable controls and window modes (S018), and no-terminal setup and packaging (S002).
+The native engine (S020-S022) stays in the repository but is paused; new work does not go
+there.
 
-S009 was the previous focus. Gears 1 is the only active title. `./run.sh` now authenticates
+Gears 1 is the only active title. `./run.sh` now authenticates
 the user's disc by its `default.xex` digest, builds the `gears1` product, and runs it
 through `x360port::SystemSession`: Xenia's kernel, file system, GPU, audio, and input
 services host the authenticated executable, the guest CPU runs on Xenia's x64 dynarec,
