@@ -3,6 +3,7 @@
 // the player at the level's PlayerStart, and runs the game loop in a window.
 
 #include <SDL3/SDL.h>
+#include <cstddef>
 #include <exception>
 #include <filesystem>
 #include <string>
@@ -11,11 +12,14 @@
 
 #include "device_input.h"
 #include "game/game_world.h"
+#include "game/pawn_body.h"
 #include "game/pawn_defaults.h"
 #include "game_window.h"
+#include "mesh/skeletal_mesh.h"
 #include "object/class_defaults.h"
 #include "object/class_hierarchy.h"
 #include "object/object_resolver.h"
+#include "object/serialized_object.h"
 #include "package/content_files.h"
 #include "package/package_store.h"
 #include "render/level_renderer.h"
@@ -47,6 +51,11 @@ void RunGame(const fs::path &content, const std::string &level_name)
     std::string pawn_class = engine::game::PlayerPawnClass(
         defaults, std::string(engine::game::kSinglePlayerGameClass));
     engine::game::PawnTuning tuning = engine::game::ReadPawnTuning(defaults, pawn_class);
+    engine::game::PawnAppearance appearance =
+        engine::game::ReadPawnAppearance(defaults, resolver, pawn_class);
+    engine::mesh::SkeletalMesh body = engine::mesh::SkeletalMesh::Read(
+        engine::object::SerializedObject::Read(*appearance.mesh.package,
+                                               appearance.mesh.export_index, classes));
     engine::game::GameWorld game(world, static_meshes, tuning, engine::game::CameraRig{});
     lucent::info("gears-native", "{}: {} level(s), {} collision triangle(s); player {}",
                  world.Persistent().Name(), world.Levels().size(),
@@ -60,6 +69,8 @@ void RunGame(const fs::path &content, const std::string &level_name)
     {
         renderer.Prepare(*level.package, level.scene);
     }
+    std::size_t body_draw = renderer.AddMovable(
+        *appearance.mesh.package, engine::mesh::ReferencePose(body, body.Lods().front()));
     engine::render::WindowFrames frames(device, window.Drawable());
     engine::app::DeviceInput input(engine::app::InputSettings{});
     lucent::info("gears-native", "{} section draw(s) on {}", renderer.Census().draws,
@@ -76,6 +87,7 @@ void RunGame(const fs::path &content, const std::string &level_name)
         previous = now;
         game.Advance(input.Read(seconds), seconds);
         engine::scene::Camera view = game.View(aspect);
+        renderer.Place(body_draw, engine::game::BodyPlacement(game.Player(), appearance, body));
         frames.Draw(
             window.Drawable(), [&](VkCommandBuffer commands) { renderer.Record(commands, view); },
             renderer.ColorImage(), kRenderExtent);

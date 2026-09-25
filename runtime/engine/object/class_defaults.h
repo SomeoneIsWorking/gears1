@@ -17,6 +17,13 @@
 namespace gears::engine::object
 {
 
+// An object reference as a default stores it: resolve `index` in `package`.
+struct StoredReference
+{
+    const Package *package = nullptr;
+    PackageIndex index = 0;
+};
+
 // The defaults an object of one class starts from: its class's default
 // object and those of every superclass, most derived first. A property reads
 // from the most derived default that stores it; a class stores only the
@@ -38,6 +45,9 @@ class DefaultChain
     // The full path ("Package.Outer.Name") of an object property's value, or
     // none when no default stores it or it is None.
     [[nodiscard]] std::optional<std::string> ObjectPath(std::string_view name) const;
+    // An object property's value as stored, or none when no default stores
+    // it or it is None.
+    [[nodiscard]] std::optional<StoredReference> Reference(std::string_view name) const;
     // The encoded value of a struct property (see PropertyValues::Struct),
     // or an empty span when no default stores it.
     [[nodiscard]] std::span<const std::uint8_t>

@@ -21,6 +21,7 @@
 #include "bsp/bsp_model.h"
 #include "bsp/component_geometry.h"
 #include "material/material_surfaces.h"
+#include "mesh/skeletal_mesh.h"
 #include "mesh/static_mesh.h"
 #include "texture/texture2d.h"
 #include "package/package_store.h"
@@ -81,6 +82,9 @@ struct Census
     std::map<std::string, std::size_t> property_only;
     std::map<std::string, std::size_t> texture_formats;
     std::map<std::size_t, std::size_t> mesh_lod_counts;
+    std::size_t skeletal_meshes = 0;
+    std::size_t skeletal_bones = 0;
+    std::size_t skeletal_vertices = 0;
     // Materials by what gives them their base colour.
     std::map<std::string, std::size_t> material_diffuse;
     std::size_t bsp_models = 0;
@@ -114,6 +118,13 @@ class AssetDecoder
         {
             auto mesh = gears::engine::mesh::StaticMesh::Read(object);
             ++census.mesh_lod_counts[mesh.Lods().size()];
+        }
+        else if (class_name == "SkeletalMesh")
+        {
+            auto mesh = gears::engine::mesh::SkeletalMesh::Read(object);
+            ++census.skeletal_meshes;
+            census.skeletal_bones += mesh.Skeleton().size();
+            census.skeletal_vertices += mesh.Lods().front().vertices.size();
         }
         else if (class_name == "Texture2D")
         {
@@ -278,6 +289,9 @@ int Run(const fs::path &directory)
     {
         lucent::info("package-census", "  StaticMesh {:>8} with {} LOD(s)", count, lods);
     }
+    lucent::info("package-census",
+                 "  SkeletalMesh {:>8} with {} bone(s) and {} LOD 0 vertices in all",
+                 census.skeletal_meshes, census.skeletal_bones, census.skeletal_vertices);
     for (const auto &[format, count] : census.texture_formats)
     {
         lucent::info("package-census", "  Texture2D {:>8} {}", count, format);

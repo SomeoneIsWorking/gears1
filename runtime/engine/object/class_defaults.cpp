@@ -38,7 +38,7 @@ bool DefaultChain::Bool(std::string_view name, bool fallback) const
     return object == nullptr ? fallback : PropertyValues(object->Properties()).Bool(name);
 }
 
-std::optional<std::string> DefaultChain::ObjectPath(std::string_view name) const
+std::optional<StoredReference> DefaultChain::Reference(std::string_view name) const
 {
     const SerializedObject *object = Storing(name);
     if (object == nullptr)
@@ -50,7 +50,17 @@ std::optional<std::string> DefaultChain::ObjectPath(std::string_view name) const
     {
         return std::nullopt;
     }
-    return object->Owner().FullPath(value);
+    return StoredReference{&object->Owner(), value};
+}
+
+std::optional<std::string> DefaultChain::ObjectPath(std::string_view name) const
+{
+    std::optional<StoredReference> reference = Reference(name);
+    if (!reference)
+    {
+        return std::nullopt;
+    }
+    return reference->package->FullPath(reference->index);
 }
 
 std::span<const std::uint8_t> DefaultChain::Struct(std::string_view name,

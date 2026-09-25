@@ -31,6 +31,7 @@ target_link_libraries(gears_engine_texture PUBLIC gears_engine_object)
 x360port_enable_warnings(gears_engine_texture)
 
 add_library(gears_engine_mesh STATIC
+    mesh/skeletal_mesh.cpp
     mesh/static_mesh.cpp)
 target_link_libraries(gears_engine_mesh PUBLIC gears_engine_object)
 x360port_enable_warnings(gears_engine_mesh)
@@ -62,6 +63,7 @@ x360port_enable_warnings(gears_engine_scene)
 add_library(gears_engine_game STATIC
     game/collision_world.cpp
     game/game_world.cpp
+    game/pawn_body.cpp
     game/pawn_defaults.cpp
     game/player_camera.cpp
     game/player_pawn.cpp

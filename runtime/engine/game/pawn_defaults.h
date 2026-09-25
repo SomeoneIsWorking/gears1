@@ -3,7 +3,9 @@
 #include <string>
 #include <string_view>
 
+#include "mesh/static_mesh.h"
 #include "object/class_defaults.h"
+#include "object/object_resolver.h"
 #include "pawn_tuning.h"
 
 namespace gears::engine::game
@@ -20,6 +22,14 @@ inline constexpr std::string_view kWorldInfoClass = "Engine.WorldInfo";
 // The pawn's collision cylinder subobject.
 inline constexpr std::string_view kCollisionCylinderName = "CollisionCylinder";
 
+// How a pawn class looks: the skeletal mesh its mesh component draws and
+// that component's offset from the pawn's location (the capsule centre).
+struct PawnAppearance
+{
+    object::ExportLocation mesh;
+    mesh::Vector3 translation;
+};
+
 // The pawn class `game_class`'s defaults spawn for the player. Refuses a game
 // type that names none.
 [[nodiscard]] std::string PlayerPawnClass(object::ClassDefaults &defaults,
@@ -32,5 +42,12 @@ inline constexpr std::string_view kCollisionCylinderName = "CollisionCylinder";
 // cylinder size or ground speed.
 [[nodiscard]] PawnTuning ReadPawnTuning(object::ClassDefaults &defaults,
                                         const std::string &pawn_class);
+
+// The appearance of `pawn_class`, read from the defaults of the component its
+// Mesh property names. Refuses a pawn whose mesh component names no skeletal
+// mesh, or one that is cooked out.
+[[nodiscard]] PawnAppearance ReadPawnAppearance(object::ClassDefaults &defaults,
+                                                object::ObjectResolver &resolver,
+                                                const std::string &pawn_class);
 
 } // namespace gears::engine::game
