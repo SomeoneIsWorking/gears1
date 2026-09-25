@@ -1,138 +1,62 @@
-# GearsUE3 engine-port guidance
+# GearsUE3 guidance
 
-The repository-wide rules in `../../AGENTS.md` apply here. Read
-`docs/project-state.md`, `docs/re-frontier.md`, and `docs/codemap.md` before
-changing a subsystem. Update the nearest authority in the same change when its
-answer changes.
+The global rules in `../../AGENTS.md` apply. Read `docs/project-state.md` and
+`docs/codemap.md` before changing a subsystem, and update the authority whose
+answer changes in the same commit.
 
-## Product target
+## Product
 
-GearsUE3 is one native/dynarec engine port for the Xbox 360 Gears of War UE3
-titles. The two cooperating execution paths are measured native overrides and
-an emulated path that executes every other guest instruction through Xenia's
-existing x64 or A64 Xenon dynarec by default. `x360port` may use a bounded,
-reason-labelled interpreter fallback only after compilation failure, an
-unsupported guest instruction, or unsafe generated host execution. Explicit
-interpreter mode is diagnostic-only; fallback coverage is never gameplay or
-performance proof.
-
-The dependency direction has three deliberate layers:
+GearsUE3 plays the Xbox 360 Gears of War titles as PC games: every guest
+instruction runs through Xenia's x64/A64 Xenon dynarec via `shared/x360port`,
+and measured native overrides replace hot or host-facing guest functions.
+`x360port` may interpret a block only after compilation fails, an instruction
+is unsupported, or generated host code is unsafe, with the reason recorded.
+Interpreter mode is diagnostic and never gameplay or performance evidence.
 
 ```text
 Gears title/revision adapters + GearsUE3
-                    |
-                    v
-        shared/x360ue3
-                    |
-                    v
-        shared/x360port -> Xenia dynarec
+        -> shared/x360ue3 -> shared/x360port -> Xenia dynarec
 ```
 
-The platform layer is `x360port`, a narrow framework around Xenia `Memory`,
-`Processor`, `ThreadState`, `RawModule`, typed imports, device-memory callbacks,
-runtime overrides, and scoped original calls. Do not put Xenia behind
-`jit-common` caches and do not write another PPC interpreter, decoder, or host
-code emitter. Xenia owns Xenon translation and its code cache. `x360port` owns
-the embedding contract and must account explicitly for Xenia's process-global
-memory, MMIO, and clock assumptions.
-
-`x360ue3` owns only reusable Xbox 360 UE3 contracts over public `x360port`
-interfaces: versioned engine ABI descriptions, UE3 RHI semantic operations,
-title-supplied binding schemas, and object/resource/thread/frame lifetime. It
-contains no Gears address, shader hash, pass roster, navigation, save policy,
-gameplay rule, or application composition. `GearsUE3` owns those Gears-family
-concerns and every exact title/revision adapter. The local `shared/ue3` checkout
-is reference material only and is never compiled, linked, packaged, copied, or
-required by this product.
-
-Gears 1 is the first conformance target. Its asset-free implementation
-discriminator is deliberately smaller than boot: translate an authenticated
-synthetic module whose code and entry point use retained leaf address
-`0x8222E868`, bind and call `DbgPrint` through a typed import, and return to native code. It proves the
-Gears-to-x360port composition seam, not the original leaf. The headless real-image
-discriminator now executes retained leaf `0x8222E868` with disabled, enabled,
-and scoped-original override paths through Xenia, including a nested guest call.
-The next boundary is complete fallback coverage and title-service composition. The independently useful evidence and native owners are
-preserved; the retired translator, generated PPC modules, function maps, generator-only
-configuration/tests, precomputed dispatch, and their methodology are deleted and
-must not return. The product may fail at the explicit missing
-runtime-service composition until those owners are wired
-over `x360port`; the old executable is never kept as a bridge or oracle.
-
-Guest addresses, image identity, shader hashes, menu walks, and diagnostics
-belong to a title/revision adapter. Shared engine or platform code must not
-acquire Gears 1 policy merely because it is the first target. Finish Gears 1's
-declared compatibility and performance gates before beginning title-specific
-work for another Gears game.
+- `x360port` owns the Xenia embedding (`SystemSession`, memory, processor,
+  threads, typed imports, overrides, scoped original calls) and Xenia's
+  process-global memory, MMIO, and clock assumptions. Do not write another PPC
+  interpreter, decoder, or emitter, and do not put Xenia behind `jit-common`.
+- `x360ue3` holds reusable UE3-on-360 contracts only; no Gears address, hash,
+  pass roster, navigation, save policy, gameplay, or composition.
+- This repo owns Gears policy. A title/revision adapter
+  (`runtime/titles/<title>/`) owns exact image identity, override bindings,
+  probes, pass hashes, save namespace, and scripted navigation; unknown
+  revisions refuse. `runtime/product/` composes the shipping executable.
+- Normal calls honor the override table; `super` suppresses only the current
+  override and re-enters the original guest address. Mutating an override
+  invalidates translated paths that captured the old decision.
+- Gears 1 comes first. Finish its compatibility and performance goals before
+  title-specific work on Gears 2 or 3.
+- `runtime/engine` (the paused native UE3 engine) stays in the tree but is not
+  extended.
+- The retired generated-PPC product (translator, generated modules, function
+  maps, precomputed dispatch) must not return.
 
 ## Clean distribution boundary
 
-The public repository contains independently authored source, compatible
-open-source dependencies with their required notices, and factual
-interoperability metadata only. It must not contain or fetch UE3 source, game
-code/assets, extracted files, decoded shader listings, decompiler output,
-derived guest source, or caches derived from a title. A user-owned disc/image
-is the only copyrighted provisioning input.
+The public repository holds independently authored source, compatible
+open-source dependencies with their notices, and factual interoperability
+metadata. It never contains or fetches UE3 source, game code or assets,
+extracted files, decoded shaders, decompiler output, or title-derived caches.
+The user's own disc image is the only copyrighted input; derived output lives in
+ignored `scratch/titles/<fingerprint>/` and must be regenerable. `shared/ue3` is
+developer reference only: nothing from it is compiled, linked, packaged, or
+copied here.
 
-Disc-derived output belongs under ignored `scratch/titles/<fingerprint>/` and
-must be regenerable. Private UE3 source may settle a conceptual question for a
-developer, but no expression, comment, declaration, patch context, mechanical
-translation, or generated artifact from it may enter this repository.
+## Building and running
 
-## Verification runs
-
-Every run started by an agent for verification, profiling, capture, or diagnosis
-must be headless. Do not open a game window for a smoke test. During the
-migration, do not invoke any path that builds, generates, or launches the
-retired generated-code product. New comparison evidence comes from the independent Xenia
-oracle, hardware, binary analysis, or a separately built diagnostic target.
-
-## Python tooling
-
-The repository root `pyproject.toml` and `uv.lock` are the only Python
-dependency authority. Run project tools as `uv run --locked python <tool>`;
-CMake generators and CTest use the same locked project. Do not select an
-ambient interpreter or create a second environment.
-
-## Host architecture
-
-This repository's `docs/codemap.md` is the ownership authority. Keep the host
-self-contained: the entry point composes focused modules, each subsystem owns
-one coherent responsibility and its lifetime, and shared/title/platform policy
-crosses narrow explicit interfaces. Split a mixed or oversized owner before
-extending it; do not create forwarding fragments, catch-all helpers, or copy a
-platform implementation from another game project. Reusable cross-title Xbox
-360 execution belongs in `x360port`; reusable UE3-on-Xbox-360 behavior belongs
-in `x360ue3`; Gears-specific behavior stays in `GearsUE3` here.
-
-- `run.sh` remains a slim locked-environment shim. Its next shipping route must
-  provision the authenticated runtime image and launch the x360port/Xenia
-  product without offline translation. Until that route exists, documentation
-  must not present an obsolete launcher as the product.
-- A title adapter owns exact image identity, semantic override bindings,
-  title-specific probes, pass hashes, save namespace, and scripted navigation.
-  Unknown revisions refuse rather than falling back.
-- Normal calls honor the runtime override table. `super` suppresses only the
-  current override and re-enters the original guest address through Xenia.
-  Override mutation invalidates translated call paths that captured an older
-  decision.
-- `runtime/vd_null_gpu.cpp` composes guest GPU dispatch with host subsystems; it
-  must not absorb their implementations.
-- `runtime/input.cpp` owns controller sources, arbitration, and the guest-facing
-  controller snapshot.
-- Lucent owns reusable loopback HTTP transport. Gears code owns only routes and
-  translations through narrow input/probe interfaces.
-- `runtime/graphics_probe.cpp` owns on-demand readback state and publication;
-  shipping render passes do not depend on HTTP.
-- `runtime/gpu_scanout.cpp` owns finished-frame staging and scan-out transforms;
-  presentation orchestration does not own swapchain resources.
-- `runtime/native_rhi_resources.*` owns title-neutral guest-object identity and
-  non-boundary lifetime bookkeeping; API allocation and retirement belong to
-  the backend.
-- `runtime/native_rhi.*` owns the PM4-independent semantic frame plan;
-  title-address bindings, Xenos translation, and host backend execution stay in
-  their focused owners.
-
-Pure state transitions belong behind production interfaces with focused tests.
-Run the structure check, its self-test, and the relevant focused tests before a
-host change; run the combined gate once when semantic edits are frozen.
+- Build with Clang: `uv run --locked cmake --build build/product --target gears1`.
+  Run the focused test for what you changed, the structure check with its
+  self-test, and the combined gate once edits are frozen.
+- Python tools run as `uv run --locked python <tool>` from the root
+  `pyproject.toml`/`uv.lock`; no ambient interpreter or second environment.
+- Agent runs are headless: `tools/run_offscreen.py` with `--control-port` and
+  `tools/product_control.py` to drive input and read state. Never run
+  `./run.sh`, never print the image path or process arguments, and never print
+  `.env` values.
