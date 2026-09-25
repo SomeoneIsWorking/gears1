@@ -50,6 +50,7 @@ x360port_enable_warnings(gears_engine_material)
 add_library(gears_engine_scene STATIC
     scene/camera.cpp
     scene/level_scene.cpp
+    scene/streaming_levels.cpp
     scene/transform.cpp)
 target_link_libraries(gears_engine_scene PUBLIC gears_engine_bsp)
 x360port_enable_warnings(gears_engine_scene)
