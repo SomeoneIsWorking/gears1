@@ -128,7 +128,9 @@ StaticMeshLod ReadLod(ByteReader &reader, std::size_t data_base)
     SkipArray(reader, 1U);        // shadow double-sided flags
     for (const MeshSection &section : lod.sections)
     {
-        if (section.first_index + section.triangle_count * 3U > lod.indices.size())
+        std::size_t count = std::size_t{section.triangle_count} * 3U;
+        if (section.first_index > lod.indices.size() ||
+            count > lod.indices.size() - section.first_index)
         {
             reader.Fail("section covers indices beyond the index buffer");
         }

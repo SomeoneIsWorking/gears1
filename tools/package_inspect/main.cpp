@@ -47,8 +47,13 @@ void DumpProperties(const Package &package, std::size_t index,
     auto object = gears::engine::object::SerializedObject::Read(package, index, classes);
     for (const auto &tag : object.Properties())
     {
+        std::string type = package.NameText(tag.type);
+        if (type == "StructProperty")
+        {
+            type += " " + package.NameText(tag.struct_name);
+        }
         lucent::info("package-inspect", "    {}[{}] {} {} {}", package.NameText(tag.name),
-                     tag.array_index, package.NameText(tag.type), tag.value.size(),
+                     tag.array_index, type, tag.value.size(),
                      HexLine(tag.value.first(std::min<std::size_t>(tag.value.size(), 16U))));
     }
     lucent::info("package-inspect", "    native data at {:#x}: {} byte(s)", object.NativeOffset(),

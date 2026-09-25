@@ -18,7 +18,8 @@ add_library(gears_engine_object STATIC
     object/class_hierarchy.cpp
     object/object_resolver.cpp
     object/property_values.cpp
-    object/serialized_object.cpp)
+    object/serialized_object.cpp
+    object/tagged_properties.cpp)
 target_link_libraries(gears_engine_object PUBLIC gears_engine_package)
 x360port_enable_warnings(gears_engine_object)
 
@@ -33,6 +34,11 @@ add_library(gears_engine_mesh STATIC
 target_link_libraries(gears_engine_mesh PUBLIC gears_engine_object)
 x360port_enable_warnings(gears_engine_mesh)
 
+add_library(gears_engine_material STATIC
+    material/material_textures.cpp)
+target_link_libraries(gears_engine_material PUBLIC gears_engine_object)
+x360port_enable_warnings(gears_engine_material)
+
 add_library(gears_engine_scene STATIC
     scene/camera.cpp
     scene/level_scene.cpp
@@ -42,8 +48,15 @@ x360port_enable_warnings(gears_engine_scene)
 
 add_executable(test_engine_package "${CMAKE_SOURCE_DIR}/tests/test_engine_package.cpp")
 target_link_libraries(test_engine_package PRIVATE gears_engine_package)
+target_include_directories(test_engine_package PRIVATE "${CMAKE_SOURCE_DIR}/tests")
 x360port_enable_warnings(test_engine_package)
 gears_add_binary_test(gears_engine_package test_engine_package)
+
+add_executable(test_engine_object "${CMAKE_SOURCE_DIR}/tests/test_engine_object.cpp")
+target_link_libraries(test_engine_object PRIVATE gears_engine_object)
+target_include_directories(test_engine_object PRIVATE "${CMAKE_SOURCE_DIR}/tests")
+x360port_enable_warnings(test_engine_object)
+gears_add_binary_test(gears_engine_object test_engine_object)
 
 add_executable(test_engine_scene "${CMAKE_SOURCE_DIR}/tests/test_engine_scene.cpp")
 target_link_libraries(test_engine_scene PRIVATE gears_engine_scene)
@@ -54,6 +67,7 @@ gears_add_binary_test(gears_engine_scene test_engine_scene)
 # CTest: restricted title bytes never become a hosted-test input.
 add_executable(gears_package_census "${CMAKE_SOURCE_DIR}/tools/package_census/main.cpp")
 target_link_libraries(gears_package_census PRIVATE gears_engine_texture gears_engine_mesh
+                                                   gears_engine_material
                                                    lucent::lucent)
 x360port_enable_warnings(gears_package_census)
 
@@ -93,12 +107,17 @@ if(Vulkan_FOUND AND Vulkan_glslc_FOUND)
     add_custom_target(gears_engine_shaders DEPENDS ${GEARS_ENGINE_SHADER_HEADERS})
 
     add_library(gears_engine_render STATIC
-    render/mesh_renderer.cpp
+        render/device_image.cpp
+        render/gpu_texture.cpp
+        render/level_renderer.cpp
+        render/mesh_renderer.cpp
         render/offscreen_target.cpp
+        render/texture_bindings.cpp
         render/vulkan_device.cpp)
     add_dependencies(gears_engine_render gears_engine_shaders)
     target_include_directories(gears_engine_render PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/render")
-    target_link_libraries(gears_engine_render PUBLIC gears_engine_scene Vulkan::Vulkan)
+    target_link_libraries(gears_engine_render PUBLIC gears_engine_scene gears_engine_material
+                                              gears_engine_texture Vulkan::Vulkan)
     x360port_enable_warnings(gears_engine_render)
 
     # Renders one level package headlessly and writes the frame as an image.

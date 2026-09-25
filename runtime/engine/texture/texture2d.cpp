@@ -11,7 +11,7 @@ namespace gears::engine::texture
 
 Texture2D Texture2D::Read(const object::SerializedObject &object)
 {
-    object::PropertyValues properties(object);
+    object::PropertyValues properties(object.Properties());
     auto format = static_cast<PixelFormat>(properties.Byte("Format"));
     std::int32_t width = properties.Int("SizeX");
     std::int32_t height = properties.Int("SizeY");

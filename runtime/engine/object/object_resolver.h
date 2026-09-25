@@ -52,7 +52,8 @@ class ObjectResolver
     const ExportPaths &PathsOf(const package::Package &package);
 
     package::PackageStore &store_;
-    // Each loaded package's export object paths, built on first lookup.
+    // Export object paths of packages the store owns (and so outlive this
+    // resolver's lookups), built on first lookup.
     std::map<const package::Package *, ExportPaths> export_paths_;
 };
 

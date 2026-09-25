@@ -21,6 +21,9 @@ struct NameReference
     std::uint32_t number = 0;
 };
 
+// Reads one name reference: a name-table index and an instance number.
+NameReference ReadNameReference(ByteReader &reader);
+
 struct NameEntry
 {
     std::string text;

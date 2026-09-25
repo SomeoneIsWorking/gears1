@@ -13,9 +13,11 @@
 
 #include <lucent/log.h>
 
+#include "object/object_resolver.h"
 #include "object/serialized_object.h"
 #include "package/content_files.h"
 #include "package/lzo1x.h"
+#include "material/material_textures.h"
 #include "mesh/static_mesh.h"
 #include "texture/texture2d.h"
 #include "package/package_store.h"
@@ -76,12 +78,23 @@ struct Census
     std::map<std::string, std::size_t> property_only;
     std::map<std::string, std::size_t> texture_formats;
     std::map<std::size_t, std::size_t> mesh_lod_counts;
+    // Materials by what gives them their base colour.
+    std::map<std::string, std::size_t> material_diffuse;
 };
 
 // Decodes the native data of the asset classes the engine owns so far.
 void DecodeAsset(const gears::engine::object::SerializedObject &object,
-                 const std::string &class_name, Census &census)
+                 const std::string &class_name,
+                 gears::engine::material::MaterialTextures &materials, Census &census)
 {
+    if (class_name == "Material" || class_name == "MaterialInstanceConstant")
+    {
+        gears::engine::object::ExportLocation location{
+            &object.Owner(), static_cast<std::size_t>(object.Index()) - 1U};
+        ++census.material_diffuse[std::string(
+            gears::engine::material::NameOf(materials.BaseColor(location).outcome))];
+        return;
+    }
     if (class_name == "StaticMesh")
     {
         auto mesh = gears::engine::mesh::StaticMesh::Read(object);
@@ -97,8 +110,11 @@ void DecodeAsset(const gears::engine::object::SerializedObject &object,
 // Reads every non-schema export's property stream. A failure is counted
 // against its class, never skipped.
 void ReadProperties(const Package &package, const std::string &file,
-                    gears::engine::object::ClassHierarchy &classes, Census &census)
+                    gears::engine::object::ClassHierarchy &classes,
+                    gears::engine::object::ObjectResolver &resolver, Census &census)
 {
+    // Its cache is keyed by package, so it lives no longer than this one.
+    gears::engine::material::MaterialTextures materials(classes, resolver);
     for (std::size_t i = 0; i < package.Tables().exports.size(); ++i)
     {
         if (gears::engine::object::IsSchemaExport(package, i))
@@ -117,7 +133,7 @@ void ReadProperties(const Package &package, const std::string &file,
             }
             if (!object.IsClassDefault())
             {
-                DecodeAsset(object, class_name, census);
+                DecodeAsset(object, class_name, materials, census);
             }
         }
         catch (const gears::engine::package::PackageFormatError &error)
@@ -131,7 +147,8 @@ void ReadProperties(const Package &package, const std::string &file,
     }
 }
 
-void LoadOne(const fs::path &path, gears::engine::object::ClassHierarchy &classes, Census &census)
+void LoadOne(const fs::path &path, gears::engine::object::ClassHierarchy &classes,
+             gears::engine::object::ObjectResolver &resolver, Census &census)
 {
     ++census.packages;
     try
@@ -153,7 +170,7 @@ void LoadOne(const fs::path &path, gears::engine::object::ClassHierarchy &classe
         {
             ++census.export_classes[package.ClassName(static_cast<std::int32_t>(i + 1U))];
         }
-        ReadProperties(package, path.filename().string(), classes, census);
+        ReadProperties(package, path.filename().string(), classes, resolver, census);
     }
     // The census boundary: a format refusal is this package's result, and the
     // next file is independent of it.
@@ -196,10 +213,11 @@ int Run(const fs::path &directory)
     gears::engine::package::ContentFiles content(directory);
     gears::engine::package::PackageStore scripts(content);
     gears::engine::object::ClassHierarchy hierarchy(scripts);
+    gears::engine::object::ObjectResolver resolver(scripts);
     Census census;
     for (const fs::path &path : files)
     {
-        LoadOne(path, hierarchy, census);
+        LoadOne(path, hierarchy, resolver, census);
     }
     lucent::info("package-census", "{} intrinsic class(es) without a script export",
                  hierarchy.IntrinsicClasses().size());
@@ -233,6 +251,10 @@ int Run(const fs::path &directory)
     for (const auto &[format, count] : census.texture_formats)
     {
         lucent::info("package-census", "  Texture2D {:>8} {}", count, format);
+    }
+    for (const auto &[outcome, count] : census.material_diffuse)
+    {
+        lucent::info("package-census", "  material base colour {:>8} {}", count, outcome);
     }
     lucent::info("package-census",
                  "{} of {} object property stream(s) read ({} properties); {} failed; {} "

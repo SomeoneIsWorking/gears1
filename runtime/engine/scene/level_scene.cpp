@@ -100,7 +100,7 @@ LevelScene LevelScene::Build(const package::Package &level, object::ClassHierarc
             continue;
         }
         auto component = object::SerializedObject::Read(level, i, classes);
-        object::PropertyValues component_properties(component);
+        object::PropertyValues component_properties(component.Properties());
         object::Resolution mesh =
             resolver.Resolve(level, component_properties.Object("StaticMesh"));
         if (mesh.status == object::ResolutionStatus::kNull)
@@ -115,7 +115,7 @@ LevelScene LevelScene::Build(const package::Package &level, object::ClassHierarc
         }
         auto actor =
             object::SerializedObject::Read(level, static_cast<std::size_t>(owner) - 1U, classes);
-        object::PropertyValues actor_properties(actor);
+        object::PropertyValues actor_properties(actor.Properties());
         Matrix local =
             Placement(component_properties, "Translation", "Rotation", "Scale", "Scale3D");
         Matrix world =
