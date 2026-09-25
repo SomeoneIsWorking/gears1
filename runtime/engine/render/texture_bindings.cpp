@@ -1,5 +1,7 @@
 #include "texture_bindings.h"
 
+#include <array>
+
 namespace gears::engine::render
 {
 
@@ -17,19 +19,22 @@ TextureBindings::TextureBindings(const VulkanDevice &device, std::uint32_t capac
     sampler.maxLod = VK_LOD_CLAMP_NONE;
     Check(vkCreateSampler(device_, &sampler, nullptr, &sampler_), "vkCreateSampler");
 
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    std::array<VkDescriptorSetLayoutBinding, kBindings> bindings{};
+    for (std::uint32_t i = 0; i < kBindings; ++i)
+    {
+        bindings[i].binding = i;
+        bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[i].descriptorCount = 1;
+        bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    }
     VkDescriptorSetLayoutCreateInfo layout{};
     layout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout.bindingCount = 1;
-    layout.pBindings = &binding;
+    layout.bindingCount = kBindings;
+    layout.pBindings = bindings.data();
     Check(vkCreateDescriptorSetLayout(device_, &layout, nullptr, &layout_),
           "vkCreateDescriptorSetLayout");
 
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, capacity};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, capacity * kBindings};
     VkDescriptorPoolCreateInfo pool{};
     pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool.maxSets = capacity;
@@ -45,7 +50,7 @@ TextureBindings::~TextureBindings()
     vkDestroySampler(device_, sampler_, nullptr);
 }
 
-VkDescriptorSet TextureBindings::Bind(const GpuTexture &texture)
+VkDescriptorSet TextureBindings::Bind(const GpuTexture &color, const GpuTexture &opacity)
 {
     VkDescriptorSetAllocateInfo allocate{};
     allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -54,15 +59,21 @@ VkDescriptorSet TextureBindings::Bind(const GpuTexture &texture)
     allocate.pSetLayouts = &layout_;
     VkDescriptorSet set = VK_NULL_HANDLE;
     Check(vkAllocateDescriptorSets(device_, &allocate, &set), "vkAllocateDescriptorSets");
-    VkDescriptorImageInfo image{sampler_, texture.View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
-    VkWriteDescriptorSet write{};
-    write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    write.dstSet = set;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &image;
-    vkUpdateDescriptorSets(device_, 1, &write, 0, nullptr);
+    std::array<VkDescriptorImageInfo, kBindings> images{{
+        {sampler_, color.View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+        {sampler_, opacity.View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
+    }};
+    std::array<VkWriteDescriptorSet, kBindings> writes{};
+    for (std::uint32_t i = 0; i < kBindings; ++i)
+    {
+        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[i].dstSet = set;
+        writes[i].dstBinding = i;
+        writes[i].descriptorCount = 1;
+        writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[i].pImageInfo = &images[i];
+    }
+    vkUpdateDescriptorSets(device_, kBindings, writes.data(), 0, nullptr);
     return set;
 }
 

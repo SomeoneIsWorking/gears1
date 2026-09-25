@@ -1,7 +1,7 @@
 ---
 id: 174
 title: Native engine draws every material opaque
-status: open
+status: resolved
 symptom: masked foliage and grates draw as solid cards; translucent glass, additive effects and modulative decals draw as opaque surfaces
 tags: native-engine,material,render
 state_items: S022
@@ -9,12 +9,17 @@ created: 2026-09-25
 updated: 2026-09-25
 ---
 
-`material::MaterialTextures` returns only a material's base-colour texture, and
-`render::MeshRenderer` has one opaque pipeline. The base material's `BlendMode`,
-`OpacityMaskClipValue`, `TwoSided`, and the texture and channel its `OpacityMask`
-or `Opacity` input reads are not carried to the draw.
+## Resolution
 
-Next: resolve each material's surface (blend mode, opacity source and channel,
-clip value), bind the opacity texture beside the colour texture, alpha-test masked
-sections, and draw translucent, additive and modulative sections after opaque ones
-with their blend state and without depth writes.
+`material::MaterialSurfaces` resolves each base material's `BlendMode`,
+`TwoSided`, `LightingModel`, and `OpacityMaskClipValue`, and walks `OpacityMask`
+(masked) or `Opacity` (translucent) to the texture and channel the nearest input
+reads (its `Mask`/`MaskR`..`MaskA` flags). `render::TextureBindings` binds the
+colour and opacity textures together; `render::MeshRenderer` has one pipeline
+per blend, alpha-tests masked sections, and draws translucent, additive and
+modulative sections after the opaque ones without depth writes. Unlit sections
+skip the sun. SP_Adams_P with its 33 streamed sublevels draws 6,009 sections:
+4,564 opaque, 1,252 masked, 40 translucent, 120 additive, 2 modulative.
+
+Remaining: an opacity computed from constants or vertex colour is not evaluated,
+so such a section keeps full opacity; blended sections are not depth-sorted.

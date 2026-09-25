@@ -581,6 +581,6 @@ component's nodes as fans with texture coordinates projected on their surface's 
 15 components as 260 textured section draws with wall trim aligned to its storeys.
 `test_engine_bsp` covers triangulation, section order, projection, and refusals.
 `gears_level_render` composes a persistent level with every sublevel its WorldInfo streams.
-Gaps: materials are reduced to one base texture and draw opaque (0174); terrain (0177),
+Materials resolve a base texture, blend mode and opacity texture (0174), not evaluated values; terrain (0177),
 skeletal meshes (0176), lighting and lightmaps (0175), and an interactive window (0178)
 are missing; face winding is unmeasured, so both faces draw (0179).

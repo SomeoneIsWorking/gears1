@@ -1,5 +1,7 @@
 #include "level_renderer.h"
 
+#include <optional>
+
 #include "mesh/static_mesh.h"
 #include "object/serialized_object.h"
 #include "texture/texture2d.h"
@@ -19,8 +21,7 @@ LevelRenderer::LevelRenderer(const VulkanDevice &device, VkExtent2D extent,
                              object::ObjectResolver &resolver)
     : device_(device), files_(files), classes_(classes), resolver_(resolver),
       materials_(classes, resolver), target_(device, extent), bindings_(device, kMaxTextures),
-      renderer_(device, target_, bindings_.Layout()), untextured_(device, kUntexturedColor),
-      untextured_set_(bindings_.Bind(untextured_))
+      renderer_(device, target_, bindings_.Layout()), untextured_(device, kUntexturedColor)
 {
 }
 
@@ -48,57 +49,124 @@ const LevelRenderer::PreparedMesh &LevelRenderer::MeshOf(const object::ExportLoc
     return meshes_.emplace(key, std::move(prepared)).first->second;
 }
 
-VkDescriptorSet LevelRenderer::Upload(const object::ExportLocation &texture)
+const GpuTexture &LevelRenderer::TextureOf(const material::ColorTexture &input)
 {
-    Key key{texture.package, texture.export_index};
-    auto found = texture_sets_.find(key);
-    if (found != texture_sets_.end())
+    if (input.outcome != material::ColorOutcome::kTexture)
     {
-        return found->second;
+        return untextured_;
     }
-    auto object = object::SerializedObject::Read(*texture.package, texture.export_index, classes_);
-    auto decoded = texture::Texture2D::Read(object);
-    VkDescriptorSet set = untextured_set_;
-    if (GpuTexture::CanSample(decoded.Format()))
+    Key key{input.texture.package, input.texture.export_index};
+    auto found = textures_.find(key);
+    if (found == textures_.end())
     {
-        textures_.push_back(std::make_unique<GpuTexture>(device_, decoded, files_));
-        set = bindings_.Bind(*textures_.back());
-        ++census_.textures;
+        auto object = object::SerializedObject::Read(*input.texture.package,
+                                                     input.texture.export_index, classes_);
+        auto decoded = texture::Texture2D::Read(object);
+        std::unique_ptr<GpuTexture> uploaded;
+        if (GpuTexture::CanSample(decoded.Format()))
+        {
+            uploaded = std::make_unique<GpuTexture>(device_, decoded, files_);
+            ++census_.textures;
+        }
+        found = textures_.emplace(key, std::move(uploaded)).first;
     }
-    texture_sets_.emplace(key, set);
-    return set;
+    return found->second ? *found->second : untextured_;
 }
 
-VkDescriptorSet LevelRenderer::TextureOf(const package::Package &package,
-                                         package::PackageIndex material)
+VkDescriptorSet LevelRenderer::SetOf(const GpuTexture &color, const GpuTexture &opacity)
+{
+    std::pair key{&color, &opacity};
+    auto found = sets_.find(key);
+    if (found == sets_.end())
+    {
+        found = sets_.emplace(key, bindings_.Bind(color, opacity)).first;
+    }
+    return found->second;
+}
+
+DrawMaterial LevelRenderer::FromSurface(const material::MaterialSurface &surface)
+{
+    const GpuTexture &color = TextureOf(surface.color);
+    std::string color_source(material::NameOf(surface.color.outcome));
+    if (surface.color.outcome == material::ColorOutcome::kTexture && &color == &untextured_)
+    {
+        color_source = "texture format not sampled";
+    }
+    ++census_.section_colors[color_source];
+    ++census_.section_blends[std::string(material::NameOf(surface.blend))];
+
+    DrawMaterial draw;
+    draw.lit = !surface.unlit;
+    draw.clip = surface.opacity_clip;
+    // A computed opacity is not evaluated; the section keeps full opacity.
+    const GpuTexture &opacity = TextureOf(surface.opacity);
+    bool textured_opacity = &opacity != &untextured_;
+    switch (surface.opacity.channel)
+    {
+    case material::Channel::kColor:
+    case material::Channel::kRed:
+        draw.channel = 0;
+        break;
+    case material::Channel::kGreen:
+        draw.channel = 1;
+        break;
+    case material::Channel::kBlue:
+        draw.channel = 2;
+        break;
+    case material::Channel::kAlpha:
+        draw.channel = 3;
+        break;
+    }
+    switch (surface.blend)
+    {
+    case material::BlendMode::kOpaque:
+        break;
+    case material::BlendMode::kMasked:
+        draw.opacity = textured_opacity ? OpacityUse::kAlphaTest : OpacityUse::kNone;
+        break;
+    case material::BlendMode::kTranslucent:
+        draw.blend = Blend::kAlpha;
+        draw.opacity = textured_opacity ? OpacityUse::kBlend : OpacityUse::kNone;
+        break;
+    case material::BlendMode::kAdditive:
+        draw.blend = Blend::kAdditive;
+        break;
+    case material::BlendMode::kModulative:
+        draw.blend = Blend::kModulative;
+        break;
+    }
+    draw.textures = SetOf(color, opacity);
+    return draw;
+}
+
+DrawMaterial LevelRenderer::MaterialOf(const package::Package &package,
+                                       package::PackageIndex material)
 {
     object::Resolution resolved = resolver_.Resolve(package, material);
-    if (resolved.status == object::ResolutionStatus::kNull)
+    if (resolved.status != object::ResolutionStatus::kFound)
     {
-        ++census_.section_colors["no material"];
-        return untextured_set_;
+        ++census_.section_colors[resolved.status == object::ResolutionStatus::kNull
+                                     ? "no material"
+                                     : "material cooked out"];
+        DrawMaterial untextured;
+        untextured.textures = SetOf(untextured_, untextured_);
+        return untextured;
     }
-    if (resolved.status == object::ResolutionStatus::kCookedOut)
-    {
-        ++census_.section_colors["material cooked out"];
-        return untextured_set_;
-    }
-    material::ColorTexture color = materials_.BaseColor(resolved.location);
-    if (color.outcome != material::ColorOutcome::kTexture)
-    {
-        ++census_.section_colors[std::string(material::NameOf(color.outcome))];
-        return untextured_set_;
-    }
-    VkDescriptorSet set = Upload(color.texture);
-    ++census_.section_colors[set == untextured_set_ ? "texture format not sampled" : "texture"];
-    return set;
+    return FromSurface(materials_.Surface(resolved.location));
+}
+
+void LevelRenderer::AddDraw(const GpuMesh &mesh, const GpuSection &section,
+                            const DrawMaterial &material, const scene::Matrix &world)
+{
+    (material.blend == Blend::kOpaque ? opaque_draws_ : blended_draws_)
+        .push_back({&mesh, section, material, world});
 }
 
 void LevelRenderer::Prepare(const package::Package &level, const scene::LevelScene &scene)
 {
     PrepareMeshes(level, scene);
     PrepareModels(scene);
-    census_.draws = draws_.size();
+    census_.draws = opaque_draws_.size() + blended_draws_.size();
 }
 
 void LevelRenderer::PrepareMeshes(const package::Package &level, const scene::LevelScene &scene)
@@ -116,10 +184,10 @@ void LevelRenderer::PrepareMeshes(const package::Package &level, const scene::Le
             // A component's own material for a section replaces the mesh's.
             bool overridden =
                 i < instance.material_overrides.size() && instance.material_overrides[i] != 0;
-            VkDescriptorSet texture = overridden
-                                          ? TextureOf(level, instance.material_overrides[i])
-                                          : TextureOf(*instance.mesh.package, mesh.materials[i]);
-            draws_.push_back({mesh.gpu.get(), mesh.gpu->Sections()[i], texture, instance.world});
+            DrawMaterial material = overridden
+                                        ? MaterialOf(level, instance.material_overrides[i])
+                                        : MaterialOf(*instance.mesh.package, mesh.materials[i]);
+            AddDraw(*mesh.gpu, mesh.gpu->Sections()[i], material, instance.world);
         }
     }
 }
@@ -137,9 +205,9 @@ void LevelRenderer::PrepareModels(const scene::LevelScene &scene)
         const GpuMesh &gpu = *models_.back();
         for (std::size_t i = 0; i < gpu.Sections().size(); ++i)
         {
-            VkDescriptorSet texture =
-                TextureOf(*model.package, model.geometry.sections[i].material);
-            draws_.push_back({&gpu, gpu.Sections()[i], texture, scene::Matrix::Identity()});
+            AddDraw(gpu, gpu.Sections()[i],
+                    MaterialOf(*model.package, model.geometry.sections[i].material),
+                    scene::Matrix::Identity());
         }
         ++census_.models;
     }
@@ -152,10 +220,23 @@ std::vector<std::uint8_t> LevelRenderer::Render(const scene::Camera &camera)
         [&](VkCommandBuffer commands)
         {
             target_.Begin(commands);
-            renderer_.Bind(commands);
-            for (const Draw &draw : draws_)
+            renderer_.Begin(commands);
+            renderer_.Bind(commands, Blend::kOpaque);
+            for (const Draw &draw : opaque_draws_)
             {
-                renderer_.Draw(commands, *draw.mesh, draw.section, draw.texture, draw.world,
+                renderer_.Draw(commands, *draw.mesh, draw.section, draw.material, draw.world,
+                               view_projection);
+            }
+            // Blended sections draw over the finished opaque depth.
+            std::optional<Blend> bound;
+            for (const Draw &draw : blended_draws_)
+            {
+                if (bound != draw.material.blend)
+                {
+                    renderer_.Bind(commands, draw.material.blend);
+                    bound = draw.material.blend;
+                }
+                renderer_.Draw(commands, *draw.mesh, draw.section, draw.material, draw.world,
                                view_projection);
             }
             target_.EndAndCopy(commands);

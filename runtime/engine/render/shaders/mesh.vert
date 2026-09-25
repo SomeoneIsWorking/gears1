@@ -6,6 +6,7 @@ layout(push_constant) uniform Instance
 {
     mat4 world;
     mat4 view_projection;
+    vec4 material;
 } instance;
 
 layout(location = 0) in vec3 in_position;

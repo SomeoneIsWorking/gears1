@@ -142,6 +142,14 @@ int Run(const fs::path &level_path, const fs::path &out_path)
     auto camera = OverviewCamera(scenes);
     WritePpm(out_path, renderer.Extent(), renderer.Render(camera));
     const auto &drawn = renderer.Census();
+    for (const auto &[source, count] : drawn.section_colors)
+    {
+        lucent::info("level-render", "  section colour {:>6} {}", count, source);
+    }
+    for (const auto &[blend, count] : drawn.section_blends)
+    {
+        lucent::info("level-render", "  section blend  {:>6} {}", count, blend);
+    }
     lucent::info("level-render",
                  "{} level(s): {} section draw(s), {} mesh(es), {} BSP component(s), {} "
                  "texture(s) on {} -> {}",

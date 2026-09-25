@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "gpu_texture.h"
-#include "material/material_textures.h"
+#include "material/material_surfaces.h"
 #include "mesh_renderer.h"
 #include "object/class_hierarchy.h"
 #include "object/object_resolver.h"
@@ -24,7 +24,7 @@ namespace gears::engine::render
 {
 
 // What the prepared frame draws: placements, distinct GPU meshes and
-// textures, and each drawn section's base-colour source.
+// textures, each drawn section's base-colour source, and its blend.
 struct LevelRenderCensus
 {
     std::size_t draws = 0;
@@ -34,10 +34,13 @@ struct LevelRenderCensus
     std::size_t models_without_triangles = 0;
     std::size_t textures = 0;
     std::map<std::string, std::size_t> section_colors;
+    std::map<std::string, std::size_t> section_blends;
 };
 
 // Draws the static meshes and BSP surfaces a level places, each section
-// sampling the base colour texture of its material, into a headless frame.
+// sampling its material's colour and opacity textures, into a headless
+// frame: opaque and masked sections first, then blended ones in the order
+// they were prepared.
 class LevelRenderer
 {
   public:
@@ -70,32 +73,40 @@ class LevelRenderer
     {
         const GpuMesh *mesh = nullptr;
         GpuSection section;
-        VkDescriptorSet texture = VK_NULL_HANDLE;
+        DrawMaterial material;
         scene::Matrix world;
     };
 
     void PrepareMeshes(const package::Package &level, const scene::LevelScene &scene);
     void PrepareModels(const scene::LevelScene &scene);
     const PreparedMesh &MeshOf(const object::ExportLocation &mesh);
-    // The texture set of a material reference, counting its colour source.
-    VkDescriptorSet TextureOf(const package::Package &package, package::PackageIndex material);
-    VkDescriptorSet Upload(const object::ExportLocation &texture);
+    // How a section drawing a material reference draws, counting its colour
+    // source and blend.
+    DrawMaterial MaterialOf(const package::Package &package, package::PackageIndex material);
+    DrawMaterial FromSurface(const material::MaterialSurface &surface);
+    // The GPU texture of a texture input, or the untextured texel when it
+    // has none that can be sampled.
+    const GpuTexture &TextureOf(const material::ColorTexture &input);
+    VkDescriptorSet SetOf(const GpuTexture &color, const GpuTexture &opacity);
+    void AddDraw(const GpuMesh &mesh, const GpuSection &section, const DrawMaterial &material,
+                 const scene::Matrix &world);
 
     const VulkanDevice &device_;
     package::ContentFiles &files_;
     object::ClassHierarchy &classes_;
     object::ObjectResolver &resolver_;
-    material::MaterialTextures materials_;
+    material::MaterialSurfaces materials_;
     OffscreenTarget target_;
     TextureBindings bindings_;
     MeshRenderer renderer_;
     GpuTexture untextured_;
-    VkDescriptorSet untextured_set_;
     std::map<Key, PreparedMesh> meshes_;
     std::vector<std::unique_ptr<GpuMesh>> models_;
-    std::vector<std::unique_ptr<GpuTexture>> textures_;
-    std::map<Key, VkDescriptorSet> texture_sets_;
-    std::vector<Draw> draws_;
+    // Uploaded textures by export; null for one that cannot be sampled.
+    std::map<Key, std::unique_ptr<GpuTexture>> textures_;
+    std::map<std::pair<const GpuTexture *, const GpuTexture *>, VkDescriptorSet> sets_;
+    std::vector<Draw> opaque_draws_;
+    std::vector<Draw> blended_draws_;
     LevelRenderCensus census_;
 };
 
