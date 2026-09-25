@@ -85,11 +85,11 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(
             executed,
             [[str(self.root / "gears1"), "--image", str(self.root / "disc.iso"),
-              "--title-id", "4d5307d5"]],
+              "--title-id", "4d5307d5", "--control-port", "32125"]],
         )
 
-    def test_control_port_comes_only_from_the_environment(self) -> None:
-        self.assertEqual(launcher.control_port_arguments({}), [])
+    def test_control_port_is_served_by_default_and_overridable(self) -> None:
+        self.assertEqual(launcher.control_port_arguments({}), ["--control-port", "32125"])
         self.assertEqual(
             launcher.control_port_arguments({"GEARS_CONTROL_PORT": "32125"}),
             ["--control-port", "32125"],

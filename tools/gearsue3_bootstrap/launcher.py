@@ -24,9 +24,9 @@ Play Gears of War from your own disc image. The disc is found from --iso, then
 GEARS_ISO in the environment or .env, then the one image or 7z archive in roms/.
 Only the supported retail revision is accepted.
 
-GEARS_CONTROL_PORT=<port>, in the environment or .env, also serves the game's
-loopback control channel on that port, so a maintainer can read its
-performance and state while you play.
+The game serves its loopback-only control channel on port 32125, so its
+performance and state can be read while you play; GEARS_CONTROL_PORT=<port>
+in the environment or .env picks another port.
 
 Options:
   --iso <path>  the disc image or 7z archive to play
@@ -36,6 +36,7 @@ Options:
 
 
 MAX_PORT = 65535
+DEFAULT_CONTROL_PORT = 32125
 
 
 class CliError(RuntimeError):
@@ -72,11 +73,9 @@ def parse_arguments(arguments: Sequence[str]) -> LaunchOptions:
 
 
 def control_port_arguments(environ: Mapping[str, str]) -> list[str]:
-    """The product arguments that serve the control channel GEARS_CONTROL_PORT names."""
+    """The product arguments that serve the control channel, on GEARS_CONTROL_PORT or the default."""
 
-    value = environ.get("GEARS_CONTROL_PORT")
-    if value is None:
-        return []
+    value = environ.get("GEARS_CONTROL_PORT", str(DEFAULT_CONTROL_PORT))
     if not value.isdigit() or not 1 <= int(value) <= MAX_PORT:
         raise CliError(f"GEARS_CONTROL_PORT must be a port from 1 to {MAX_PORT}, not {value!r}")
     return ["--control-port", str(int(value))]
