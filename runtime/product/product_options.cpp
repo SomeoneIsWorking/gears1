@@ -69,10 +69,12 @@ constexpr std::array<std::string_view, 7> kValueOptions = {
     {
         if (!options.storage_root.empty() || options.run_seconds != 0 ||
             !options.capture_directory.empty() || options.capture_interval_seconds != 0 ||
-            options.perf_map || options.control_port != 0 || options.verify_audio_mix)
+            options.perf_map || options.control_port != 0 || options.verify_audio_mix ||
+            options.console_pacing)
         {
             return "--storage-root, --seconds, --capture-dir, --capture-every, --perf-map, "
-                   "--control-port, and --verify-audio-mix apply only with --offscreen";
+                   "--control-port, --verify-audio-mix, and --console-pacing apply only with "
+                   "--offscreen";
         }
         return {};
     }
@@ -114,6 +116,11 @@ ProductOptionsResult ParseProductOptions(std::span<const char *const> arguments)
         if (option == "--verify-audio-mix")
         {
             options.verify_audio_mix = true;
+            continue;
+        }
+        if (option == "--console-pacing")
+        {
+            options.console_pacing = true;
             continue;
         }
         if (!TakesValue(option))

@@ -99,6 +99,12 @@ def _parser() -> argparse.ArgumentParser:
         help="run the guest's own audio-mix body beside the native mix on every call and fail "
         "the run on any disagreement",
     )
+    parser.add_argument(
+        "--console-pacing",
+        action="store_true",
+        help="pace as the console does (60 Hz vblank, no host cap) instead of the product's "
+        "120 presents/s, to compare the title's speed under both",
+    )
     route = parser.add_mutually_exclusive_group()
     route.add_argument("--walk", default="menu", help="none, start, menu, checkpoint, gameplay, or continue")
     route.add_argument(
@@ -148,6 +154,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         command += ["--control-port", str(arguments.control_port)]
     if arguments.verify_audio_mix:
         command.append("--verify-audio-mix")
+    if arguments.console_pacing:
+        command.append("--console-pacing")
     status = run_logged_child(
         command, cwd=REPO_ROOT, environ=child_environment, log_path=run_root / "run.log"
     )

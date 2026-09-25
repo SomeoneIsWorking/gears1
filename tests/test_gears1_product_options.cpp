@@ -55,7 +55,7 @@ int main()
     ProductOptionsResult offscreen = Parse(
         {"--offscreen", "--image", "/games/gears.iso", "--title-id", "4D5307D5", "--storage-root",
          storage.c_str(), "--seconds", "90", "--capture-dir", frames.c_str(), "--capture-every",
-         "15", "--perf-map", "--control-port", "32125", "--verify-audio-mix"});
+         "15", "--perf-map", "--control-port", "32125", "--verify-audio-mix", "--console-pacing"});
     Require(static_cast<bool>(offscreen), offscreen.error);
     Require(offscreen.options.mode == ProductMode::Offscreen, "--offscreen was not selected");
     Require(offscreen.options.run_seconds == 90U, "--seconds was not read");
@@ -66,6 +66,8 @@ int main()
     Require(window.options.control_port == 0U, "a control channel was served without asking");
     Require(offscreen.options.verify_audio_mix, "--verify-audio-mix was not read");
     Require(!window.options.verify_audio_mix, "the audio mix was checked without asking");
+    Require(offscreen.options.console_pacing, "--console-pacing was not read");
+    Require(!window.options.console_pacing, "console pacing was chosen without asking");
 
     RequireRefused({"--title-id", "4d5307d5"}, "--image is required");
     RequireRefused({"--image", "/games/gears.iso"}, "--title-id is required");
@@ -79,6 +81,8 @@ int main()
     RequireRefused({"--image", "/games/gears.iso", "--title-id", "4d5307d5", "--perf-map"},
                    "only with --offscreen");
     RequireRefused({"--image", "/games/gears.iso", "--title-id", "4d5307d5", "--verify-audio-mix"},
+                   "only with --offscreen");
+    RequireRefused({"--image", "/games/gears.iso", "--title-id", "4d5307d5", "--console-pacing"},
                    "only with --offscreen");
     RequireRefused(
         {"--image", "/games/gears.iso", "--title-id", "4d5307d5", "--control-port", "32125"},
