@@ -17,6 +17,7 @@
 #include "package/content_files.h"
 #include "scene/camera.h"
 #include "scene/level_scene.h"
+#include "scene/static_meshes.h"
 #include "texture_bindings.h"
 #include "vulkan_device.h"
 
@@ -44,19 +45,28 @@ class LevelRenderer
     static constexpr std::uint32_t kMaxTextures = 8192;
 
     LevelRenderer(const VulkanDevice &device, VkExtent2D extent, package::ContentFiles &files,
-                  object::ClassHierarchy &classes, object::ObjectResolver &resolver);
+                  object::ClassHierarchy &classes, object::ObjectResolver &resolver,
+                  scene::StaticMeshes &static_meshes);
 
     // Uploads the meshes and textures `scene` (built from `level`) places
     // and records its draws.
     void Prepare(const package::Package &level, const scene::LevelScene &scene);
     // Renders the prepared draws and returns the frame as RGBA rows.
     [[nodiscard]] std::vector<std::uint8_t> Render(const scene::Camera &camera);
+    // Records the prepared draws seen from `camera` into `commands`, leaving
+    // the frame in ColorImage(). The previous frame recorded here must have
+    // finished executing.
+    void Record(VkCommandBuffer commands, const scene::Camera &camera);
+    [[nodiscard]] VkImage ColorImage() const noexcept { return target_.ColorImage(); }
 
     [[nodiscard]] VkExtent2D Extent() const noexcept { return target_.Extent(); }
     [[nodiscard]] const LevelRenderCensus &Census() const noexcept { return census_; }
     [[nodiscard]] const MaterialCensus &Materials() const noexcept { return materials_.Census(); }
 
   private:
+    // Records the pass itself; the caller ends it.
+    void RecordDraws(VkCommandBuffer commands);
+
     using Key = std::pair<const package::Package *, std::size_t>;
 
     struct PreparedMesh
@@ -81,7 +91,7 @@ class LevelRenderer
                  const scene::Matrix &world);
 
     const VulkanDevice &device_;
-    object::ClassHierarchy &classes_;
+    scene::StaticMeshes &static_meshes_;
     OffscreenTarget target_;
     TextureBindings bindings_;
     FrameConstants frame_;

@@ -3,15 +3,15 @@
 #include <optional>
 
 #include "mesh/static_mesh.h"
-#include "object/serialized_object.h"
 
 namespace gears::engine::render
 {
 LevelRenderer::LevelRenderer(const VulkanDevice &device, VkExtent2D extent,
                              package::ContentFiles &files, object::ClassHierarchy &classes,
-                             object::ObjectResolver &resolver)
-    : device_(device), classes_(classes), target_(device, extent), bindings_(device, kMaxTextures),
-      frame_(device), renderer_(device, target_, bindings_.Layout(), frame_.Layout()),
+                             object::ObjectResolver &resolver, scene::StaticMeshes &static_meshes)
+    : device_(device), static_meshes_(static_meshes), target_(device, extent),
+      bindings_(device, kMaxTextures), frame_(device),
+      renderer_(device, target_, bindings_.Layout(), frame_.Layout()),
       materials_(device, files, classes, resolver, bindings_)
 {
 }
@@ -24,8 +24,7 @@ const LevelRenderer::PreparedMesh &LevelRenderer::MeshOf(const object::ExportLoc
     {
         return found->second;
     }
-    auto object = object::SerializedObject::Read(*mesh.package, mesh.export_index, classes_);
-    auto decoded = mesh::StaticMesh::Read(object);
+    const mesh::StaticMesh &decoded = static_meshes_.Get(mesh);
     PreparedMesh prepared;
     if (!decoded.Lods().empty())
     {
@@ -106,27 +105,39 @@ std::vector<std::uint8_t> LevelRenderer::Render(const scene::Camera &camera)
     device_.Submit(
         [&](VkCommandBuffer commands)
         {
-            target_.Begin(commands);
-            renderer_.Begin(commands, frame_.Set());
-            renderer_.Bind(commands, Blend::kOpaque);
-            for (const Draw &draw : opaque_draws_)
-            {
-                renderer_.Draw(commands, *draw.mesh, draw.section, draw.material, draw.world);
-            }
-            // Blended sections draw over the finished opaque depth.
-            std::optional<Blend> bound;
-            for (const Draw &draw : blended_draws_)
-            {
-                if (bound != draw.material.blend)
-                {
-                    renderer_.Bind(commands, draw.material.blend);
-                    bound = draw.material.blend;
-                }
-                renderer_.Draw(commands, *draw.mesh, draw.section, draw.material, draw.world);
-            }
+            RecordDraws(commands);
             target_.EndAndCopy(commands);
         });
     return target_.Pixels();
+}
+
+void LevelRenderer::Record(VkCommandBuffer commands, const scene::Camera &camera)
+{
+    frame_.Write(camera.ViewProjection());
+    RecordDraws(commands);
+    target_.End(commands);
+}
+
+void LevelRenderer::RecordDraws(VkCommandBuffer commands)
+{
+    target_.Begin(commands);
+    renderer_.Begin(commands, frame_.Set());
+    renderer_.Bind(commands, Blend::kOpaque);
+    for (const Draw &draw : opaque_draws_)
+    {
+        renderer_.Draw(commands, *draw.mesh, draw.section, draw.material, draw.world);
+    }
+    // Blended sections draw over the finished opaque depth.
+    std::optional<Blend> bound;
+    for (const Draw &draw : blended_draws_)
+    {
+        if (bound != draw.material.blend)
+        {
+            renderer_.Bind(commands, draw.material.blend);
+            bound = draw.material.blend;
+        }
+        renderer_.Draw(commands, *draw.mesh, draw.section, draw.material, draw.world);
+    }
 }
 
 } // namespace gears::engine::render

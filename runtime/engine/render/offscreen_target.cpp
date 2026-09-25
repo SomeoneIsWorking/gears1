@@ -90,9 +90,14 @@ void OffscreenTarget::Begin(VkCommandBuffer commands) const
     vkCmdBeginRenderPass(commands, &begin, VK_SUBPASS_CONTENTS_INLINE);
 }
 
-void OffscreenTarget::EndAndCopy(VkCommandBuffer commands) const
+void OffscreenTarget::End(VkCommandBuffer commands) const
 {
     vkCmdEndRenderPass(commands);
+}
+
+void OffscreenTarget::EndAndCopy(VkCommandBuffer commands) const
+{
+    End(commands);
     VkBufferImageCopy copy{};
     copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     copy.imageExtent = {extent_.width, extent_.height, 1};

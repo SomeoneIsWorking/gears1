@@ -2,9 +2,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 #include <vulkan/vulkan.h>
 
@@ -43,19 +46,34 @@ class HostBuffer
     std::size_t size_;
 };
 
-// One headless Vulkan device: instance, the chosen physical device, a
-// logical device with one graphics queue, and a command pool on it.
+// What a device that presents to a window needs: the instance extensions
+// the window system requires, and how to create the window's surface once
+// the instance exists.
+struct SurfaceRequest
+{
+    std::vector<const char *> instance_extensions;
+    std::function<VkSurfaceKHR(VkInstance)> create_surface;
+};
+
+// One Vulkan device: instance, the chosen physical device, a logical device
+// with one graphics queue, and a command pool on it; with a surface request,
+// also the window's surface, a queue that presents to it, and swapchains.
 class VulkanDevice
 {
   public:
-    // Chooses the first discrete GPU, else the first device with a graphics
-    // queue. Refuses when there is none.
-    VulkanDevice();
+    // Chooses the first discrete GPU, else the first device whose graphics
+    // queue can present to the surface when one is requested. Refuses when
+    // there is none.
+    explicit VulkanDevice(std::optional<SurfaceRequest> surface = std::nullopt);
     ~VulkanDevice();
     VulkanDevice(const VulkanDevice &) = delete;
     VulkanDevice &operator=(const VulkanDevice &) = delete;
 
+    [[nodiscard]] VkInstance Instance() const noexcept { return instance_; }
     [[nodiscard]] VkDevice Device() const noexcept { return device_; }
+    // The window's surface; VK_NULL_HANDLE for a headless device.
+    [[nodiscard]] VkSurfaceKHR Surface() const noexcept { return surface_; }
+    [[nodiscard]] std::uint32_t QueueFamily() const noexcept { return queue_family_; }
     [[nodiscard]] VkPhysicalDevice Physical() const noexcept { return physical_; }
     [[nodiscard]] VkQueue Queue() const noexcept { return queue_; }
     [[nodiscard]] VkCommandPool CommandPool() const noexcept { return command_pool_; }
@@ -81,7 +99,12 @@ class VulkanDevice
     [[nodiscard]] VkCommandBuffer BeginOneTime() const;
     void EndOneTime(VkCommandBuffer commands) const;
 
+    // Picks the physical device and its queue family.
+    void ChooseDevice();
+    void CreateLogicalDevice();
+
     VkInstance instance_ = VK_NULL_HANDLE;
+    VkSurfaceKHR surface_ = VK_NULL_HANDLE;
     VkPhysicalDevice physical_ = VK_NULL_HANDLE;
     VkDevice device_ = VK_NULL_HANDLE;
     VkQueue queue_ = VK_NULL_HANDLE;

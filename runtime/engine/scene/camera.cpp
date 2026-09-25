@@ -3,29 +3,19 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "mesh/vector_math.h"
+
 namespace gears::engine::scene
 {
 namespace
 {
 
-mesh::Vector3 Subtract(mesh::Vector3 a, mesh::Vector3 b)
-{
-    return {a.x - b.x, a.y - b.y, a.z - b.z};
-}
-
-mesh::Vector3 Cross(mesh::Vector3 a, mesh::Vector3 b)
-{
-    return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
-}
-
-float Dot(mesh::Vector3 a, mesh::Vector3 b)
-{
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-}
+using mesh::Cross;
+using mesh::Dot;
 
 mesh::Vector3 Normalized(mesh::Vector3 v, const char *what)
 {
-    float length = std::sqrt(Dot(v, v));
+    float length = mesh::Length(v);
     if (!(length > 0.0F))
     {
         throw std::invalid_argument(what);
@@ -37,7 +27,7 @@ mesh::Vector3 Normalized(mesh::Vector3 v, const char *what)
 
 Matrix Camera::ViewProjection() const
 {
-    mesh::Vector3 forward = Normalized(Subtract(target, eye), "camera eye equals its target");
+    mesh::Vector3 forward = Normalized(target - eye, "camera eye equals its target");
     // The engine's basis is left-handed: up x forward points right.
     mesh::Vector3 right =
         Normalized(Cross({0.0F, 0.0F, 1.0F}, forward), "camera looks straight along the up axis");

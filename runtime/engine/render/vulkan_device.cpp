@@ -1,5 +1,6 @@
 #include "vulkan_device.h"
 
+#include <array>
 #include <format>
 #include <utility>
 #include <vector>
@@ -76,7 +77,7 @@ HostBuffer::~HostBuffer()
     }
 }
 
-VulkanDevice::VulkanDevice()
+VulkanDevice::VulkanDevice(std::optional<SurfaceRequest> surface)
 {
     VkApplicationInfo application{};
     application.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
@@ -85,8 +86,28 @@ VulkanDevice::VulkanDevice()
     VkInstanceCreateInfo instance_info{};
     instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     instance_info.pApplicationInfo = &application;
+    if (surface)
+    {
+        instance_info.enabledExtensionCount =
+            static_cast<std::uint32_t>(surface->instance_extensions.size());
+        instance_info.ppEnabledExtensionNames = surface->instance_extensions.data();
+    }
     Check(vkCreateInstance(&instance_info, nullptr, &instance_), "vkCreateInstance");
+    if (surface)
+    {
+        surface_ = surface->create_surface(instance_);
+        if (surface_ == VK_NULL_HANDLE)
+        {
+            vkDestroyInstance(instance_, nullptr);
+            throw VulkanError("the window system could not create a Vulkan surface");
+        }
+    }
+    ChooseDevice();
+    CreateLogicalDevice();
+}
 
+void VulkanDevice::ChooseDevice()
+{
     std::uint32_t count = 0;
     Check(vkEnumeratePhysicalDevices(instance_, &count, nullptr), "vkEnumeratePhysicalDevices");
     std::vector<VkPhysicalDevice> devices(count);
@@ -105,6 +126,16 @@ VulkanDevice::VulkanDevice()
             {
                 continue;
             }
+            if (surface_ != VK_NULL_HANDLE)
+            {
+                VkBool32 presents = VK_FALSE;
+                Check(vkGetPhysicalDeviceSurfaceSupportKHR(candidate, family, surface_, &presents),
+                      "vkGetPhysicalDeviceSurfaceSupportKHR");
+                if (presents == VK_FALSE)
+                {
+                    continue;
+                }
+            }
             VkPhysicalDeviceProperties properties{};
             vkGetPhysicalDeviceProperties(candidate, &properties);
             bool discrete = properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
@@ -120,19 +151,35 @@ VulkanDevice::VulkanDevice()
     }
     if (physical_ == VK_NULL_HANDLE)
     {
+        if (surface_ != VK_NULL_HANDLE)
+        {
+            vkDestroySurfaceKHR(instance_, surface_, nullptr);
+        }
         vkDestroyInstance(instance_, nullptr);
-        throw VulkanError("no Vulkan device has a graphics queue");
+        throw VulkanError(surface_ != VK_NULL_HANDLE
+                              ? "no Vulkan device has a graphics queue that presents to the window"
+                              : "no Vulkan device has a graphics queue");
     }
+}
+
+void VulkanDevice::CreateLogicalDevice()
+{
     float priority = 1.0F;
     VkDeviceQueueCreateInfo queue_info{};
     queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     queue_info.queueFamilyIndex = queue_family_;
     queue_info.queueCount = 1;
     queue_info.pQueuePriorities = &priority;
+    std::array<const char *, 1> swapchain_extension{VK_KHR_SWAPCHAIN_EXTENSION_NAME};
     VkDeviceCreateInfo device_info{};
     device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
     device_info.queueCreateInfoCount = 1;
     device_info.pQueueCreateInfos = &queue_info;
+    if (surface_ != VK_NULL_HANDLE)
+    {
+        device_info.enabledExtensionCount = static_cast<std::uint32_t>(swapchain_extension.size());
+        device_info.ppEnabledExtensionNames = swapchain_extension.data();
+    }
     Check(vkCreateDevice(physical_, &device_info, nullptr, &device_), "vkCreateDevice");
     vkGetDeviceQueue(device_, queue_family_, 0, &queue_);
     VkCommandPoolCreateInfo pool_info{};
@@ -147,6 +194,10 @@ VulkanDevice::~VulkanDevice()
     vkDeviceWaitIdle(device_);
     vkDestroyCommandPool(device_, command_pool_, nullptr);
     vkDestroyDevice(device_, nullptr);
+    if (surface_ != VK_NULL_HANDLE)
+    {
+        vkDestroySurfaceKHR(instance_, surface_, nullptr);
+    }
     vkDestroyInstance(instance_, nullptr);
 }
 
