@@ -96,12 +96,12 @@ void TrimPadding(std::vector<std::uint8_t> &bytes, const PackageSummary &summary
 
 } // namespace
 
-Package Package::Load(std::span<const std::uint8_t> file)
+Package Package::Load(std::string name, std::span<const std::uint8_t> file)
 {
     if (IsWholeFileCompressed(file))
     {
         std::vector<std::uint8_t> inner = DecodeWholeFile(file);
-        return Load(inner);
+        return Load(std::move(name), inner);
     }
     ByteReader file_reader(file, ByteOrder::Big);
     PackageSummary file_summary = PackageSummary::Read(file_reader);
@@ -116,12 +116,17 @@ Package Package::Load(std::span<const std::uint8_t> file)
     }
     ObjectTables tables = ObjectTables::Read(reader, summary);
     TrimPadding(bytes, summary, tables);
-    return Package(std::move(bytes), std::move(summary), std::move(tables));
+    return Package(std::move(name), std::move(bytes), std::move(summary), std::move(tables));
 }
 
 std::string Package::NameText(const NameReference &name) const
 {
-    const std::string &text = tables_.names.at(name.index).text;
+    if (name.index >= tables_.names.size())
+    {
+        throw PackageFormatError(
+            std::format("name index {} is outside the {} names", name.index, tables_.names.size()));
+    }
+    const std::string &text = tables_.names[name.index].text;
     return name.number == 0U ? text : std::format("{}_{}", text, name.number - 1U);
 }
 
@@ -158,6 +163,26 @@ std::string Package::ObjectPath(PackageIndex index) const
         path += path.empty() ? NameText(ObjectName(*it)) : "." + NameText(ObjectName(*it));
     }
     return path;
+}
+
+std::string Package::OutermostName(PackageIndex index) const
+{
+    std::string path = ObjectPath(index);
+    return path.substr(0, path.find('.'));
+}
+
+std::string Package::FullPath(PackageIndex index) const
+{
+    PackageIndex outermost = index;
+    for (std::size_t steps = 0; Outer(outermost) != 0; ++steps)
+    {
+        if (steps > tables_.imports.size() + tables_.exports.size())
+        {
+            throw PackageFormatError(std::format("object {} has a cyclic outer chain", index));
+        }
+        outermost = Outer(outermost);
+    }
+    return outermost > 0 ? name_ + "." + ObjectPath(index) : ObjectPath(index);
 }
 
 std::string Package::ClassName(PackageIndex index) const
