@@ -12,7 +12,7 @@ ComponentGeometry::ComponentGeometry(object::ClassHierarchy &classes,
 {
 }
 
-mesh::StaticMeshLod ComponentGeometry::Triangulate(const object::SerializedObject &component)
+ComponentMesh ComponentGeometry::Triangulate(const object::SerializedObject &component)
 {
     ModelComponent decoded = ModelComponent::Read(component);
     return TriangulateComponent(ModelOf(component.Owner(), decoded.Model()), decoded);

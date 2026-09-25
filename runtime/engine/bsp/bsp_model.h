@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -34,6 +35,14 @@ struct BspSurface
     std::int32_t texture_v = 0;
 };
 
+// One vertex-pool entry: the point it stands on and its light-map (shadow)
+// texture coordinate before the element's scale and bias.
+struct BspVertex
+{
+    std::int32_t point = 0;
+    std::array<float, 2> shadow_uv{};
+};
+
 // The render-relevant part of a Model export: shared vectors and points,
 // nodes, surfaces, and the vertex pool whose entries index the points.
 // Everything after the vertex pool (zones, leaves, collision hulls) is not
@@ -47,17 +56,13 @@ class BspModel
 
     BspModel(std::vector<mesh::Vector3> vectors, std::vector<mesh::Vector3> points,
              std::vector<BspNode> nodes, std::vector<BspSurface> surfaces,
-             std::vector<std::int32_t> vertex_points);
+             std::vector<BspVertex> vertices);
 
     [[nodiscard]] const std::vector<mesh::Vector3> &Vectors() const noexcept { return vectors_; }
     [[nodiscard]] const std::vector<mesh::Vector3> &Points() const noexcept { return points_; }
     [[nodiscard]] const std::vector<BspNode> &Nodes() const noexcept { return nodes_; }
     [[nodiscard]] const std::vector<BspSurface> &Surfaces() const noexcept { return surfaces_; }
-    // Each vertex-pool entry's point index.
-    [[nodiscard]] const std::vector<std::int32_t> &VertexPoints() const noexcept
-    {
-        return vertex_points_;
-    }
+    [[nodiscard]] const std::vector<BspVertex> &Vertices() const noexcept { return vertices_; }
 
   private:
     // Refuses tables that reference outside one another.
@@ -67,7 +72,7 @@ class BspModel
     std::vector<mesh::Vector3> points_;
     std::vector<BspNode> nodes_;
     std::vector<BspSurface> surfaces_;
-    std::vector<std::int32_t> vertex_points_;
+    std::vector<BspVertex> vertices_;
 };
 
 } // namespace gears::engine::bsp

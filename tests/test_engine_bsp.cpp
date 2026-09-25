@@ -18,6 +18,8 @@ namespace
 using gears::engine::bsp::BspModel;
 using gears::engine::bsp::BspNode;
 using gears::engine::bsp::BspSurface;
+using gears::engine::bsp::BspVertex;
+using gears::engine::bsp::LightMap2D;
 using gears::engine::bsp::ModelComponent;
 using gears::engine::bsp::TriangulateComponent;
 using gears::engine::mesh::Vector3;
@@ -49,16 +51,20 @@ BspModel FloorAndWall()
         {0.0F, 0.0F, 1.0F, 0.0F, 0, 0, 4},
         {0.0F, -1.0F, 0.0F, 0.0F, 4, 1, 3},
     };
-    std::vector<std::int32_t> vertex_points{0, 1, 2, 3, 0, 1, 4};
+    std::vector<BspVertex> vertices{{0, {0.0F, 0.0F}}, {1, {1.0F, 0.0F}}, {2, {1.0F, 1.0F}},
+                                    {3, {0.0F, 1.0F}}, {0, {0.0F, 0.0F}}, {1, {1.0F, 0.0F}},
+                                    {4, {0.0F, 1.0F}}};
     return {std::move(vectors), std::move(points), std::move(nodes), std::move(surfaces),
-            std::move(vertex_points)};
+            std::move(vertices)};
 }
 
 void TestTriangulation()
 {
     BspModel model = FloorAndWall();
     ModelComponent component(1, {{kWallMaterial, {1}}, {kFloorMaterial, {0}}});
-    auto lod = TriangulateComponent(model, component);
+    auto mesh = TriangulateComponent(model, component);
+    const auto &lod = mesh.lod;
+    assert(mesh.light_maps.size() == 2U && !mesh.light_maps[0] && !mesh.light_maps[1]);
     // Sections follow the component's elements, not the model's node order.
     assert(lod.sections.size() == 2U);
     assert(lod.sections[0].material == kWallMaterial);
@@ -78,8 +84,23 @@ void TestTriangulation()
 void TestElementWithoutTrianglesIsDropped()
 {
     ModelComponent component(1, {{kWallMaterial, {}}, {kFloorMaterial, {0}}});
-    auto lod = TriangulateComponent(FloorAndWall(), component);
-    assert(lod.sections.size() == 1U && lod.sections[0].material == kFloorMaterial);
+    auto mesh = TriangulateComponent(FloorAndWall(), component);
+    assert(mesh.lod.sections.size() == 1U && mesh.lod.sections[0].material == kFloorMaterial);
+    assert(mesh.light_maps.size() == 1U);
+}
+
+void TestLightMapCoordinates()
+{
+    LightMap2D light_map;
+    light_map.coordinate_scale = {0.5F, 0.25F};
+    light_map.coordinate_bias = {0.125F, 0.5F};
+    ModelComponent component(1, {{kFloorMaterial, {0}, light_map}});
+    auto mesh = TriangulateComponent(FloorAndWall(), component);
+    assert(mesh.light_maps.size() == 1U && mesh.light_maps[0]);
+    // The floor's far corner stores shadow coordinate (1, 1).
+    const auto &corner = mesh.lod.vertices[2];
+    assert(Near(corner.uv[1][0], 0.625F) && Near(corner.uv[1][1], 0.75F));
+    assert(mesh.lod.tex_coord_count == 2U);
 }
 
 void TestRefusesNodeOutsideModel()
@@ -105,7 +126,7 @@ void TestModelRefusesVertexOutsidePoints()
         // One triangle whose last vertex names a point past the only one.
         BspModel model({{1.0F, 0.0F, 0.0F}}, {{0.0F, 0.0F, 0.0F}},
                        {{0.0F, 0.0F, 1.0F, 0.0F, 0, 0, 3}}, {{kFloorMaterial, 0U, 0, 0, 0, 0}},
-                       {0, 0, 1});
+                       {{0, {}}, {0, {}}, {1, {}}});
     }
     catch (const gears::engine::package::PackageFormatError &)
     {
@@ -120,6 +141,7 @@ int main()
 {
     TestTriangulation();
     TestElementWithoutTrianglesIsDropped();
+    TestLightMapCoordinates();
     TestRefusesNodeOutsideModel();
     TestModelRefusesVertexOutsidePoints();
     return 0;

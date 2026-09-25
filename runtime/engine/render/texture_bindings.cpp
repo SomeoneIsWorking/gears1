@@ -1,9 +1,20 @@
 #include "texture_bindings.h"
 
-#include <array>
+#include <utility>
 
 namespace gears::engine::render
 {
+namespace
+{
+
+// Binding number and descriptor count of each binding.
+constexpr std::array<std::pair<std::uint32_t, std::uint32_t>, 3> kBindings{{
+    {0U, 1U},
+    {1U, 1U},
+    {2U, static_cast<std::uint32_t>(kLightMapTextures)},
+}};
+
+} // namespace
 
 TextureBindings::TextureBindings(const VulkanDevice &device, std::uint32_t capacity)
     : device_(device.Device())
@@ -19,22 +30,23 @@ TextureBindings::TextureBindings(const VulkanDevice &device, std::uint32_t capac
     sampler.maxLod = VK_LOD_CLAMP_NONE;
     Check(vkCreateSampler(device_, &sampler, nullptr, &sampler_), "vkCreateSampler");
 
-    std::array<VkDescriptorSetLayoutBinding, kBindings> bindings{};
-    for (std::uint32_t i = 0; i < kBindings; ++i)
+    std::array<VkDescriptorSetLayoutBinding, kBindings.size()> bindings{};
+    for (std::size_t i = 0; i < kBindings.size(); ++i)
     {
-        bindings[i].binding = i;
+        bindings[i].binding = kBindings[i].first;
         bindings[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        bindings[i].descriptorCount = 1;
+        bindings[i].descriptorCount = kBindings[i].second;
         bindings[i].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
     }
     VkDescriptorSetLayoutCreateInfo layout{};
     layout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layout.bindingCount = kBindings;
+    layout.bindingCount = static_cast<std::uint32_t>(bindings.size());
     layout.pBindings = bindings.data();
     Check(vkCreateDescriptorSetLayout(device_, &layout, nullptr, &layout_),
           "vkCreateDescriptorSetLayout");
 
-    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, capacity * kBindings};
+    VkDescriptorPoolSize size{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                              capacity * kDescriptorsPerSet};
     VkDescriptorPoolCreateInfo pool{};
     pool.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     pool.maxSets = capacity;
@@ -50,7 +62,7 @@ TextureBindings::~TextureBindings()
     vkDestroySampler(device_, sampler_, nullptr);
 }
 
-VkDescriptorSet TextureBindings::Bind(const GpuTexture &color, const GpuTexture &opacity)
+VkDescriptorSet TextureBindings::Bind(const DrawTextures &textures)
 {
     VkDescriptorSetAllocateInfo allocate{};
     allocate.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
@@ -59,21 +71,29 @@ VkDescriptorSet TextureBindings::Bind(const GpuTexture &color, const GpuTexture 
     allocate.pSetLayouts = &layout_;
     VkDescriptorSet set = VK_NULL_HANDLE;
     Check(vkAllocateDescriptorSets(device_, &allocate, &set), "vkAllocateDescriptorSets");
-    std::array<VkDescriptorImageInfo, kBindings> images{{
-        {sampler_, color.View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-        {sampler_, opacity.View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},
-    }};
-    std::array<VkWriteDescriptorSet, kBindings> writes{};
-    for (std::uint32_t i = 0; i < kBindings; ++i)
+
+    std::array<VkDescriptorImageInfo, kDescriptorsPerSet> images{};
+    images[0] = {sampler_, textures.color->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    images[1] = {sampler_, textures.opacity->View(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    for (std::size_t i = 0; i < kLightMapTextures; ++i)
+    {
+        images[2U + i] = {sampler_, textures.light_map[i]->View(),
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL};
+    }
+    std::array<VkWriteDescriptorSet, kBindings.size()> writes{};
+    std::size_t first_image = 0;
+    for (std::size_t i = 0; i < kBindings.size(); ++i)
     {
         writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
         writes[i].dstSet = set;
-        writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1;
+        writes[i].dstBinding = kBindings[i].first;
+        writes[i].descriptorCount = kBindings[i].second;
         writes[i].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        writes[i].pImageInfo = &images[i];
+        writes[i].pImageInfo = &images[first_image];
+        first_image += kBindings[i].second;
     }
-    vkUpdateDescriptorSets(device_, kBindings, writes.data(), 0, nullptr);
+    vkUpdateDescriptorSets(device_, static_cast<std::uint32_t>(writes.size()), writes.data(), 0,
+                           nullptr);
     return set;
 }
 

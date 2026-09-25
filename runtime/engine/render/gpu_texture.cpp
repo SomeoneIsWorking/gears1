@@ -14,19 +14,20 @@ namespace
 
 // The sampled format a stored format uploads to, unchanged in its bytes;
 // VK_FORMAT_UNDEFINED for none.
-VkFormat SampledFormat(texture::PixelFormat format) noexcept
+VkFormat SampledFormat(texture::PixelFormat format, ColorSpace space) noexcept
 {
+    bool srgb = space == ColorSpace::kSrgb;
     switch (format)
     {
     case texture::PixelFormat::Dxt1:
-        return VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
+        return srgb ? VK_FORMAT_BC1_RGBA_SRGB_BLOCK : VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
     case texture::PixelFormat::Dxt3:
-        return VK_FORMAT_BC2_SRGB_BLOCK;
+        return srgb ? VK_FORMAT_BC2_SRGB_BLOCK : VK_FORMAT_BC2_UNORM_BLOCK;
     case texture::PixelFormat::Dxt5:
-        return VK_FORMAT_BC3_SRGB_BLOCK;
+        return srgb ? VK_FORMAT_BC3_SRGB_BLOCK : VK_FORMAT_BC3_UNORM_BLOCK;
     case texture::PixelFormat::A8R8G8B8:
         // B, G, R, A bytes once each word is in host order.
-        return VK_FORMAT_B8G8R8A8_SRGB;
+        return srgb ? VK_FORMAT_B8G8R8A8_SRGB : VK_FORMAT_B8G8R8A8_UNORM;
     case texture::PixelFormat::G8:
         return VK_FORMAT_R8_UNORM;
     default:
@@ -131,13 +132,13 @@ std::vector<MipUpload> MipChain(const texture::Texture2D &texture, package::Cont
 
 bool GpuTexture::CanSample(texture::PixelFormat format) noexcept
 {
-    return SampledFormat(format) != VK_FORMAT_UNDEFINED;
+    return SampledFormat(format, ColorSpace::kLinear) != VK_FORMAT_UNDEFINED;
 }
 
 GpuTexture::GpuTexture(const VulkanDevice &device, const texture::Texture2D &texture,
-                       package::ContentFiles &files)
+                       package::ContentFiles &files, ColorSpace space)
 {
-    VkFormat format = SampledFormat(texture.Format());
+    VkFormat format = SampledFormat(texture.Format(), space);
     if (format == VK_FORMAT_UNDEFINED)
     {
         throw package::PackageFormatError(std::format("texture format {} has no sampled equivalent",

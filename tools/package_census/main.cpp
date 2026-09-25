@@ -129,7 +129,7 @@ class AssetDecoder
         {
             auto geometry = components_.Triangulate(object);
             ++census.bsp_components;
-            census.bsp_triangles += geometry.indices.size() / 3U;
+            census.bsp_triangles += geometry.lod.indices.size() / 3U;
         }
     }
 
