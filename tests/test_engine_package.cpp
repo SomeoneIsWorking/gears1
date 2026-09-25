@@ -4,11 +4,14 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "package/content_files.h"
 #include "package/lzo1x.h"
 #include "package/package.h"
 #include "package/package_constants.h"
@@ -241,6 +244,9 @@ void CheckThing(const Package &package)
     assert(package.Tables().names.size() == 3U);
     assert(package.ObjectPath(1) == "Thing_2");
     assert(package.ObjectPath(-1) == "Core");
+    assert(package.FullPath(1) == "Test.Thing_2");
+    assert(package.FullPath(-1) == "Core");
+    assert(package.OutermostName(1) == "Thing_2");
     assert(package.ClassName(1) == "Core");
     assert(package.ClassName(-1) == "Package");
     std::span<const std::uint8_t> data = package.ExportData(0);
@@ -249,26 +255,26 @@ void CheckThing(const Package &package)
 
 void TestPlainPackage()
 {
-    CheckThing(Package::Load(PlainPackage()));
-    assert(Refuses<PackageFormatError>([] { (void)Package::Load(PlainPackage(375)); }));
-    assert(Refuses<PackageFormatError>([] { (void)Package::Load(PlainPackage(374, 9)); }));
+    CheckThing(Package::Load("Test", PlainPackage()));
+    assert(Refuses<PackageFormatError>([] { (void)Package::Load("Test", PlainPackage(375)); }));
+    assert(Refuses<PackageFormatError>([] { (void)Package::Load("Test", PlainPackage(374, 9)); }));
     Bytes padded = PlainPackage();
     padded.resize(padded.size() + 64U, 0U);
-    assert(Package::Load(padded).Bytes().size() == PlainPackage().size());
+    assert(Package::Load("Test", padded).Bytes().size() == PlainPackage().size());
     padded.back() = 1U;
-    assert(Refuses<PackageFormatError>([&] { (void)Package::Load(padded); }));
+    assert(Refuses<PackageFormatError>([&] { (void)Package::Load("Test", padded); }));
     Bytes truncated = PlainPackage();
     truncated.resize(truncated.size() - 1U);
-    assert(Refuses<PackageFormatError>([&] { (void)Package::Load(truncated); }));
+    assert(Refuses<PackageFormatError>([&] { (void)Package::Load("Test", truncated); }));
 }
 
 void TestWholeFileCompressedPackage()
 {
     Bytes file = Record(PlainPackage(), true);
     file.resize(file.size() + 32U, 0U);
-    CheckThing(Package::Load(file));
+    CheckThing(Package::Load("Test", file));
     file.back() = 1U;
-    assert(Refuses<PackageFormatError>([&] { (void)Package::Load(file); }));
+    assert(Refuses<PackageFormatError>([&] { (void)Package::Load("Test", file); }));
 }
 
 // The file keeps the plain summary, adds the LZO method and one chunk entry,
@@ -296,22 +302,39 @@ Bytes ChunkedPackage()
 void TestChunkCompressedPackage()
 {
     Bytes file = ChunkedPackage();
-    CheckThing(Package::Load(file));
+    CheckThing(Package::Load("Test", file));
 
     Writer gap;
     gap.bytes = file;
     gap.Patch(kChunkTableField, static_cast<std::uint32_t>(kChunkTableField + 1U));
-    assert(Refuses<PackageFormatError>([&] { (void)Package::Load(gap.bytes); }));
+    assert(Refuses<PackageFormatError>([&] { (void)Package::Load("Test", gap.bytes); }));
     Writer outside;
     outside.bytes = file;
     outside.Patch(kChunkTableField + 12U, static_cast<std::uint32_t>(file.size()));
-    assert(Refuses<PackageFormatError>([&] { (void)Package::Load(outside.bytes); }));
+    assert(Refuses<PackageFormatError>([&] { (void)Package::Load("Test", outside.bytes); }));
 }
 
 } // namespace
 
+// The file reader returns every byte of a file and refuses one it cannot open.
+void TestReadPackageFile()
+{
+    std::filesystem::path path = "test_engine_package_file.xxx";
+    Bytes written{0xC1, 0x83, 0x2A, 0x9E, 0x00, 0x01, 0x02};
+    {
+        std::ofstream stream(path, std::ios::binary);
+        stream.write(reinterpret_cast<const char *>(written.data()),
+                     static_cast<std::streamsize>(written.size()));
+    }
+    assert(gears::engine::package::ReadPackageFile(path) == written);
+    std::filesystem::remove(path);
+    assert(
+        Refuses<PackageFormatError>([&] { (void)gears::engine::package::ReadPackageFile(path); }));
+}
+
 int main()
 {
+    TestReadPackageFile();
     TestLzo1x();
     TestPlainPackage();
     TestWholeFileCompressedPackage();

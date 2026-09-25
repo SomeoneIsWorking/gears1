@@ -6,16 +6,19 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <stdexcept>
 #include <filesystem>
-#include <fstream>
 #include <map>
 #include <string>
 #include <vector>
 
 #include <lucent/log.h>
 
+#include "object/serialized_object.h"
+#include "package/content_files.h"
 #include "package/lzo1x.h"
+#include "mesh/static_mesh.h"
+#include "texture/texture2d.h"
+#include "package/package_store.h"
 #include "package/package.h"
 
 namespace
@@ -23,16 +26,6 @@ namespace
 
 namespace fs = std::filesystem;
 using gears::engine::package::Package;
-
-std::vector<std::uint8_t> ReadFile(const fs::path &path)
-{
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream)
-    {
-        throw std::runtime_error("cannot open " + path.filename().string());
-    }
-    return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
-}
 
 // Export serial data must tile the package after the header: sorted by
 // offset, each range starts where the previous ended and the last ends at the
@@ -75,14 +68,76 @@ struct Census
     std::size_t exports = 0;
     std::size_t uncompressed_bytes = 0;
     std::map<std::string, std::size_t> export_classes;
+    std::size_t objects = 0;
+    std::size_t properties = 0;
+    // Per class: property streams that failed, and streams that end exactly
+    // at the export's end (the class adds no native data).
+    std::map<std::string, std::size_t> property_failures;
+    std::map<std::string, std::size_t> property_only;
+    std::map<std::string, std::size_t> texture_formats;
+    std::map<std::size_t, std::size_t> mesh_lod_counts;
 };
 
-void LoadOne(const fs::path &path, Census &census)
+// Decodes the native data of the asset classes the engine owns so far.
+void DecodeAsset(const gears::engine::object::SerializedObject &object,
+                 const std::string &class_name, Census &census)
+{
+    if (class_name == "StaticMesh")
+    {
+        auto mesh = gears::engine::mesh::StaticMesh::Read(object);
+        ++census.mesh_lod_counts[mesh.Lods().size()];
+    }
+    else if (class_name == "Texture2D")
+    {
+        auto texture = gears::engine::texture::Texture2D::Read(object);
+        ++census.texture_formats[std::string(gears::engine::texture::NameOf(texture.Format()))];
+    }
+}
+
+// Reads every non-schema export's property stream. A failure is counted
+// against its class, never skipped.
+void ReadProperties(const Package &package, const std::string &file,
+                    gears::engine::object::ClassHierarchy &classes, Census &census)
+{
+    for (std::size_t i = 0; i < package.Tables().exports.size(); ++i)
+    {
+        if (gears::engine::object::IsSchemaExport(package, i))
+        {
+            continue;
+        }
+        std::string class_name = package.ClassName(static_cast<std::int32_t>(i + 1U));
+        ++census.objects;
+        try
+        {
+            auto object = gears::engine::object::SerializedObject::Read(package, i, classes);
+            census.properties += object.Properties().size();
+            if (object.NativeData().empty())
+            {
+                ++census.property_only[class_name];
+            }
+            if (!object.IsClassDefault())
+            {
+                DecodeAsset(object, class_name, census);
+            }
+        }
+        catch (const gears::engine::package::PackageFormatError &error)
+        {
+            if (census.property_failures[class_name]++ == 0U)
+            {
+                lucent::error("package-census", "{} export {} ({}): {}", file, i + 1U, class_name,
+                              error.what());
+            }
+        }
+    }
+}
+
+void LoadOne(const fs::path &path, gears::engine::object::ClassHierarchy &classes, Census &census)
 {
     ++census.packages;
     try
     {
-        Package package = Package::Load(ReadFile(path));
+        Package package =
+            Package::Load(path.stem().string(), gears::engine::package::ReadPackageFile(path));
         std::string tiling = CheckExportTiling(package);
         if (!tiling.empty())
         {
@@ -98,6 +153,7 @@ void LoadOne(const fs::path &path, Census &census)
         {
             ++census.export_classes[package.ClassName(static_cast<std::int32_t>(i + 1U))];
         }
+        ReadProperties(package, path.filename().string(), classes, census);
     }
     // The census boundary: a format refusal is this package's result, and the
     // next file is independent of it.
@@ -135,11 +191,18 @@ int Run(const fs::path &directory)
         lucent::error("package-census", "REFUSING: {} holds no .xxx packages", directory.string());
         return 2;
     }
+    // Script packages the class hierarchy loads stay cached; the census's
+    // own packages are loaded one at a time.
+    gears::engine::package::ContentFiles content(directory);
+    gears::engine::package::PackageStore scripts(content);
+    gears::engine::object::ClassHierarchy hierarchy(scripts);
     Census census;
     for (const fs::path &path : files)
     {
-        LoadOne(path, census);
+        LoadOne(path, hierarchy, census);
     }
+    lucent::info("package-census", "{} intrinsic class(es) without a script export",
+                 hierarchy.IntrinsicClasses().size());
     std::vector<std::pair<std::size_t, std::string>> classes;
     classes.reserve(census.export_classes.size());
     for (const auto &[name, count] : census.export_classes)
@@ -157,7 +220,26 @@ int Run(const fs::path &directory)
                  census.packages - census.failed, census.packages, census.failed, census.names,
                  census.imports, census.exports, census.export_classes.size(),
                  census.uncompressed_bytes >> 20U);
-    return census.failed == 0U ? 0 : 1;
+    std::size_t property_failures = 0;
+    for (const auto &[name, count] : census.property_failures)
+    {
+        property_failures += count;
+        lucent::error("package-census", "  property streams failed: {:>8} {}", count, name);
+    }
+    for (const auto &[lods, count] : census.mesh_lod_counts)
+    {
+        lucent::info("package-census", "  StaticMesh {:>8} with {} LOD(s)", count, lods);
+    }
+    for (const auto &[format, count] : census.texture_formats)
+    {
+        lucent::info("package-census", "  Texture2D {:>8} {}", count, format);
+    }
+    lucent::info("package-census",
+                 "{} of {} object property stream(s) read ({} properties); {} failed; {} "
+                 "classes had streams that end their export",
+                 census.objects - property_failures, census.objects, census.properties,
+                 property_failures, census.property_only.size());
+    return census.failed == 0U && property_failures == 0U ? 0 : 1;
 }
 
 } // namespace

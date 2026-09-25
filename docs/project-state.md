@@ -28,15 +28,15 @@ This inventory reports observable capabilities independently of the product goal
 | S018 | PC keyboard and mouse controls beside host gamepads | partial | S009 | G001 |
 | S019 | Campaign checkpoints save and resume in the player's user-data directory | verified | S006 | G001 |
 | S020 | Native engine reads Gears 1's cooked packages without the guest | verified | S002 | G001 |
-| S021 | Native engine reads objects' serialized properties | missing | S020 | G001 |
-| S022 | Native engine decodes textures and static meshes and renders a level | missing | S020, S021 | G001, G003 |
+| S021 | Native engine reads objects' serialized properties | verified | S020 | G001 |
+| S022 | Native engine decodes textures and static meshes and renders a level | partial | S020, S021 | G001, G003 |
 
 ## Current focus
 
 The native engine (S020-S022) is the current focus: independently written C++ that owns
 UE3 subsystems over Gears 1's own content, with the dynarec only for what remains. S020
-is the first layer. The Xenia-hosted product below is the dynarec half and is no longer
-where new work goes first.
+and S021 are verified; S022 renders a level's placed static meshes untextured. The
+Xenia-hosted product below is the dynarec half and is no longer where new work goes first.
 
 S009 was the previous focus. Gears 1 is the only active title. `./run.sh` now authenticates
 the user's disc by its `default.xex` digest, builds the `gears1` product, and runs it
@@ -544,10 +544,29 @@ agreed byte for byte with FFmpeg's on the whole-file packages.
 
 ### S021 — native property serialization
 
-Missing. Next layer: the tagged-property stream at the start of each export's data,
-and the class and struct schemas from the script packages that give it meaning.
+`runtime/engine/object/` reads each export's serialized object: the state frame of
+objects that carry one, a component's template owner (and its template name inside class
+defaults), the net index, then tagged properties to `None`, leaving the native data that
+follows for the asset layers. Class ancestry comes from the script packages' own class
+exports; the 147 classes no script package exports (e.g. `StaticMesh`, `Level`) are
+intrinsic roots. Imports resolve by path in their owning package; an import whose package
+no longer exports the object (editor-only helpers such as `EditorMeshes.MatineeCam_SM`)
+resolves as cooked out, never as a format error. Bulk data is read inline, LZO-compressed,
+or from the raw file of the object's outermost package. Evidence: `gears_package_census`
+read all 2,768,308 non-schema property streams of the retail disc (12,579,295 properties)
+with 0 failures.
 
 ### S022 — native asset decode and level rendering
 
-Missing. Needs S021 for Texture2D and StaticMesh properties, then their native bulk
-data and a Vulkan renderer that draws a persistent level from its actors.
+Partial. Texture2D (A8R8G8B8, G8, DXT1/3/5) mips are untiled from the Xenos 2D layout
+(`runtime/engine/texture/`) and StaticMesh LODs (sections, packed tangent basis, UVs,
+indices) are decoded (`runtime/engine/mesh/`); the census decoded all 16,525 StaticMeshes
+and 53,160 Texture2Ds on the disc with 0 failures, and exported textures were checked by
+eye. `runtime/engine/scene/` places every actor-owned StaticMeshComponent of a level
+package (actor and component location, rotation, scale) and `runtime/engine/render/`
+draws them headlessly through Vulkan; `gears_level_render` rendered SP_Adams_S08_MainRoom
+(711 placements of 65 meshes) with the mansion's columns, stairs, and railings in place.
+`test_engine_scene` covers placement handedness and the camera's clip-space mapping.
+Gaps: materials and textures are not bound; BSP (`Model`) geometry, terrain, skeletal
+meshes, lighting and lightmaps, streaming a persistent level's sublevels together, and an
+interactive window are missing. Face winding is not yet measured, so both faces draw.
