@@ -30,12 +30,14 @@ struct LevelRenderCensus
     std::size_t draws = 0;
     std::size_t meshes = 0;
     std::size_t placements_without_lod = 0;
+    std::size_t models = 0;
+    std::size_t models_without_triangles = 0;
     std::size_t textures = 0;
     std::map<std::string, std::size_t> section_colors;
 };
 
-// Draws the static meshes a level places, each section sampling the base
-// colour texture of its material, into a headless frame.
+// Draws the static meshes and BSP surfaces a level places, each section
+// sampling the base colour texture of its material, into a headless frame.
 class LevelRenderer
 {
   public:
@@ -72,6 +74,8 @@ class LevelRenderer
         scene::Matrix world;
     };
 
+    void PrepareMeshes(const package::Package &level, const scene::LevelScene &scene);
+    void PrepareModels(const scene::LevelScene &scene);
     const PreparedMesh &MeshOf(const object::ExportLocation &mesh);
     // The texture set of a material reference, counting its colour source.
     VkDescriptorSet TextureOf(const package::Package &package, package::PackageIndex material);
@@ -88,6 +92,7 @@ class LevelRenderer
     GpuTexture untextured_;
     VkDescriptorSet untextured_set_;
     std::map<Key, PreparedMesh> meshes_;
+    std::vector<std::unique_ptr<GpuMesh>> models_;
     std::vector<std::unique_ptr<GpuTexture>> textures_;
     std::map<Key, VkDescriptorSet> texture_sets_;
     std::vector<Draw> draws_;

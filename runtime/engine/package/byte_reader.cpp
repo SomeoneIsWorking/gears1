@@ -1,5 +1,6 @@
 #include "byte_reader.h"
 
+#include <bit>
 #include <format>
 #include <limits>
 
@@ -60,6 +61,16 @@ std::uint8_t ByteReader::ReadU8()
     return Take(1)[0];
 }
 
+std::uint16_t ByteReader::ReadU16()
+{
+    std::span<const std::uint8_t> b = Take(2);
+    if (order_ == ByteOrder::Big)
+    {
+        return static_cast<std::uint16_t>((unsigned{b[0]} << 8U) | unsigned{b[1]});
+    }
+    return static_cast<std::uint16_t>((unsigned{b[1]} << 8U) | unsigned{b[0]});
+}
+
 std::uint32_t ByteReader::ReadU32()
 {
     std::span<const std::uint8_t> b = Take(4);
@@ -75,6 +86,11 @@ std::uint32_t ByteReader::ReadU32()
 std::int32_t ByteReader::ReadI32()
 {
     return static_cast<std::int32_t>(ReadU32());
+}
+
+float ByteReader::ReadF32()
+{
+    return std::bit_cast<float>(ReadU32());
 }
 
 std::uint64_t ByteReader::ReadU64()

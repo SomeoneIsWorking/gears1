@@ -34,6 +34,14 @@ add_library(gears_engine_mesh STATIC
 target_link_libraries(gears_engine_mesh PUBLIC gears_engine_object)
 x360port_enable_warnings(gears_engine_mesh)
 
+add_library(gears_engine_bsp STATIC
+    bsp/bsp_geometry.cpp
+    bsp/bsp_model.cpp
+    bsp/component_geometry.cpp
+    bsp/model_component.cpp)
+target_link_libraries(gears_engine_bsp PUBLIC gears_engine_mesh)
+x360port_enable_warnings(gears_engine_bsp)
+
 add_library(gears_engine_material STATIC
     material/material_textures.cpp)
 target_link_libraries(gears_engine_material PUBLIC gears_engine_object)
@@ -43,7 +51,7 @@ add_library(gears_engine_scene STATIC
     scene/camera.cpp
     scene/level_scene.cpp
     scene/transform.cpp)
-target_link_libraries(gears_engine_scene PUBLIC gears_engine_mesh)
+target_link_libraries(gears_engine_scene PUBLIC gears_engine_bsp)
 x360port_enable_warnings(gears_engine_scene)
 
 add_executable(test_engine_package "${CMAKE_SOURCE_DIR}/tests/test_engine_package.cpp")
@@ -58,6 +66,11 @@ target_include_directories(test_engine_object PRIVATE "${CMAKE_SOURCE_DIR}/tests
 x360port_enable_warnings(test_engine_object)
 gears_add_binary_test(gears_engine_object test_engine_object)
 
+add_executable(test_engine_bsp "${CMAKE_SOURCE_DIR}/tests/test_engine_bsp.cpp")
+target_link_libraries(test_engine_bsp PRIVATE gears_engine_bsp)
+x360port_enable_warnings(test_engine_bsp)
+gears_add_binary_test(gears_engine_bsp test_engine_bsp)
+
 add_executable(test_engine_scene "${CMAKE_SOURCE_DIR}/tests/test_engine_scene.cpp")
 target_link_libraries(test_engine_scene PRIVATE gears_engine_scene)
 x360port_enable_warnings(test_engine_scene)
@@ -67,7 +80,7 @@ gears_add_binary_test(gears_engine_scene test_engine_scene)
 # CTest: restricted title bytes never become a hosted-test input.
 add_executable(gears_package_census "${CMAKE_SOURCE_DIR}/tools/package_census/main.cpp")
 target_link_libraries(gears_package_census PRIVATE gears_engine_texture gears_engine_mesh
-                                                   gears_engine_material
+                                                   gears_engine_material gears_engine_bsp
                                                    lucent::lucent)
 x360port_enable_warnings(gears_package_census)
 

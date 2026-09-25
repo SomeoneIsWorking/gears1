@@ -2,6 +2,7 @@
 
 #include <bit>
 
+#include "bsp/component_geometry.h"
 #include "object/property_values.h"
 #include "object/serialized_object.h"
 
@@ -12,6 +13,7 @@ namespace
 
 constexpr std::string_view kStaticMeshComponentClass = "Engine.StaticMeshComponent";
 constexpr std::string_view kActorClass = "Engine.Actor";
+constexpr std::string_view kModelComponentClass = "Engine.ModelComponent";
 
 std::uint32_t BigEndian32(std::span<const std::uint8_t> bytes, std::size_t offset)
 {
@@ -76,13 +78,25 @@ LevelScene LevelScene::Build(const package::Package &level, object::ClassHierarc
                              object::ObjectResolver &resolver)
 {
     LevelScene scene;
+    bsp::ComponentGeometry geometry(classes, resolver);
     const auto &exports = level.Tables().exports;
     for (std::size_t i = 0; i < exports.size(); ++i)
     {
         auto index = static_cast<package::PackageIndex>(i + 1U);
-        if ((exports[i].object_flags & object::kObjectFlagClassDefaultObject) != 0U ||
-            !classes.IsA(object::ClassHierarchy::ClassPath(level, index),
-                         kStaticMeshComponentClass))
+        if ((exports[i].object_flags & object::kObjectFlagClassDefaultObject) != 0U)
+        {
+            continue;
+        }
+        std::string class_path = object::ClassHierarchy::ClassPath(level, index);
+        if (classes.IsA(class_path, kModelComponentClass) &&
+            !object::IsInsideClassDefaults(level, i))
+        {
+            auto component = object::SerializedObject::Read(level, i, classes);
+            scene.models_.push_back({&level, geometry.Triangulate(component)});
+            ++scene.census_.model_components;
+            continue;
+        }
+        if (!classes.IsA(class_path, kStaticMeshComponentClass))
         {
             continue;
         }

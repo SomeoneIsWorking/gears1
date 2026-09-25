@@ -60,7 +60,8 @@ void DumpProperties(const Package &package, std::size_t index,
                  object.NativeData().size());
 }
 
-void DumpExport(const Package &package, std::size_t index, std::size_t byte_limit)
+void DumpExport(const Package &package, std::size_t index, std::size_t byte_limit,
+                std::size_t byte_offset)
 {
     auto index_value = static_cast<std::int32_t>(index + 1U);
     std::span<const std::uint8_t> data = package.ExportData(index);
@@ -68,17 +69,27 @@ void DumpExport(const Package &package, std::size_t index, std::size_t byte_limi
                  package.ClassName(index_value), package.ObjectPath(index_value),
                  package.Tables().exports[index].object_flags, data.size(),
                  package.Tables().exports[index].serial_offset);
-    std::size_t shown = std::min(data.size(), byte_limit);
-    for (std::size_t offset = 0; offset < shown; offset += 32U)
+    std::size_t shown = std::min(data.size(), byte_offset + byte_limit);
+    for (std::size_t offset = std::min(byte_offset, shown); offset < shown; offset += 32U)
     {
         lucent::info("package-inspect", "  {:6x}: {}", offset,
                      HexLine(data.subspan(offset, std::min<std::size_t>(32U, shown - offset))));
     }
 }
 
-int Run(const std::filesystem::path &path, std::string_view class_filter, std::size_t limit,
-        std::size_t byte_limit)
+struct Selection
 {
+    std::string_view class_filter;
+    std::size_t limit = 50U;
+    std::size_t byte_limit = 128U;
+    // Only exports whose object path contains this text.
+    std::string_view path_filter;
+    std::size_t byte_offset = 0;
+};
+
+int Run(const std::filesystem::path &path, const Selection &selection)
+{
+    std::string_view class_filter = selection.class_filter;
     gears::engine::package::ContentFiles files(path.parent_path());
     gears::engine::package::PackageStore store(files);
     gears::engine::object::ClassHierarchy classes(store);
@@ -87,12 +98,14 @@ int Run(const std::filesystem::path &path, std::string_view class_filter, std::s
                  path.filename().string(), package.Tables().names.size(),
                  package.Tables().imports.size(), package.Tables().exports.size());
     std::size_t matched = 0;
-    for (std::size_t i = 0; i < package.Tables().exports.size() && matched < limit; ++i)
+    for (std::size_t i = 0; i < package.Tables().exports.size() && matched < selection.limit; ++i)
     {
-        if (class_filter.empty() ||
-            package.ClassName(static_cast<std::int32_t>(i + 1U)) == class_filter)
+        auto index = static_cast<std::int32_t>(i + 1U);
+        if ((class_filter.empty() || package.ClassName(index) == class_filter) &&
+            package.ObjectPath(index).find(selection.path_filter) != std::string::npos)
         {
-            DumpExport(package, i, class_filter.empty() ? 0U : byte_limit);
+            DumpExport(package, i, class_filter.empty() ? 0U : selection.byte_limit,
+                       selection.byte_offset);
             if (!class_filter.empty())
             {
                 DumpProperties(package, i, classes);
@@ -109,14 +122,17 @@ int Run(const std::filesystem::path &path, std::string_view class_filter, std::s
 
 int main(int argc, char **argv)
 {
-    if (argc < 2 || argc > 5)
+    if (argc < 2 || argc > 7)
     {
-        lucent::error("package-inspect",
-                      "usage: gears_package_inspect <package> [class] [count] [bytes]");
+        lucent::error("package-inspect", "usage: gears_package_inspect <package> [class] [count] "
+                                         "[bytes] [path filter] [byte offset]");
         return 2;
     }
-    std::string_view class_filter = argc >= 3 ? argv[2] : "";
-    std::size_t limit = argc >= 4 ? std::stoul(argv[3]) : 50U;
-    std::size_t byte_limit = argc >= 5 ? std::stoul(argv[4]) : 128U;
-    return Run(argv[1], class_filter, limit, byte_limit);
+    Selection selection;
+    selection.class_filter = argc >= 3 ? argv[2] : "";
+    selection.limit = argc >= 4 ? std::stoul(argv[3]) : selection.limit;
+    selection.byte_limit = argc >= 5 ? std::stoul(argv[4]) : selection.byte_limit;
+    selection.path_filter = argc >= 6 ? argv[5] : "";
+    selection.byte_offset = argc >= 7 ? std::stoul(argv[6], nullptr, 0) : 0U;
+    return Run(argv[1], selection);
 }

@@ -96,6 +96,13 @@ VkDescriptorSet LevelRenderer::TextureOf(const package::Package &package,
 
 void LevelRenderer::Prepare(const package::Package &level, const scene::LevelScene &scene)
 {
+    PrepareMeshes(level, scene);
+    PrepareModels(scene);
+    census_.draws = draws_.size();
+}
+
+void LevelRenderer::PrepareMeshes(const package::Package &level, const scene::LevelScene &scene)
+{
     for (const scene::MeshInstance &instance : scene.Instances())
     {
         const PreparedMesh &mesh = MeshOf(instance.mesh);
@@ -115,7 +122,27 @@ void LevelRenderer::Prepare(const package::Package &level, const scene::LevelSce
             draws_.push_back({mesh.gpu.get(), mesh.gpu->Sections()[i], texture, instance.world});
         }
     }
-    census_.draws = draws_.size();
+}
+
+void LevelRenderer::PrepareModels(const scene::LevelScene &scene)
+{
+    for (const scene::ModelInstance &model : scene.Models())
+    {
+        if (model.geometry.indices.empty())
+        {
+            ++census_.models_without_triangles;
+            continue;
+        }
+        models_.push_back(std::make_unique<GpuMesh>(device_, model.geometry));
+        const GpuMesh &gpu = *models_.back();
+        for (std::size_t i = 0; i < gpu.Sections().size(); ++i)
+        {
+            VkDescriptorSet texture =
+                TextureOf(*model.package, model.geometry.sections[i].material);
+            draws_.push_back({&gpu, gpu.Sections()[i], texture, scene::Matrix::Identity()});
+        }
+        ++census_.models;
+    }
 }
 
 std::vector<std::uint8_t> LevelRenderer::Render(const scene::Camera &camera)

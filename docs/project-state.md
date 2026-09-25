@@ -35,8 +35,8 @@ This inventory reports observable capabilities independently of the product goal
 
 The native engine (S020-S022) is the current focus: independently written C++ that owns
 UE3 subsystems over Gears 1's own content, with the dynarec only for what remains. S020
-and S021 are verified; S022 renders a level's placed static meshes with their materials'
-base-colour textures. The
+and S021 are verified; S022 renders a level's placed static meshes and BSP surfaces with their
+materials' base-colour textures. The
 Xenia-hosted product below is the dynarec half and is no longer where new work goes first.
 
 S009 was the previous focus. Gears 1 is the only active title. `./run.sh` now authenticates
@@ -573,8 +573,15 @@ material's texture (sRGB, full stored mip chain); `gears_level_render` rendered
 SP_Adams_S08_MainRoom with 721 of 728 section draws textured. `test_engine_object` covers
 nested tagged structs and struct arrays; `test_engine_scene` covers placement handedness
 and the camera's clip-space mapping.
+`runtime/engine/bsp/` reads a Model's vectors, points, nodes, surfaces, and vertex pool
+and a ModelComponent's elements (light maps validated and skipped), and triangulates each
+component's nodes as fans with texture coordinates projected on their surface's axes at
+128 units per repeat; the census decoded all 21,482 Models and 6,138 ModelComponents
+(257,499 triangles) with 0 failures, and `gears_level_render` drew SP_Adams_House_BSP's
+15 components as 260 textured section draws with wall trim aligned to its storeys.
+`test_engine_bsp` covers triangulation, section order, projection, and refusals.
 Gaps: materials are reduced to one base texture (no blends, tints, normal or specular
-maps, blend modes, or alpha test, so translucent and masked materials draw opaque); BSP
-(`Model`) geometry, terrain, skeletal meshes, lighting and lightmaps, streaming a
+maps, blend modes, or alpha test, so translucent and masked materials draw opaque);
+terrain, skeletal meshes, lighting and lightmaps, streaming a
 persistent level's sublevels together, and an interactive window are missing. Face
 winding is not yet measured, so both faces draw.
