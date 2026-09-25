@@ -1,6 +1,7 @@
 #include "level_renderer.h"
 
 #include <optional>
+#include <utility>
 
 #include "mesh/static_mesh.h"
 
@@ -51,6 +52,25 @@ void LevelRenderer::Prepare(const package::Package &level, const scene::LevelSce
     PrepareMeshes(level, scene);
     PrepareModels(scene);
     census_.draws = opaque_draws_.size() + blended_draws_.size();
+}
+
+std::size_t LevelRenderer::AddMovable(const package::Package &package,
+                                      const mesh::StaticMeshLod &lod)
+{
+    Movable movable;
+    movable.gpu = std::make_unique<GpuMesh>(device_, lod);
+    for (const mesh::MeshSection &section : lod.sections)
+    {
+        movable.materials.push_back(materials_.Of(package, section.material, std::nullopt));
+    }
+    movable.world = scene::Matrix::Identity();
+    movables_.push_back(std::move(movable));
+    return movables_.size() - 1U;
+}
+
+void LevelRenderer::Place(std::size_t movable, const scene::Matrix &world)
+{
+    movables_.at(movable).world = world;
 }
 
 void LevelRenderer::PrepareMeshes(const package::Package &level, const scene::LevelScene &scene)
@@ -123,12 +143,13 @@ void LevelRenderer::RecordDraws(VkCommandBuffer commands)
     target_.Begin(commands);
     renderer_.Begin(commands, frame_.Set());
     renderer_.Bind(commands, Blend::kOpaque);
+    std::optional<Blend> bound = Blend::kOpaque;
     for (const Draw &draw : opaque_draws_)
     {
         renderer_.Draw(commands, *draw.mesh, draw.section, draw.material, draw.world);
     }
+    RecordMovables(commands, false, bound);
     // Blended sections draw over the finished opaque depth.
-    std::optional<Blend> bound;
     for (const Draw &draw : blended_draws_)
     {
         if (bound != draw.material.blend)
@@ -137,6 +158,30 @@ void LevelRenderer::RecordDraws(VkCommandBuffer commands)
             bound = draw.material.blend;
         }
         renderer_.Draw(commands, *draw.mesh, draw.section, draw.material, draw.world);
+    }
+    RecordMovables(commands, true, bound);
+}
+
+void LevelRenderer::RecordMovables(VkCommandBuffer commands, bool blended,
+                                   std::optional<Blend> &bound)
+{
+    for (const Movable &movable : movables_)
+    {
+        for (std::size_t i = 0; i < movable.materials.size(); ++i)
+        {
+            const DrawMaterial &material = movable.materials[i];
+            if ((material.blend != Blend::kOpaque) != blended)
+            {
+                continue;
+            }
+            if (bound != material.blend)
+            {
+                renderer_.Bind(commands, material.blend);
+                bound = material.blend;
+            }
+            renderer_.Draw(commands, *movable.gpu, movable.gpu->Sections()[i], material,
+                           movable.world);
+        }
     }
 }
 

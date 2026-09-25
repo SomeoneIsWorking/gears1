@@ -71,4 +71,41 @@ PawnTuning ReadPawnTuning(object::ClassDefaults &defaults, const std::string &pa
     return tuning;
 }
 
+PawnAppearance ReadPawnAppearance(object::ClassDefaults &defaults,
+                                  object::ObjectResolver &resolver, const std::string &pawn_class)
+{
+    std::optional<std::string> component = defaults.Of(pawn_class).ObjectPath("Mesh");
+    if (!component)
+    {
+        throw package::PackageFormatError(
+            std::format("pawn class {} names no mesh component", pawn_class));
+    }
+    // The component is a default subobject: its name follows the last dot.
+    std::string name = component->substr(component->rfind('.') + 1U);
+    const object::DefaultChain &mesh_component = defaults.Subobject(pawn_class, name);
+    std::optional<object::StoredReference> mesh = mesh_component.Reference("SkeletalMesh");
+    if (!mesh)
+    {
+        throw package::PackageFormatError(
+            std::format("mesh component {} of {} names no skeletal mesh", name, pawn_class));
+    }
+    object::Resolution resolved = resolver.Resolve(*mesh->package, mesh->index);
+    if (resolved.status != object::ResolutionStatus::kFound)
+    {
+        throw package::PackageFormatError(std::format(
+            "skeletal mesh {} of {} is cooked out", mesh->package->FullPath(mesh->index),
+            pawn_class));
+    }
+    PawnAppearance appearance;
+    appearance.mesh = resolved.location;
+    std::span<const std::uint8_t> translation =
+        mesh_component.Struct("Translation", "Vector", 12U);
+    if (!translation.empty())
+    {
+        package::ByteReader reader(translation, package::ByteOrder::Big);
+        appearance.translation = mesh::ReadVector(reader);
+    }
+    return appearance;
+}
+
 } // namespace gears::engine::game

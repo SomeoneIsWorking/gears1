@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -51,6 +52,12 @@ class LevelRenderer
     // Uploads the meshes and textures `scene` (built from `level`) places
     // and records its draws.
     void Prepare(const package::Package &level, const scene::LevelScene &scene);
+    // Uploads `lod`, whose section materials are references of `package`, as
+    // a mesh that moves: it draws at the placement last given to Place.
+    // Returns its handle.
+    [[nodiscard]] std::size_t AddMovable(const package::Package &package,
+                                         const mesh::StaticMeshLod &lod);
+    void Place(std::size_t movable, const scene::Matrix &world);
     // Renders the prepared draws and returns the frame as RGBA rows.
     [[nodiscard]] std::vector<std::uint8_t> Render(const scene::Camera &camera);
     // Records the prepared draws seen from `camera` into `commands`, leaving
@@ -84,6 +91,16 @@ class LevelRenderer
         scene::Matrix world;
     };
 
+    struct Movable
+    {
+        std::unique_ptr<GpuMesh> gpu;
+        std::vector<DrawMaterial> materials;
+        scene::Matrix world;
+    };
+
+    // Draws the movable sections whose blend is opaque (`blended` false) or
+    // not, binding each blend as it changes from `bound`.
+    void RecordMovables(VkCommandBuffer commands, bool blended, std::optional<Blend> &bound);
     void PrepareMeshes(const package::Package &level, const scene::LevelScene &scene);
     void PrepareModels(const scene::LevelScene &scene);
     const PreparedMesh &MeshOf(const object::ExportLocation &mesh);
@@ -101,6 +118,7 @@ class LevelRenderer
     std::vector<std::unique_ptr<GpuMesh>> models_;
     std::vector<Draw> opaque_draws_;
     std::vector<Draw> blended_draws_;
+    std::vector<Movable> movables_;
     LevelRenderCensus census_;
 };
 
