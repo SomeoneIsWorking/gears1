@@ -37,6 +37,10 @@ struct ProductOptions
     // Offscreen only: check the native audio mix against the guest's own
     // body on every call, keeping the original's result.
     bool verify_audio_mix = false;
+    // Offscreen only: pace as the console does (its 60 Hz vblank, no host
+    // cap), so a measurement can compare the title's speed at 30 presents a
+    // second with the product's own pacing.
+    bool console_pacing = false;
 };
 
 struct ProductOptionsResult
