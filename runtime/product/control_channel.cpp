@@ -1,6 +1,9 @@
 #include "control_channel.h"
 
+#include <chrono>
 #include <format>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <span>
 #include <string_view>
@@ -111,11 +114,34 @@ constexpr std::size_t kMaxConnections = 8;
     return std::format("0x{:08X}", point.vtable);
 }
 
+constexpr double kMedian = 0.5;
+constexpr double kP95 = 0.95;
+constexpr double kP99 = 0.99;
+constexpr double kMicrosecondsPerMillisecond = 1000.0;
+
+// A frame-time percentile in milliseconds, as the upper edge of its 0.1 ms
+// bucket; `at_least` when it fell in the open-ended last bucket; null when
+// the interval recorded no frame.
+[[nodiscard]] std::string QuantileJson(const x360port::FrameIntervalHistogram &intervals,
+                                       double fraction)
+{
+    std::optional<x360port::FrameIntervalQuantile> quantile = intervals.Quantile(fraction);
+    if (!quantile)
+    {
+        return "null";
+    }
+    return std::format("{{\"ms\":{:.1f},\"at_least\":{}}}",
+                       quantile->microseconds / kMicrosecondsPerMillisecond,
+                       quantile->open_ended ? "true" : "false");
+}
+
 } // namespace
 
-ControlChannel::ControlChannel(const x360port::SystemSession &session, RunStop &stop,
+ControlChannel::ControlChannel(const x360port::SystemSession &session, RunStop *stop,
                                std::uint16_t port)
     : session_(session), stop_(stop),
+      perf_mark_{
+          .time = std::chrono::steady_clock::now(), .presents = 0, .intervals = {}, .counts = {}},
       server_(LoopbackOptions(port),
               [this](const lucent::http::Request &request) { return Handle(request); })
 {
@@ -173,11 +199,13 @@ lucent::http::Response ControlChannel::Handle(const lucent::http::Request &reque
     {
         return Navigation();
     }
+    if (request.method == "GET" && path == "/api/perf")
+    {
+        return Perf();
+    }
     if (request.method == "POST" && path == "/api/stop")
     {
-        stop_.Request();
-        lucent::info("control", "a stop was requested; the run ends at its next second");
-        return lucent::http::Response::json(202, "Accepted", "{\"stopping\":true}\n");
+        return Stop();
     }
     return JsonError(404, "Not Found", std::format("no route {} {}", request.method, path));
 }
@@ -195,6 +223,47 @@ lucent::http::Response ControlChannel::Status() const
                     pad.connected ? "true" : "false", pad.packet, pad.state.buttons,
                     pad.state.leftTrigger, pad.state.rightTrigger, pad.state.thumbLX,
                     pad.state.thumbLY, pad.state.thumbRX, pad.state.thumbRY));
+}
+
+lucent::http::Response ControlChannel::Stop() const
+{
+    if (stop_ == nullptr)
+    {
+        return JsonError(409, "Conflict", "the windowed product ends when its window closes");
+    }
+    stop_->Request();
+    lucent::info("control", "a stop was requested; the run ends at its next second");
+    return lucent::http::Response::json(202, "Accepted", "{\"stopping\":true}\n");
+}
+
+lucent::http::Response ControlChannel::Perf() const
+{
+    PerfMark now{.time = std::chrono::steady_clock::now(),
+                 .presents = session_.PresentedFrameCount(),
+                 .intervals = session_.FrameIntervals(),
+                 .counts = session_.ExecutionCounts()};
+    PerfMark previous;
+    {
+        std::scoped_lock lock(perf_mutex_);
+        previous = std::exchange(perf_mark_, now);
+    }
+    double seconds = std::chrono::duration<double>(now.time - previous.time).count();
+    std::uint64_t presents = now.presents - previous.presents;
+    x360port::FrameIntervalHistogram intervals = now.intervals.Since(previous.intervals);
+    return lucent::http::Response::json(
+        200, "OK",
+        std::format("{{\"seconds\":{:.3f},\"presents\":{},\"presents_per_second\":{:.1f},"
+                    "\"frame_ms\":{{\"count\":{},\"p50\":{},\"p95\":{},\"p99\":{},"
+                    "\"max\":{}}},\"translated_functions\":{},\"new_translations\":{},"
+                    "\"translation_failures\":{},\"native_override_calls\":{}}}\n",
+                    seconds, presents,
+                    seconds > 0.0 ? static_cast<double>(presents) / seconds : 0.0,
+                    intervals.Count(), QuantileJson(intervals, kMedian),
+                    QuantileJson(intervals, kP95), QuantileJson(intervals, kP99),
+                    QuantileJson(intervals, 1.0), now.counts.translated_functions,
+                    now.counts.translated_functions - previous.counts.translated_functions,
+                    now.counts.translation_failures,
+                    now.counts.native_override_calls - previous.counts.native_override_calls));
 }
 
 lucent::http::Response ControlChannel::SetPad(const lucent::http::Request &request)

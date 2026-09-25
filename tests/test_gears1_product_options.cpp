@@ -51,6 +51,17 @@ int main()
     Require(window.options.mode == ProductMode::Window, "the default mode is not the window");
     Require(window.options.title_id == 0x4D5307D5U, "the title ID was not read as hexadecimal");
     Require(window.options.image == "/games/gears.iso", "the image path was not kept");
+    Require(window.options.resolution_scale == 2U, "the product does not render at 1440p");
+
+    ProductOptionsResult measured_window =
+        Parse({"--image", "/games/gears.iso", "--title-id", "4d5307d5", "--control-port", "32125",
+               "--resolution-scale", "3"});
+    Require(static_cast<bool>(measured_window), measured_window.error);
+    Require(measured_window.options.mode == ProductMode::Window,
+            "a control channel changed the mode");
+    Require(measured_window.options.control_port == 32125U,
+            "--control-port was not read for the window");
+    Require(measured_window.options.resolution_scale == 3U, "--resolution-scale was not read");
 
     ProductOptionsResult offscreen = Parse(
         {"--offscreen", "--image", "/games/gears.iso", "--title-id", "4D5307D5", "--storage-root",
@@ -85,8 +96,8 @@ int main()
     RequireRefused({"--image", "/games/gears.iso", "--title-id", "4d5307d5", "--console-pacing"},
                    "only with --offscreen");
     RequireRefused(
-        {"--image", "/games/gears.iso", "--title-id", "4d5307d5", "--control-port", "32125"},
-        "only with --offscreen");
+        {"--image", "/games/gears.iso", "--title-id", "4d5307d5", "--resolution-scale", "0"},
+        "malformed");
     RequireRefused({"--offscreen", "--image", "/games/gears.iso", "--title-id", "4d5307d5",
                     "--control-port", "0"},
                    "malformed");
@@ -105,6 +116,6 @@ int main()
     RequireRefused({"--offscreen", "--image", "/games/gears.iso", "--title-id", "4d5307d5",
                     "--storage-root", storage.c_str(), "--seconds", "5", "--capture-every", "1"},
                    "given together");
-    std::cout << "product options: 2 accepted, 15 refused\n";
+    std::cout << "product options: 3 accepted, 15 refused\n";
     return EXIT_SUCCESS;
 }

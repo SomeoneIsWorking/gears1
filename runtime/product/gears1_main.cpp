@@ -4,6 +4,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include <lucent/config.h>
 #include <lucent/log.h>
@@ -69,7 +70,7 @@ constexpr std::string_view kSaveNamespace = "gears1";
     std::optional<gears::product::ControlChannel> control;
     if (options.control_port != 0)
     {
-        control.emplace(*created.session, stop, options.control_port);
+        control.emplace(*created.session, &stop, options.control_port);
         if (!control->Start())
         {
             lucent::error("product", "the control channel cannot serve on loopback port {}",
@@ -110,8 +111,26 @@ int main(int argc, char **argv)
     x360port::DesktopInputState desktop;
     gears::InitialiseInput(true);
     gears::SetHostPadSource(gears::titles::gears1::SampleDesktopControls, &desktop);
+    // Served from the running session; the process ends with the window, so
+    // the channel is never torn down before it.
+    std::optional<gears::product::ControlChannel> control;
+    x360port::SystemSessionLaunched serve_control;
+    if (options.control_port != 0)
+    {
+        serve_control = [&control, &options](const x360port::SystemSession &session)
+        {
+            control.emplace(session, nullptr, options.control_port);
+            if (!control->Start())
+            {
+                lucent::error("product", "the control channel cannot serve on loopback port {}",
+                              options.control_port);
+                control.reset();
+            }
+        };
+    }
     x360port::RuntimeFailure failure = x360port::RunWindowedSystem(
-        gears::product::Gears1SessionConfig(options, *storage_root, &desktop, nullptr));
+        gears::product::Gears1SessionConfig(options, *storage_root, &desktop, nullptr),
+        std::move(serve_control));
     lucent::error("product", "Gears of War could not start: {}", failure.detail);
     return EXIT_FAILURE;
 }

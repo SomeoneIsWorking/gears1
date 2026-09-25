@@ -361,6 +361,13 @@ and prove frame parity. Existing native pieces do not establish that result.
 
 ### S013 — native renderer budget
 
+The product renders at 2560x1440 by default (`--resolution-scale 2`, Xenia's
+draw-resolution scale over the console's 1280x720); a headless 75 s menu run
+(2026-09-25) captured 2560x1440 guest output at 70-107 presents/s, p50 8.4-9.0 ms and
+p95 14-35 ms, which is not yet a smooth 60 fps floor. `GEARS_CONTROL_PORT` serves
+`/api/perf` from the player's window (`docs/interactive-debug.md`), so windowed play
+can be measured as it is played.
+
 The console presents Gears 1 every second vblank, and the title's game clock is the
 host clock (`runtime/titles/gears1/presentation.h` records the evidence). The title
 waits for a vblank at every present, so vblank pacing rounds each frame up to the vblank

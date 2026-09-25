@@ -17,6 +17,9 @@ enum class ProductMode : std::uint8_t
     Offscreen,
 };
 
+// The product renders at 1440p unless told otherwise.
+inline constexpr std::uint32_t kDefaultResolutionScale = 2;
+
 // The product's complete command line. The bootstrap supplies the
 // authenticated image and its title ID; everything else is optional.
 struct ProductOptions
@@ -32,8 +35,12 @@ struct ProductOptions
     std::uint32_t capture_interval_seconds = 0;
     // Offscreen only: write a Linux perf map of the translated guest code.
     bool perf_map = false;
-    // Offscreen only: serve the loopback control channel on this port.
+    // Serve the loopback control channel on this port (zero: none), so a
+    // maintainer can drive and measure the run, offscreen or windowed.
     std::uint16_t control_port = 0;
+    // Render-target scale along each axis over the console's 1280x720:
+    // 2 renders 2560x1440.
+    std::uint32_t resolution_scale = kDefaultResolutionScale;
     // Offscreen only: check the native audio mix against the guest's own
     // body on every call, keeping the original's result.
     bool verify_audio_mix = false;

@@ -46,9 +46,9 @@ class ArgumentCursor final
     std::size_t index_ = 0;
 };
 
-constexpr std::array<std::string_view, 7> kValueOptions = {
+constexpr std::array<std::string_view, 8> kValueOptions = {
     "--image",       "--title-id",      "--storage-root", "--seconds",
-    "--capture-dir", "--capture-every", "--control-port"};
+    "--capture-dir", "--capture-every", "--control-port", "--resolution-scale"};
 
 [[nodiscard]] bool TakesValue(std::string_view option) noexcept
 {
@@ -69,12 +69,10 @@ constexpr std::array<std::string_view, 7> kValueOptions = {
     {
         if (!options.storage_root.empty() || options.run_seconds != 0 ||
             !options.capture_directory.empty() || options.capture_interval_seconds != 0 ||
-            options.perf_map || options.control_port != 0 || options.verify_audio_mix ||
-            options.console_pacing)
+            options.perf_map || options.verify_audio_mix || options.console_pacing)
         {
             return "--storage-root, --seconds, --capture-dir, --capture-every, --perf-map, "
-                   "--control-port, --verify-audio-mix, and --console-pacing apply only with "
-                   "--offscreen";
+                   "--verify-audio-mix, and --console-pacing apply only with --offscreen";
         }
         return {};
     }
@@ -154,6 +152,12 @@ ProductOptionsResult ParseProductOptions(std::span<const char *const> arguments)
         else if (option == "--capture-dir")
         {
             options.capture_directory = value;
+        }
+        else if (option == "--resolution-scale")
+        {
+            // The session refuses a scale outside the range x360port supports.
+            parsed =
+                ParseInteger(value, 10, options.resolution_scale) && options.resolution_scale != 0;
         }
         else if (option == "--control-port")
         {

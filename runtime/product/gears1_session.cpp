@@ -36,6 +36,7 @@ Gears1SessionConfig(const ProductOptions &options, const std::filesystem::path &
         config.display_refresh_hz = titles::gears1::kDisplayRefreshHz;
         config.max_presents_per_second = titles::gears1::kTargetPresentsPerSecond;
     }
+    config.resolution_scale = options.resolution_scale;
     config.write_perf_map = options.perf_map;
     if (audio_mix_check != nullptr)
     {

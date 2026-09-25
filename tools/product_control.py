@@ -45,6 +45,10 @@ class ProductControl:
     def status(self) -> dict[str, object]:
         return json.loads(self._request("GET", "/api/status"))
 
+    def perf(self) -> dict[str, object]:
+        """Presents, frame times, and dynarec counts since the previous perf call."""
+        return json.loads(self._request("GET", "/api/perf"))
+
     def set_pad(self, fields: dict[str, str]) -> None:
         self._request("POST", "/api/input", urllib.parse.urlencode(fields).encode())
 
@@ -105,11 +109,47 @@ def hex_dump(address: int, data: bytes) -> str:
     return "\n".join(lines)
 
 
+def perf_line(reading: dict[str, object]) -> str:
+    """One interval's frame rate and frame-time percentiles on one line."""
+
+    frames = reading["frame_ms"]
+    assert isinstance(frames, dict)
+
+    def percentile(name: str) -> str:
+        value = frames[name]
+        if value is None:
+            return "-"
+        return f"{'>=' if value['at_least'] else ''}{value['ms']:.1f}"
+
+    return (
+        f"{reading['presents_per_second']:6.1f} fps over {reading['seconds']:.1f} s; "
+        f"frame ms p50 {percentile('p50')} p95 {percentile('p95')} p99 {percentile('p99')} "
+        f"max {percentile('max')}; {reading['new_translations']} new translations, "
+        f"{reading['native_override_calls']} override calls"
+    )
+
+
+def show_perf(control: ProductControl, every: float | None) -> None:
+    """Print the interval since the last perf call, then one per `every` seconds."""
+
+    if every is None:
+        print(json.dumps(control.perf(), indent=2))
+        return
+    if every <= 0:
+        raise ControlError("--every must be positive")
+    control.perf()
+    while True:
+        time.sleep(every)
+        print(perf_line(control.perf()), flush=True)
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", type=int, required=True)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status", help="print the run's presents and pad")
+    perf = commands.add_parser("perf", help="print frame rate and frame times, once or live")
+    perf.add_argument("--every", type=float, help="keep printing one line per this many seconds")
     pad = commands.add_parser("pad", help="replace the whole pad state")
     pad.add_argument("--buttons", help="comma-separated names, e.g. A,START")
     for stick in ("lx", "ly", "rx", "ry"):
@@ -138,6 +178,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             if arguments.hold is not None:
                 time.sleep(arguments.hold)
                 control.release()
+        elif arguments.command == "perf":
+            show_perf(control, arguments.every)
         elif arguments.command == "release":
             control.release()
         elif arguments.command == "player":
