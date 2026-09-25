@@ -88,6 +88,19 @@ class BootstrapTests(unittest.TestCase):
               "--title-id", "4d5307d5"]],
         )
 
+    def test_control_port_comes_only_from_the_environment(self) -> None:
+        self.assertEqual(launcher.control_port_arguments({}), [])
+        self.assertEqual(
+            launcher.control_port_arguments({"GEARS_CONTROL_PORT": "32125"}),
+            ["--control-port", "32125"],
+        )
+        for malformed in ("", "0", "65536", "-1", "port", "8080 "):
+            with (
+                self.subTest(value=malformed),
+                self.assertRaisesRegex(launcher.CliError, "GEARS_CONTROL_PORT"),
+            ):
+                launcher.control_port_arguments({"GEARS_CONTROL_PORT": malformed})
+
     def test_disc_is_identified_by_its_default_xex(self) -> None:
         executable = b"XEX2" + bytes(range(256)) * 20
         disc = gdf_fixture.image(

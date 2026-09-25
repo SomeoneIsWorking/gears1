@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -24,11 +24,18 @@ Play Gears of War from your own disc image. The disc is found from --iso, then
 GEARS_ISO in the environment or .env, then the one image or 7z archive in roms/.
 Only the supported retail revision is accepted.
 
+GEARS_CONTROL_PORT=<port>, in the environment or .env, also serves the game's
+loopback control channel on that port, so a maintainer can read its
+performance and state while you play.
+
 Options:
   --iso <path>  the disc image or 7z archive to play
   --prepare     check the disc and build the game, but do not start it
   -h, --help    show this text
 """
+
+
+MAX_PORT = 65535
 
 
 class CliError(RuntimeError):
@@ -64,6 +71,17 @@ def parse_arguments(arguments: Sequence[str]) -> LaunchOptions:
     return LaunchOptions(image=image, prepare_only=prepare_only, show_help=show_help)
 
 
+def control_port_arguments(environ: Mapping[str, str]) -> list[str]:
+    """The product arguments that serve the control channel GEARS_CONTROL_PORT names."""
+
+    value = environ.get("GEARS_CONTROL_PORT")
+    if value is None:
+        return []
+    if not value.isdigit() or not 1 <= int(value) <= MAX_PORT:
+        raise CliError(f"GEARS_CONTROL_PORT must be a port from 1 to {MAX_PORT}, not {value!r}")
+    return ["--control-port", str(int(value))]
+
+
 def main(
     arguments: Sequence[str] | None = None,
     repo_root: Path | None = None,
@@ -75,14 +93,16 @@ def main(
         print(USAGE)
         return 0
     selected_environment_file = environment_file(root)
+    environ = load_environment(root, env_file=selected_environment_file)
+    control = control_port_arguments(environ)
     prepared = prepare_title(
         root,
         load_profile(root),
         image=options.image,
-        environ=load_environment(root, env_file=selected_environment_file),
+        environ=environ,
         env_file=selected_environment_file,
     )
-    command = prepared.command()
+    command = prepared.command() + control
     if options.prepare_only:
         print(f"bootstrap: ready: {' '.join(command)}")
         return 0

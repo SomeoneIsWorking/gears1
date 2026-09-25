@@ -6,7 +6,9 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-ALLOWED_NAMES = frozenset({"GEARS_ISO", "GEARS_GAME_DIR", "GEARS_BUILD_DIR"})
+ALLOWED_NAMES = frozenset(
+    {"GEARS_ISO", "GEARS_GAME_DIR", "GEARS_BUILD_DIR", "GEARS_CONTROL_PORT"}
+)
 
 
 class EnvironmentError(RuntimeError):

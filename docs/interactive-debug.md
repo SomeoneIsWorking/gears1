@@ -1,6 +1,6 @@
-# Interactive control of an offscreen run
+# Interactive control of a run
 
-An offscreen product run can serve a loopback-only HTTP control channel, so a
+An offscreen product run, or the player's windowed product, can serve a loopback-only HTTP control channel, so a
 maintainer or agent can press buttons, read status and look at the guest's
 output while the title plays. It is off unless asked for:
 
@@ -9,8 +9,12 @@ uv run --locked python tools/run_offscreen.py --walk gameplay --seconds 900 \
     --control-port 32125
 ```
 
-The product itself takes `--control-port N` only with `--offscreen`; the
-player's windowed product never listens. `runtime/product/control_channel.*`
+To measure the game while the player plays it, set `GEARS_CONTROL_PORT=32125`
+in the environment or `.env` before `./run.sh`; the launcher passes it to the
+product as `--control-port`, and the channel starts once the title has
+launched. Without it the windowed product never listens. In the window,
+`POST /api/stop` is refused (409): the game ends when its window closes.
+`runtime/product/control_channel.*`
 owns the routes, and Lucent owns the listener, bounded parsing, concurrent
 dispatch and shutdown.
 
@@ -28,6 +32,8 @@ where the walk left the game. `--walk none` hands the pad over from the start.
 ```sh
 C="uv run --locked python tools/product_control.py --port 32125"
 $C status                              # presents and the pad's source and state
+$C perf                                # fps and frame times since the last perf call
+$C perf --every 1                      # one live line per second until interrupted
 $C pad --ly 32767 --hold 2             # walk forward for 2 s, then release
 $C pad --buttons A,START               # replace the whole pad, held until changed
 $C pad --lt 255 --hold 0.3             # pull the left trigger
@@ -48,6 +54,7 @@ is refused with HTTP 400 naming the field.
 | Route | Result |
 |---|---|
 | `GET /api/status` | JSON: presents so far, and the pad's source, packet and state |
+| `GET /api/perf` | JSON: presents per second, frame-time p50/p95/p99/max (0.1 ms buckets; `at_least` in the open-ended ≥100 ms bucket), and translation and override counts, over the interval since the previous `/api/perf` (since launch on the first call) |
 | `POST /api/input` | form fields as above; 409 while a walk owns the pad |
 | `POST /api/input/release` | a neutral pad, still connected |
 | `DELETE /api/input` | disconnect the remote controller |
