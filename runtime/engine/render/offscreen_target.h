@@ -9,8 +9,9 @@
 namespace gears::engine::render
 {
 
-// The color and depth attachments of a headless frame, the render pass that
-// clears and draws into them, and the copy that reads the color back.
+// The color and depth attachments of a frame, the render pass that clears
+// and draws into them (leaving the color ready to be read by a transfer), and
+// the copy that reads the color back to the host.
 class OffscreenTarget
 {
   public:
@@ -24,8 +25,12 @@ class OffscreenTarget
 
     [[nodiscard]] VkExtent2D Extent() const noexcept { return extent_; }
     [[nodiscard]] VkRenderPass RenderPass() const noexcept { return render_pass_; }
+    // The color attachment, in TRANSFER_SRC_OPTIMAL once the pass has ended.
+    [[nodiscard]] VkImage ColorImage() const noexcept { return color_.Image(); }
 
     void Begin(VkCommandBuffer commands) const;
+    // Ends the pass; the color is left for a transfer to read.
+    void End(VkCommandBuffer commands) const;
     // Ends the pass and copies the color attachment into the readback buffer.
     void EndAndCopy(VkCommandBuffer commands) const;
     // RGBA8 rows of the last copied frame; valid after the submit completes.

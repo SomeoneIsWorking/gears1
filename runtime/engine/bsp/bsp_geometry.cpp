@@ -3,22 +3,13 @@
 #include <format>
 #include <limits>
 
+#include "mesh/vector_math.h"
 #include "package/byte_reader.h"
 
 namespace gears::engine::bsp
 {
 namespace
 {
-
-float Dot(const mesh::Vector3 &a, const mesh::Vector3 &b)
-{
-    return a.x * b.x + a.y * b.y + a.z * b.z;
-}
-
-mesh::Vector3 Subtract(const mesh::Vector3 &a, const mesh::Vector3 &b)
-{
-    return {a.x - b.x, a.y - b.y, a.z - b.z};
-}
 
 // Appends one node's outline as vertices and its fan as triangles.
 void AppendNode(const BspModel &model, const BspNode &node, const std::optional<LightMap2D> &light,
@@ -41,9 +32,9 @@ void AppendNode(const BspModel &model, const BspNode &node, const std::optional<
         mesh::MeshVertex vertex;
         vertex.position = model.Points()[static_cast<std::size_t>(source.point)];
         vertex.normal = {node.plane_x, node.plane_y, node.plane_z};
-        mesh::Vector3 offset = Subtract(vertex.position, base);
-        vertex.uv[0] = {Dot(offset, axis_u) / kTextureUnitsPerRepeat,
-                        Dot(offset, axis_v) / kTextureUnitsPerRepeat};
+        mesh::Vector3 offset = vertex.position - base;
+        vertex.uv[0] = {mesh::Dot(offset, axis_u) / kTextureUnitsPerRepeat,
+                        mesh::Dot(offset, axis_v) / kTextureUnitsPerRepeat};
         if (light)
         {
             for (std::size_t axis = 0; axis < 2U; ++axis)

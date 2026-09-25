@@ -50,10 +50,22 @@ x360port_enable_warnings(gears_engine_material)
 add_library(gears_engine_scene STATIC
     scene/camera.cpp
     scene/level_scene.cpp
+    scene/placement_properties.cpp
+    scene/static_meshes.cpp
     scene/streaming_levels.cpp
-    scene/transform.cpp)
+    scene/transform.cpp
+    scene/world.cpp)
 target_link_libraries(gears_engine_scene PUBLIC gears_engine_bsp)
 x360port_enable_warnings(gears_engine_scene)
+
+add_library(gears_engine_game STATIC
+    game/collision_world.cpp
+    game/game_world.cpp
+    game/player_camera.cpp
+    game/player_pawn.cpp
+    game/walking_movement.cpp)
+target_link_libraries(gears_engine_game PUBLIC gears_engine_scene)
+x360port_enable_warnings(gears_engine_game)
 
 add_executable(test_engine_package "${CMAKE_SOURCE_DIR}/tests/test_engine_package.cpp")
 target_link_libraries(test_engine_package PRIVATE gears_engine_package)
@@ -71,6 +83,11 @@ add_executable(test_engine_bsp "${CMAKE_SOURCE_DIR}/tests/test_engine_bsp.cpp")
 target_link_libraries(test_engine_bsp PRIVATE gears_engine_bsp)
 x360port_enable_warnings(test_engine_bsp)
 gears_add_binary_test(gears_engine_bsp test_engine_bsp)
+
+add_executable(test_engine_game "${CMAKE_SOURCE_DIR}/tests/test_engine_game.cpp")
+target_link_libraries(test_engine_game PRIVATE gears_engine_game)
+x360port_enable_warnings(test_engine_game)
+gears_add_binary_test(gears_engine_game test_engine_game)
 
 add_executable(test_engine_scene "${CMAKE_SOURCE_DIR}/tests/test_engine_scene.cpp")
 target_link_libraries(test_engine_scene PRIVATE gears_engine_scene)
@@ -128,13 +145,31 @@ if(Vulkan_FOUND AND Vulkan_glslc_FOUND)
         render/level_renderer.cpp
         render/mesh_renderer.cpp
         render/offscreen_target.cpp
+        render/swapchain.cpp
         render/texture_bindings.cpp
-        render/vulkan_device.cpp)
+        render/vulkan_device.cpp
+        render/window_frames.cpp)
     add_dependencies(gears_engine_render gears_engine_shaders)
     target_include_directories(gears_engine_render PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/render")
     target_link_libraries(gears_engine_render PUBLIC gears_engine_scene gears_engine_material
                                               gears_engine_texture Vulkan::Vulkan)
     x360port_enable_warnings(gears_engine_render)
+
+    # The game itself: the native engine in a window. Built when SDL3 is
+    # available.
+    find_package(SDL3 CONFIG QUIET)
+    if(SDL3_FOUND)
+        add_library(gears_engine_app STATIC
+            app/device_input.cpp
+            app/game_window.cpp)
+        target_link_libraries(gears_engine_app PUBLIC gears_engine_render gears_engine_game
+                                                      SDL3::SDL3)
+        x360port_enable_warnings(gears_engine_app)
+
+        add_executable(gears_native app/main.cpp)
+        target_link_libraries(gears_native PRIVATE gears_engine_app lucent::lucent)
+        x360port_enable_warnings(gears_native)
+    endif()
 
     # Renders one level package headlessly and writes the frame as an image.
     add_executable(gears_level_render "${CMAKE_SOURCE_DIR}/tools/level_render/main.cpp")
