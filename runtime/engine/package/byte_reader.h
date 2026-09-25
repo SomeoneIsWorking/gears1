@@ -38,8 +38,11 @@ class ByteReader
 
     void Seek(std::size_t offset);
     std::uint8_t ReadU8();
+    std::uint16_t ReadU16();
     std::uint32_t ReadU32();
     std::int32_t ReadI32();
+    // An IEEE single in the reader's byte order.
+    float ReadF32();
     std::uint64_t ReadU64();
     std::span<const std::uint8_t> ReadBytes(std::size_t count);
     // A length-prefixed string: a positive length counts 8-bit characters, a

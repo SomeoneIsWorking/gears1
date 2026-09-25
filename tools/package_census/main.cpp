@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <map>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <lucent/log.h>
@@ -17,6 +18,8 @@
 #include "object/serialized_object.h"
 #include "package/content_files.h"
 #include "package/lzo1x.h"
+#include "bsp/bsp_model.h"
+#include "bsp/component_geometry.h"
 #include "material/material_textures.h"
 #include "mesh/static_mesh.h"
 #include "texture/texture2d.h"
@@ -80,32 +83,60 @@ struct Census
     std::map<std::size_t, std::size_t> mesh_lod_counts;
     // Materials by what gives them their base colour.
     std::map<std::string, std::size_t> material_diffuse;
+    std::size_t bsp_models = 0;
+    std::size_t bsp_components = 0;
+    std::size_t bsp_triangles = 0;
 };
 
-// Decodes the native data of the asset classes the engine owns so far.
-void DecodeAsset(const gears::engine::object::SerializedObject &object,
-                 const std::string &class_name,
-                 gears::engine::material::MaterialTextures &materials, Census &census)
+// Decodes the native data of the asset classes the engine owns so far. Its
+// caches are keyed by package, so it lives no longer than the package it
+// decodes.
+class AssetDecoder
 {
-    if (class_name == "Material" || class_name == "MaterialInstanceConstant")
+  public:
+    AssetDecoder(gears::engine::object::ClassHierarchy &classes,
+                 gears::engine::object::ObjectResolver &resolver)
+        : materials_(classes, resolver), components_(classes, resolver)
     {
-        gears::engine::object::ExportLocation location{
-            &object.Owner(), static_cast<std::size_t>(object.Index()) - 1U};
-        ++census.material_diffuse[std::string(
-            gears::engine::material::NameOf(materials.BaseColor(location).outcome))];
-        return;
     }
-    if (class_name == "StaticMesh")
+
+    void Decode(const gears::engine::object::SerializedObject &object,
+                const std::string &class_name, Census &census)
     {
-        auto mesh = gears::engine::mesh::StaticMesh::Read(object);
-        ++census.mesh_lod_counts[mesh.Lods().size()];
+        if (class_name == "Material" || class_name == "MaterialInstanceConstant")
+        {
+            gears::engine::object::ExportLocation location{
+                &object.Owner(), static_cast<std::size_t>(object.Index()) - 1U};
+            ++census.material_diffuse[std::string(
+                gears::engine::material::NameOf(materials_.BaseColor(location).outcome))];
+        }
+        else if (class_name == "StaticMesh")
+        {
+            auto mesh = gears::engine::mesh::StaticMesh::Read(object);
+            ++census.mesh_lod_counts[mesh.Lods().size()];
+        }
+        else if (class_name == "Texture2D")
+        {
+            auto texture = gears::engine::texture::Texture2D::Read(object);
+            ++census.texture_formats[std::string(gears::engine::texture::NameOf(texture.Format()))];
+        }
+        else if (class_name == "Model")
+        {
+            (void)gears::engine::bsp::BspModel::Read(object);
+            ++census.bsp_models;
+        }
+        else if (class_name == "ModelComponent")
+        {
+            auto geometry = components_.Triangulate(object);
+            ++census.bsp_components;
+            census.bsp_triangles += geometry.indices.size() / 3U;
+        }
     }
-    else if (class_name == "Texture2D")
-    {
-        auto texture = gears::engine::texture::Texture2D::Read(object);
-        ++census.texture_formats[std::string(gears::engine::texture::NameOf(texture.Format()))];
-    }
-}
+
+  private:
+    gears::engine::material::MaterialTextures materials_;
+    gears::engine::bsp::ComponentGeometry components_;
+};
 
 // Reads every non-schema export's property stream. A failure is counted
 // against its class, never skipped.
@@ -113,8 +144,7 @@ void ReadProperties(const Package &package, const std::string &file,
                     gears::engine::object::ClassHierarchy &classes,
                     gears::engine::object::ObjectResolver &resolver, Census &census)
 {
-    // Its cache is keyed by package, so it lives no longer than this one.
-    gears::engine::material::MaterialTextures materials(classes, resolver);
+    AssetDecoder decoder(classes, resolver);
     for (std::size_t i = 0; i < package.Tables().exports.size(); ++i)
     {
         if (gears::engine::object::IsSchemaExport(package, i))
@@ -133,7 +163,7 @@ void ReadProperties(const Package &package, const std::string &file,
             }
             if (!object.IsClassDefault())
             {
-                DecodeAsset(object, class_name, materials, census);
+                decoder.Decode(object, class_name, census);
             }
         }
         catch (const gears::engine::package::PackageFormatError &error)
@@ -252,6 +282,8 @@ int Run(const fs::path &directory)
     {
         lucent::info("package-census", "  Texture2D {:>8} {}", count, format);
     }
+    lucent::info("package-census", "  BSP: {} model(s); {} component(s) of {} triangle(s)",
+                 census.bsp_models, census.bsp_components, census.bsp_triangles);
     for (const auto &[outcome, count] : census.material_diffuse)
     {
         lucent::info("package-census", "  material base colour {:>8} {}", count, outcome);

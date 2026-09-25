@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "object/serialized_object.h"
+#include "package/byte_reader.h"
 
 namespace gears::engine::mesh
 {
@@ -16,6 +17,9 @@ struct Vector3
     float y = 0.0F;
     float z = 0.0F;
 };
+
+// Three consecutive floats in the reader's byte order.
+Vector3 ReadVector(package::ByteReader &reader);
 
 struct Bounds
 {

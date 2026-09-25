@@ -43,7 +43,8 @@ float Quantile(std::vector<float> values, double q)
     return values[rank];
 }
 
-// A three-quarter overview of where the level's meshes stand.
+// A three-quarter overview of where the level's meshes and BSP vertices
+// stand.
 gears::engine::scene::Camera OverviewCamera(const gears::engine::scene::LevelScene &scene)
 {
     std::array<std::vector<float>, 3> axes;
@@ -52,6 +53,15 @@ gears::engine::scene::Camera OverviewCamera(const gears::engine::scene::LevelSce
         for (std::size_t axis = 0; axis < 3U; ++axis)
         {
             axes[axis].push_back(instance.world.m[3][axis]);
+        }
+    }
+    for (const auto &model : scene.Models())
+    {
+        for (const auto &vertex : model.geometry.vertices)
+        {
+            axes[0].push_back(vertex.position.x);
+            axes[1].push_back(vertex.position.y);
+            axes[2].push_back(vertex.position.z);
         }
     }
     std::array<float, 3> low{};
@@ -97,12 +107,12 @@ int Run(const fs::path &level_path, const fs::path &out_path)
     lucent::info(
         "level-render",
         "{}: {} static mesh component(s), {} template(s), {} placed, {} without a mesh, {} with a "
-        "cooked-out mesh, {} outside an actor",
+        "cooked-out mesh, {} outside an actor; {} model component(s)",
         level.Name(), census.components, census.templates, census.placed, census.without_mesh,
-        census.cooked_out_mesh, census.outside_actor);
-    if (scene.Instances().empty())
+        census.cooked_out_mesh, census.outside_actor, census.model_components);
+    if (scene.Instances().empty() && scene.Models().empty())
     {
-        lucent::error("level-render", "REFUSING: {} places no static meshes", level.Name());
+        lucent::error("level-render", "REFUSING: {} places no static meshes or BSP", level.Name());
         return 1;
     }
 
@@ -117,12 +127,14 @@ int Run(const fs::path &level_path, const fs::path &out_path)
         lucent::info("level-render", "  section colour {:>6} {}", count, source);
     }
     lucent::info("level-render",
-                 "{} section draw(s) of {} mesh(es) and {} texture(s), {} placement(s) of a mesh "
-                 "with no LOD, on {}; camera eye ({:.0f}, {:.0f}, {:.0f}) target ({:.0f}, {:.0f}, "
+                 "{} section draw(s) of {} mesh(es), {} BSP component(s) ({} empty) and {} "
+                 "texture(s), {} placement(s) of a mesh with no LOD, on {}; camera eye ({:.0f}, "
+                 "{:.0f}, {:.0f}) target ({:.0f}, {:.0f}, "
                  "{:.0f}) -> {}",
-                 drawn.draws, drawn.meshes, drawn.textures, drawn.placements_without_lod,
-                 device.Name(), camera.eye.x, camera.eye.y, camera.eye.z, camera.target.x,
-                 camera.target.y, camera.target.z, out_path.filename().string());
+                 drawn.draws, drawn.meshes, drawn.models, drawn.models_without_triangles,
+                 drawn.textures, drawn.placements_without_lod, device.Name(), camera.eye.x,
+                 camera.eye.y, camera.eye.z, camera.target.x, camera.target.y, camera.target.z,
+                 out_path.filename().string());
     return 0;
 }
 

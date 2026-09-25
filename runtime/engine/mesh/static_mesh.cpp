@@ -1,6 +1,5 @@
 #include "static_mesh.h"
 
-#include <bit>
 #include <format>
 
 #include "object/bulk_data.h"
@@ -21,20 +20,6 @@ constexpr std::size_t kEdgeSize = 16;
 constexpr std::size_t kVertexBaseSize = 28;
 constexpr std::size_t kTexCoordSize = 8;
 constexpr std::int32_t kMeshVersion = 15;
-
-float ReadFloat(ByteReader &reader)
-{
-    return std::bit_cast<float>(reader.ReadU32());
-}
-
-Vector3 ReadVector(ByteReader &reader)
-{
-    Vector3 v;
-    v.x = ReadFloat(reader);
-    v.y = ReadFloat(reader);
-    v.z = ReadFloat(reader);
-    return v;
-}
 
 // A packed unit vector: x in the lowest byte, each byte mapping 0..255 to
 // -1..1.
@@ -89,8 +74,8 @@ void ReadVertices(ByteReader &reader, StaticMeshLod &lod)
         vertex.normal = UnpackNormal(reader.ReadU32());
         for (std::size_t i = 0; i < lod.tex_coord_count; ++i)
         {
-            vertex.uv[i][0] = ReadFloat(reader);
-            vertex.uv[i][1] = ReadFloat(reader);
+            vertex.uv[i][0] = reader.ReadF32();
+            vertex.uv[i][1] = reader.ReadF32();
         }
     }
     if (reader.ReadU32() != vertex_count)
@@ -115,8 +100,7 @@ StaticMeshLod ReadLod(ByteReader &reader, std::size_t data_base)
     lod.indices.reserve(index_count);
     for (std::size_t i = 0; i < index_count; ++i)
     {
-        std::span<const std::uint8_t> bytes = reader.ReadBytes(2U);
-        auto index = static_cast<std::uint16_t>((bytes[0] << 8U) | bytes[1]);
+        std::uint16_t index = reader.ReadU16();
         if (index >= lod.vertices.size())
         {
             reader.Fail(std::format("index {} exceeds {} vertices", index, lod.vertices.size()));
@@ -140,13 +124,22 @@ StaticMeshLod ReadLod(ByteReader &reader, std::size_t data_base)
 
 } // namespace
 
+Vector3 ReadVector(package::ByteReader &reader)
+{
+    Vector3 v;
+    v.x = reader.ReadF32();
+    v.y = reader.ReadF32();
+    v.z = reader.ReadF32();
+    return v;
+}
+
 StaticMesh StaticMesh::Read(const object::SerializedObject &object)
 {
     ByteReader reader(object.NativeData(), package::ByteOrder::Big);
     Bounds bounds;
     bounds.origin = ReadVector(reader);
     bounds.extent = ReadVector(reader);
-    bounds.radius = ReadFloat(reader);
+    bounds.radius = reader.ReadF32();
     (void)reader.ReadI32(); // collision body setup, also a property
     SkipArray(reader, kCollisionNodeSize);
     SkipArray(reader, kCollisionTriangleSize);
