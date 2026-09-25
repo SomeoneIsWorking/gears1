@@ -17,7 +17,43 @@ struct PushConstants
 {
     scene::Matrix world;
     scene::Matrix view_projection;
+    std::array<float, 4> material;
 };
+
+// The colour blend of each Blend, as source and destination factors.
+VkPipelineColorBlendAttachmentState BlendState(Blend blend)
+{
+    VkPipelineColorBlendAttachmentState state{};
+    state.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    if (blend == Blend::kOpaque)
+    {
+        return state;
+    }
+    state.blendEnable = VK_TRUE;
+    state.colorBlendOp = VK_BLEND_OP_ADD;
+    state.alphaBlendOp = VK_BLEND_OP_ADD;
+    state.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    state.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    switch (blend)
+    {
+    case Blend::kAlpha:
+        state.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+        state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+        break;
+    case Blend::kAdditive:
+        state.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        state.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+        break;
+    case Blend::kModulative:
+        state.srcColorBlendFactor = VK_BLEND_FACTOR_DST_COLOR;
+        state.dstColorBlendFactor = VK_BLEND_FACTOR_ZERO;
+        break;
+    case Blend::kOpaque:
+        break;
+    }
+    return state;
+}
 
 VkShaderModule CreateShader(VkDevice device, std::span<const std::uint32_t> words)
 {
@@ -113,7 +149,8 @@ MeshRenderer::MeshRenderer(const VulkanDevice &device, const OffscreenTarget &ta
                            VkDescriptorSetLayout texture_layout)
     : device_(device.Device()), extent_(target.Extent())
 {
-    VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants)};
+    VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                             sizeof(PushConstants)};
     VkPipelineLayoutCreateInfo layout{};
     layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
     layout.setLayoutCount = 1;
@@ -121,10 +158,16 @@ MeshRenderer::MeshRenderer(const VulkanDevice &device, const OffscreenTarget &ta
     layout.pushConstantRangeCount = 1;
     layout.pPushConstantRanges = &push;
     Check(vkCreatePipelineLayout(device_, &layout, nullptr, &layout_), "vkCreatePipelineLayout");
+    for (std::size_t i = 0; i < kBlendCount; ++i)
+    {
+        pipelines_[i] = CreatePipeline(static_cast<Blend>(i), target.RenderPass());
+    }
+}
 
+VkPipeline MeshRenderer::CreatePipeline(Blend blend, VkRenderPass render_pass) const
+{
     ShaderModules shaders(device_);
     std::array<VkPipelineShaderStageCreateInfo, 2> stages = shaders.Stages();
-
     VkVertexInputBindingDescription binding{0, GpuMesh::kVertexStride, VK_VERTEX_INPUT_RATE_VERTEX};
     std::array<VkVertexInputAttributeDescription, 3> attributes{{
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
@@ -162,16 +205,14 @@ MeshRenderer::MeshRenderer(const VulkanDevice &device, const OffscreenTarget &ta
     VkPipelineDepthStencilStateCreateInfo depth{};
     depth.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
     depth.depthTestEnable = VK_TRUE;
-    depth.depthWriteEnable = VK_TRUE;
+    depth.depthWriteEnable = blend == Blend::kOpaque ? VK_TRUE : VK_FALSE;
     depth.depthCompareOp = VK_COMPARE_OP_LESS;
 
-    VkPipelineColorBlendAttachmentState blend_attachment{};
-    blend_attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
-                                      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
-    VkPipelineColorBlendStateCreateInfo blend{};
-    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
-    blend.attachmentCount = 1;
-    blend.pAttachments = &blend_attachment;
+    VkPipelineColorBlendAttachmentState blend_attachment = BlendState(blend);
+    VkPipelineColorBlendStateCreateInfo color_blend{};
+    color_blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    color_blend.attachmentCount = 1;
+    color_blend.pAttachments = &blend_attachment;
 
     std::array<VkDynamicState, 2> dynamic_states{VK_DYNAMIC_STATE_VIEWPORT,
                                                  VK_DYNAMIC_STATE_SCISSOR};
@@ -190,23 +231,27 @@ MeshRenderer::MeshRenderer(const VulkanDevice &device, const OffscreenTarget &ta
     pipeline.pRasterizationState = &raster;
     pipeline.pMultisampleState = &multisample;
     pipeline.pDepthStencilState = &depth;
-    pipeline.pColorBlendState = &blend;
+    pipeline.pColorBlendState = &color_blend;
     pipeline.pDynamicState = &dynamic;
     pipeline.layout = layout_;
-    pipeline.renderPass = target.RenderPass();
-    Check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipeline, nullptr, &pipeline_),
+    pipeline.renderPass = render_pass;
+    VkPipeline created = VK_NULL_HANDLE;
+    Check(vkCreateGraphicsPipelines(device_, VK_NULL_HANDLE, 1, &pipeline, nullptr, &created),
           "vkCreateGraphicsPipelines");
+    return created;
 }
 
 MeshRenderer::~MeshRenderer()
 {
-    vkDestroyPipeline(device_, pipeline_, nullptr);
+    for (VkPipeline pipeline : pipelines_)
+    {
+        vkDestroyPipeline(device_, pipeline, nullptr);
+    }
     vkDestroyPipelineLayout(device_, layout_, nullptr);
 }
 
-void MeshRenderer::Bind(VkCommandBuffer commands) const
+void MeshRenderer::Begin(VkCommandBuffer commands) const
 {
-    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline_);
     VkViewport viewport{
         0.0F, 0.0F, static_cast<float>(extent_.width), static_cast<float>(extent_.height),
         0.0F, 1.0F};
@@ -215,15 +260,24 @@ void MeshRenderer::Bind(VkCommandBuffer commands) const
     vkCmdSetScissor(commands, 0, 1, &scissor);
 }
 
+void MeshRenderer::Bind(VkCommandBuffer commands, Blend blend) const
+{
+    vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      pipelines_[static_cast<std::size_t>(blend)]);
+}
+
 void MeshRenderer::Draw(VkCommandBuffer commands, const GpuMesh &mesh, const GpuSection &section,
-                        VkDescriptorSet texture, const scene::Matrix &world,
+                        const DrawMaterial &material, const scene::Matrix &world,
                         const scene::Matrix &view_projection) const
 {
-    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &texture, 0,
-                            nullptr);
-    PushConstants constants{world, view_projection};
-    vkCmdPushConstants(commands, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(constants),
-                       &constants);
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1,
+                            &material.textures, 0, nullptr);
+    PushConstants constants{world,
+                            view_projection,
+                            {static_cast<float>(material.opacity), material.clip,
+                             static_cast<float>(material.channel), material.lit ? 1.0F : 0.0F}};
+    vkCmdPushConstants(commands, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                       0, sizeof(constants), &constants);
     VkBuffer vertices = mesh.Vertices();
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(commands, 0, 1, &vertices, &offset);

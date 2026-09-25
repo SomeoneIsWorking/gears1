@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -38,8 +40,44 @@ class GpuMesh
     std::vector<GpuSection> sections_;
 };
 
-// The opaque static-mesh pipeline of an offscreen target: depth-tested,
-// sampling one base-colour texture per section, lit by one fixed sun.
+// How a draw's colour combines with the target.
+enum class Blend : std::uint8_t
+{
+    kOpaque,
+    // Source over destination by the source's alpha.
+    kAlpha,
+    kAdditive,
+    // Destination multiplied by the source colour.
+    kModulative,
+};
+
+inline constexpr std::size_t kBlendCount = 4;
+
+// How a draw uses its opacity texture.
+enum class OpacityUse : std::uint8_t
+{
+    kNone,
+    // Discards fragments whose opacity is below the clip value.
+    kAlphaTest,
+    // Outputs the opacity as alpha for blending.
+    kBlend,
+};
+
+// Everything a section's material decides about its draw.
+struct DrawMaterial
+{
+    VkDescriptorSet textures = VK_NULL_HANDLE;
+    Blend blend = Blend::kOpaque;
+    OpacityUse opacity = OpacityUse::kNone;
+    float clip = 0.0F;
+    // The opacity texture's channel: 0 red, 1 green, 2 blue, 3 alpha.
+    std::uint32_t channel = 0;
+    bool lit = true;
+};
+
+// The static-mesh pipelines of an offscreen target, one per blend: all
+// depth-tested, the blended ones without depth writes; each section samples
+// its material's colour and opacity textures, lit by one fixed sun.
 class MeshRenderer
 {
   public:
@@ -49,18 +87,23 @@ class MeshRenderer
     MeshRenderer(const MeshRenderer &) = delete;
     MeshRenderer &operator=(const MeshRenderer &) = delete;
 
-    // Binds the pipeline and the target-sized viewport; call inside the pass.
-    void Bind(VkCommandBuffer commands) const;
-    // Draws one section of `mesh` sampling `texture`.
+    // Sets the target-sized viewport; call inside the pass before drawing.
+    void Begin(VkCommandBuffer commands) const;
+    // Binds the pipeline of `blend`.
+    void Bind(VkCommandBuffer commands, Blend blend) const;
+    // Draws one section of `mesh` with `material`; the pipeline of its blend
+    // must be bound.
     void Draw(VkCommandBuffer commands, const GpuMesh &mesh, const GpuSection &section,
-              VkDescriptorSet texture, const scene::Matrix &world,
+              const DrawMaterial &material, const scene::Matrix &world,
               const scene::Matrix &view_projection) const;
 
   private:
+    [[nodiscard]] VkPipeline CreatePipeline(Blend blend, VkRenderPass render_pass) const;
+
     VkDevice device_;
     VkExtent2D extent_;
     VkPipelineLayout layout_ = VK_NULL_HANDLE;
-    VkPipeline pipeline_ = VK_NULL_HANDLE;
+    std::array<VkPipeline, kBlendCount> pipelines_{};
 };
 
 } // namespace gears::engine::render

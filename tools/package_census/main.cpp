@@ -20,7 +20,7 @@
 #include "package/lzo1x.h"
 #include "bsp/bsp_model.h"
 #include "bsp/component_geometry.h"
-#include "material/material_textures.h"
+#include "material/material_surfaces.h"
 #include "mesh/static_mesh.h"
 #include "texture/texture2d.h"
 #include "package/package_store.h"
@@ -108,7 +108,7 @@ class AssetDecoder
             gears::engine::object::ExportLocation location{
                 &object.Owner(), static_cast<std::size_t>(object.Index()) - 1U};
             ++census.material_diffuse[std::string(
-                gears::engine::material::NameOf(materials_.BaseColor(location).outcome))];
+                gears::engine::material::NameOf(materials_.Surface(location).color.outcome))];
         }
         else if (class_name == "StaticMesh")
         {
@@ -134,7 +134,7 @@ class AssetDecoder
     }
 
   private:
-    gears::engine::material::MaterialTextures materials_;
+    gears::engine::material::MaterialSurfaces materials_;
     gears::engine::bsp::ComponentGeometry components_;
 };
 

@@ -43,7 +43,7 @@ target_link_libraries(gears_engine_bsp PUBLIC gears_engine_mesh)
 x360port_enable_warnings(gears_engine_bsp)
 
 add_library(gears_engine_material STATIC
-    material/material_textures.cpp)
+    material/material_surfaces.cpp)
 target_link_libraries(gears_engine_material PUBLIC gears_engine_object)
 x360port_enable_warnings(gears_engine_material)
 
