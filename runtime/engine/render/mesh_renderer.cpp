@@ -75,13 +75,20 @@ void PackVertex(const mesh::MeshVertex &vertex, std::span<std::uint8_t> out)
     std::memcpy(out.data(), packed.data(), sizeof(packed));
 }
 
-std::uint32_t CheckedIndexCount(const mesh::StaticMeshLod &lod)
+std::vector<GpuSection> CheckedSections(const mesh::StaticMeshLod &lod)
 {
     if (lod.indices.empty() || lod.vertices.empty())
     {
         throw package::PackageFormatError("static mesh LOD has no triangles to upload");
     }
-    return static_cast<std::uint32_t>(lod.indices.size());
+    // StaticMesh::Read has placed every section inside the index list.
+    std::vector<GpuSection> sections;
+    sections.reserve(lod.sections.size());
+    for (const mesh::MeshSection &section : lod.sections)
+    {
+        sections.push_back({section.first_index, section.triangle_count * 3U});
+    }
+    return sections;
 }
 
 } // namespace
@@ -91,7 +98,7 @@ GpuMesh::GpuMesh(const VulkanDevice &device, const mesh::StaticMeshLod &lod)
                                         VK_BUFFER_USAGE_VERTEX_BUFFER_BIT)),
       indices_(device.CreateHostBuffer(sizeof(std::uint16_t) * lod.indices.size(),
                                        VK_BUFFER_USAGE_INDEX_BUFFER_BIT)),
-      index_count_(CheckedIndexCount(lod))
+      sections_(CheckedSections(lod))
 {
     std::span<std::uint8_t> vertex_bytes = vertices_.Bytes();
     for (std::size_t i = 0; i < lod.vertices.size(); ++i)
@@ -102,12 +109,15 @@ GpuMesh::GpuMesh(const VulkanDevice &device, const mesh::StaticMeshLod &lod)
                 sizeof(std::uint16_t) * lod.indices.size());
 }
 
-MeshRenderer::MeshRenderer(const VulkanDevice &device, const OffscreenTarget &target)
+MeshRenderer::MeshRenderer(const VulkanDevice &device, const OffscreenTarget &target,
+                           VkDescriptorSetLayout texture_layout)
     : device_(device.Device()), extent_(target.Extent())
 {
     VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(PushConstants)};
     VkPipelineLayoutCreateInfo layout{};
     layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout.setLayoutCount = 1;
+    layout.pSetLayouts = &texture_layout;
     layout.pushConstantRangeCount = 1;
     layout.pPushConstantRanges = &push;
     Check(vkCreatePipelineLayout(device_, &layout, nullptr, &layout_), "vkCreatePipelineLayout");
@@ -205,9 +215,12 @@ void MeshRenderer::Bind(VkCommandBuffer commands) const
     vkCmdSetScissor(commands, 0, 1, &scissor);
 }
 
-void MeshRenderer::Draw(VkCommandBuffer commands, const GpuMesh &mesh, const scene::Matrix &world,
+void MeshRenderer::Draw(VkCommandBuffer commands, const GpuMesh &mesh, const GpuSection &section,
+                        VkDescriptorSet texture, const scene::Matrix &world,
                         const scene::Matrix &view_projection) const
 {
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1, &texture, 0,
+                            nullptr);
     PushConstants constants{world, view_projection};
     vkCmdPushConstants(commands, layout_, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(constants),
                        &constants);
@@ -215,7 +228,7 @@ void MeshRenderer::Draw(VkCommandBuffer commands, const GpuMesh &mesh, const sce
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(commands, 0, 1, &vertices, &offset);
     vkCmdBindIndexBuffer(commands, mesh.Indices(), 0, VK_INDEX_TYPE_UINT16);
-    vkCmdDrawIndexed(commands, mesh.IndexCount(), 1, 0, 0, 0);
+    vkCmdDrawIndexed(commands, section.index_count, 1, section.first_index, 0, 0);
 }
 
 } // namespace gears::engine::render

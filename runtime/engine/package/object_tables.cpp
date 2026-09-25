@@ -13,14 +13,6 @@ namespace
 constexpr std::size_t kImportSize = 3U * kNameReferenceSize + 4U;
 constexpr std::size_t kMinimumExportSize = 68U;
 
-NameReference ReadName(ByteReader &reader)
-{
-    NameReference name;
-    name.index = reader.ReadU32();
-    name.number = reader.ReadU32();
-    return name;
-}
-
 std::vector<NameEntry> ReadNames(ByteReader &reader, const TableLocation &location)
 {
     reader.Seek(location.offset);
@@ -46,10 +38,10 @@ std::vector<ObjectImport> ReadImports(ByteReader &reader, const TableLocation &l
     std::vector<ObjectImport> imports(location.count);
     for (ObjectImport &import : imports)
     {
-        import.class_package = ReadName(reader);
-        import.class_name = ReadName(reader);
+        import.class_package = ReadNameReference(reader);
+        import.class_name = ReadNameReference(reader);
         import.outer = reader.ReadI32();
-        import.object_name = ReadName(reader);
+        import.object_name = ReadNameReference(reader);
     }
     return imports;
 }
@@ -60,7 +52,7 @@ ObjectExport ReadExport(ByteReader &reader)
     object.class_index = reader.ReadI32();
     object.super_index = reader.ReadI32();
     object.outer = reader.ReadI32();
-    object.object_name = ReadName(reader);
+    object.object_name = ReadNameReference(reader);
     object.archetype = reader.ReadI32();
     object.object_flags = reader.ReadU64();
     object.serial_size = reader.ReadU32();
@@ -69,7 +61,7 @@ ObjectExport ReadExport(ByteReader &reader)
     object.components.reserve(component_count);
     for (std::size_t i = 0; i < component_count; ++i)
     {
-        NameReference name = ReadName(reader);
+        NameReference name = ReadNameReference(reader);
         object.components.emplace_back(name, reader.ReadI32());
     }
     object.export_flags = reader.ReadU32();
@@ -170,6 +162,14 @@ class ReferenceValidator
 };
 
 } // namespace
+
+NameReference ReadNameReference(ByteReader &reader)
+{
+    NameReference name;
+    name.index = reader.ReadU32();
+    name.number = reader.ReadU32();
+    return name;
+}
 
 ObjectTables ObjectTables::Read(ByteReader &reader, const PackageSummary &summary)
 {

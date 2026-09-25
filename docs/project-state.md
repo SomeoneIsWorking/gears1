@@ -35,7 +35,8 @@ This inventory reports observable capabilities independently of the product goal
 
 The native engine (S020-S022) is the current focus: independently written C++ that owns
 UE3 subsystems over Gears 1's own content, with the dynarec only for what remains. S020
-and S021 are verified; S022 renders a level's placed static meshes untextured. The
+and S021 are verified; S022 renders a level's placed static meshes with their materials'
+base-colour textures. The
 Xenia-hosted product below is the dynarec half and is no longer where new work goes first.
 
 S009 was the previous focus. Gears 1 is the only active title. `./run.sh` now authenticates
@@ -561,12 +562,19 @@ with 0 failures.
 Partial. Texture2D (A8R8G8B8, G8, DXT1/3/5) mips are untiled from the Xenos 2D layout
 (`runtime/engine/texture/`) and StaticMesh LODs (sections, packed tangent basis, UVs,
 indices) are decoded (`runtime/engine/mesh/`); the census decoded all 16,525 StaticMeshes
-and 53,160 Texture2Ds on the disc with 0 failures, and exported textures were checked by
-eye. `runtime/engine/scene/` places every actor-owned StaticMeshComponent of a level
-package (actor and component location, rotation, scale) and `runtime/engine/render/`
-draws them headlessly through Vulkan; `gears_level_render` rendered SP_Adams_S08_MainRoom
-(711 placements of 65 meshes) with the mansion's columns, stairs, and railings in place.
-`test_engine_scene` covers placement handedness and the camera's clip-space mapping.
-Gaps: materials and textures are not bound; BSP (`Model`) geometry, terrain, skeletal
-meshes, lighting and lightmaps, streaming a persistent level's sublevels together, and an
-interactive window are missing. Face winding is not yet measured, so both faces draw.
+and 53,160 Texture2Ds on the disc with 0 failures. `runtime/engine/material/` finds each
+material's base-colour texture by walking its cooked expression graph from DiffuseColor
+(EmissiveColor for unlit materials), with material-instance texture parameters applied;
+across the disc's 23,661 materials: 19,777 texture, 1,258 no texture in the colour graph,
+112 no colour input, 2,513 cooked out, 1 instance with no parent, 0 failures.
+`runtime/engine/scene/` places every actor-owned StaticMeshComponent of a level package and
+`runtime/engine/render/` draws each section headlessly through Vulkan, sampling its
+material's texture (sRGB, full stored mip chain); `gears_level_render` rendered
+SP_Adams_S08_MainRoom with 721 of 728 section draws textured. `test_engine_object` covers
+nested tagged structs and struct arrays; `test_engine_scene` covers placement handedness
+and the camera's clip-space mapping.
+Gaps: materials are reduced to one base texture (no blends, tints, normal or specular
+maps, blend modes, or alpha test, so translucent and masked materials draw opaque); BSP
+(`Model`) geometry, terrain, skeletal meshes, lighting and lightmaps, streaming a
+persistent level's sublevels together, and an interactive window are missing. Face
+winding is not yet measured, so both faces draw.

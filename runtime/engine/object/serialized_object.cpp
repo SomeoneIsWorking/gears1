@@ -37,14 +37,6 @@ constexpr std::array<std::string_view, 21> kSchemaClasses{"Class",
                                                           "DelegateProperty",
                                                           "ComponentProperty"};
 
-NameReference ReadName(ByteReader &reader)
-{
-    NameReference name;
-    name.index = reader.ReadU32();
-    name.number = reader.ReadU32();
-    return name;
-}
-
 StateFrame ReadStateFrame(ByteReader &reader)
 {
     StateFrame frame;
@@ -113,59 +105,13 @@ SerializedObject SerializedObject::Read(const Package &package, std::size_t expo
         // A component template inside class defaults also names itself.
         if (IsInsideClassDefaults(package, export_index))
         {
-            object.template_name_ = ReadName(reader);
+            object.template_name_ = package::ReadNameReference(reader);
         }
     }
     object.net_index_ = reader.ReadI32();
-    while (true)
-    {
-        PropertyTag tag;
-        tag.name = ReadName(reader);
-        std::string name = package.NameText(tag.name);
-        if (name == "None")
-        {
-            break;
-        }
-        tag.type = ReadName(reader);
-        std::string type = package.NameText(tag.type);
-        std::size_t size = reader.ReadCount(1);
-        tag.array_index = reader.ReadI32();
-        if (type == "StructProperty")
-        {
-            tag.struct_name = ReadName(reader);
-            if (!package.HasName(tag.struct_name))
-            {
-                reader.Fail(std::format("struct '{}' names entry {} of {}", name,
-                                        tag.struct_name.index, package.Tables().names.size()));
-            }
-        }
-        else if (type == "BoolProperty")
-        {
-            std::uint32_t value = reader.ReadU32();
-            if (value > 1U || size != 0U)
-            {
-                reader.Fail(
-                    std::format("boolean '{}' has value {} and size {}", name, value, size));
-            }
-            tag.bool_value = value != 0U;
-        }
-        tag.value = reader.ReadBytes(size);
-        object.properties_.push_back(tag);
-    }
+    object.properties_ = TaggedProperties::Read(reader, package);
     object.native_offset_ = reader.Offset();
     return object;
-}
-
-const PropertyTag *SerializedObject::Find(std::string_view name, std::int32_t array_index) const
-{
-    for (const PropertyTag &tag : properties_)
-    {
-        if (tag.array_index == array_index && package_->NameText(tag.name) == name)
-        {
-            return &tag;
-        }
-    }
-    return nullptr;
 }
 
 } // namespace gears::engine::object

@@ -9,24 +9,18 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <map>
-#include <memory>
 #include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include <lucent/log.h>
 
-#include "mesh/static_mesh.h"
 #include "object/class_hierarchy.h"
 #include "object/object_resolver.h"
-#include "object/serialized_object.h"
 #include "package/content_files.h"
 #include "package/package_store.h"
 #include "scene/camera.h"
-#include "render/mesh_renderer.h"
-#include "render/offscreen_target.h"
+#include "render/level_renderer.h"
 #include "render/vulkan_device.h"
 #include "scene/level_scene.h"
 
@@ -41,46 +35,6 @@ constexpr VkExtent2D kImageExtent{1280, 720};
 // stretch the overview camera's framing.
 constexpr double kFramingLowQuantile = 0.1;
 constexpr double kFramingHighQuantile = 0.9;
-
-using MeshKey = std::pair<const gears::engine::package::Package *, std::size_t>;
-
-// Uploads each referenced static mesh's first LOD once.
-class MeshUploads
-{
-  public:
-    MeshUploads(const gears::engine::render::VulkanDevice &device,
-                gears::engine::object::ClassHierarchy &classes)
-        : device_(device), classes_(classes)
-    {
-    }
-
-    // The uploaded LOD, or null for a mesh that has no LOD.
-    const gears::engine::render::GpuMesh *Get(const gears::engine::object::ExportLocation &mesh)
-    {
-        MeshKey key{mesh.package, mesh.export_index};
-        auto found = meshes_.find(key);
-        if (found != meshes_.end())
-        {
-            return found->second.get();
-        }
-        auto object = gears::engine::object::SerializedObject::Read(*mesh.package,
-                                                                    mesh.export_index, classes_);
-        auto decoded = gears::engine::mesh::StaticMesh::Read(object);
-        std::unique_ptr<gears::engine::render::GpuMesh> uploaded;
-        if (!decoded.Lods().empty())
-        {
-            uploaded = std::make_unique<gears::engine::render::GpuMesh>(device_, decoded.Lods()[0]);
-        }
-        return meshes_.emplace(key, std::move(uploaded)).first->second.get();
-    }
-
-    [[nodiscard]] std::size_t Count() const noexcept { return meshes_.size(); }
-
-  private:
-    const gears::engine::render::VulkanDevice &device_;
-    gears::engine::object::ClassHierarchy &classes_;
-    std::map<MeshKey, std::unique_ptr<gears::engine::render::GpuMesh>> meshes_;
-};
 
 float Quantile(std::vector<float> values, double q)
 {
@@ -153,43 +107,22 @@ int Run(const fs::path &level_path, const fs::path &out_path)
     }
 
     gears::engine::render::VulkanDevice device;
-    gears::engine::render::OffscreenTarget target(device, kImageExtent);
-    gears::engine::render::MeshRenderer renderer(device, target);
-    MeshUploads uploads(device, classes);
-    std::vector<std::pair<const gears::engine::render::GpuMesh *,
-                          const gears::engine::scene::MeshInstance *>>
-        draws;
-    std::size_t without_lod = 0;
-    for (const auto &instance : scene.Instances())
-    {
-        const gears::engine::render::GpuMesh *mesh = uploads.Get(instance.mesh);
-        if (mesh == nullptr)
-        {
-            ++without_lod;
-            continue;
-        }
-        draws.emplace_back(mesh, &instance);
-    }
+    gears::engine::render::LevelRenderer renderer(device, kImageExtent, files, classes, resolver);
+    renderer.Prepare(level, scene);
     auto camera = OverviewCamera(scene);
-    gears::engine::scene::Matrix view_projection = camera.ViewProjection();
-    device.Submit(
-        [&](VkCommandBuffer commands)
-        {
-            target.Begin(commands);
-            renderer.Bind(commands);
-            for (const auto &[mesh, instance] : draws)
-            {
-                renderer.Draw(commands, *mesh, instance->world, view_projection);
-            }
-            target.EndAndCopy(commands);
-        });
-    WritePpm(out_path, target.Extent(), target.Pixels());
+    WritePpm(out_path, renderer.Extent(), renderer.Render(camera));
+    const auto &drawn = renderer.Census();
+    for (const auto &[source, count] : drawn.section_colors)
+    {
+        lucent::info("level-render", "  section colour {:>6} {}", count, source);
+    }
     lucent::info("level-render",
-                 "{} draw(s) of {} distinct mesh(es), {} placement(s) of a mesh with no LOD, on "
-                 "{}; camera eye ({:.0f}, {:.0f}, {:.0f}) target ({:.0f}, {:.0f}, {:.0f}) -> {}",
-                 draws.size(), uploads.Count(), without_lod, device.Name(), camera.eye.x,
-                 camera.eye.y, camera.eye.z, camera.target.x, camera.target.y, camera.target.z,
-                 out_path.filename().string());
+                 "{} section draw(s) of {} mesh(es) and {} texture(s), {} placement(s) of a mesh "
+                 "with no LOD, on {}; camera eye ({:.0f}, {:.0f}, {:.0f}) target ({:.0f}, {:.0f}, "
+                 "{:.0f}) -> {}",
+                 drawn.draws, drawn.meshes, drawn.textures, drawn.placements_without_lod,
+                 device.Name(), camera.eye.x, camera.eye.y, camera.eye.z, camera.target.x,
+                 camera.target.y, camera.target.z, out_path.filename().string());
     return 0;
 }
 

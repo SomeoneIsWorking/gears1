@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "class_hierarchy.h"
+#include "tagged_properties.h"
 #include "package/object_tables.h"
 #include "package/package.h"
 
@@ -37,19 +38,6 @@ struct StateFrame
     std::int32_t code_offset = 0;
 };
 
-// One tagged property: its name, its type name, the element of a static
-// array it fills, the struct type of a struct value, and its encoded value.
-// A boolean's value lives in the tag and its value span is empty.
-struct PropertyTag
-{
-    NameReference name;
-    NameReference type;
-    std::int32_t array_index = 0;
-    NameReference struct_name;
-    bool bool_value = false;
-    std::span<const std::uint8_t> value;
-};
-
 // The generic part of one export's data: the optional state frame, a
 // component's template owner class, the net index, and the tagged properties
 // up to the terminating "None". Everything
@@ -69,10 +57,7 @@ class SerializedObject
     [[nodiscard]] bool IsClassDefault() const noexcept { return class_default_; }
     // A component's template owner class, or 0 for none or a non-component.
     [[nodiscard]] PackageIndex TemplateOwnerClass() const noexcept { return template_owner_class_; }
-    [[nodiscard]] const std::vector<PropertyTag> &Properties() const noexcept
-    {
-        return properties_;
-    }
+    [[nodiscard]] const TaggedProperties &Properties() const noexcept { return properties_; }
     [[nodiscard]] std::size_t NativeOffset() const noexcept { return native_offset_; }
     [[nodiscard]] std::span<const std::uint8_t> NativeData() const noexcept
     {
@@ -84,14 +69,11 @@ class SerializedObject
     // This object's package index (one-based export index).
     [[nodiscard]] PackageIndex Index() const noexcept { return index_; }
 
-    // The first tag with this name and array index, or none.
-    [[nodiscard]] const PropertyTag *Find(std::string_view name,
-                                          std::int32_t array_index = 0) const;
-
   private:
     SerializedObject(const Package &package, PackageIndex index, std::span<const std::uint8_t> data,
                      std::size_t data_base)
-        : package_(&package), index_(index), data_(data), data_base_(data_base)
+        : package_(&package), index_(index), data_(data), data_base_(data_base),
+          properties_(package)
     {
     }
 
@@ -104,7 +86,7 @@ class SerializedObject
     PackageIndex template_owner_class_ = 0;
     NameReference template_name_;
     std::int32_t net_index_ = 0;
-    std::vector<PropertyTag> properties_;
+    TaggedProperties properties_;
     std::size_t native_offset_ = 0;
 };
 

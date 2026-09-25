@@ -4,6 +4,7 @@
 #include <format>
 
 #include "package/byte_reader.h"
+#include "package/package_constants.h"
 
 namespace gears::engine::object
 {
@@ -21,12 +22,12 @@ std::uint32_t BigEndian32(std::span<const std::uint8_t> bytes)
 const PropertyTag *PropertyValues::Tag(std::string_view name, std::string_view type,
                                        std::size_t size) const
 {
-    const PropertyTag *tag = object_.Find(name);
+    const PropertyTag *tag = properties_.Find(name);
     if (tag == nullptr)
     {
         return nullptr;
     }
-    std::string stored_type = object_.Owner().NameText(tag->type);
+    std::string stored_type = properties_.Owner().NameText(tag->type);
     if (stored_type != type || (size != 0U && tag->value.size() != size))
     {
         throw package::PackageFormatError(
@@ -66,6 +67,17 @@ PackageIndex PropertyValues::Object(std::string_view name) const
     return tag == nullptr ? 0 : static_cast<PackageIndex>(BigEndian32(tag->value));
 }
 
+std::optional<std::string> PropertyValues::Name(std::string_view name) const
+{
+    const PropertyTag *tag = Tag(name, "NameProperty", package::kNameReferenceSize);
+    if (tag == nullptr)
+    {
+        return std::nullopt;
+    }
+    package::NameReference reference{BigEndian32(tag->value), BigEndian32(tag->value.subspan(4U))};
+    return properties_.Owner().NameText(reference);
+}
+
 std::span<const std::uint8_t>
 PropertyValues::Struct(std::string_view name, std::string_view struct_name, std::size_t size) const
 {
@@ -74,13 +86,36 @@ PropertyValues::Struct(std::string_view name, std::string_view struct_name, std:
     {
         return {};
     }
-    std::string stored = object_.Owner().NameText(tag->struct_name);
+    std::string stored = properties_.Owner().NameText(tag->struct_name);
     if (stored != struct_name)
     {
         throw package::PackageFormatError(
             std::format("property '{}' is a {} struct, not a {}", name, stored, struct_name));
     }
     return tag->value;
+}
+
+std::optional<TaggedProperties> PropertyValues::StructFields(std::string_view name,
+                                                             std::string_view struct_name) const
+{
+    // A tagged struct holds at least its terminating name, so an empty value
+    // means the stream does not store the property.
+    std::span<const std::uint8_t> value = Struct(name, struct_name, 0U);
+    if (value.empty())
+    {
+        return std::nullopt;
+    }
+    return TaggedProperties::Parse(value, properties_.Owner());
+}
+
+std::vector<TaggedProperties> PropertyValues::StructArray(std::string_view name) const
+{
+    const PropertyTag *tag = Tag(name, "ArrayProperty", 0U);
+    if (tag == nullptr)
+    {
+        return {};
+    }
+    return TaggedProperties::ParseArray(tag->value, properties_.Owner());
 }
 
 std::span<const std::uint8_t> PropertyValues::Array(std::string_view name,
