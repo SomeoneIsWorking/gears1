@@ -9,10 +9,11 @@ uv run --locked python tools/run_offscreen.py --walk gameplay --seconds 900 \
     --control-port 32125
 ```
 
-To measure the game while the player plays it, set `GEARS_CONTROL_PORT=32125`
-in the environment or `.env` before `./run.sh`; the launcher passes it to the
+`./run.sh` always serves the channel on loopback port 32125 (or
+`GEARS_CONTROL_PORT` from the environment or `.env`), so the game can be
+measured while the player plays it; the launcher passes the port to the
 product as `--control-port`, and the channel starts once the title has
-launched. Without it the windowed product never listens. In the window,
+launched. In the window,
 `POST /api/stop` is refused (409): the game ends when its window closes.
 `runtime/product/control_channel.*`
 owns the routes, and Lucent owns the listener, bounded parsing, concurrent
