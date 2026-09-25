@@ -580,8 +580,7 @@ component's nodes as fans with texture coordinates projected on their surface's 
 (257,499 triangles) with 0 failures, and `gears_level_render` drew SP_Adams_House_BSP's
 15 components as 260 textured section draws with wall trim aligned to its storeys.
 `test_engine_bsp` covers triangulation, section order, projection, and refusals.
-Gaps: materials are reduced to one base texture (no blends, tints, normal or specular
-maps, blend modes, or alpha test, so translucent and masked materials draw opaque);
-terrain, skeletal meshes, lighting and lightmaps, streaming a
-persistent level's sublevels together, and an interactive window are missing. Face
-winding is not yet measured, so both faces draw.
+`gears_level_render` composes a persistent level with every sublevel its WorldInfo streams.
+Gaps: materials are reduced to one base texture and draw opaque (0174); terrain (0177),
+skeletal meshes (0176), lighting and lightmaps (0175), and an interactive window (0178)
+are missing; face winding is unmeasured, so both faces draw (0179).
