@@ -16,23 +16,39 @@ using package::ByteReader;
 constexpr std::uint32_t kLightMapNone = 0;
 constexpr std::uint32_t kLightMap2D = 2;
 constexpr std::size_t kGuidSize = 16;
-// Three coefficient textures, each with an RGB scale, then the coordinate
-// scale and bias.
-constexpr std::size_t kLightMap2DSize = 3U * 16U + 16U;
 
-void SkipLightMap(ByteReader &reader)
+std::optional<LightMap2D> ReadLightMap(ByteReader &reader)
 {
     std::uint32_t kind = reader.ReadU32();
     if (kind == kLightMapNone)
     {
-        return;
+        return std::nullopt;
     }
     if (kind != kLightMap2D)
     {
         reader.Fail(std::format("light map kind {} is not measured", kind));
     }
+    // The GUIDs of the lights baked into the map.
     std::size_t lights = reader.ReadCount(kGuidSize);
-    (void)reader.ReadBytes(lights * kGuidSize + kLightMap2DSize);
+    (void)reader.ReadBytes(lights * kGuidSize);
+    LightMap2D light_map;
+    for (std::size_t i = 0; i < kLightMapCoefficients; ++i)
+    {
+        light_map.textures[i] = reader.ReadI32();
+        for (float &channel : light_map.scales[i])
+        {
+            channel = reader.ReadF32();
+        }
+    }
+    for (float &value : light_map.coordinate_scale)
+    {
+        value = reader.ReadF32();
+    }
+    for (float &value : light_map.coordinate_bias)
+    {
+        value = reader.ReadF32();
+    }
+    return light_map;
 }
 
 std::vector<std::uint16_t> ReadNodeList(ByteReader &reader)
@@ -59,12 +75,13 @@ ModelComponent ModelComponent::Read(const object::SerializedObject &object)
     elements.reserve(element_count);
     for (std::size_t i = 0; i < element_count; ++i)
     {
-        SkipLightMap(reader);
+        std::optional<LightMap2D> light_map = ReadLightMap(reader);
         if (reader.ReadI32() != object.Index())
         {
             reader.Fail("model element belongs to another component");
         }
         ModelElement element;
+        element.light_map = light_map;
         element.material = reader.ReadI32();
         element.nodes = ReadNodeList(reader);
         std::size_t shadow_maps = reader.ReadCount(4);

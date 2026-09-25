@@ -61,7 +61,7 @@ OverviewCamera(const std::vector<gears::engine::scene::LevelScene> &scenes)
         }
         for (const auto &model : scene.Models())
         {
-            for (const auto &vertex : model.geometry.vertices)
+            for (const auto &vertex : model.geometry.lod.vertices)
             {
                 axes[0].push_back(vertex.position.x);
                 axes[1].push_back(vertex.position.y);
@@ -142,18 +142,23 @@ int Run(const fs::path &level_path, const fs::path &out_path)
     auto camera = OverviewCamera(scenes);
     WritePpm(out_path, renderer.Extent(), renderer.Render(camera));
     const auto &drawn = renderer.Census();
-    for (const auto &[source, count] : drawn.section_colors)
+    const auto &materials = renderer.Materials();
+    for (const auto &[source, count] : materials.colors)
     {
-        lucent::info("level-render", "  section colour {:>6} {}", count, source);
+        lucent::info("level-render", "  section colour   {:>6} {}", count, source);
     }
-    for (const auto &[blend, count] : drawn.section_blends)
+    for (const auto &[blend, count] : materials.blends)
     {
-        lucent::info("level-render", "  section blend  {:>6} {}", count, blend);
+        lucent::info("level-render", "  section blend    {:>6} {}", count, blend);
+    }
+    for (const auto &[lighting, count] : materials.lighting)
+    {
+        lucent::info("level-render", "  section lighting {:>6} {}", count, lighting);
     }
     lucent::info("level-render",
                  "{} level(s): {} section draw(s), {} mesh(es), {} BSP component(s), {} "
                  "texture(s) on {} -> {}",
-                 levels.size(), drawn.draws, drawn.meshes, drawn.models, drawn.textures,
+                 levels.size(), drawn.draws, drawn.meshes, drawn.models, materials.textures,
                  device.Name(), out_path.filename().string());
     return 0;
 }

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <vector>
 
+#include "bsp/bsp_geometry.h"
 #include "mesh/static_mesh.h"
 #include "object/class_hierarchy.h"
 #include "object/object_resolver.h"
@@ -24,11 +25,11 @@ struct MeshInstance
 };
 
 // The level's BSP surfaces one model component draws, already in world
-// space; each section's material is a reference of `package`.
+// space; each section's material and light map are references of `package`.
 struct ModelInstance
 {
     const package::Package *package = nullptr;
-    mesh::StaticMeshLod geometry;
+    bsp::ComponentMesh geometry;
 };
 
 struct SceneCensus

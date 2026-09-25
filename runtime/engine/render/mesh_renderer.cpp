@@ -13,12 +13,18 @@ namespace gears::engine::render
 namespace
 {
 
+// 128 bytes: the push-constant size every Vulkan device supports.
 struct PushConstants
 {
     scene::Matrix world;
-    scene::Matrix view_projection;
     std::array<float, 4> material;
+    std::array<std::array<float, 4>, 3> light_scales;
 };
+static_assert(sizeof(PushConstants) == 128U);
+
+// The shader's texture set and frame set numbers.
+constexpr std::uint32_t kTextureSet = 0;
+constexpr std::uint32_t kFrameSet = 1;
 
 // The colour blend of each Blend, as source and destination factors.
 VkPipelineColorBlendAttachmentState BlendState(Blend blend)
@@ -105,9 +111,9 @@ class ShaderModules
 
 void PackVertex(const mesh::MeshVertex &vertex, std::span<std::uint8_t> out)
 {
-    std::array<float, 8> packed{vertex.position.x, vertex.position.y, vertex.position.z,
-                                vertex.normal.x,   vertex.normal.y,   vertex.normal.z,
-                                vertex.uv[0][0],   vertex.uv[0][1]};
+    std::array<float, 10> packed{
+        vertex.position.x, vertex.position.y, vertex.position.z, vertex.normal.x, vertex.normal.y,
+        vertex.normal.z,   vertex.uv[0][0],   vertex.uv[0][1],   vertex.uv[1][0], vertex.uv[1][1]};
     std::memcpy(out.data(), packed.data(), sizeof(packed));
 }
 
@@ -146,15 +152,18 @@ GpuMesh::GpuMesh(const VulkanDevice &device, const mesh::StaticMeshLod &lod)
 }
 
 MeshRenderer::MeshRenderer(const VulkanDevice &device, const OffscreenTarget &target,
-                           VkDescriptorSetLayout texture_layout)
+                           VkDescriptorSetLayout texture_layout, VkDescriptorSetLayout frame_layout)
     : device_(device.Device()), extent_(target.Extent())
 {
     VkPushConstantRange push{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                              sizeof(PushConstants)};
+    std::array<VkDescriptorSetLayout, 2> set_layouts{};
+    set_layouts[kTextureSet] = texture_layout;
+    set_layouts[kFrameSet] = frame_layout;
     VkPipelineLayoutCreateInfo layout{};
     layout.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    layout.setLayoutCount = 1;
-    layout.pSetLayouts = &texture_layout;
+    layout.setLayoutCount = static_cast<std::uint32_t>(set_layouts.size());
+    layout.pSetLayouts = set_layouts.data();
     layout.pushConstantRangeCount = 1;
     layout.pPushConstantRanges = &push;
     Check(vkCreatePipelineLayout(device_, &layout, nullptr, &layout_), "vkCreatePipelineLayout");
@@ -169,10 +178,11 @@ VkPipeline MeshRenderer::CreatePipeline(Blend blend, VkRenderPass render_pass) c
     ShaderModules shaders(device_);
     std::array<VkPipelineShaderStageCreateInfo, 2> stages = shaders.Stages();
     VkVertexInputBindingDescription binding{0, GpuMesh::kVertexStride, VK_VERTEX_INPUT_RATE_VERTEX};
-    std::array<VkVertexInputAttributeDescription, 3> attributes{{
+    std::array<VkVertexInputAttributeDescription, 4> attributes{{
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
         {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 12},
         {2, 0, VK_FORMAT_R32G32_SFLOAT, 24},
+        {3, 0, VK_FORMAT_R32G32_SFLOAT, 32},
     }};
     VkPipelineVertexInputStateCreateInfo vertex_input{};
     vertex_input.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -250,7 +260,7 @@ MeshRenderer::~MeshRenderer()
     vkDestroyPipelineLayout(device_, layout_, nullptr);
 }
 
-void MeshRenderer::Begin(VkCommandBuffer commands) const
+void MeshRenderer::Begin(VkCommandBuffer commands, VkDescriptorSet frame) const
 {
     VkViewport viewport{
         0.0F, 0.0F, static_cast<float>(extent_.width), static_cast<float>(extent_.height),
@@ -258,6 +268,8 @@ void MeshRenderer::Begin(VkCommandBuffer commands) const
     vkCmdSetViewport(commands, 0, 1, &viewport);
     VkRect2D scissor{{0, 0}, extent_};
     vkCmdSetScissor(commands, 0, 1, &scissor);
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, kFrameSet, 1,
+                            &frame, 0, nullptr);
 }
 
 void MeshRenderer::Bind(VkCommandBuffer commands, Blend blend) const
@@ -267,15 +279,20 @@ void MeshRenderer::Bind(VkCommandBuffer commands, Blend blend) const
 }
 
 void MeshRenderer::Draw(VkCommandBuffer commands, const GpuMesh &mesh, const GpuSection &section,
-                        const DrawMaterial &material, const scene::Matrix &world,
-                        const scene::Matrix &view_projection) const
+                        const DrawMaterial &material, const scene::Matrix &world) const
 {
-    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, 0, 1,
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, layout_, kTextureSet, 1,
                             &material.textures, 0, nullptr);
-    PushConstants constants{world,
-                            view_projection,
-                            {static_cast<float>(material.opacity), material.clip,
-                             static_cast<float>(material.channel), material.lit ? 1.0F : 0.0F}};
+    PushConstants constants{};
+    constants.world = world;
+    constants.material = {static_cast<float>(material.opacity), material.clip,
+                          static_cast<float>(material.channel),
+                          static_cast<float>(material.lighting)};
+    for (std::size_t i = 0; i < constants.light_scales.size(); ++i)
+    {
+        const std::array<float, 3> &scale = material.light_scales[i];
+        constants.light_scales[i] = {scale[0], scale[1], scale[2], 0.0F};
+    }
     vkCmdPushConstants(commands, layout_, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                        0, sizeof(constants), &constants);
     VkBuffer vertices = mesh.Vertices();

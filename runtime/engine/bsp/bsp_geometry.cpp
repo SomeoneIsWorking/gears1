@@ -21,7 +21,8 @@ mesh::Vector3 Subtract(const mesh::Vector3 &a, const mesh::Vector3 &b)
 }
 
 // Appends one node's outline as vertices and its fan as triangles.
-void AppendNode(const BspModel &model, const BspNode &node, mesh::StaticMeshLod &lod)
+void AppendNode(const BspModel &model, const BspNode &node, const std::optional<LightMap2D> &light,
+                mesh::StaticMeshLod &lod)
 {
     const BspSurface &surface = model.Surfaces()[static_cast<std::size_t>(node.surface)];
     const mesh::Vector3 &base = model.Points()[static_cast<std::size_t>(surface.texture_base)];
@@ -36,13 +37,21 @@ void AppendNode(const BspModel &model, const BspNode &node, mesh::StaticMeshLod 
     }
     for (std::size_t k = 0; k < node.vertex_count; ++k)
     {
-        std::int32_t point = model.VertexPoints()[static_cast<std::size_t>(node.vertex_pool) + k];
+        const BspVertex &source = model.Vertices()[static_cast<std::size_t>(node.vertex_pool) + k];
         mesh::MeshVertex vertex;
-        vertex.position = model.Points()[static_cast<std::size_t>(point)];
+        vertex.position = model.Points()[static_cast<std::size_t>(source.point)];
         vertex.normal = {node.plane_x, node.plane_y, node.plane_z};
         mesh::Vector3 offset = Subtract(vertex.position, base);
         vertex.uv[0] = {Dot(offset, axis_u) / kTextureUnitsPerRepeat,
                         Dot(offset, axis_v) / kTextureUnitsPerRepeat};
+        if (light)
+        {
+            for (std::size_t axis = 0; axis < 2U; ++axis)
+            {
+                vertex.uv[1][axis] = source.shadow_uv[axis] * light->coordinate_scale[axis] +
+                                     light->coordinate_bias[axis];
+            }
+        }
         lod.vertices.push_back(vertex);
     }
     for (std::size_t k = 2; k < node.vertex_count; ++k)
@@ -55,10 +64,11 @@ void AppendNode(const BspModel &model, const BspNode &node, mesh::StaticMeshLod 
 
 } // namespace
 
-mesh::StaticMeshLod TriangulateComponent(const BspModel &model, const ModelComponent &component)
+ComponentMesh TriangulateComponent(const BspModel &model, const ModelComponent &component)
 {
-    mesh::StaticMeshLod lod;
-    lod.tex_coord_count = 1;
+    ComponentMesh result;
+    mesh::StaticMeshLod &lod = result.lod;
+    lod.tex_coord_count = 2;
     for (const ModelElement &element : component.Elements())
     {
         mesh::MeshSection section;
@@ -71,16 +81,17 @@ mesh::StaticMeshLod TriangulateComponent(const BspModel &model, const ModelCompo
                 throw package::PackageFormatError(
                     std::format("model element names node {} of {}", index, model.Nodes().size()));
             }
-            AppendNode(model, model.Nodes()[index], lod);
+            AppendNode(model, model.Nodes()[index], element.light_map, lod);
         }
         section.triangle_count =
             static_cast<std::uint32_t>((lod.indices.size() - section.first_index) / 3U);
         if (section.triangle_count > 0U)
         {
             lod.sections.push_back(section);
+            result.light_maps.push_back(element.light_map);
         }
     }
-    return lod;
+    return result;
 }
 
 } // namespace gears::engine::bsp

@@ -9,10 +9,15 @@ created: 2026-09-25
 updated: 2026-09-25
 ---
 
-`bsp::ModelComponent::Read` validates and skips each element's 2D light map
-(three texture references with RGB scales, then a coordinate scale and bias), and
-static mesh components' light maps are not read. The BSP vertex pool's shadow
-texture coordinates are skipped too.
+BSP light maps are decoded and drawn: `bsp::ModelComponent::Read` keeps each
+element's 2D light map (three coefficient textures with RGB scales, then a
+coordinate scale and bias), `bsp::BspModel` keeps each vertex's shadow texture
+coordinate, triangulation writes it scaled and biased into texture coordinate
+set 1, and `render::DrawMaterials` binds the coefficients as linear textures.
+The shader weights each coefficient by 1/sqrt(3), the share an unperturbed
+normal receives from each basis direction. Not yet rendered or checked on the
+disc.
 
-Next: decode the light-map textures and coordinates for BSP and static meshes,
-then the material's normal-map input.
+Next: static mesh components' light maps (their per-LOD data is not measured),
+the material's normal-map input (so the coefficients are weighted by the
+perturbed normal), and dynamic lights.

@@ -73,9 +73,9 @@ bool Inside(std::int64_t index, std::size_t size)
 
 BspModel::BspModel(std::vector<mesh::Vector3> vectors, std::vector<mesh::Vector3> points,
                    std::vector<BspNode> nodes, std::vector<BspSurface> surfaces,
-                   std::vector<std::int32_t> vertex_points)
+                   std::vector<BspVertex> vertices)
     : vectors_(std::move(vectors)), points_(std::move(points)), nodes_(std::move(nodes)),
-      surfaces_(std::move(surfaces)), vertex_points_(std::move(vertex_points))
+      surfaces_(std::move(surfaces)), vertices_(std::move(vertices))
 {
     Validate();
 }
@@ -106,15 +106,19 @@ BspModel BspModel::Read(const object::SerializedObject &object)
         surfaces.push_back(ReadSurface(reader));
     }
     std::size_t vertex_count = reader.ReadCount(kVertexSize);
-    std::vector<std::int32_t> vertex_points;
-    vertex_points.reserve(vertex_count);
+    std::vector<BspVertex> vertices;
+    vertices.reserve(vertex_count);
     for (std::size_t i = 0; i < vertex_count; ++i)
     {
-        vertex_points.push_back(reader.ReadI32());
-        (void)reader.ReadBytes(kVertexSize - 4U); // side and shadow-map coordinates
+        BspVertex vertex;
+        vertex.point = reader.ReadI32();
+        (void)reader.ReadI32(); // side
+        vertex.shadow_uv = {reader.ReadF32(), reader.ReadF32()};
+        (void)reader.ReadBytes(kVertexSize - 16U); // back-face shadow coordinate
+        vertices.push_back(vertex);
     }
     return {std::move(vectors), std::move(points), std::move(nodes), std::move(surfaces),
-            std::move(vertex_points)};
+            std::move(vertices)};
 }
 
 void BspModel::Validate() const
@@ -126,13 +130,13 @@ void BspModel::Validate() const
             continue;
         }
         if (!Inside(node.surface, surfaces_.size()) || node.vertex_pool < 0 ||
-            !Inside(std::int64_t{node.vertex_pool} + node.vertex_count - 1, vertex_points_.size()))
+            !Inside(std::int64_t{node.vertex_pool} + node.vertex_count - 1, vertices_.size()))
         {
             throw package::PackageFormatError(
                 std::format("node with surface {} and {} vertices at {} lies outside {} surfaces "
                             "and {} vertices",
                             node.surface, node.vertex_count, node.vertex_pool, surfaces_.size(),
-                            vertex_points_.size()));
+                            vertices_.size()));
         }
         const BspSurface &surface = surfaces_[static_cast<std::size_t>(node.surface)];
         if (!Inside(surface.texture_base, points_.size()) ||
@@ -145,7 +149,7 @@ void BspModel::Validate() const
         }
         for (std::size_t k = 0; k < node.vertex_count; ++k)
         {
-            std::int32_t point = vertex_points_[static_cast<std::size_t>(node.vertex_pool) + k];
+            std::int32_t point = vertices_[static_cast<std::size_t>(node.vertex_pool) + k].point;
             if (!Inside(point, points_.size()))
             {
                 throw package::PackageFormatError(

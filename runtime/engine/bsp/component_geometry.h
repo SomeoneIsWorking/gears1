@@ -4,6 +4,7 @@
 #include <map>
 #include <utility>
 
+#include "bsp_geometry.h"
 #include "bsp_model.h"
 #include "mesh/static_mesh.h"
 #include "object/class_hierarchy.h"
@@ -20,10 +21,9 @@ class ComponentGeometry
   public:
     ComponentGeometry(object::ClassHierarchy &classes, object::ObjectResolver &resolver);
 
-    // The component's triangles, one section per element; each section's
-    // material is a reference of the component's package. Refuses a
-    // component whose model does not resolve to an export.
-    mesh::StaticMeshLod Triangulate(const object::SerializedObject &component);
+    // The component's triangles and light maps (see TriangulateComponent).
+    // Refuses a component whose model does not resolve to an export.
+    ComponentMesh Triangulate(const object::SerializedObject &component);
 
   private:
     const BspModel &ModelOf(const package::Package &package, object::PackageIndex model);

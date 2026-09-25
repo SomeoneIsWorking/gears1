@@ -1,6 +1,9 @@
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -9,15 +12,31 @@
 namespace gears::engine::bsp
 {
 
-// One material's share of a model component: the model nodes it draws.
+// Coefficients of a baked light map in a component's package.
+inline constexpr std::size_t kLightMapCoefficients = 3;
+
+// A 2D light map: its coefficient textures, each with the RGB scale that
+// restores its range, and the scale and bias that map a vertex's shadow
+// texture coordinate into the textures.
+struct LightMap2D
+{
+    std::array<object::PackageIndex, kLightMapCoefficients> textures{};
+    std::array<std::array<float, 3>, kLightMapCoefficients> scales{};
+    std::array<float, 2> coordinate_scale{};
+    std::array<float, 2> coordinate_bias{};
+};
+
+// One material's share of a model component: the model nodes it draws and
+// the light map they were baked into, if any.
 struct ModelElement
 {
     object::PackageIndex material = 0;
     std::vector<std::uint16_t> nodes;
+    std::optional<LightMap2D> light_map;
 };
 
-// A ModelComponent export: the model it draws from and its elements.
-// Light and shadow maps are validated and skipped; they are not read yet.
+// A ModelComponent export: the model it draws from and its elements with
+// their light maps. Shadow maps and irrelevant lights are skipped.
 class ModelComponent
 {
   public:

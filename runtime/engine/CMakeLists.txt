@@ -122,6 +122,8 @@ if(Vulkan_FOUND AND Vulkan_glslc_FOUND)
 
     add_library(gears_engine_render STATIC
         render/device_image.cpp
+        render/draw_materials.cpp
+        render/frame_constants.cpp
         render/gpu_texture.cpp
         render/level_renderer.cpp
         render/mesh_renderer.cpp
