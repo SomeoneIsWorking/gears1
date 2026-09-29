@@ -40,6 +40,16 @@ rebindable controls and window modes (S018), and no-terminal setup and packaging
 The native engine (S020-S022) stays in the repository but is paused; new work does not go
 there.
 
+Resume point (2026-09-29): the user reports the menu, and only the menu, as sped up;
+gameplay speed looks right to them. Headless measurement did not find it: the title
+and main-menu background's large-scale motion changes no faster per wall second at
+64-120 presents/s than under `--console-pacing` (24-30), and the menu world clock runs
+1.48 against 1.50 game seconds per wall second under the two pacings. The remaining
+candidates are per-frame effects: film grain and flicker, the selection auto-repeat,
+transitions, or sound. Which one is fast is parked on the user's answer; the fix then goes
+to that owner, with gameplay speed re-checked. `/api/perf` reports the interval since
+its previous call per server, so two clients polling it corrupt each other's intervals.
+
 Gears 1 is the only active title. `./run.sh` now authenticates
 the user's disc by its `default.xex` digest, builds the `gears1` product, and runs it
 through `x360port::SystemSession`: Xenia's kernel, file system, GPU, audio, and input
@@ -441,6 +451,17 @@ against 70.4M and 74.3M. With it the render thread spent 14% in host code instea
 the copies through a bounce buffer 6.8%, range checks (the MMIO range scan, page query and
 `CanAccess`) 3.4%, the setter's own code 1.6%, and dispatch 0.7%, against 5.5% for the
 translated setter, so it was not kept. A leaf this short does not pay for a native call.
+
+At 1440p (2026-09-25/29, `tools/combat_route.py`'s per-step `/api/perf` timeline) the route
+holds 117-120 presents/s to the jammed door, then 17-40 (steady ~30 ms frames, not spikes)
+from the door kick through the first yard firefight for about 60 s, and 92-112 in the same
+firefight replayed after a checkpoint reload, which skips the door kick's scripted scene;
+the rest of the level runs 80-105. In that slow stretch the guest render thread is the
+saturated one and spends about 41% of its samples waiting on the GPU (the `0x8222F460`
+poll 34%, the `0x822306A0` wait check 7%); the game thread uses about half a core. The
+next step is to find what the GPU command side does during the door scene that it does
+not do on the replay: compare Xenia's command-thread work per present between the two
+(draws, resolves, render-target changes) with `--perf-map` profiles of both.
 
 The combat route's yard firefight (`tools/combat_route.py`) ran at 103-114 presents/s
 in one run and fell to 19-50 in another, while another agent's emulator held 2.3 cores
