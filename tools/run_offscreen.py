@@ -105,6 +105,12 @@ def _parser() -> argparse.ArgumentParser:
         help="pace as the console does (60 Hz vblank, no host cap) instead of the product's "
         "120 presents/s, to compare the title's speed under both",
     )
+    parser.add_argument(
+        "--resolution-scale",
+        type=int,
+        help="render-target scale over the console's 1280x720 (the product's default is 2, "
+        "2560x1440); x360port refuses a scale it does not support",
+    )
     route = parser.add_mutually_exclusive_group()
     route.add_argument("--walk", default="menu", help="none, start, menu, checkpoint, gameplay, or continue")
     route.add_argument(
@@ -156,6 +162,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         command.append("--verify-audio-mix")
     if arguments.console_pacing:
         command.append("--console-pacing")
+    if arguments.resolution_scale is not None:
+        command += ["--resolution-scale", str(arguments.resolution_scale)]
     status = run_logged_child(
         command, cwd=REPO_ROOT, environ=child_environment, log_path=run_root / "run.log"
     )

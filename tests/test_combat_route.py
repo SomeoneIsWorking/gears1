@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 import unittest
 from pathlib import Path
 
@@ -504,7 +505,7 @@ class AdvanceTest(unittest.TestCase):
         route._sleep = downed_on_the_way
         route_module.join_squad(route, "join")
         self.assertEqual(player.mates[0]["health"], 301)
-        walk = [step for step in route.steps if step["step"] == "join"][0]
+        walk = next(step for step in route.steps if step["step"] == "join")
         self.assertTrue(walk["stopped"])
         self.assertEqual(route.steps[-1]["step"], "join: revive Dom")
 
@@ -848,7 +849,7 @@ class CoverTest(unittest.TestCase):
         self.assertTrue(player.alive)
 
     def test_staying_in_flanked_cover_is_fatal(self) -> None:
-        player, route = self._flanked_fight()
+        _, route = self._flanked_fight()
         route.take_cover = lambda step, avoid=(): None if avoid else Route.take_cover(route, step)
         with self.assertRaisesRegex(RouteFailure, "fight: the player died"):
             route.clear_firefight("fight", timeout=60.0, arrival=5.0, cover=True)
@@ -910,3 +911,56 @@ class CoverTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FakePerf:
+    """A control channel whose /api/perf returns scripted readings, failing when told to."""
+
+    def __init__(self, rates: list[float | None]) -> None:
+        self._rates = list(rates)
+
+    def perf(self) -> dict[str, object]:
+        if not self._rates:
+            return {"presents_per_second": 0.0, "frame_ms": {}}
+        rate = self._rates.pop(0)
+        if rate is None:
+            raise route_module.ControlError("no reply")
+        return {"presents_per_second": rate, "frame_ms": {"p95": {"ms": 1000.0 / max(rate, 1)}}}
+
+
+class PerfTimelineTest(unittest.TestCase):
+    def test_samples_are_tagged_with_the_step_under_way_and_ranked(self) -> None:
+        route = Route(FakePerf([]))
+        timeline = route_module.PerfTimeline(FakePerf([]), route)
+        timeline.samples = [
+            {"presents_per_second": 110.0, "frame_ms": {}, "after_step": "walk"},
+            {"presents_per_second": 25.0, "frame_ms": {}, "after_step": "fight"},
+            {"presents_per_second": 90.0, "frame_ms": {}, "after_step": "fight"},
+        ]
+        summary = timeline.summary()
+        self.assertEqual(summary["fps_min"], 25.0)
+        self.assertEqual(summary["fps_median"], 90.0)
+        self.assertEqual(summary["slowest"][0]["after_step"], "fight")
+
+    def test_an_empty_timeline_is_refused_with_its_failed_reads(self) -> None:
+        timeline = route_module.PerfTimeline(FakePerf([]), Route(FakePerf([])))
+        timeline.errors = 3
+        with self.assertRaisesRegex(RouteFailure, "no sample \\(3 reads failed\\)"):
+            timeline.summary()
+
+    def test_a_live_timeline_counts_failed_reads_and_keeps_the_rest(self) -> None:
+        route = Route(FakePerf([]))
+        route.steps.append({"step": "cross the yard"})
+        timeline = route_module.PerfTimeline(FakePerf([60.0, 100.0, None, 80.0]), route)
+        original = route_module.PERF_SAMPLE_SECONDS
+        route_module.PERF_SAMPLE_SECONDS = 0.01
+        try:
+            with timeline:
+                deadline = time.monotonic() + 2.0
+                while len(timeline.samples) < 2 and time.monotonic() < deadline:
+                    time.sleep(0.01)
+        finally:
+            route_module.PERF_SAMPLE_SECONDS = original
+        self.assertGreaterEqual(timeline.errors, 1)
+        self.assertEqual([s["presents_per_second"] for s in timeline.samples[:2]], [100.0, 80.0])
+        self.assertEqual(timeline.samples[0]["after_step"], "cross the yard")

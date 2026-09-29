@@ -26,6 +26,11 @@ the title saves its next checkpoint (read from the run's storage by
 ``--checkpoints N`` plays on through N saves. ``--continue`` instead resumes
 the profile's last saved checkpoint through Continue Campaign (the profile's
 continue walk) and plays on from there, skipping the opening.
+From the pad handover on, the route samples the run's ``/api/perf`` once a
+second, tags each sample with the step under way, and writes the timeline to
+``scratch/combat_route/perf_timeline.json`` and its slowest seconds to the report,
+whether or not the route passes; ``--resolution-scale`` and ``--perf-map`` pass
+through to the product for rendering-cost comparisons and named-function profiles.
 Each tutorial holds Marcus in place until its button is held, and a prompt that
 blocks his input is dismissed with A when a burst, walk, or revive has no effect. The report in ``scratch/combat_route/``
 records where every step began and ended. The route fails, naming the step,
@@ -45,9 +50,11 @@ import json
 import math
 import subprocess
 import sys
+import threading
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Self
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -87,6 +94,7 @@ SQUAD_SETTLE_SECONDS = 3.0
 SQUAD_WAIT_SECONDS = 60.0
 SQUAD_RADIUS = 250.0
 SQUAD_POLL_SECONDS = 1.0
+PERF_SAMPLE_SECONDS = 1.0
 # From Dom, fighting and following him reached the next checkpoint in 90 s live.
 ADVANCE_SECONDS = 300.0
 # Deaths one advance may cost; each reloads the checkpoint it started from.
@@ -293,6 +301,56 @@ def advance_to_next_checkpoint(route: Route,
                 raise
 
 
+class PerfTimeline:
+    """Samples the run's /api/perf once a second, tagging each with the route step under way."""
+
+    def __init__(self, control: ProductControl, route: Route) -> None:
+        self._control = control
+        self._route = route
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._sample, daemon=True)
+        self.samples: list[dict[str, object]] = []
+        self.errors = 0
+
+    def __enter__(self) -> Self:
+        self._control.perf()
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        self._thread.join()
+
+    def _sample(self) -> None:
+        while not self._stop.wait(PERF_SAMPLE_SECONDS):
+            try:
+                reading = self._control.perf()
+            except ControlError:
+                self.errors += 1
+                continue
+            steps = self._route.steps
+            reading["after_step"] = steps[-1]["step"] if steps else "handover"
+            self.samples.append(reading)
+
+    def summary(self) -> dict[str, object]:
+        """The slowest seconds and the frame-rate spread; refuses an empty timeline."""
+
+        if not self.samples:
+            raise RouteFailure(f"the perf timeline has no sample ({self.errors} reads failed)")
+        rates = sorted(float(sample["presents_per_second"]) for sample in self.samples)
+        slowest = sorted(self.samples, key=lambda sample: float(sample["presents_per_second"]))
+        return {
+            "seconds": len(self.samples),
+            "failed_reads": self.errors,
+            "fps_min": rates[0],
+            "fps_p5": rates[len(rates) // 20],
+            "fps_median": rates[len(rates) // 2],
+            "slowest": [{"after_step": sample["after_step"],
+                         "fps": sample["presents_per_second"],
+                         "frame_ms": sample["frame_ms"]} for sample in slowest[:10]],
+        }
+
+
 def wait_for_handover(control: ProductControl, run: subprocess.Popen[bytes]) -> None:
     """Wait until the walk has given up the pad and the player exists."""
 
@@ -330,6 +388,16 @@ def _parser() -> argparse.ArgumentParser:
         "none is saved",
     )
     parser.add_argument(
+        "--resolution-scale",
+        type=int,
+        help="render-target scale over 1280x720, passed to run_offscreen.py (product default 2)",
+    )
+    parser.add_argument(
+        "--perf-map",
+        action="store_true",
+        help="write the product's perf map of translated guest code, for perf_guest_report.py",
+    )
+    parser.add_argument(
         "--verify-audio-mix",
         action="store_true",
         help="compare the native audio mix with the guest's body on every call during the route",
@@ -354,25 +422,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         command += ["--iso", arguments.iso]
     if arguments.verify_audio_mix:
         command.append("--verify-audio-mix")
+    if arguments.perf_map:
+        command.append("--perf-map")
+    if arguments.resolution_scale is not None:
+        command += ["--resolution-scale", str(arguments.resolution_scale)]
     control = ProductControl(arguments.port)
     route = Route(control)
+    timeline = PerfTimeline(control, route)
     outcome: dict[str, object] = {"passed": False}
     with (report_root / "run.out").open("wb") as run_output:
         run = subprocess.Popen(command, cwd=REPO_ROOT, stdout=run_output, stderr=subprocess.STDOUT)
         try:
             wait_for_handover(control, run)
             route.start_timing()
-            if resumed is None:
-                play_to_first_firefight(route)
-                outcome["deaths"] = clear_first_firefight(route)
-                join_squad(route)
-            else:
-                outcome["resumed"] = f"{resumed.level}.{resumed.name}"
-                wait_for_squad(route, SQUAD_WAIT_SECONDS)
-            reached = []
-            for _ in range(arguments.checkpoints):
-                checkpoint = advance_to_next_checkpoint(route, lambda: read_checkpoint(storage))
-                reached.append(f"{checkpoint.level}.{checkpoint.name}")
+            with timeline:
+                if resumed is None:
+                    play_to_first_firefight(route)
+                    outcome["deaths"] = clear_first_firefight(route)
+                    join_squad(route)
+                else:
+                    outcome["resumed"] = f"{resumed.level}.{resumed.name}"
+                    wait_for_squad(route, SQUAD_WAIT_SECONDS)
+                reached = []
+                for _ in range(arguments.checkpoints):
+                    checkpoint = advance_to_next_checkpoint(route,
+                                                            lambda: read_checkpoint(storage))
+                    reached.append(f"{checkpoint.level}.{checkpoint.name}")
             outcome["checkpoints"] = reached
             route.require_real_time()
             outcome["passed"] = True
@@ -383,6 +458,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ControlError as error:
             outcome["final_frame"] = str(error)
         outcome["steps"] = route.steps
+        # A failed route's timeline still measures the stretch it played.
+        if timeline.samples:
+            outcome["performance"] = timeline.summary()
+            (report_root / "perf_timeline.json").write_text(
+                json.dumps(timeline.samples, indent=1) + "\n")
         # The run ends at the stop, or on its own at RUN_SECONDS, and fails
         # when its own checks do.
         if arguments.hold_on_failure and not outcome["passed"]:
