@@ -5,6 +5,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 #include "bsp/bsp_geometry.h"
@@ -61,7 +62,8 @@ BspModel FloorAndWall()
 void TestTriangulation()
 {
     BspModel model = FloorAndWall();
-    ModelComponent component(1, {{kWallMaterial, {1}}, {kFloorMaterial, {0}}});
+    ModelComponent component(
+        1, {{kWallMaterial, {1}, std::nullopt}, {kFloorMaterial, {0}, std::nullopt}});
     auto mesh = TriangulateComponent(model, component);
     const auto &lod = mesh.lod;
     assert(mesh.light_maps.size() == 2U && !mesh.light_maps[0] && !mesh.light_maps[1]);
@@ -83,7 +85,8 @@ void TestTriangulation()
 
 void TestElementWithoutTrianglesIsDropped()
 {
-    ModelComponent component(1, {{kWallMaterial, {}}, {kFloorMaterial, {0}}});
+    ModelComponent component(
+        1, {{kWallMaterial, {}, std::nullopt}, {kFloorMaterial, {0}, std::nullopt}});
     auto mesh = TriangulateComponent(FloorAndWall(), component);
     assert(mesh.lod.sections.size() == 1U && mesh.lod.sections[0].material == kFloorMaterial);
     assert(mesh.light_maps.size() == 1U);
@@ -105,7 +108,7 @@ void TestLightMapCoordinates()
 
 void TestRefusesNodeOutsideModel()
 {
-    ModelComponent component(1, {{kFloorMaterial, {2}}});
+    ModelComponent component(1, {{kFloorMaterial, {2}, std::nullopt}});
     bool refused = false;
     try
     {

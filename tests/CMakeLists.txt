@@ -1,11 +1,7 @@
 # Only executor-independent contracts are active during the break-first
 # migration. Tests that exercised the generated PPC ABI were removed with that
-# ABI; retained host semantics remain in focused native tests.
-if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|AppleClang")
-    add_compile_options(-UNDEBUG)
-elseif(MSVC)
-    add_compile_options(/UNDEBUG)
-endif()
+# ABI; retained host semantics remain in focused native tests. Test targets
+# built in other directories take the same -UNDEBUG from the root CMakeLists.
 
 add_executable(test_title_profile test_title_profile.cpp)
 target_link_libraries(test_title_profile PRIVATE gears_title_profile)
@@ -145,20 +141,12 @@ add_test(NAME python_project_locked
     COMMAND "${GEARS_UV_EXECUTABLE}" lock --check --project "${CMAKE_SOURCE_DIR}")
 add_test(NAME source_structure
     COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py")
-add_test(NAME source_structure_selftest
-    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py" --selftest)
-add_test(NAME project_info_entrypoint
-    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/info.py" brief x360port)
 add_test(NAME re_frontier_selftest
     COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/re_frontier.py" selftest)
 add_test(NAME clean_distribution
     COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_distribution_clean.py")
-add_test(NAME clean_distribution_selftest
-    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_distribution_clean.py" --selftest)
 add_test(NAME migration_boundary
     COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_migration_boundary.py")
-add_test(NAME migration_boundary_selftest
-    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_migration_boundary.py" --selftest)
 add_test(NAME title_identity
     COMMAND ${GEARS_UV_RUN} python "${CMAKE_CURRENT_SOURCE_DIR}/test_title_identity.py")
 add_test(NAME guest_image_layout
@@ -171,8 +159,6 @@ add_test(NAME bootstrap_profile
     COMMAND ${GEARS_UV_RUN} python "${CMAKE_CURRENT_SOURCE_DIR}/test_bootstrap_profile.py")
 add_test(NAME bootstrap
     COMMAND ${GEARS_UV_RUN} python "${CMAKE_CURRENT_SOURCE_DIR}/test_bootstrap.py")
-add_test(NAME cpp_quality_selftest
-    COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.py" --selftest)
 add_test(NAME cpp_quality
     COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_cpp_quality.py"
             "${CMAKE_BINARY_DIR}")

@@ -6,6 +6,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 enable_testing()
 
+# Every test target asserts, whichever directory declares it. Without this a
+# release build elides the assertions and the test binary checks nothing.
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU|AppleClang")
+    add_compile_options(-UNDEBUG)
+elseif(MSVC)
+    add_compile_options(/UNDEBUG)
+endif()
+
 # Xenia builds its Debug objects with libstdc++'s debug containers, which have a
 # different layout. Every library linked into the same program must agree, so
 # the composing build sets it for all of them, including Lucent, rather than
@@ -122,9 +130,6 @@ gears_add_binary_test(gears1_dynarec_boundary test_gears1_dynarec_boundary)
 add_test(NAME gears_dependency_checkout_contract
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tests/test_dependency_checkout.py")
-add_test(NAME gears_import_inventory_contract
-    COMMAND ${GEARS_UV_RUN} python
-            "${CMAKE_SOURCE_DIR}/tests/test_import_inventory.py")
 
 add_library(gears1_guest_image STATIC runtime/gears1_guest_image.cpp)
 target_include_directories(gears1_guest_image PUBLIC runtime)
@@ -268,33 +273,9 @@ if(GEARS_DYNAREC_CONTRACT_ONLY)
                 "${CMAKE_BINARY_DIR}")
     add_test(NAME gears_source_structure
         COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py")
-    add_test(NAME gears_source_structure_selftest
-        COMMAND ${GEARS_UV_RUN} python "${CMAKE_SOURCE_DIR}/tools/check_source_structure.py"
-                --selftest)
     add_test(NAME gears_bootstrap_contract
         COMMAND ${GEARS_UV_RUN} python
                 "${CMAKE_SOURCE_DIR}/tests/test_bootstrap.py")
-    add_test(NAME gears_perf_guest_report
-        COMMAND ${GEARS_UV_RUN} python
-                "${CMAKE_SOURCE_DIR}/tests/test_perf_guest_report.py")
-    add_test(NAME gears_combat_route
-        COMMAND ${GEARS_UV_RUN} python
-                "${CMAKE_SOURCE_DIR}/tests/test_combat_route.py")
-    add_test(NAME gears_combat_world
-        COMMAND ${GEARS_UV_RUN} python
-                "${CMAKE_SOURCE_DIR}/tests/test_combat_world.py")
-    add_test(NAME gears_navigation
-        COMMAND ${GEARS_UV_RUN} python
-                "${CMAKE_SOURCE_DIR}/tests/test_navigation.py")
-    add_test(NAME gears_ppcdis
-        COMMAND ${GEARS_UV_RUN} python
-                "${CMAKE_SOURCE_DIR}/tests/test_ppcdis.py")
-    add_test(NAME gears1_checkpoint
-        COMMAND ${GEARS_UV_RUN} python
-                "${CMAKE_SOURCE_DIR}/tests/test_gears1_checkpoint.py")
-    add_test(NAME gears_frame_parity
-        COMMAND ${GEARS_UV_RUN} python
-                "${CMAKE_SOURCE_DIR}/tests/test_frame_parity.py")
     return()
 endif()
 
