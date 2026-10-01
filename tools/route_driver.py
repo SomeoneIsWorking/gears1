@@ -38,7 +38,7 @@ BURST_SECONDS = 0.5
 # Back in cover after a burst, long enough for hits to register.
 COVER_SECONDS = 1.2
 # Below this health the player stays in cover until it regenerates; one
-# exposed burst has cost the player half of its 301 (docs/re-frontier.md).
+# exposed burst has cost the player half of its 301.
 RECOVER_HEALTH = 280
 # Bursts at one target that leave its health unchanged before trying another.
 BURSTS_PER_TARGET = 4
@@ -623,5 +623,5 @@ class Route:
             self._sleep(AIM_POLL_SECONDS)
 
 
-# Positions measured on the retail image's sp_prison_p (docs/re-frontier.md).
+# Positions measured on the retail image's sp_prison_p.
 # Where the walk usually leaves Marcus: in cover past the path choice.

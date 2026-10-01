@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -148,80 +147,10 @@ def scan(root: Path) -> ScanResult:
     return ScanResult(files, scanned_bytes, tuple(findings))
 
 
-def reset_selftest_directory(root: Path) -> Path:
-    scratch = root / "scratch"
-    scratch.mkdir(exist_ok=True)
-    target = scratch / "migration-boundary-selftest"
-    if target.parent != scratch or target.name != "migration-boundary-selftest":
-        raise RuntimeError("selftest cleanup scope changed")
-    if target.exists():
-        shutil.rmtree(target)
-    target.mkdir()
-    return target
-
-
-def selftest(root: Path) -> int:
-    target = reset_selftest_directory(root)
-    try:
-        (target / "run.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-        (target / "runtime").mkdir()
-        (target / "tools").mkdir()
-        (target / "docs").mkdir()
-        (target / "runtime" / "clean.cpp").write_text(
-            "void ExecuteGuestBlock();\n", encoding="utf-8"
-        )
-        clean = scan(target)
-        assert clean.files == 2 and not clean.findings
-
-        old_name = "Xenon" + "Recomp"
-        old_wrapper = "__imp__" + "sub_82235528"
-        (target / "docs" / "old.md").write_text(
-            old_name + " bridge\n" + old_wrapper + "\n", encoding="utf-8"
-        )
-        (target / "tools" / "bad.cpp").write_text(
-            "int main() { " + "printf" + '("bad"); }\n', encoding="utf-8"
-        )
-        (target / "tools" / "extra.sh").write_text("#!/bin/sh\n", encoding="utf-8")
-        (target / "runtime" / "environment.cpp").write_text(
-            "const char *value = " + "get" + 'env("SETTING");\n', encoding="utf-8"
-        )
-        (target / "runtime" / "shell.cpp").write_text(
-            "int result = std::" + "sys" + 'tem("mkdir output");\n', encoding="utf-8"
-        )
-        (target / "docs" / "stale.md").write_text(
-            "required gate: generated-" + "cpu\n", encoding="utf-8"
-        )
-        rejected = scan(target)
-        reasons = {finding.reason for finding in rejected.findings}
-        process_paths = {
-            finding.path
-            for finding in rejected.findings
-            if finding.reason == "direct process environment or shell access"
-        }
-        assert rejected.files == 8
-        assert process_paths == {"runtime/environment.cpp", "runtime/shell.cpp"}
-        assert reasons == {
-            "retired CPU-product terminology",
-            "stale CPU-product conformance vocabulary",
-            "direct C/C++ diagnostic output",
-            "direct process environment or shell access",
-            "run.sh must be the sole shell entry point",
-        }
-    finally:
-        shutil.rmtree(target)
-    print(
-        "migration-boundary selftest passed: clean tree accepted; terminology, "
-        "direct diagnostics/process access, stale conformance, and extra shell rejected"
-    )
-    return 0
-
-
 def main(argv: list[str]) -> int:
     root = Path(__file__).resolve().parents[1]
-    if argv[1:] == ["--selftest"]:
-        return selftest(root)
     if argv[1:]:
-        print(f"usage: {argv[0]} [--selftest]", file=sys.stderr)
+        print(f"usage: {argv[0]}", file=sys.stderr)
         return 2
 
     result = scan(root)

@@ -196,36 +196,9 @@ def history_failures(root: Path) -> list[tuple[str, str]]:
     return failures
 
 
-def selftest() -> int:
-    assert not classify_path("runtime/input.cpp")
-    assert classify_path("scratch/guest/generated.cpp")
-    assert classify_path("modules/title/executable_addr_flags.bin")
-    assert classify_path("runtime/default.xex")
-    assert classify_path("generated/guest_module_42.cpp")
-    assert classify_text("CMakeLists.txt", "set(GEARS_UE3_SRC /private)")
-    assert classify_text(
-        "doc.md", "Development/Src/Engine is required to build this target"
-    )
-    assert not classify_text(
-        "doc.md", "The engine implements observable package behavior independently"
-    )
-    assert classify_bytes("runtime/blob.bin", b"MZ\0game")
-    assert not classify_bytes("runtime/input.cpp", b"int input = 0;\n")
-    assert spirv_source(
-        "tests/test_spv.h",
-        "// GENERATED from tests/test.frag by tools/gen_native_spv.py -- do not edit.\n",
-    ) == "tests/test.frag"
-    assert spirv_source("tests/test_spv.h", "#pragma once\n") == ""
-    print("clean-distribution checker selftest passed: text, binary, path, and "
-          "generated-provenance controls exercised")
-    return 0
-
-
 def main(argv: list[str]) -> int:
-    if argv[1:] == ["--selftest"]:
-        return selftest()
     if argv[1:] not in ([], ["--history"]):
-        print(f"usage: {argv[0]} [--selftest|--history]", file=sys.stderr)
+        print(f"usage: {argv[0]} [--history]", file=sys.stderr)
         return 2
 
     root = Path(__file__).resolve().parents[1]

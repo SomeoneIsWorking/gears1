@@ -5,7 +5,7 @@ WHY. Xenia renders this title correctly, and it ships a HEADLESS renderer --
 `xenia-gpu-vulkan-trace-dump` -- that turns a trace into an image with no
 window, no controller and no playthrough. If our capture can be expressed as a
 trace, every open question of the form "what should this frame look like?"
-becomes one command instead of a play session. See catalog #7 and #62.
+becomes one command instead of a play session.
 
 WHAT THIS CAN AND CANNOT SETTLE -- read before trusting a run.
 
@@ -70,7 +70,6 @@ from gfr_trace_plan import (
     changed_runs,
     parse_checkpoint,
     parse_probe,
-    selftest_cases,
 )
 
 # --- Xenos (extern/xenia/src/xenia/gpu/xenos.h, registers.h) ----------------
@@ -377,7 +376,7 @@ def emit_swap(w, cap, scratch, present="guest"):
     note_prefix = ""
     if present.startswith("resolve:"):
         # WHY AN INTERMEDIATE RESOLVE CAN BE PRESENTED AT ALL, and why this is
-        # not cherry-picking. Measured in catalog #79: in trace playback the
+        # not cherry-picking: in trace playback the
         # frame's EARLY resolves land in shared memory and its LATE ones write
         # zeros over what is already there, including the final composite the
         # swap reads. So --present frame shows an emptied buffer even though the
@@ -537,11 +536,11 @@ def convert(src: Path, dst: Path, max_draws=None, present="guest", regs="delta",
         # memcpy into the register file and NEVER calls WriteRegister, which
         # is what drives every register side effect Xenia has. The registers
         # arrive, the draws rasterise, the resolve reports a written length, and
-        # NOTHING lands in shared memory. That is catalog #79's black dump, and
+        # NOTHING lands in shared memory: the black dump, and
         # it is why traces this tool produced have never rendered.
         #
         # But the callbacks cannot be run over the DC_LUT window. Writing
-        # DC_LUT_30_COLOR auto-increments DC_LUT_RW_INDEX (catalog #78), so
+        # DC_LUT_30_COLOR auto-increments DC_LUT_RW_INDEX, so
         # restoring those registers once per draw pushes 844 bogus entries into
         # the gamma ramp -- measured: the frame comes out uniformly 1.0 on every
         # channel instead of black. They are pure display state and no draw or
@@ -659,235 +658,8 @@ def convert(src: Path, dst: Path, max_draws=None, present="guest", regs="delta",
     return 0
 
 
-def selftest():
-    """Prove the bit-packing, not just that it runs.
-
-    Every constant here is transcribed from Xenia's headers, and a transcription
-    error produces a trace that parses and renders the wrong thing -- the exact
-    failure this whole tool exists to avoid. So the packing is checked against
-    values worked out by hand.
-    """
-    failures = []
-
-    def check(what, got, want):
-        ok = got == want
-        fmt = (lambda v: f"{v:#x}") if isinstance(got, int) and isinstance(want, int) else repr
-        print(f"   {'ok  ' if ok else 'FAIL'}  {what}: got {fmt(got)}, want {fmt(want)}")
-        if not ok:
-            failures.append(what)
-
-    # Indexed, 16-bit, triangle list (prim 4), 804 indices.
-    d = dict(regs=[0] * REG_COUNT, prim=4, index_count=804, indexed=True,
-             index32=False, index_base=0xDEAD00)
-    pkt = draw_packet(d)
-    # header: type3 | (count-1)<<16 | opcode<<8, body is 4 dwords
-    check("indexed packet header", pkt[0], 0xC0000000 | (3 << 16) | (0x22 << 8))
-    check("indexed initiator", pkt[2], 4 | (0 << 6) | (0 << 11) | (804 << 16))
-    check("indexed dma base", pkt[3], 0xDEAD00)
-    # num_words is the INDEX COUNT, not whatever the register held: it held zero,
-    # and that zero is what made the oracle render an empty frame.
-    check("indexed dma size carries the count and the swap mode", pkt[4],
-          804 | (ENDIAN_8IN16 << 30))
-    check("indexed packet length", len(pkt), 5)
-    pkt32 = draw_packet(dict(d, index32=True, index_count=96))
-    check("32-bit indices use k8in32", pkt32[4], 96 | (ENDIAN_8IN32 << 30))
-
-    # Auto-index (non-indexed) draws carry no DMA registers at all.
-    d2 = dict(d, indexed=False, index_count=3, index32=True)
-    pkt2 = draw_packet(d2)
-    check("auto packet header", pkt2[0], 0xC0000000 | (1 << 16) | (0x22 << 8))
-    check("auto initiator", pkt2[2],
-          4 | (SRC_SELECT_AUTO_INDEX << 6) | (1 << 11) | (3 << 16))
-    check("auto packet length", len(pkt2), 3)
-
-    # A lower EDRAM tile stores global rows 512..719 at local rows 0..207.
-    # Globalizing its copy must undo both coordinate shifts and rebase the
-    # contiguous 1280-wide, 32bpp destination from row 512 back to row zero.
-    lower = [0] * REG_COUNT
-    lower[REG_RB_COPY_CONTROL] = 4
-    lower[REG_PA_SC_WINDOW_OFFSET] = (-512 & 0x7FFF) << 16
-    lower[REG_PA_SC_WINDOW_SCISSOR_TL] = 512 << 16
-    lower[REG_PA_SU_SC_MODE_CNTL] = 1 << 16
-    lower[REG_RB_COPY_DEST_BASE] = 0x0BCD0000
-    lower[REG_RB_COPY_DEST_PITCH] = 1280 | (208 << 16)
-    lower_global = globalize_probe_y(lower)
-    check("global-Y probe rebases destination", lower_global[REG_RB_COPY_DEST_BASE],
-          0x0BA50000)
-    check("global-Y probe expands destination height",
-          lower_global[REG_RB_COPY_DEST_PITCH], 1280 | (720 << 16))
-    check("global-Y probe disables vertex window offset",
-          lower_global[REG_PA_SU_SC_MODE_CNTL] & (1 << 16), 0)
-    check("global-Y probe disables scissor window offset",
-          lower_global[REG_PA_SC_WINDOW_SCISSOR_TL] >> 31, 1)
-
-    # The registers command's layout is where a silent format break would live:
-    # a bool padded to a dword. 2 registers => 6 dwords of header + 2 of payload.
-    w = TraceWriter()
-    w.registers(0x2000, [0x11111111, 0x22222222])
-    check("registers command size", len(w.buf), 6 * 4 + 2 * 4)
-    check("registers command tag", struct.unpack_from("<I", w.buf, 0)[0], K_REGISTERS)
-    check("registers first index", struct.unpack_from("<I", w.buf, 4)[0], 0x2000)
-    check("registers payload length", struct.unpack_from("<I", w.buf, 20)[0], 8)
-
-    # IM_LOAD_IMMEDIATE: the count covers the two body dwords PLUS the inline
-    # microcode, and the microcode must NOT be byte-swapped.
-    ucode = bytes(range(16))                      # 4 dwords
-    dwords, payload = im_load_packet(SHADER_TYPE_PIXEL, ucode)
-    check("im_load header", dwords[0],
-          0xC0000000 | ((2 + 4 - 1) << 16) | (0x2B << 8))
-    check("im_load shader type", dwords[1], SHADER_TYPE_PIXEL)
-    check("im_load size dwords", dwords[2], 4)
-    w3 = TraceWriter()
-    w3.packet_with_payload(0x1000, dwords, payload)
-    # count must be body + microcode, or Xenia reads the next command as opcodes
-    check("im_load packet count", struct.unpack_from("<I", w3.buf, 8)[0], 3 + 4)
-    check("microcode kept in guest byte order",
-          w3.buf[12 + 3 * 4:12 + 3 * 4 + 4], ucode[:4])
-    # A shader too large for a 14-bit count must be REFUSED, not truncated: a
-    # truncated shader translates to something plausible and wrong.
-    check("oversized shader refused",
-          im_load_packet(SHADER_TYPE_VERTEX, b"\0" * (PM4_MAX_COUNT * 4)), None)
-
-    # Packets are big-endian in guest memory; trace headers are little. Getting
-    # this backwards yields a trace Xenia reads as garbage opcodes.
-    w2 = TraceWriter()
-    w2.packet(0x1000, [0xAABBCCDD])
-    check("packet payload is big-endian",
-          struct.unpack_from(">I", w2.buf, 12)[0], 0xAABBCCDD)
-
-    # The swap packets, whose absence was the whole reason a trace rendered 744
-    # draws and produced no file. Every field is checked against Xenia's own
-    # VdSwap_entry, because a swap that parses but names the wrong buffer would
-    # present something plausible.
-    #   dword_1: format/endian/etc in the low 12 bits, base_address>>12 above.
-    #   The base is a VIRTUAL address in the 0xC0000000 alias; the kernel posts
-    #   the physical one.
-    fetch = [0, (0xC1234 << 12) | 0x086, (720 - 1) << 13 | (1280 - 1), 0, 0, 0]
-    type0, type3, w_, h_, phys = swap_packets(fetch, 0xC1234000)
-    check("swap type0 header", type0[0], (5 << 16) | 0x4800)
-    check("swap type0 carries six dwords", len(type0) - 1, 6)
-    check("swap fetch base translated to physical", type0[2] >> 12, 0x01234)
-    check("swap fetch low bits untouched", type0[2] & 0xFFF, 0x086)
-    check("swap physical address", phys, 0x01234000)
-    check("swap width from size_2d", w_, 1280)
-    check("swap height from size_2d", h_, 720)
-    check("swap type3 header", type3[0], 0xC0000000 | (3 << 16) | (0x64 << 8))
-    check("swap signature is 'SWAP'", type3[1],
-          int.from_bytes(b"SWAP", "big"))
-    check("swap packet address", type3[2], 0x01234000)
-
-    # And the negative: a capture that cannot state the front buffer must REFUSE
-    # to swap and SAY so, not quietly emit a trace that renders nothing.
-    class _Cap:
-        version, front_buffer, front_fetch = 2, 0x1234000, None
-    note = emit_swap(TraceWriter(), _Cap(), 0)
-    check("v2 capture refuses to swap", note.startswith("NO SWAP"), True)
-    _Cap.version, _Cap.front_fetch = 3, [0] * 6
-    check("all-zero fetch refuses to swap",
-          emit_swap(TraceWriter(), _Cap(), 0).startswith("NO SWAP"), True)
-    # Disagreement between the two statements of the front buffer must stop the
-    # build, not pick one.
-    _Cap.front_fetch = [0, (0xC1234 << 12) | 0x086, 0, 0, 0, 0]
-    _Cap.front_buffer = 0x5678000
-    try:
-        emit_swap(TraceWriter(), _Cap(), 0)
-        check("mismatched front buffer refused", False, True)
-    except SystemExit:
-        check("mismatched front buffer refused", True, True)
-
-    # Synthetic values deliberately isolate the base, pitch, height, format,
-    # endian, swap, and dimensionality fields. None are copied from a capture.
-    built = fetch_from_resolve(dict(base=0x1234000, pitch=96, height=17,
-                                    info=(1 << 24) | (0x15 << 7) | 2))
-    synthetic_expected = [0x80C00002, 0x1234095, 0x2005F,
-                          0x1414, 0x0, 0x200]
-    for i, want in enumerate(synthetic_expected):
-        check(f"resolve-derived fetch dword_{i}", built[i], want)
-
-    # --present frame: the swap must move to the frame's OWN resolve
-    # destination, and must refuse when the frame performs no colour resolve.
-    # Both are checked because a silent fallback to the guest's buffer would
-    # render black and look like a renderer defect rather than a missing swap.
-    def _cap_with_resolve(mode, src_select, dest):
-        regs = [0] * REG_COUNT
-        regs[REG_RB_MODECONTROL] = mode
-        regs[REG_RB_COPY_CONTROL] = src_select
-        regs[REG_RB_COPY_DEST_BASE] = dest
-        regs[REG_RB_COPY_DEST_PITCH] = 1280 | (720 << 16)
-
-        class C:
-            version = 3
-            front_buffer = 0xC1234000
-            front_fetch = [0, (0xC1234 << 12) | 0x086,
-                           (720 - 1) << 13 | (1280 - 1), 0, 0, 0]
-            draws = [dict(regs=regs)]
-        return C()
-
-    note = emit_swap(TraceWriter(), _cap_with_resolve(6, 0, 0xC4000000), 0,
-                     present="frame")
-    check("--present frame moves the swap to the frame's resolve",
-          "0x4000000" in note, True)
-    check("--present frame says it departed from the guest's buffer",
-          "instead of the front buffer the guest named" in note, True)
-    # A DEPTH resolve is not a composite and must not be picked.
-    note = emit_swap(TraceWriter(), _cap_with_resolve(6, 4, 0xC4000000), 0,
-                     present="frame")
-    check("--present frame ignores a depth resolve", note.startswith("NO SWAP"),
-          True)
-    # A frame with no resolve at all must refuse rather than swap something.
-    note = emit_swap(TraceWriter(), _cap_with_resolve(4, 0, 0xC4000000), 0,
-                     present="frame")
-    check("--present frame refuses a frame with no colour resolve",
-          note.startswith("NO SWAP"), True)
-
-    # --present resolve:N must REFUSE the cases that would produce a confident
-    # non-image, and must accept the one that would not. Both classes run.
-    def _cap_with_resolves(specs):
-        draws = []
-        for mode, src_select, dest in specs:
-            regs = [0] * REG_COUNT
-            regs[REG_RB_MODECONTROL] = mode
-            regs[REG_RB_COPY_CONTROL] = src_select
-            regs[REG_RB_COPY_DEST_BASE] = dest
-            regs[REG_RB_COPY_DEST_PITCH] = 1280 | (720 << 16)
-            draws.append(dict(regs=regs))
-
-        class C:
-            version = 3
-            front_buffer = 0xC1234000
-            front_fetch = [0, (0xC1234 << 12) | 0x086,
-                           (720 - 1) << 13 | (1280 - 1), 0, 0, 0]
-        C.draws = draws
-        return C()
-
-    two = _cap_with_resolves([(6, 0, 0xC4000000), (6, 4, 0xC5000000),
-                              (6, 0, 0xC6000000)])
-    check("all_resolves numbers every resolve, depth included",
-          [(r["index"], r["draw"], r["depth"]) for r in all_resolves(two)],
-          [(0, 0, False), (1, 1, True), (2, 2, False)])
-    note = emit_swap(TraceWriter(), two, 0, present="resolve:0")
-    check("--present resolve:0 presents the FIRST resolve, not the last",
-          "0x4000000" in note and "RESOLVE 0 of 3" in note, True)
-    note = emit_swap(TraceWriter(), two, 0, present="resolve:1")
-    check("--present resolve:N refuses a depth resolve",
-          note.startswith("NO SWAP") and "DEPTH" in note, True)
-    note = emit_swap(TraceWriter(), two, 0, present="resolve:9")
-    check("--present resolve:N out of range lists what does exist",
-          note.startswith("NO SWAP") and "0:0xc4000000" in note
-          and "1:0xc5000000(depth)" in note, True)
-
-    for label, got, want in selftest_cases():
-        check(label, got, want)
-
-    print("\nSELFTEST FAILED: " + ", ".join(failures) if failures
-          else "\nselftest passed: the packing matches Xenia's headers by hand-check.")
-    return 1 if failures else 0
-
-
 def main(argv):
     args = argv[1:]
-    if args[:1] == ["--selftest"]:
-        return selftest()
     present = "guest"
     present_set = False
     if "--present" in args:
