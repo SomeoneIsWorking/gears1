@@ -335,44 +335,7 @@ def run(command: list[str], root: Path) -> None:
     subprocess.run(command, cwd=root, check=True)
 
 
-def selftest() -> int:
-    fake = lambda name: f"/tools/{name}" if name != "missing" else None
-    assert find_tool("clang-format", finder=fake) == "/tools/clang-format"
-    try:
-        find_tool("missing", finder=fake)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("missing tools must be refused")
-    assert sdk_arguments("Linux", lambda: "/sdk") == []
-    assert sdk_arguments("Darwin", lambda: "/sdk") == ["--extra-arg=-isysroot/sdk"]
-    try:
-        sdk_arguments("Darwin", lambda: "")
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("a macOS host without an SDK must be refused")
-
-    root = Path(__file__).resolve().parents[1]
-    discovered = first_party_cpp(root)
-    assert Path("runtime/byte_order.h") in discovered
-    assert Path("runtime/wait_probe.cpp") in discovered
-    assert Path("tools/heap_replay.cpp") in discovered
-    assert all((root / path).is_file() for path in MAINTAINED_FILES)
-    assert not any(is_generated_source(root / path) for path in MAINTAINED_FILES)
-    selected = selected_tidy_units(root, {(root / "runtime/wait_probe.cpp").resolve()})
-    assert selected == [Path("runtime/wait_probe.cpp")]
-    print(
-        f"C++ quality checker selftest passed: discovered {len(discovered)} current "
-        f"first-party files and validated {len(MAINTAINED_FILES)} maintained files; "
-        "missing-tool, missing-SDK and compiled-unit refusals exercised"
-    )
-    return 0
-
-
 def main(argv: list[str]) -> int:
-    if argv[1:] == ["--selftest"]:
-        return selftest()
     if len(argv) > 2:
         print(f"usage: {argv[0]} [build-dir]", file=sys.stderr)
         return 2

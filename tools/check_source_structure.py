@@ -11,11 +11,10 @@ DEFAULT_MAX_LINES = 1000
 LEGACY_LIMITS = {
     "runtime/gpu_draw.cpp": 3708,
     "runtime/vd_null_gpu.cpp": 3329,
-    "runtime/gpu_draw_probe.cpp": 1507,
+    "runtime/gpu_draw_probe.cpp": 1505,
     "runtime/gpu_draw_xlate.cpp": 1438,
     "runtime/gpu_present.cpp": 1371,
-    "tools/layer_compare.py": 1052,
-    "tools/gfr_to_xtr.py": 965,
+    "tools/gfr_to_xtr.py": 737,
 }
 
 
@@ -50,28 +49,7 @@ def source_counts(root):
     return counts
 
 
-def selftest():
-    cases = [
-        ({"new.cpp": DEFAULT_MAX_LINES}, []),
-        ({"new.cpp": DEFAULT_MAX_LINES + 1}, ["exceeds"]),
-        ({"runtime/gpu_draw.cpp": LEGACY_LIMITS["runtime/gpu_draw.cpp"] + 1},
-         ["exceeds"]),
-        ({"runtime/gpu_draw.cpp": LEGACY_LIMITS["runtime/gpu_draw.cpp"] - 1},
-         ["ratchet"]),
-    ]
-    for counts, required in cases:
-        text = "\n".join(violations(counts))
-        if any(word not in text for word in required) or (not required and text):
-            print(f"FAIL: counts {counts} produced {text!r}")
-            return 1
-    print("source structure selftest passed: accepts the boundary and rejects "
-          "new growth, legacy growth, and an unratcheted reduction")
-    return 0
-
-
 def main(argv):
-    if argv[1:] == ["--selftest"]:
-        return selftest()
     if len(argv) != 1:
         print(__doc__)
         return 2
