@@ -18,9 +18,8 @@ the only way either emulator reaches gameplay. Two costs follow:
   interior, is not reachable at all.
 
 The fix is not a faster walk. It is to reverse-engineer the engine's own map
-load and ask for a scene directly. The map-change chain and GEngine
-(0x82BED138) are recorded in docs/re-frontier.md, "Retained exact facts" and
-"Local player".
+load and ask for a scene directly. The map-change chain follows GEngine
+(0x82BED138) and the local player from the control channel.
 
 Still open: the commit step is not identified, and the ORACLE side needs a
 mechanism of its own -- Xenia cannot be told to call a guest function, so

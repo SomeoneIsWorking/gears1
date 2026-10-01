@@ -1,7 +1,8 @@
 # Codemap
 
 This map owns placement and responsibility only. Capability state is in
-`docs/project-state.md`; evidence order is in `docs/re-frontier.md`.
+`docs/project-state.md`; the RE evidence chain is in `docs/re-frontier.md`
+(`tools/re_frontier.py`); atomic work is in `docs/issues/`.
 
 | Owner | Current location | Responsibility | Boundary |
 |---|---|---|---|
@@ -39,7 +40,6 @@ This map owns placement and responsibility only. Capability state is in
 | Distribution gate | `tools/check_distribution_clean.py` | Refuse copyrighted inputs, executable/archive payloads, private-source dependencies, and unverifiable generated artifacts. | Does not replace runtime identity validation or the migration-boundary gate. |
 | Architecture/quality gates | `tools/check_source_structure.py`, `tools/check_cpp_quality.py` | Source-size ratchet, format, and lint checks against the real compile database. | Maintainer verification selects Clang; the project does not reject supported user compilers. |
 | Boundary-target compiler warnings | `CMakeLists.txt` calling the pinned `x360port_enable_warnings` CMake owner | Apply driver-appropriate diagnostic groups and warnings-as-errors to the Gears discriminator. | The shared framework owns GNU-style, clang-cl, and MSVC flag selection; Gears does not duplicate it. |
-| Import-service inventory | `tools/import_inventory.py`, `tools/gearsue3_imports/` | Join the image's import manifest to Xenia's ordinal tables and the recovered handler corpus, so the migration work list is the set of exports the title reaches; refuse a missing manifest, a moved ordinal table, a table that parses to nothing, a runtime tree with no sources, and a host-service tree that claims no export. It reports recovered-handler coverage and bound services separately, because a service implemented in `x360port` is bound while carrying no recovered handler. | Reads claimed export names from the composed service sources, not from a running binding table, so a claim the title does not compose would still count. |
 | Gears/x360port discriminators | `tests/test_gears1_dynarec_boundary.cpp`, `tests/test_gears1_real_leaf.cpp`, `tests/test_remote_input.cpp`, `tests/test_gears1_desktop_controls.cpp` | Exercise synthetic native/JIT wiring and, with the ignored user XEX, the real leaf, import refusal, and controller-state thunk over the retained input owner. | Synthetic coverage is not title conformance; the real-image test is a headless import/leaf discriminator, not gameplay. |
 | Boundary verifier and hosted matrix | `tools/verify_dynarec_boundary.py`, `.github/workflows/dynarec-boundary.yml` | Configure the exact x360port/Xenia revisions with Clang/Ninja and execute the Gears discriminator on each implemented native host boundary. A test that ends on a signal has its threads' stacks printed: rerun under gdb on Linux, from its ReportCrash report on macOS (`tools/gearsue3_bootstrap/crash_triage.py`). | No game input; Android is added only with a real APK/runtime owner. |
 

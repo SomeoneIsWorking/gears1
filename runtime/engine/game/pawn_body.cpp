@@ -9,9 +9,9 @@ scene::Matrix BodyPlacement(const PlayerPawn &pawn, const PawnAppearance &appear
                             const mesh::SkeletalMesh &mesh)
 {
     const auto &origin = mesh.OriginRotation();
-    scene::Matrix component = scene::ActorPlacement(
-        appearance.translation, scene::Rotator{origin[0], origin[1], origin[2]},
-        mesh::Vector3{1.0F, 1.0F, 1.0F});
+    scene::Matrix component = scene::ActorPlacement(appearance.translation,
+                                                    scene::Rotator{origin[0], origin[1], origin[2]},
+                                                    mesh::Vector3{1.0F, 1.0F, 1.0F});
     float sy = std::sin(pawn.FacingYaw());
     float cy = std::cos(pawn.FacingYaw());
     scene::Matrix actor = scene::Matrix::Identity();

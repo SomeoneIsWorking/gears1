@@ -999,8 +999,8 @@ void FrameProbe::Report(const std::vector<PreparedDraw>& prepared)
         tl.flush(lucent::Level::Info, "draw");
     }
     // The render comparer's file. One row per draw: what the draw WAS, and a
-    // hash plus statistics of the surface AFTER it. Two runs give two files and
-    // tools/render_diff.py names the first row that differs.
+    // hash plus statistics of the surface AFTER it. Two runs give two files to
+    // diff against each other.
     if (!tracePath.empty())
     {
         std::ofstream tf(tracePath);
@@ -1054,9 +1054,8 @@ void FrameProbe::Report(const std::vector<PreparedDraw>& prepared)
                    << '\t' << sum[2] / px << '\n';
             }
             lucent::info("draw", "render comparer: {} row(s) written to {}"
-                " ({}x{} thumbnails). Diff two of these with"
-                " tools/render_diff.py", thumbs.size(), tracePath,
-                kThumbW, kThumbH);
+                " ({}x{} thumbnails). Diff two of these row-for-row",
+                thumbs.size(), tracePath, kThumbW, kThumbH);
         }
     }
 
@@ -1073,7 +1072,8 @@ void FrameProbe::Report(const std::vector<PreparedDraw>& prepared)
     //
     // The trap is a units mismatch, and it is easy to walk into: _FROM counts
     // the draws this renderer ISSUED, while the number you naturally reach for
-    // is the `draw` column of the diag table or a pass_structure listing, which
+    // is the `draw` column of the diag table or a captured trace's draw list,
+    // which
     // are GUEST draw indices. They differ by every draw the frame drops -- with
     // the tiling collapse on, act1 issues 527 of 737, so every guest index above
     // 527 names a checkpoint that can never fire.
@@ -1309,17 +1309,15 @@ void DrawStats::WriteTable(uint32_t drawn, const std::vector<PreparedDraw>& prep
              // buffer is swapped relative to which" is a question you can
              // only answer by toggling a knob and diffing images, which is
              // how catalog #62 stayed open.
-             // The DESTINATION FORMAT, which is how tools/layer_compare.py names
+             // The DESTINATION FORMAT, which is how a resolve dump names
              // a pass ("srcC2D0 1280x720 f7 #0"). Without it here, mapping one
-             // of that tool's rows back to the draw that produced it means
-             // going through resolve-dump FILENAMES, and the two instruments
-             // that are meant to be read together cannot be joined.
+             // of those rows back to the draw that produced it means
+             // going through resolve-dump FILENAMES.
              "\tresolve_swap_rb\tresolve_scale\tcopy_sample_sel"
              // BOTH ends of the copy's format question. The destination format
-             // is how layer_compare.py names a pass; the SOURCE format is
+             // is how a resolve dump names a pass; the SOURCE format is
              // RB_COLOR_INFO[copy_src_select], which is what decides whether the
-             // EDRAM reinterpretation pass fires before the copy -- and one
-             // conversion it fires accounts for the whole of catalog #95.
+             // EDRAM reinterpretation pass fires before the copy.
              "\tresolve_dest_fmt\tresolve_src_fmt\n";
         t << header;
         // THE HEADER'S OWN WIDTH, counted from the string just written rather

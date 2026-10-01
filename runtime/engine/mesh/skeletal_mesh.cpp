@@ -147,8 +147,8 @@ void Validate(ByteReader &reader, const SkeletalMeshLod &lod, std::size_t bone_c
     }
     for (const SkinChunk &chunk : lod.chunks)
     {
-        std::size_t end = std::size_t{chunk.base_vertex} + chunk.rigid_vertices +
-                          chunk.soft_vertices;
+        std::size_t end =
+            std::size_t{chunk.base_vertex} + chunk.rigid_vertices + chunk.soft_vertices;
         if (end > lod.vertices.size())
         {
             reader.Fail("chunk covers vertices beyond the vertex buffer");

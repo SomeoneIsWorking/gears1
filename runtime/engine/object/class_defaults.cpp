@@ -63,14 +63,12 @@ std::optional<std::string> DefaultChain::ObjectPath(std::string_view name) const
     return reference->package->FullPath(reference->index);
 }
 
-std::span<const std::uint8_t> DefaultChain::Struct(std::string_view name,
-                                                   std::string_view struct_name,
-                                                   std::size_t size) const
+std::span<const std::uint8_t>
+DefaultChain::Struct(std::string_view name, std::string_view struct_name, std::size_t size) const
 {
     const SerializedObject *object = Storing(name);
-    return object == nullptr
-               ? std::span<const std::uint8_t>{}
-               : PropertyValues(object->Properties()).Struct(name, struct_name, size);
+    return object == nullptr ? std::span<const std::uint8_t>{}
+                             : PropertyValues(object->Properties()).Struct(name, struct_name, size);
 }
 
 const DefaultChain &ClassDefaults::Of(const std::string &class_path)
@@ -99,9 +97,9 @@ const DefaultChain &ClassDefaults::Subobject(const std::string &class_path, std:
         DefaultChain chain = Read(class_path, "." + std::string(name));
         if (chain.Empty())
         {
-            throw package::PackageFormatError(std::format(
-                "no default object of {} or its superclasses owns a subobject {}", class_path,
-                name));
+            throw package::PackageFormatError(
+                std::format("no default object of {} or its superclasses owns a subobject {}",
+                            class_path, name));
         }
         found = chains_.emplace(std::move(key), std::move(chain)).first;
     }
@@ -120,8 +118,7 @@ DefaultChain ClassDefaults::Read(const std::string &class_path, std::string_view
             throw package::PackageFormatError(
                 std::format("class path '{}' names no package", *current));
         }
-        std::string object_path =
-            "Default__" + current->substr(dot + 1U) + std::string(suffix);
+        std::string object_path = "Default__" + current->substr(dot + 1U) + std::string(suffix);
         std::optional<ExportLocation> location =
             resolver_.Find(std::string_view(*current).substr(0, dot), object_path);
         if (location)

@@ -140,6 +140,11 @@ if(Vulkan_FOUND AND Vulkan_glslc_FOUND)
         list(APPEND GEARS_ENGINE_SHADER_HEADERS "${header}")
     endforeach()
     add_custom_target(gears_engine_shaders DEPENDS ${GEARS_ENGINE_SHADER_HEADERS})
+    # The generated headers are in the compile database, so anything that
+    # lints or compiles the engine's Vulkan units needs them present.
+    if(TARGET gears1_ctest_binaries)
+        add_dependencies(gears1_ctest_binaries gears_engine_shaders)
+    endif()
 
     add_library(gears_engine_render STATIC
         render/device_image.cpp

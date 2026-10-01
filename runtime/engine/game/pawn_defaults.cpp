@@ -52,8 +52,7 @@ std::string PlayerPawnClass(object::ClassDefaults &defaults, const std::string &
 PawnTuning ReadPawnTuning(object::ClassDefaults &defaults, const std::string &pawn_class)
 {
     const object::DefaultChain &pawn = defaults.Of(pawn_class);
-    const object::DefaultChain &cylinder =
-        defaults.Subobject(pawn_class, kCollisionCylinderName);
+    const object::DefaultChain &cylinder = defaults.Subobject(pawn_class, kCollisionCylinderName);
     const object::DefaultChain &roadie_run = defaults.Of(std::string(kRoadieRunMoveClass));
     const object::DefaultChain &world = defaults.Of(std::string(kWorldInfoClass));
     PawnTuning stock;
@@ -71,8 +70,8 @@ PawnTuning ReadPawnTuning(object::ClassDefaults &defaults, const std::string &pa
     return tuning;
 }
 
-PawnAppearance ReadPawnAppearance(object::ClassDefaults &defaults,
-                                  object::ObjectResolver &resolver, const std::string &pawn_class)
+PawnAppearance ReadPawnAppearance(object::ClassDefaults &defaults, object::ObjectResolver &resolver,
+                                  const std::string &pawn_class)
 {
     std::optional<std::string> component = defaults.Of(pawn_class).ObjectPath("Mesh");
     if (!component)
@@ -92,14 +91,13 @@ PawnAppearance ReadPawnAppearance(object::ClassDefaults &defaults,
     object::Resolution resolved = resolver.Resolve(*mesh->package, mesh->index);
     if (resolved.status != object::ResolutionStatus::kFound)
     {
-        throw package::PackageFormatError(std::format(
-            "skeletal mesh {} of {} is cooked out", mesh->package->FullPath(mesh->index),
-            pawn_class));
+        throw package::PackageFormatError(std::format("skeletal mesh {} of {} is cooked out",
+                                                      mesh->package->FullPath(mesh->index),
+                                                      pawn_class));
     }
     PawnAppearance appearance;
     appearance.mesh = resolved.location;
-    std::span<const std::uint8_t> translation =
-        mesh_component.Struct("Translation", "Vector", 12U);
+    std::span<const std::uint8_t> translation = mesh_component.Struct("Translation", "Vector", 12U);
     if (!translation.empty())
     {
         package::ByteReader reader(translation, package::ByteOrder::Big);

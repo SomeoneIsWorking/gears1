@@ -169,7 +169,7 @@ Qualify x86-64, Apple
 These facts must be re-observed through the authenticated Xenia context before
 they authorize dispatch or a shared `x360ue3` contract.
 
-### Local player
+## Local player
 
 Read live through `GET /api/memory` on sp_prison_p; `runtime/titles/gears1/player_probe.*`
 follows this chain for `GET /api/player`:
