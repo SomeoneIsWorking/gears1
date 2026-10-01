@@ -80,8 +80,8 @@ The local `shared/ue3` checkout is developer reference material, not one of
 these runtime layers. No product may compile, link, package, copy, or require it.
 
 `docs/codemap.md` maps existing and target locations. `docs/re-frontier.md`
-preserves the grounded execution/rendering evidence and now names the dynamic
-migration chain. Atomic work is in `docs/issues/`.
+records what has and has not been reverse-engineered. Atomic work is in
+`docs/issues/`.
 
 ## Third-party code and licence
 

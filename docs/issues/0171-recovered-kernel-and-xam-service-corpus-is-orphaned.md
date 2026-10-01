@@ -35,10 +35,10 @@ import routes to the typed unsupported-service refusal, so the title cannot
 execute past its first unbound service. This gap, not the dynarec, is what
 stands between the current discriminator and S009 gameplay.
 
-## Measured work list — 2026-09-22
+## Recovered corpus against the image — 2026-09-22
 
-`tools/import_inventory.py` joins the image's manifest to Xenia's ordinal
-tables and to the recovered corpus. Against the ignored user XEX:
+Joining the image's manifest to Xenia's ordinal tables and to the recovered
+corpus, against the ignored user XEX:
 
 - 236 imports: 226 function, 10 variable.
 - 0 unresolved ordinals. Every ordinal the image imports is declared by the
@@ -53,8 +53,8 @@ tables and to the recovered corpus. Against the ignored user XEX:
 - 3 recovered handlers correspond to no import of this image, so the corpus was
   built for this title and is close to the right shape for it.
 
-A recovered handler is preserved source, not a binding. The tool now reports the
-two separately: six function imports reach a host service — `XGetAVPack`, the two
+A recovered handler is preserved source, not a binding. The two counts are
+reported separately: six function imports reach a host service — `XGetAVPack`, the two
 XAM controller exports, and the three kernel virtual-memory exports — while 220
 still take the typed refusal. A service implemented in `x360port` is bound and
 carries no recovered handler, so neither count can be read off the other.

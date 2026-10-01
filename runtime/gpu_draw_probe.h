@@ -56,8 +56,8 @@ struct FrameProbe
     // differ between these two runs", and every previous answer to it was
     // assembled by hand from single-pixel traces, which cost an iteration each
     // and twice attributed a change to the wrong draw. Two runs under different
-    // knobs produce two of these files, and tools/render_diff.py names the first
-    // divergent draw directly.
+    // knobs produce two of these files; the first divergent draw is the first
+    // row that differs between them.
     //
     // A thumbnail rather than one texel, because a single pixel cannot see a
     // change that happens somewhere else, and rather than the whole surface,

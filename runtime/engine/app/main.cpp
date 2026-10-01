@@ -48,18 +48,18 @@ void RunGame(const fs::path &content, const std::string &level_name)
     auto world = engine::scene::World::Load(store, classes, resolver, level_name);
     engine::scene::StaticMeshes static_meshes(classes);
     engine::object::ClassDefaults defaults(classes, resolver);
-    std::string pawn_class = engine::game::PlayerPawnClass(
-        defaults, std::string(engine::game::kSinglePlayerGameClass));
+    std::string pawn_class =
+        engine::game::PlayerPawnClass(defaults, std::string(engine::game::kSinglePlayerGameClass));
     engine::game::PawnTuning tuning = engine::game::ReadPawnTuning(defaults, pawn_class);
     engine::game::PawnAppearance appearance =
         engine::game::ReadPawnAppearance(defaults, resolver, pawn_class);
-    engine::mesh::SkeletalMesh body = engine::mesh::SkeletalMesh::Read(
-        engine::object::SerializedObject::Read(*appearance.mesh.package,
-                                               appearance.mesh.export_index, classes));
+    engine::mesh::SkeletalMesh body =
+        engine::mesh::SkeletalMesh::Read(engine::object::SerializedObject::Read(
+            *appearance.mesh.package, appearance.mesh.export_index, classes));
     engine::game::GameWorld game(world, static_meshes, tuning, engine::game::CameraRig{});
     lucent::info("gears-native", "{}: {} level(s), {} collision triangle(s); player {}",
-                 world.Persistent().Name(), world.Levels().size(),
-                 game.Collision().TriangleCount(), pawn_class);
+                 world.Persistent().Name(), world.Levels().size(), game.Collision().TriangleCount(),
+                 pawn_class);
 
     engine::app::GameWindow window("Gears of War", kWindowExtent);
     engine::render::VulkanDevice device(window.Surface());

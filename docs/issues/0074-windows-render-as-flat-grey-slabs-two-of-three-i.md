@@ -116,7 +116,7 @@ Clipping exonerated by measurement: the three 'identical' draws differ in their 
 ### Note (2026-08-05)
 Frame-wide context, so the next reader does not re-ask it. 276 of 552 draws in
 courtyard.gfr die at clipping, which invites "then the clip is systemically
-wrong". Broken down by pass (diag table + tools/pass_structure.py):
+wrong". Broken down by pass (the diag table):
 
     PREPASS    115 of 167 killed (69%)
     BASEPASS   121 of 175 killed (69%)

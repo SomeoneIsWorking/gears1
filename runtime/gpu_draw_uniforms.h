@@ -73,8 +73,8 @@ struct UniformCache
     // A NaN in one pixel constant took a whole gameplay frame to 0 of 921,600
     // non-black pixels, and it took two sessions to find because nothing in the
     // renderer looks at the VALUES it packs -- the frame reported "0 px
-    // non-black" and every instrument pointed at the draws, which were all
-    // fine (`catalog.py show 73`). A frame that is black because it was handed
+    // non-black" and every measurement pointed at the draws, which were all
+    // fine. A frame that is black because it was handed
     // a NaN must SAY so, in a normal run, without anyone having guessed the
     // shader hash first.
     //

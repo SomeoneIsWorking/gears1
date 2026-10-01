@@ -2,7 +2,7 @@
 
 The global rules in `../../AGENTS.md` apply. Read `docs/project-state.md` and
 `docs/codemap.md` before changing a subsystem, and update the authority whose
-answer changes in the same commit.
+answer changes in the same commit. Atomic work is in `docs/issues/`.
 
 ## Product
 
@@ -52,11 +52,13 @@ copied here.
 ## Building and running
 
 - Build with Clang: `uv run --locked cmake --build build/product --target gears1`.
-  Run the focused test for what you changed, the structure check with its
-  self-test, and the combined gate once edits are frozen.
+  Run the focused test for what you changed and the combined CTest gate once
+  edits are frozen. Wrap shared build and gate commands in
+  `flock ~/repo/scratch/.gate.lock <command>` and use at most `-j6`.
 - Python tools run as `uv run --locked python <tool>` from the root
   `pyproject.toml`/`uv.lock`; no ambient interpreter or second environment.
 - Agent runs are headless: `tools/run_offscreen.py` with `--control-port` and
-  `tools/product_control.py` to drive input and read state. Never run
-  `./run.sh`, never print the image path or process arguments, and never print
-  `.env` values.
+  `tools/product_control.py` to drive input and read state. `tools/combat_route.py`
+  plays Act 1 closed-loop over that channel. Never run `./run.sh`, never print
+  the image path or process arguments, and never print `.env` values. Kill any
+  process you start by PID.

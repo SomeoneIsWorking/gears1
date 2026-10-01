@@ -34,7 +34,7 @@ when a target builds its reader again.
 | `GEARS_DRAW_NO_TARGET_LOOKUP_CACHE`, `GEARS_DRAW_NO_TEX_DIRTY`, `GEARS_DRAW_NO_TEX_SIGNS` | Disable one renderer optimization/interpretation for a diagnostic comparison. |
 | `GEARS_DRAW_NOBLEND`, `GEARS_DRAW_NOCLAMP`, `GEARS_DRAW_NOCULL`, `GEARS_DRAW_CULL_INVERT`, `GEARS_DRAW_NODEPTH`, `GEARS_DRAW_NODEPTHBIAS`, `GEARS_DRAW_NOMSAA`, `GEARS_DRAW_NOSTENCIL`, `GEARS_DRAW_NOTEX` | Disable one bounded graphics behavior to discriminate a rendering cause. Never product fixes. |
 | `GEARS_DRAW_FIXEDVP`, `GEARS_DRAW_FORCE_LDR`, `GEARS_DRAW_MODE_ONLY`, `GEARS_DRAW_NOALIAS`, `GEARS_DRAW_NOREINTERP`, `GEARS_DRAW_NORT`, `GEARS_DRAW_TILED`, `GEARS_DRAW_SPLIT_DEPTH` | Select one bounded viewport, format, aliasing, resolve, tiling, or depth-model comparison. |
-| `GEARS_DRAW_REINTERP_SELFTEST`, `GEARS_DRAW_RESOLVE_BLIT`, `GEARS_DRAW_RESOLVE_NOSWAP`, `GEARS_DRAW_SLATE_CLEAR`, `GEARS_DRAW_DEPTHONLY_PS` | Explicit negative/control paths that must report their activation and denominator. |
+| `GEARS_DRAW_REINTERP_SELFTEST`, `GEARS_DRAW_RESOLVE_BLIT`, `GEARS_DRAW_RESOLVE_NOSWAP`, `GEARS_DRAW_SLATE_CLEAR`, `GEARS_DRAW_DEPTHONLY_PS` | Explicit control paths that must report their activation. |
 
 ## Diagnostic self-tests
 
