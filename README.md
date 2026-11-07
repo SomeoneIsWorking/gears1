@@ -91,3 +91,5 @@ and hardware code. The XMA decoder is built from an LGPL-2.1-or-later FFmpeg
 fork. First-party code is intended to be MIT licensed. Gears of War is
 copyright Epic Games / Microsoft; this project ships none of it. See `LICENSE`
 and `THIRD_PARTY_NOTICES` for the complete notices.
+
+Built with AI assistance (Claude and other LLMs).
