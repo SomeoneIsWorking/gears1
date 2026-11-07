@@ -64,7 +64,7 @@ endif()
 
 set(X360PORT_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360port" CACHE PATH
     "Exact shared/x360port checkout consumed by GearsUE3")
-set(X360PORT_REQUIRED_REVISION "09f9f8d90aba408dcc3426d7e7fd7c7464ac48f7")
+set(X360PORT_REQUIRED_REVISION "9c0bd443268941ce816664da8bfeea27e0fe98c7")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
@@ -93,7 +93,7 @@ message(STATUS
 
 set(X360UE3_ROOT "${CMAKE_SOURCE_DIR}/../../shared/x360ue3" CACHE PATH
     "Exact shared/x360ue3 checkout consumed by GearsUE3")
-set(X360UE3_REQUIRED_REVISION "7bc5763b9a3acb3ea04463ef05056b222a2579be")
+set(X360UE3_REQUIRED_REVISION "752cfa008a18bb38169a78b047884f90932cca03")
 execute_process(
     COMMAND ${GEARS_UV_RUN} python
             "${CMAKE_SOURCE_DIR}/tools/require_git_checkout.py"
@@ -143,7 +143,7 @@ x360port_enable_warnings(gears1_xam_services)
 include(FetchContent)
 FetchContent_Declare(lucent
     GIT_REPOSITORY https://github.com/SomeoneIsWorking/lucent.git
-    GIT_TAG f1494ccb06804ac0c85a6876e5a72bc54d88837e)
+    GIT_TAG 9faa08530ec4db96570a78c40c9cfa24f7bbe0fd)
 FetchContent_MakeAvailable(lucent)
 add_library(gears_input STATIC runtime/input.cpp runtime/titles/gears1/xam_input_provider.cpp
                             runtime/titles/gears1/desktop_controls.cpp)
